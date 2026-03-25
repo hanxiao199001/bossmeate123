@@ -1,0 +1,58 @@
+# BossMate 开发环境 Docker Compose
+# 使用方式：docker compose up -d
+
+version: "3.8"
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: bossmate-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bossmate
+      POSTGRES_USER: bossmate
+      POSTGRES_PASSWORD: bossmate_dev_2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bossmate"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: bossmate-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: bossmate-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./apps/web/dist:/usr/share/nginx/html
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  pg_data:
+  redis_data:

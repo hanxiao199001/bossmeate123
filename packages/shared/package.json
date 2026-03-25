@@ -1,0 +1,8 @@
+{
+  "name": "@bossmate/shared",
+  "version": "0.1.0",
+  "description": "BossMate 共享类型和工具",
+  "type": "module",
+  "main": "src/types.ts",
+  "types": "src/types.ts"
+}

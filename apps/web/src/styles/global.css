@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/* BossMate 全局样式 */
+:root {
+  --color-primary: #4361ee;
+  --color-secondary: #7209b7;
+  --color-accent: #f72585;
+  --color-success: #2e7d32;
+  --color-warning: #e65100;
+  --color-bg: #f8fafc;
+  --color-text: #1a1a2e;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei",
+    sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

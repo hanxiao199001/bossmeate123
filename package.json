@@ -1,0 +1,27 @@
+{
+  "name": "bossmate",
+  "version": "0.1.0",
+  "description": "BossMate（AI超级员工）- 企业AI操作系统",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @bossmate/server dev\" \"pnpm --filter @bossmate/web dev\"",
+    "dev:server": "pnpm --filter @bossmate/server dev",
+    "dev:web": "pnpm --filter @bossmate/web dev",
+    "build": "pnpm -r build",
+    "lint": "oxlint .",
+    "test": "vitest",
+    "db:migrate": "pnpm --filter @bossmate/server db:migrate",
+    "db:seed": "pnpm --filter @bossmate/server db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "oxlint": "^0.16.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
