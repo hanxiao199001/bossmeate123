@@ -16,17 +16,16 @@ import { ArxivCrawler } from "./arxiv-crawler.js";
 import type { CrawlerAdapter, CrawlerResult, PlatformName } from "./types.js";
 
 // 注册所有爬虫适配器
-const crawlerRegistry: Map<PlatformName, CrawlerAdapter> = new Map([
-  // 社交媒体热搜
-  ["baidu", new BaiduCrawler()],
-  ["weibo", new WeiboCrawler()],
-  ["zhihu", new ZhihuCrawler()],
-  ["toutiao", new ToutiaoCrawler()],
-  // 学术数据源
-  ["openalex", new OpenAlexCrawler()],
-  ["pubmed", new PubMedCrawler()],
-  ["arxiv", new ArxivCrawler()],
-]);
+const crawlerRegistry = new Map<PlatformName, CrawlerAdapter>();
+// 社交媒体（行业定向搜索版）
+crawlerRegistry.set("baidu", new BaiduCrawler());
+crawlerRegistry.set("weibo", new WeiboCrawler());
+crawlerRegistry.set("zhihu", new ZhihuCrawler());
+crawlerRegistry.set("toutiao", new ToutiaoCrawler());
+// 学术数据源
+crawlerRegistry.set("openalex", new OpenAlexCrawler());
+crawlerRegistry.set("pubmed", new PubMedCrawler());
+crawlerRegistry.set("arxiv", new ArxivCrawler());
 
 /**
  * 获取所有已注册平台

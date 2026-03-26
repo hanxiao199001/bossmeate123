@@ -1,24 +1,27 @@
 /**
- * arXiv 学术预印本热点爬虫
+ * arXiv 学术预印本爬虫 —— 期刊行业定向版
  *
- * 数据源：arXiv（计算机/物理/数学/生物等预印本，免费公开API）
- * 策略：获取各学科近期最热门的预印本论文
- * API文档：https://info.arxiv.org/help/api/index.html
+ * 数据源：arXiv（计算机/物理/数学/生物等预印本）
+ * 策略变更：聚焦期刊代发行业关注的热门投稿方向：
+ * 1. 各学科近期最热论文标题（反映投稿趋势）
+ * 2. 强调"可转化为期刊投稿"的研究方向
  */
 
 import { logger } from "../../config/logger.js";
 import type { CrawlerAdapter, CrawlerResult, RawHotItem } from "./types.js";
 
-// arXiv 学科分类（聚焦与期刊出版相关的热门领域）
+// 期刊代发行业关注的arXiv学科分类（偏向中国作者常投的领域）
 const ARXIV_CATEGORIES = [
-  { code: "cs.AI", name: "人工智能" },
-  { code: "cs.CL", name: "自然语言处理" },
-  { code: "cs.CV", name: "计算机视觉" },
-  { code: "cs.LG", name: "机器学习" },
-  { code: "q-bio", name: "定量生物学" },
-  { code: "physics.med-ph", name: "医学物理" },
-  { code: "stat.ML", name: "统计机器学习" },
-  { code: "eess.SP", name: "信号处理" },
+  { code: "cs.AI", label: "人工智能" },
+  { code: "cs.CL", label: "自然语言处理" },
+  { code: "cs.CV", label: "计算机视觉" },
+  { code: "cs.LG", label: "机器学习" },
+  { code: "q-bio", label: "定量生物学" },
+  { code: "physics.med-ph", label: "医学物理" },
+  { code: "stat.ML", label: "统计机器学习" },
+  { code: "eess.SP", label: "信号处理" },
+  { code: "cs.SE", label: "软件工程" },
+  { code: "cs.DB", label: "数据库" },
 ];
 
 export class ArxivCrawler implements CrawlerAdapter {
@@ -36,12 +39,12 @@ export class ArxivCrawler implements CrawlerAdapter {
 
           for (const paper of papers) {
             items.push({
-              keyword: paper.title,
-              heatScore: 500 - items.length, // arXiv没有引用数，按时间排序
+              keyword: `${category.label}投稿热点：${paper.title.slice(0, 80)}`,
+              heatScore: 500 - items.length,
               platform: "arxiv",
               rank: items.length + 1,
               url: paper.link,
-              description: `${category.name} | ${paper.published} | ${paper.authors.slice(0, 3).join(", ")}`,
+              description: `${category.label} | ${paper.published} | ${paper.authors.slice(0, 3).join(", ")} | arXiv预印本→可转期刊投稿`,
               crawledAt: now,
             });
           }
@@ -66,7 +69,7 @@ export class ArxivCrawler implements CrawlerAdapter {
 
       logger.info(
         { platform: "arxiv", count: top50.length },
-        "arXiv 学术热点抓取完成"
+        "arXiv 期刊行业热点抓取完成"
       );
 
       return { platform: "arxiv", items: top50, success: true, crawledAt: now };
@@ -88,7 +91,6 @@ export class ArxivCrawler implements CrawlerAdapter {
 
     const xml = await response.text();
 
-    // 简单XML解析（arXiv返回Atom格式）
     const entries = xml.split("<entry>").slice(1);
     const papers: Array<{
       title: string;
@@ -118,14 +120,12 @@ export class ArxivCrawler implements CrawlerAdapter {
     return papers;
   }
 
-  /** 提取XML标签内容 */
   private extractXmlTag(xml: string, tag: string): string {
     const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`);
     const match = xml.match(regex);
     return match ? match[1].trim() : "";
   }
 
-  /** 提取XML标签属性 */
   private extractXmlAttribute(
     xml: string,
     tag: string,

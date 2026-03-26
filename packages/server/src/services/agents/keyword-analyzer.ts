@@ -1,13 +1,15 @@
 /**
- * Agent 2：关键词分析智能体
+ * Agent 2：关键词分析智能体 —— 期刊行业专用版
  *
  * 职责：
  * 1. 接收 Agent 1 的原始热点数据
  * 2. 去重 + 跨平台合并
- * 3. 行业相关性过滤
+ * 3. 严格行业相关性过滤（只保留期刊代发行业相关的）
  * 4. 计算综合热度分
  * 5. 与历史关键词库交叉比对
  * 6. 输出今日关键词报告
+ *
+ * 核心原则：宁可漏掉，不要混入无关内容
  */
 
 import { db } from "../../models/db.js";
@@ -16,18 +18,48 @@ import { logger } from "../../config/logger.js";
 import { eq, and, gte, sql } from "drizzle-orm";
 import type { CrawlerResult } from "../crawler/types.js";
 
-// 学术/期刊行业相关关键词 - 用于过滤
-const INDUSTRY_KEYWORDS = [
-  "论文", "期刊", "SCI", "SSCI", "EI", "核心", "发表", "投稿",
-  "审稿", "影响因子", "分区", "学术", "研究", "科研", "博士",
-  "硕士", "导师", "学位", "基金", "课题", "综述", "实验",
-  "医学", "临床", "教育", "工程", "管理", "经济", "法学",
-  "心理", "生物", "化学", "物理", "计算机", "人工智能", "AI",
-  "大数据", "碳中和", "新能源", "量子", "芯片", "半导体",
-  "考研", "考博", "保研", "高校", "大学", "院校",
-  "Nature", "Science", "Lancet", "Cell", "JAMA", "BMJ",
-  "预警", "降区", "黑名单", "撤稿", "学术不端", "查重",
-  "中科院", "JCR", "LetPub", "知网", "万方", "维普",
+// ========== 期刊代发行业关键词库（严格版）==========
+
+// 一级关键词：直接命中即为行业相关（高权重）
+const PRIMARY_KEYWORDS = [
+  // 期刊类型
+  "SCI", "SSCI", "EI", "CSCD", "CSSCI", "核心期刊", "北大核心", "南大核心",
+  "学报", "期刊", "杂志",
+  // 期刊指标
+  "影响因子", "IF", "分区", "JCR", "中科院分区", "期刊预警", "降区", "升区",
+  // 发表相关
+  "论文发表", "投稿", "审稿", "拒稿", "退修", "录用", "见刊", "检索",
+  "论文代发", "论文润色", "英文润色", "选刊", "期刊推荐",
+  // 查重/学术规范
+  "查重", "重复率", "学术不端", "撤稿", "知网", "万方", "维普",
+  // 学术工具/平台
+  "LetPub", "小木虫", "Sci-Hub", "PubMed", "Web of Science", "WOS",
+  "Google Scholar", "中国知网", "CNKI",
+  // 升学/科研
+  "考研", "考博", "保研", "硕士", "博士", "导师", "学位论文",
+  "开题", "答辩", "毕业论文",
+  // 基金/课题
+  "国自然", "基金申请", "课题申报", "项目申请", "科研经费",
+  // 学术写作
+  "SCI写作", "论文写作", "文献综述", "Meta分析", "系统综述",
+  "实验设计", "统计分析", "SPSS", "R语言",
+];
+
+// 二级关键词：需要与学术语境组合才算行业相关（低权重）
+const SECONDARY_KEYWORDS = [
+  "论文", "发表", "科研", "学术", "研究", "高校", "大学", "教授",
+  "学科", "专业", "医学", "工程", "教育", "经济", "管理",
+  "Nature", "Science", "Lancet", "Cell", "JAMA", "BMJ", "IEEE",
+  "Springer", "Elsevier", "Wiley",
+  "OA", "开放获取", "预印本", "arXiv",
+  "临床", "实验", "样本", "数据", "模型", "算法",
+];
+
+// 学术语境词（用于二级关键词的组合判断）
+const ACADEMIC_CONTEXT = [
+  "论文", "期刊", "发表", "投稿", "审稿", "引用", "索引", "检索",
+  "研究", "学术", "科研", "课题", "基金", "实验", "数据",
+  "综述", "分析", "方法", "结果", "结论",
 ];
 
 interface AnalyzedKeyword {
@@ -45,8 +77,8 @@ interface KeywordReport {
   afterDedup: number;
   industryRelated: number;
   topKeywords: AnalyzedKeyword[];
-  newKeywords: string[];       // 今天新出现的
-  sustainedKeywords: string[]; // 持续热门的（连续出现3天+）
+  newKeywords: string[];
+  sustainedKeywords: string[];
 }
 
 /**
@@ -64,7 +96,7 @@ export async function analyzeKeywords(
 
   logger.info(
     { totalRawItems, platforms: crawlerResults.length },
-    "🔍 Agent 2 启动：开始关键词分析"
+    "🔍 Agent 2 启动：开始关键词分析（期刊行业专用）"
   );
 
   // Step 1: 去重 + 跨平台合并
@@ -78,14 +110,13 @@ export async function analyzeKeywords(
       const existing = keywordMap.get(normalized);
 
       if (existing) {
-        // 合并：累加热度，记录平台来源
         existing.totalHeatScore += item.heatScore;
         if (!existing.platforms.includes(item.platform)) {
           existing.platforms.push(item.platform);
         }
       } else {
         keywordMap.set(normalized, {
-          keyword: item.keyword.trim(), // 保留原始大小写
+          keyword: item.keyword.trim(),
           platforms: [item.platform],
           totalHeatScore: item.heatScore,
           compositeScore: 0,
@@ -98,25 +129,27 @@ export async function analyzeKeywords(
 
   const afterDedup = keywordMap.size;
 
-  // Step 2: 行业相关性过滤 + 分类
+  // Step 2: 严格行业相关性过滤 + 分类
   for (const [, item] of keywordMap) {
     item.isIndustryRelated = checkIndustryRelevance(item.keyword);
     item.category = inferCategory(item.keyword);
   }
 
-  // Step 3: 计算综合热度分
-  // 跨平台出现的权重更高（每多出现一个平台，权重 ×1.5）
+  // Step 3: 计算综合热度分（跨平台权重更高）
   for (const [, item] of keywordMap) {
     const platformMultiplier = 1 + (item.platforms.length - 1) * 0.5;
-    item.compositeScore = item.totalHeatScore * platformMultiplier;
+    // 行业相关的权重 ×3
+    const industryMultiplier = item.isIndustryRelated ? 3 : 1;
+    item.compositeScore = item.totalHeatScore * platformMultiplier * industryMultiplier;
   }
 
-  // Step 4: 按综合分排序，取 TOP 50
+  // Step 4: 只保留行业相关的关键词入库
   const allKeywords = Array.from(keywordMap.values());
   allKeywords.sort((a, b) => b.compositeScore - a.compositeScore);
 
-  const industryRelated = allKeywords.filter((k) => k.isIndustryRelated);
-  const topKeywords = allKeywords.slice(0, 50);
+  // 核心变更：只入库行业相关的关键词
+  const industryKeywords = allKeywords.filter((k) => k.isIndustryRelated);
+  const topKeywords = industryKeywords.slice(0, 100); // 最多入库100个
 
   // Step 5: 入库 + 与历史比对
   const newKeywords: string[] = [];
@@ -124,7 +157,6 @@ export async function analyzeKeywords(
 
   for (const kw of topKeywords) {
     try {
-      // 检查是否已存在（同租户、同关键词）
       const existing = await db
         .select()
         .from(keywords)
@@ -137,7 +169,6 @@ export async function analyzeKeywords(
         .limit(1);
 
       if (existing.length > 0) {
-        // 已存在 → 更新热度和出现次数
         const record = existing[0];
         const newAppearCount = (record.appearCount || 0) + 1;
 
@@ -156,7 +187,6 @@ export async function analyzeKeywords(
           sustainedKeywords.push(kw.keyword);
         }
       } else {
-        // 新关键词 → 插入
         await db.insert(keywords).values({
           tenantId,
           keyword: kw.keyword,
@@ -185,7 +215,7 @@ export async function analyzeKeywords(
     date: today,
     totalRawItems,
     afterDedup,
-    industryRelated: industryRelated.length,
+    industryRelated: industryKeywords.length,
     topKeywords,
     newKeywords,
     sustainedKeywords,
@@ -196,42 +226,77 @@ export async function analyzeKeywords(
       date: today,
       totalRaw: totalRawItems,
       deduped: afterDedup,
-      industryHits: industryRelated.length,
+      industryHits: industryKeywords.length,
+      saved: topKeywords.length,
       newCount: newKeywords.length,
       sustainedCount: sustainedKeywords.length,
     },
-    "🔍 Agent 2 完成：关键词分析结束"
+    "🔍 Agent 2 完成：关键词分析结束（仅入库行业相关关键词）"
   );
 
   return report;
 }
 
 /**
- * 检查关键词是否与行业相关
+ * 严格检查关键词是否与期刊代发行业相关
  */
 function checkIndustryRelevance(keyword: string): boolean {
   const lower = keyword.toLowerCase();
-  return INDUSTRY_KEYWORDS.some(
-    (ik) => lower.includes(ik.toLowerCase())
+
+  // 一级关键词：直接命中即相关
+  if (PRIMARY_KEYWORDS.some((pk) => lower.includes(pk.toLowerCase()))) {
+    return true;
+  }
+
+  // 二级关键词：需要搭配学术语境词
+  const hasSecondary = SECONDARY_KEYWORDS.some((sk) =>
+    lower.includes(sk.toLowerCase())
   );
+  const hasContext = ACADEMIC_CONTEXT.some((ac) =>
+    lower.includes(ac.toLowerCase())
+  );
+
+  // 二级关键词 + 学术语境 = 行业相关
+  if (hasSecondary && hasContext) {
+    return true;
+  }
+
+  // 特殊模式匹配
+  // 匹配 "XX期刊" "XX学报" "影响因子XX" 等模式
+  if (/期刊|学报|影响因子|分区|投稿|审稿|查重|发表/.test(lower)) {
+    return true;
+  }
+
+  // 学术数据源的关键词默认视为行业相关（因为已经做了定向搜索）
+  // 这些关键词来自 openalex/pubmed/arxiv 的定向抓取
+  if (lower.includes("投稿热点") || lower.includes("热门方向") ||
+      lower.includes("期刊：") || lower.includes("（if趋势）")) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * 推断学科分类（简单规则匹配，后续可用AI分类器替代）
+ * 推断学科分类
  */
 function inferCategory(keyword: string): string | null {
   const lower = keyword.toLowerCase();
 
   const categoryMap: Record<string, string[]> = {
-    medicine: ["医学", "临床", "药物", "基因", "细胞", "肿瘤", "心血管", "神经", "免疫", "Lancet", "JAMA", "BMJ"],
+    medicine: [
+      "医学", "临床", "药物", "基因", "细胞", "肿瘤", "心血管", "神经",
+      "免疫", "护理", "康复", "外科", "内科", "中医", "药学",
+      "Lancet", "JAMA", "BMJ", "PubMed", "pubmed",
+    ],
     education: ["教育", "教学", "课程", "学生", "教师", "高考", "考研", "保研", "高校"],
     engineering: ["工程", "机械", "材料", "能源", "建筑", "制造", "自动化"],
     computer: ["计算机", "人工智能", "AI", "机器学习", "深度学习", "大数据", "算法", "软件"],
     economics: ["经济", "金融", "管理", "会计", "市场", "贸易", "投资"],
-    law: ["法学", "法律", "司法", "立法", "宪法"],
+    law: ["法学", "法律", "司法", "立法"],
     psychology: ["心理", "认知", "行为", "心理健康"],
-    biology: ["生物", "生态", "进化", "遗传", "分子"],
-    chemistry: ["化学", "催化", "合成", "分子", "材料"],
+    biology: ["生物", "生态", "进化", "遗传", "分子", "微生物"],
+    chemistry: ["化学", "催化", "合成", "材料"],
     physics: ["物理", "量子", "光学", "半导体", "芯片"],
   };
 
@@ -303,7 +368,6 @@ export async function getKeywords(
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 
-  // 总数
   const countResult = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(keywords)
