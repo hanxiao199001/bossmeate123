@@ -11,6 +11,7 @@ import { tenantRoutes } from "./routes/tenant.js";
 import { chatRoutes } from "./routes/chat.js";
 import { contentRoutes } from "./routes/content.js";
 import { healthRoutes } from "./routes/health.js";
+import { keywordRoutes } from "./routes/keywords.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
@@ -40,6 +41,7 @@ async function bootstrap() {
     await protectedApp.register(tenantRoutes, { prefix: `${env.API_PREFIX}/tenant` });
     await protectedApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
     await protectedApp.register(contentRoutes, { prefix: `${env.API_PREFIX}/content` });
+    await protectedApp.register(keywordRoutes, { prefix: `${env.API_PREFIX}/keywords` });
   });
 
   // 初始化 AI 提供商
