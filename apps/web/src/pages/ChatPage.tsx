@@ -1,121 +1,392 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { api } from "../utils/api";
 
 /**
- * 对话页面 - AI交互主界面
- *
- * TODO: 第二阶段完善
- * - WebSocket 流式输出
- * - 多轮对话上下文
- * - 语音输入
- * - RAG 知识库引用展示
+ * 对话页面 - 对接真实后端 AI API
  */
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  model?: string | null;
+  tokensUsed?: number;
+  createdAt: string;
+}
+
+interface Conversation {
+  id: string;
+  title: string;
+  skillType: string | null;
+  updatedAt: string;
 }
 
 export default function ChatPage() {
+  const { conversationId } = useParams();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConvId, setCurrentConvId] = useState<string | null>(conversationId || null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const skillType = searchParams.get("skill") || "article";
+
+  // 滚动到底部
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  // 加载对话列表
+  useEffect(() => {
+    async function loadConversations() {
+      try {
+        const res = await api.get<Conversation[]>("/chat/conversations");
+        if (res.data) setConversations(res.data);
+      } catch {
+        // 静默失败
+      }
+    }
+    loadConversations();
+  }, [currentConvId]);
+
+  // 加载消息历史
+  useEffect(() => {
+    if (!currentConvId) return;
+    async function loadMessages() {
+      try {
+        const res = await api.get<Message[]>(`/chat/conversations/${currentConvId}/messages`);
+        if (res.data) {
+          setMessages(res.data);
+          setTimeout(scrollToBottom, 100);
+        }
+      } catch {
+        // 对话可能不存在
+      }
+    }
+    loadMessages();
+  }, [currentConvId, scrollToBottom]);
+
+  // 创建新对话
+  async function createConversation(): Promise<string | null> {
+    try {
+      const res = await api.post<Conversation>("/chat/conversations", {
+        title: "新对话",
+        skillType,
+      });
+      if (res.data) {
+        setCurrentConvId(res.data.id);
+        navigate(`/chat/${res.data.id}`, { replace: true });
+        return res.data.id;
+      }
+    } catch (err: any) {
+      console.error("创建对话失败:", err);
+    }
+    return null;
+  }
+
+  // 发送消息
   async function handleSend() {
     if (!input.trim() || loading) return;
 
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: input,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
+    const userContent = input.trim();
     setInput("");
     setLoading(true);
 
-    // TODO: 调用后端 API
-    // 当前用占位回复
-    setTimeout(() => {
-      const aiMsg: Message = {
-        id: crypto.randomUUID(),
+    // 如果还没有对话，先创建
+    let convId = currentConvId;
+    if (!convId) {
+      convId = await createConversation();
+      if (!convId) {
+        setLoading(false);
+        return;
+      }
+    }
+
+    // 立即在UI显示用户消息
+    const tempUserMsg: Message = {
+      id: "temp-user-" + Date.now(),
+      role: "user",
+      content: userContent,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
+    setTimeout(scrollToBottom, 50);
+
+    try {
+      const res = await api.post<{
+        userMessage: Message;
+        aiMessage: Message;
+      }>(`/chat/conversations/${convId}/send`, { content: userContent });
+
+      if (res.data) {
+        // 替换临时消息为真实消息，并添加AI回复
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== tempUserMsg.id),
+          res.data!.userMessage,
+          res.data!.aiMessage,
+        ]);
+        setTimeout(scrollToBottom, 100);
+      }
+    } catch (err: any) {
+      // 显示错误
+      const errorMsg: Message = {
+        id: "error-" + Date.now(),
         role: "assistant",
-        content: `收到您的需求："${userMsg.content.slice(0, 50)}"。AI模型将在后端集成后提供真实回复。`,
-        timestamp: new Date(),
+        content: `发送失败: ${err.message || "网络错误"}`,
+        createdAt: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, aiMsg]);
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
       setLoading(false);
-    }, 800);
+      inputRef.current?.focus();
+    }
+  }
+
+  // 切换对话
+  function switchConversation(convId: string) {
+    setCurrentConvId(convId);
+    setMessages([]);
+    navigate(`/chat/${convId}`, { replace: true });
+  }
+
+  // 新建对话
+  function handleNewChat() {
+    setCurrentConvId(null);
+    setMessages([]);
+    navigate(`/chat?skill=${skillType}`, { replace: true });
+  }
+
+  // 简单的 Markdown 渲染
+  function renderContent(content: string) {
+    // 处理标题
+    let html = content
+      .replace(/^### (.+)$/gm, '<h3 class="text-base font-bold mt-3 mb-1">$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2 class="text-lg font-bold mt-4 mb-2">$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>');
+
+    // 处理粗体
+    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+    // 处理分隔线
+    html = html.replace(/^---$/gm, '<hr class="my-3 border-gray-200" />');
+
+    // 处理换行
+    html = html.replace(/\n/g, "<br />");
+
+    return html;
+  }
+
+  // 格式化时间
+  function formatTime(dateStr: string) {
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      {/* 顶部 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4">
-        <Link to="/" className="text-blue-600 hover:text-blue-700">← 返回</Link>
-        <span className="font-bold text-gray-900">AI对话</span>
-      </nav>
-
-      {/* 消息区域 */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-400 mt-20">
-            <p className="text-4xl mb-4">🤖</p>
-            <p>你好！我是BossMate AI超级员工</p>
-            <p className="text-sm mt-1">告诉我你需要什么内容，我来帮你创作</p>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[70%] rounded-2xl px-4 py-3 ${
-                msg.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white border border-gray-200 text-gray-800"
-              }`}
+    <div className="h-screen flex bg-gray-50">
+      {/* 侧边栏 - 对话列表 */}
+      {sidebarOpen && (
+        <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
+          <div className="p-3 border-b border-gray-100">
+            <button
+              onClick={handleNewChat}
+              className="w-full py-2 px-3 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
             >
-              <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-            </div>
+              + 新对话
+            </button>
           </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
-              <p className="text-sm text-gray-400">AI正在思考...</p>
-            </div>
+          <div className="flex-1 overflow-y-auto">
+            {conversations.map((conv) => (
+              <button
+                key={conv.id}
+                onClick={() => switchConversation(conv.id)}
+                className={`w-full text-left px-3 py-2.5 text-sm border-b border-gray-50 hover:bg-gray-50 transition-colors ${
+                  conv.id === currentConvId ? "bg-blue-50 text-blue-700" : "text-gray-700"
+                }`}
+              >
+                <div className="font-medium truncate">{conv.title}</div>
+                <div className="text-xs text-gray-400 mt-0.5">
+                  {conv.skillType === "article" ? "图文" : "对话"} · {formatTime(conv.updatedAt)}
+                </div>
+              </button>
+            ))}
+            {conversations.length === 0 && (
+              <div className="text-center text-gray-400 text-sm mt-8">暂无对话</div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* 输入区域 */}
-      <div className="bg-white border-t border-gray-200 p-4">
-        <div className="max-w-3xl mx-auto flex gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-            placeholder="输入你的需求，如：帮我写一篇关于期刊发展趋势的文章..."
-            disabled={loading}
-          />
+      {/* 主内容区 */}
+      <div className="flex-1 flex flex-col">
+        {/* 顶部导航 */}
+        <nav className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
           <button
-            onClick={handleSend}
-            disabled={loading || !input.trim()}
-            className="px-6 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="text-gray-500 hover:text-gray-700 text-lg"
           >
-            发送
+            {sidebarOpen ? "◀" : "▶"}
           </button>
+          <Link to="/" className="text-blue-600 hover:text-blue-700 text-sm">
+            返回首页
+          </Link>
+          <span className="text-gray-300">|</span>
+          <span className="font-medium text-gray-900 text-sm">
+            {skillType === "article" ? "图文创作" : "AI对话"}
+          </span>
+          {loading && (
+            <span className="ml-auto text-xs text-orange-500 animate-pulse">
+              AI正在生成中...
+            </span>
+          )}
+        </nav>
+
+        {/* 消息区域 */}
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="max-w-3xl mx-auto space-y-4">
+            {messages.length === 0 && !loading && (
+              <div className="text-center text-gray-400 mt-20">
+                <p className="text-5xl mb-4">
+                  {skillType === "article" ? "\u270D\uFE0F" : "\u{1F916}"}
+                </p>
+                <p className="text-lg font-medium text-gray-600">
+                  {skillType === "article"
+                    ? "图文创作助手"
+                    : "BossMate AI"}
+                </p>
+                <p className="text-sm mt-2">
+                  {skillType === "article"
+                    ? "告诉我你想写什么文章，比如主题、受众、字数"
+                    : "有什么可以帮您的？"}
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  {skillType === "article" && (
+                    <>
+                      <QuickPrompt
+                        text="写一篇AI技术趋势文章"
+                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                      />
+                      <QuickPrompt
+                        text="帮我写一篇产品发布公告"
+                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                      />
+                      <QuickPrompt
+                        text="写一篇行业分析报告，1000字"
+                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[75%] rounded-2xl px-4 py-3 ${
+                    msg.role === "user"
+                      ? "bg-blue-600 text-white"
+                      : "bg-white border border-gray-200 text-gray-800 shadow-sm"
+                  }`}
+                >
+                  {msg.role === "assistant" ? (
+                    <div
+                      className="text-sm leading-relaxed prose-sm"
+                      dangerouslySetInnerHTML={{ __html: renderContent(msg.content) }}
+                    />
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  )}
+                  <div
+                    className={`text-xs mt-2 ${
+                      msg.role === "user" ? "text-blue-200" : "text-gray-400"
+                    }`}
+                  >
+                    {formatTime(msg.createdAt)}
+                    {msg.model && msg.model !== "none" && (
+                      <span className="ml-2">via {msg.model}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                    </div>
+                    <span className="text-sm text-gray-400">AI正在思考并生成内容...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* 输入区域 */}
+        <div className="bg-white border-t border-gray-200 p-3">
+          <div className="max-w-3xl mx-auto flex gap-2">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none text-sm"
+              placeholder={
+                skillType === "article"
+                  ? "描述你想写的文章，如：写一篇AI在期刊出版中的应用，面向编辑，800字..."
+                  : "输入你的问题..."
+              }
+              rows={2}
+              disabled={loading}
+            />
+            <button
+              onClick={handleSend}
+              disabled={loading || !input.trim()}
+              className="px-5 py-2.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors self-end text-sm"
+            >
+              {loading ? "生成中" : "发送"}
+            </button>
+          </div>
+          <div className="max-w-3xl mx-auto mt-1.5 text-xs text-gray-400 text-center">
+            Enter 发送 · Shift+Enter 换行 · AI生成内容仅供参考
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+// 快捷提示按钮
+function QuickPrompt({ text, onClick }: { text: string; onClick: (text: string) => void }) {
+  return (
+    <button
+      onClick={() => onClick(text)}
+      className="px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-colors"
+    >
+      {text}
+    </button>
   );
 }
