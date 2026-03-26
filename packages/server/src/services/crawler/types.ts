@@ -10,7 +10,10 @@ export type PlatformName =
   | "xiaohongshu"
   | "weibo"
   | "baijiahao"
-  | "toutiao";
+  | "toutiao"
+  | "openalex"
+  | "pubmed"
+  | "arxiv";
 
 export interface RawHotItem {
   keyword: string;

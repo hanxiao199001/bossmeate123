@@ -43,6 +43,9 @@ const PLATFORM_LABELS: Record<string, string> = {
   douyin: "抖音",
   xiaohongshu: "小红书",
   baijiahao: "百家号",
+  openalex: "OpenAlex学术",
+  pubmed: "PubMed医学",
+  arxiv: "arXiv预印本",
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -154,7 +157,7 @@ export default function KeywordsPage() {
               关键词中心
             </h1>
             <p className="text-sm text-gray-500 mt-1">
-              共 {total} 个关键词 · 支持百度/微博/知乎/头条 4大平台实时抓取
+              共 {total} 个关键词 · 支持 7 大平台（社交热搜+学术数据库）
             </p>
           </div>
           <button

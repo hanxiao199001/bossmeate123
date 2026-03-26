@@ -10,19 +10,22 @@ import { BaiduCrawler } from "./baidu-crawler.js";
 import { WeiboCrawler } from "./weibo-crawler.js";
 import { ZhihuCrawler } from "./zhihu-crawler.js";
 import { ToutiaoCrawler } from "./toutiao-crawler.js";
+import { OpenAlexCrawler } from "./openalex-crawler.js";
+import { PubMedCrawler } from "./pubmed-crawler.js";
+import { ArxivCrawler } from "./arxiv-crawler.js";
 import type { CrawlerAdapter, CrawlerResult, PlatformName } from "./types.js";
 
 // 注册所有爬虫适配器
 const crawlerRegistry: Map<PlatformName, CrawlerAdapter> = new Map([
+  // 社交媒体热搜
   ["baidu", new BaiduCrawler()],
   ["weibo", new WeiboCrawler()],
   ["zhihu", new ZhihuCrawler()],
   ["toutiao", new ToutiaoCrawler()],
-  // TODO: 后续加入
-  // ["wechat", new WechatCrawler()],
-  // ["douyin", new DouyinCrawler()],
-  // ["xiaohongshu", new XiaohongshuCrawler()],
-  // ["baijiahao", new BaijiahaoCrawler()],
+  // 学术数据源
+  ["openalex", new OpenAlexCrawler()],
+  ["pubmed", new PubMedCrawler()],
+  ["arxiv", new ArxivCrawler()],
 ]);
 
 /**
