@@ -32,6 +32,18 @@ export default function DashboardPage() {
         <p className="text-gray-500 mb-8">选择你需要的AI助手功能</p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* 关键词中心（新增） */}
+          <Link
+            to="/keywords"
+            className="bg-white rounded-xl p-6 border border-gray-200 hover:border-blue-400 hover:shadow-md transition-all"
+          >
+            <div className="text-3xl mb-3">🔍</div>
+            <h3 className="font-bold text-gray-900 mb-1">关键词中心</h3>
+            <p className="text-sm text-gray-500">
+              8大平台热点实时抓取，每日关键词智能推荐
+            </p>
+          </Link>
+
           {/* 图文线 */}
           <Link
             to="/chat?skill=article"
@@ -53,25 +65,21 @@ export default function DashboardPage() {
             </p>
             <span className="text-xs text-orange-500 font-medium">即将上线</span>
           </div>
-
-          {/* 客服线（待开发）*/}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 opacity-50">
-            <div className="text-3xl mb-3">💬</div>
-            <h3 className="font-bold text-gray-900 mb-1">智能客服</h3>
-            <p className="text-sm text-gray-500">
-              7×24小时自动应答，SOP驱动的专业服务
-            </p>
-            <span className="text-xs text-orange-500 font-medium">即将上线</span>
-          </div>
         </div>
 
-        {/* 内容管理入口 */}
-        <div className="mt-8">
+        {/* 快捷入口 */}
+        <div className="mt-8 flex gap-4">
+          <Link
+            to="/keywords"
+            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700"
+          >
+            🔍 关键词中心 →
+          </Link>
           <Link
             to="/content"
             className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700"
           >
-            📂 查看内容管理 →
+            📂 内容管理 →
           </Link>
         </div>
       </div>

@@ -105,6 +105,104 @@ CREATE TABLE IF NOT EXISTS token_logs (
 CREATE INDEX IF NOT EXISTS idx_token_tenant ON token_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_token_created ON token_logs(created_at);
 
+-- 关键词库
+CREATE TABLE IF NOT EXISTS keywords (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  keyword VARCHAR(200) NOT NULL,
+  source_platform VARCHAR(50) NOT NULL,
+  heat_score REAL NOT NULL DEFAULT 0,
+  composite_score REAL DEFAULT 0,
+  category VARCHAR(50),
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  first_seen_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  last_seen_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  appear_count INTEGER NOT NULL DEFAULT 1,
+  used_in_articles JSONB DEFAULT '[]',
+  metadata JSONB DEFAULT '{}',
+  crawl_date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kw_tenant ON keywords(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_kw_platform ON keywords(source_platform);
+CREATE INDEX IF NOT EXISTS idx_kw_category ON keywords(category);
+CREATE INDEX IF NOT EXISTS idx_kw_crawl_date ON keywords(crawl_date);
+CREATE INDEX IF NOT EXISTS idx_kw_composite ON keywords(composite_score);
+
+-- 期刊库
+CREATE TABLE IF NOT EXISTS journals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  name VARCHAR(300) NOT NULL,
+  name_en VARCHAR(300),
+  issn VARCHAR(20),
+  publisher VARCHAR(200),
+  discipline VARCHAR(100),
+  partition VARCHAR(20),
+  impact_factor REAL,
+  annual_volume INTEGER,
+  acceptance_rate REAL,
+  review_cycle VARCHAR(50),
+  is_warning_list BOOLEAN NOT NULL DEFAULT false,
+  warning_year VARCHAR(10),
+  letpub_views INTEGER DEFAULT 0,
+  peer_write_count INTEGER DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  source VARCHAR(50),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_tenant ON journals(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_journal_discipline ON journals(discipline);
+CREATE INDEX IF NOT EXISTS idx_journal_partition ON journals(partition);
+CREATE INDEX IF NOT EXISTS idx_journal_warning ON journals(is_warning_list);
+
+-- 竞品内容库
+CREATE TABLE IF NOT EXISTS competitors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  account_id VARCHAR(200) NOT NULL,
+  account_name VARCHAR(200),
+  platform VARCHAR(50) NOT NULL,
+  article_title VARCHAR(500),
+  article_content TEXT,
+  article_url VARCHAR(1000),
+  content_type VARCHAR(50),
+  hook_words JSONB DEFAULT '[]',
+  journal_mentioned JSONB DEFAULT '[]',
+  public_metrics JSONB DEFAULT '{}',
+  crawl_date DATE NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comp_tenant ON competitors(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_comp_platform ON competitors(platform);
+CREATE INDEX IF NOT EXISTS idx_comp_crawl_date ON competitors(crawl_date);
+CREATE INDEX IF NOT EXISTS idx_comp_content_type ON competitors(content_type);
+
+-- 分发记录库
+CREATE TABLE IF NOT EXISTS distribution_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID REFERENCES contents(id),
+  platform VARCHAR(50) NOT NULL,
+  account_name VARCHAR(200),
+  published_title VARCHAR(500),
+  published_url VARCHAR(1000),
+  adapted_content TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  published_at TIMESTAMP,
+  metrics JSONB DEFAULT '{}',
+  metrics_updated_at TIMESTAMP,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dist_tenant ON distribution_records(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_dist_content ON distribution_records(content_id);
+CREATE INDEX IF NOT EXISTS idx_dist_platform ON distribution_records(platform);
+CREATE INDEX IF NOT EXISTS idx_dist_status ON distribution_records(status);
+
 -- 知识库条目
 CREATE TABLE IF NOT EXISTS knowledge_entries (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

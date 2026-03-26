@@ -7,6 +7,7 @@ import RegisterPage from "./pages/RegisterPage";
 import ChatPage from "./pages/ChatPage";
 import ContentPage from "./pages/ContentPage";
 import DashboardPage from "./pages/DashboardPage";
+import KeywordsPage from "./pages/KeywordsPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -43,6 +44,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ChatPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/keywords"
+        element={
+          <ProtectedRoute>
+            <KeywordsPage />
           </ProtectedRoute>
         }
       />
