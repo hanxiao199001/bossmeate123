@@ -1066,14 +1066,7 @@ export default function WorkflowPage() {
                     if (imgMatch) {
                       const src = imgMatch[2];
                       const alt = imgMatch[1];
-                      // 对SVG data URI: 直接解码内嵌，避免img标签兼容问题
-                      if (src.startsWith("data:image/svg+xml;base64,")) {
-                        try {
-                          const svgContent = atob(src.replace("data:image/svg+xml;base64,", ""));
-                          return <div key={i} className="my-4 flex justify-center"><div className="inline-block rounded-lg border border-gray-200 shadow-sm overflow-hidden" dangerouslySetInnerHTML={{ __html: svgContent }} /><p className="text-xs text-gray-400 mt-1 text-center">{alt}</p></div>;
-                        } catch { /* fallback to img */ }
-                      }
-                      return <div key={i} className="my-3 text-center"><img src={src} alt={alt} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                      return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
                     }
                     if (line.trim() === "") return <div key={i} className="h-2" />;
                     return <p key={i} className="text-gray-700 leading-relaxed mb-2">{line}</p>;
@@ -1439,13 +1432,7 @@ export default function WorkflowPage() {
                       if (imgMatch) {
                         const src = imgMatch[2];
                         const alt = imgMatch[1];
-                        if (src.startsWith("data:image/svg+xml;base64,")) {
-                          try {
-                            const svgContent = atob(src.replace("data:image/svg+xml;base64,", ""));
-                            return <div key={i} className="my-4 flex justify-center"><div className="inline-block rounded-lg border border-gray-200 shadow-sm overflow-hidden" dangerouslySetInnerHTML={{ __html: svgContent }} /><p className="text-xs text-gray-400 mt-1 text-center">{alt}</p></div>;
-                          } catch { /* fallback */ }
-                        }
-                        return <div key={i} className="my-4 text-center"><img src={src} alt={alt} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                        return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
                       }
                       return <p key={i} className="text-sm text-gray-700 leading-relaxed my-2 indent-8">{trimmed.replace(/\*\*(.+?)\*\*/g, (_, t) => t)}</p>;
                     })}
