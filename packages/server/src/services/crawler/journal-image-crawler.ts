@@ -193,9 +193,20 @@ export function generateJournalDataCard(journal: {
 
 /**
  * 将 SVG 转为 data URI（可直接嵌入 img src）
+ * 使用 URL 编码方式，确保中文 UTF-8 正确显示
  */
 export function svgToDataUri(svg: string): string {
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+  // 用 encodeURIComponent 保证中文 UTF-8 正确传递
+  // 再做一些安全的反转义让 URI 短一些
+  const encoded = encodeURIComponent(svg)
+    .replace(/%20/g, " ")
+    .replace(/%3D/g, "=")
+    .replace(/%3A/g, ":")
+    .replace(/%2F/g, "/")
+    .replace(/%22/g, "'")
+    .replace(/%2C/g, ",")
+    .replace(/%3B/g, ";");
+  return `data:image/svg+xml;charset=utf-8,${encoded}`;
 }
 
 /**
