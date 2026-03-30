@@ -1062,7 +1062,7 @@ export default function WorkflowPage() {
                     if (line.startsWith("# ")) return <h1 key={i} className="text-xl font-bold text-gray-900 mt-4 mb-3">{line.replace("# ", "")}</h1>;
                     if (line.startsWith("---")) return <hr key={i} className="my-4 border-gray-200" />;
                     if (line.startsWith("- ") || line.startsWith("* ")) return <li key={i} className="text-gray-700 ml-4">{line.replace(/^[-*]\s/, "")}</li>;
-                    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+                    const imgMatch = line.match(/^!\[([^\]]*)\]\((.+)\)/);
                     if (imgMatch) return <div key={i} className="my-3 text-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{imgMatch[1]}</p></div>;
                     if (line.trim() === "") return <div key={i} className="h-2" />;
                     return <p key={i} className="text-gray-700 leading-relaxed mb-2">{line}</p>;
@@ -1424,7 +1424,7 @@ export default function WorkflowPage() {
                       if (trimmed.startsWith("> ")) return <blockquote key={i} className="border-l-3 border-green-400 pl-4 py-2 my-2 bg-gray-50 text-gray-600 text-sm italic rounded-r">{trimmed.slice(2)}</blockquote>;
                       if (trimmed.startsWith("- ")) return <p key={i} className="pl-5 my-1 text-sm text-gray-700 leading-relaxed">{"\u2022 "}{trimmed.slice(2)}</p>;
                       if (/^\d+\. /.test(trimmed)) return <p key={i} className="pl-5 my-1 text-sm text-gray-700 leading-relaxed">{trimmed}</p>;
-                      const imgMatch = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+                      const imgMatch = trimmed.match(/^!\[([^\]]*)\]\((.+)\)/);
                       if (imgMatch) return <div key={i} className="my-4 text-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{imgMatch[1]}</p></div>;
                       return <p key={i} className="text-sm text-gray-700 leading-relaxed my-2 indent-8">{trimmed.replace(/\*\*(.+?)\*\*/g, (_, t) => t)}</p>;
                     })}
