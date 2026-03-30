@@ -300,3 +300,113 @@ export const knowledgeEntries = pgTable(
     index("idx_knowledge_category").on(table.category),
   ]
 );
+
+// ============ 微信公众号配置 ============
+export const wechatConfigs = pgTable("wechat_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id")
+    .references(() => tenants.id)
+    .notNull()
+    .unique(),
+  appId: varchar("app_id", { length: 100 }).notNull(),
+  appSecret: varchar("app_secret", { length: 200 }).notNull(),
+  accessToken: text("access_token"),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  accountName: varchar("account_name", { length: 100 }), // 公众号名称
+  isVerified: boolean("is_verified").default(false),     // 是否已验证可用
+  thumbMediaId: text("thumb_media_id"),                  // 默认封面图的media_id（缓存）
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ============ 关键词热度历史（每日快照）============
+export const keywordHistory = pgTable(
+  "keyword_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    keyword: varchar("keyword", { length: 200 }).notNull(),
+    snapshotDate: date("snapshot_date").notNull(), // 快照日期
+    heatScore: real("heat_score").notNull().default(0), // 当日热度分
+    compositeScore: real("composite_score").default(0), // 当日综合分
+    platforms: jsonb("platforms").default([]), // 当日出现的平台列表
+    platformCount: integer("platform_count").default(1), // 跨平台数
+    category: varchar("category", { length: 50 }),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_kwh_tenant").on(table.tenantId),
+    index("idx_kwh_keyword").on(table.keyword),
+    index("idx_kwh_date").on(table.snapshotDate),
+    uniqueIndex("idx_kwh_tenant_keyword_date").on(
+      table.tenantId,
+      table.keyword,
+      table.snapshotDate
+    ),
+  ]
+);
+
+// ============ 行业关键词库（动态词库，替代硬编码）============
+export const industryKeywords = pgTable(
+  "industry_keywords",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    word: varchar("word", { length: 200 }).notNull(), // 关键词
+    level: varchar("level", { length: 20 }).notNull(), // primary | secondary | context
+    category: varchar("category", { length: 50 }), // 分类标签：期刊类型/发表相关/学术工具...
+    weight: real("weight").default(1.0), // 权重（人工标记可调整）
+    isSystem: boolean("is_system").default(true), // 是否系统预置（vs 人工添加）
+    isActive: boolean("is_active").default(true), // 是否启用
+    source: varchar("source", { length: 50 }).default("system"), // system | manual | learned
+    hitCount: integer("hit_count").default(0), // 累计命中次数
+    lastHitAt: timestamp("last_hit_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ik_tenant").on(table.tenantId),
+    index("idx_ik_level").on(table.level),
+    index("idx_ik_active").on(table.isActive),
+    uniqueIndex("idx_ik_tenant_word_level").on(
+      table.tenantId,
+      table.word,
+      table.level
+    ),
+  ]
+);
+
+// ============ 平台账号管理（多账号+多平台）============
+export const platformAccounts = pgTable(
+  "platform_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    platform: varchar("platform", { length: 50 }).notNull(), // wechat | baijiahao | toutiao | zhihu | xiaohongshu
+    accountName: varchar("account_name", { length: 200 }).notNull(), // 账号名称/昵称
+    accountId: varchar("account_id", { length: 200 }), // 平台方的账号ID
+    credentials: jsonb("credentials").default({}).notNull(), // 平台凭证 (加密存储)
+    // wechat: { appId, appSecret }
+    // baijiahao: { appId, appSecret, accessToken }
+    // toutiao: { appId, appSecret }
+    // zhihu: { cookie, token }
+    // xiaohongshu: { cookie, token }
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active | disabled | expired
+    isVerified: boolean("is_verified").default(false),
+    groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
+    metadata: jsonb("metadata").default({}), // 扩展信息
+    lastPublishedAt: timestamp("last_published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_pa_tenant").on(table.tenantId),
+    index("idx_pa_platform").on(table.platform),
+    index("idx_pa_group").on(table.groupName),
+  ]
+);

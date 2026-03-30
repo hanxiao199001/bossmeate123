@@ -1,7 +1,23 @@
 import { config } from "dotenv";
+import { resolve, dirname } from "path";
+import { existsSync } from "fs";
+import { fileURLToPath } from "url";
 import { z } from "zod";
 
-config();
+// 从当前目录向上查找 .env 文件（支持 monorepo）
+function findEnvFile(): string | undefined {
+  let dir = process.cwd();
+  for (let i = 0; i < 5; i++) {
+    const envPath = resolve(dir, ".env");
+    if (existsSync(envPath)) return envPath;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
+config({ path: findEnvFile() });
 
 const envSchema = z.object({
   // 服务

@@ -218,6 +218,92 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_tenant ON knowledge_entries(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge_entries(category);
+
+-- 微信公众号配置
+CREATE TABLE IF NOT EXISTS wechat_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) UNIQUE,
+  app_id VARCHAR(100) NOT NULL,
+  app_secret VARCHAR(200) NOT NULL,
+  access_token TEXT,
+  token_expires_at TIMESTAMP,
+  account_name VARCHAR(100),
+  is_verified BOOLEAN DEFAULT false,
+  thumb_media_id TEXT,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
+-- 补丁：给已存在的 wechat_configs 表补上缺失的列
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'wechat_configs' AND column_name = 'thumb_media_id'
+  ) THEN
+    ALTER TABLE wechat_configs ADD COLUMN thumb_media_id TEXT;
+  END IF;
+END $$;
+
+-- 关键词热度历史（每日快照）
+CREATE TABLE IF NOT EXISTS keyword_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  keyword VARCHAR(200) NOT NULL,
+  snapshot_date DATE NOT NULL,
+  heat_score REAL NOT NULL DEFAULT 0,
+  composite_score REAL DEFAULT 0,
+  platforms JSONB DEFAULT '[]',
+  platform_count INTEGER DEFAULT 1,
+  category VARCHAR(50),
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kwh_tenant ON keyword_history(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_kwh_keyword ON keyword_history(keyword);
+CREATE INDEX IF NOT EXISTS idx_kwh_date ON keyword_history(snapshot_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kwh_tenant_keyword_date ON keyword_history(tenant_id, keyword, snapshot_date);
+
+-- 行业关键词库（动态词库）
+CREATE TABLE IF NOT EXISTS industry_keywords (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  word VARCHAR(200) NOT NULL,
+  level VARCHAR(20) NOT NULL,
+  category VARCHAR(50),
+  weight REAL DEFAULT 1.0,
+  is_system BOOLEAN DEFAULT true,
+  is_active BOOLEAN DEFAULT true,
+  source VARCHAR(50) DEFAULT 'system',
+  hit_count INTEGER DEFAULT 0,
+  last_hit_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ik_tenant ON industry_keywords(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ik_level ON industry_keywords(level);
+CREATE INDEX IF NOT EXISTS idx_ik_active ON industry_keywords(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ik_tenant_word_level ON industry_keywords(tenant_id, word, level);
+
+-- 平台账号管理（多账号+多平台）
+CREATE TABLE IF NOT EXISTS platform_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  platform VARCHAR(50) NOT NULL,
+  account_name VARCHAR(200) NOT NULL,
+  account_id VARCHAR(200),
+  credentials JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  is_verified BOOLEAN DEFAULT false,
+  group_name VARCHAR(100),
+  metadata JSONB DEFAULT '{}',
+  last_published_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pa_tenant ON platform_accounts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_pa_platform ON platform_accounts(platform);
+CREATE INDEX IF NOT EXISTS idx_pa_group ON platform_accounts(group_name);
 `;
 
 async function migrate() {

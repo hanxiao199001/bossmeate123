@@ -33,14 +33,20 @@ async function request<T>(
     headers,
   });
 
-  const data = await response.json();
+  let data: any;
+  try {
+    const text = await response.text();
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { code: "PARSE_ERROR", message: `服务器返回异常 (HTTP ${response.status})` };
+  }
 
   if (!response.ok) {
     // 401 自动登出
     if (response.status === 401) {
       useAuthStore.getState().logout();
     }
-    throw new Error(data.message || "请求失败");
+    throw new Error(data.message || `请求失败 (${response.status})`);
   }
 
   return data;

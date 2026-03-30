@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql, count } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { contents } from "../models/schema.js";
 import { logger } from "../config/logger.js";
@@ -20,21 +20,88 @@ const updateContentSchema = z.object({
 
 export async function contentRoutes(app: FastifyInstance) {
   /**
-   * GET /content - 获取内容列表
+   * GET /content - 获取内容列表（支持筛选和分页）
    */
   app.get("/", async (request) => {
-    const query = request.query as { type?: string; status?: string };
+    const query = request.query as {
+      type?: string;
+      status?: string;
+      page?: string;
+      pageSize?: string;
+    };
 
-    let conditions = [eq(contents.tenantId, request.tenantId)];
+    const page = Math.max(1, parseInt(query.page || "1", 10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(query.pageSize || "20", 10)));
+    const offset = (page - 1) * pageSize;
 
-    const list = await db
-      .select()
+    const conditions = [eq(contents.tenantId, request.tenantId)];
+
+    if (query.type && ["article", "video_script", "reply"].includes(query.type)) {
+      conditions.push(eq(contents.type, query.type));
+    }
+
+    if (query.status && ["draft", "reviewing", "approved", "published"].includes(query.status)) {
+      conditions.push(eq(contents.status, query.status));
+    }
+
+    const whereClause = and(...conditions);
+
+    const [list, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(contents)
+        .where(whereClause)
+        .orderBy(desc(contents.updatedAt))
+        .limit(pageSize)
+        .offset(offset),
+      db
+        .select({ total: count() })
+        .from(contents)
+        .where(whereClause),
+    ]);
+
+    const total = totalResult[0]?.total || 0;
+
+    return {
+      code: "OK",
+      data: {
+        items: list,
+        total,
+        page,
+        pageSize,
+      },
+    };
+  });
+
+  /**
+   * GET /content/stats - 获取内容统计（各状态数量）
+   */
+  app.get("/stats", async (request) => {
+    const result = await db
+      .select({
+        status: contents.status,
+        type: contents.type,
+        count: count(),
+      })
       .from(contents)
-      .where(and(...conditions))
-      .orderBy(desc(contents.updatedAt))
-      .limit(100);
+      .where(eq(contents.tenantId, request.tenantId))
+      .groupBy(contents.status, contents.type);
 
-    return { code: "OK", data: list };
+    // 聚合为更友好的格式
+    const stats = {
+      total: 0,
+      byStatus: {} as Record<string, number>,
+      byType: {} as Record<string, number>,
+    };
+
+    for (const row of result) {
+      const c = Number(row.count);
+      stats.total += c;
+      stats.byStatus[row.status] = (stats.byStatus[row.status] || 0) + c;
+      stats.byType[row.type] = (stats.byType[row.type] || 0) + c;
+    }
+
+    return { code: "OK", data: stats };
   });
 
   /**
@@ -112,5 +179,30 @@ export async function contentRoutes(app: FastifyInstance) {
     logger.info({ contentId: id }, "内容更新成功");
 
     return { code: "OK", data: updated };
+  });
+
+  /**
+   * DELETE /content/:id - 删除内容
+   */
+  app.delete("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const [deleted] = await db
+      .delete(contents)
+      .where(
+        and(eq(contents.id, id), eq(contents.tenantId, request.tenantId))
+      )
+      .returning();
+
+    if (!deleted) {
+      return reply.code(404).send({
+        code: "NOT_FOUND",
+        message: "内容不存在",
+      });
+    }
+
+    logger.info({ contentId: id }, "内容删除成功");
+
+    return { code: "OK", data: { id } };
   });
 }

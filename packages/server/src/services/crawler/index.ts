@@ -1,50 +1,66 @@
 /**
- * Agent 1：热点爬虫调度器
+ * 爬虫调度器
  *
- * 统一调度所有平台爬虫，汇总结果
- * 支持按需单平台抓取或全平台批量抓取
+ * 两条业务线：
+ * 1. 国内核心线 (domestic)：抓热门学科关键词 → 做泛流量内容
+ *    - baidu-academic: 百度学术热词联想
+ *    - wechat-index: 搜狗微信公众号热文
+ *    - policy-monitor: 职称政策热词监控
+ *
+ * 2. SCI线 (sci)：按LetPub大类抓期刊数据 → 匹配科研产品
+ *    - letpub: LetPub期刊分类数据
+ *    - openalex: OpenAlex学术数据（补充IF/发文量）
+ *    - pubmed: PubMed医学方向（中国作者投稿热点）
+ *    - arxiv: arXiv预印本（计算机/物理研究趋势）
  */
 
 import { logger } from "../../config/logger.js";
-import { BaiduCrawler } from "./baidu-crawler.js";
-import { WeiboCrawler } from "./weibo-crawler.js";
-import { ZhihuCrawler } from "./zhihu-crawler.js";
-import { ToutiaoCrawler } from "./toutiao-crawler.js";
+import { BaiduAcademicCrawler } from "./baidu-academic-crawler.js";
+import { WechatIndexCrawler } from "./wechat-index-crawler.js";
+import { PolicyCrawler } from "./policy-crawler.js";
+import { LetPubCrawler } from "./letpub-crawler.js";
 import { OpenAlexCrawler } from "./openalex-crawler.js";
 import { PubMedCrawler } from "./pubmed-crawler.js";
 import { ArxivCrawler } from "./arxiv-crawler.js";
-import type { CrawlerAdapter, CrawlerResult, PlatformName } from "./types.js";
+import type { CrawlerAdapter, CrawlerResult, CrawlerTrack, PlatformName } from "./types.js";
 
-// 注册所有爬虫适配器
+// ===== 注册所有爬虫 =====
 const crawlerRegistry = new Map<PlatformName, CrawlerAdapter>();
-// 社交媒体（行业定向搜索版）
-crawlerRegistry.set("baidu", new BaiduCrawler());
-crawlerRegistry.set("weibo", new WeiboCrawler());
-crawlerRegistry.set("zhihu", new ZhihuCrawler());
-crawlerRegistry.set("toutiao", new ToutiaoCrawler());
-// 学术数据源
+
+// 国内核心线
+crawlerRegistry.set("baidu-academic", new BaiduAcademicCrawler());
+crawlerRegistry.set("wechat-index", new WechatIndexCrawler());
+crawlerRegistry.set("policy-monitor", new PolicyCrawler());
+
+// SCI线
+crawlerRegistry.set("letpub", new LetPubCrawler());
 crawlerRegistry.set("openalex", new OpenAlexCrawler());
 crawlerRegistry.set("pubmed", new PubMedCrawler());
 crawlerRegistry.set("arxiv", new ArxivCrawler());
 
-/**
- * 获取所有已注册平台
- */
+// ===== 公开接口 =====
+
+/** 获取所有已注册平台 */
 export function getRegisteredPlatforms(): PlatformName[] {
   return Array.from(crawlerRegistry.keys());
 }
 
-/**
- * 抓取单个平台
- */
-export async function crawlPlatform(
-  platform: PlatformName
-): Promise<CrawlerResult> {
+/** 获取某条业务线的平台 */
+export function getPlatformsByTrack(track: CrawlerTrack): PlatformName[] {
+  return Array.from(crawlerRegistry.entries())
+    .filter(([_, crawler]) => crawler.track === track)
+    .map(([name]) => name);
+}
+
+/** 抓取单个平台 */
+export async function crawlPlatform(platform: PlatformName): Promise<CrawlerResult> {
   const crawler = crawlerRegistry.get(platform);
   if (!crawler) {
     return {
       platform,
-      items: [],
+      track: "domestic",
+      keywords: [],
+      journals: [],
       success: false,
       error: `未注册的平台: ${platform}`,
       crawledAt: new Date().toISOString(),
@@ -53,53 +69,73 @@ export async function crawlPlatform(
   return crawler.crawl();
 }
 
-/**
- * 批量抓取所有平台（并发执行）
- */
-export async function crawlAll(): Promise<CrawlerResult[]> {
-  const platforms = getRegisteredPlatforms();
+/** 按业务线批量抓取（并发执行） */
+export async function crawlByTrack(track: CrawlerTrack): Promise<CrawlerResult[]> {
+  const platforms = getPlatformsByTrack(track);
+  const trackLabel = track === "domestic" ? "国内核心" : "SCI";
+
   logger.info(
-    { platforms, count: platforms.length },
-    "🕷️ Agent 1 启动：开始批量抓取所有平台热点"
+    { track, platforms, count: platforms.length },
+    `🕷️ ${trackLabel}线启动：开始批量抓取`
   );
 
   const startTime = Date.now();
 
-  // 所有平台并发执行
   const results = await Promise.allSettled(
     platforms.map((p) => crawlPlatform(p))
   );
 
   const crawlerResults: CrawlerResult[] = results.map((r, i) => {
-    if (r.status === "fulfilled") {
-      return r.value;
-    }
+    if (r.status === "fulfilled") return r.value;
     return {
       platform: platforms[i],
-      items: [],
+      track,
+      keywords: [],
+      journals: [],
       success: false,
       error: r.reason?.message || "Unknown error",
       crawledAt: new Date().toISOString(),
     };
   });
 
-  const totalItems = crawlerResults.reduce(
-    (sum, r) => sum + r.items.length,
-    0
-  );
+  const totalKeywords = crawlerResults.reduce((sum, r) => sum + r.keywords.length, 0);
+  const totalJournals = crawlerResults.reduce((sum, r) => sum + r.journals.length, 0);
   const successCount = crawlerResults.filter((r) => r.success).length;
 
   logger.info(
     {
-      totalItems,
+      track,
+      totalKeywords,
+      totalJournals,
       successPlatforms: successCount,
       totalPlatforms: platforms.length,
       durationMs: Date.now() - startTime,
     },
-    "🕷️ Agent 1 完成：热点抓取结束"
+    `🕷️ ${trackLabel}线完成`
   );
 
   return crawlerResults;
 }
 
-export type { CrawlerResult, RawHotItem, PlatformName } from "./types.js";
+/** 全部抓取（两条线并发） */
+export async function crawlAll(): Promise<CrawlerResult[]> {
+  logger.info("🕷️ 全量抓取启动：国内核心线 + SCI线");
+  const startTime = Date.now();
+
+  const [domesticResults, sciResults] = await Promise.all([
+    crawlByTrack("domestic"),
+    crawlByTrack("sci"),
+  ]);
+
+  const allResults = [...domesticResults, ...sciResults];
+
+  logger.info(
+    { totalPlatforms: allResults.length, durationMs: Date.now() - startTime },
+    "🕷️ 全量抓取完成"
+  );
+
+  return allResults;
+}
+
+// ===== 导出类型 =====
+export type { CrawlerResult, HotKeywordItem, JournalItem, PlatformName, CrawlerTrack } from "./types.js";

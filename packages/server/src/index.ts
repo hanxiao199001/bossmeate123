@@ -12,6 +12,11 @@ import { chatRoutes } from "./routes/chat.js";
 import { contentRoutes } from "./routes/content.js";
 import { healthRoutes } from "./routes/health.js";
 import { keywordRoutes } from "./routes/keywords.js";
+import { journalRoutes } from "./routes/journals.js";
+import { topicRoutes } from "./routes/topic.js";
+import { workflowRoutes } from "./routes/workflow.js";
+import { wechatRoutes } from "./routes/wechat.js";
+import { accountRoutes } from "./routes/accounts.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
@@ -42,6 +47,11 @@ async function bootstrap() {
     await protectedApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
     await protectedApp.register(contentRoutes, { prefix: `${env.API_PREFIX}/content` });
     await protectedApp.register(keywordRoutes, { prefix: `${env.API_PREFIX}/keywords` });
+    await protectedApp.register(journalRoutes, { prefix: `${env.API_PREFIX}` });
+    await protectedApp.register(topicRoutes, { prefix: `${env.API_PREFIX}` });
+    await protectedApp.register(workflowRoutes, { prefix: `${env.API_PREFIX}` });
+    await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });
+    await protectedApp.register(accountRoutes, { prefix: `${env.API_PREFIX}` });
   });
 
   // 初始化 AI 提供商

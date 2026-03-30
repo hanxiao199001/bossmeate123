@@ -6,8 +6,12 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ChatPage from "./pages/ChatPage";
 import ContentPage from "./pages/ContentPage";
+import ContentDetailPage from "./pages/ContentDetailPage";
 import DashboardPage from "./pages/DashboardPage";
 import KeywordsPage from "./pages/KeywordsPage";
+import WorkflowPage from "./pages/WorkflowPage";
+import SettingsPage from "./pages/SettingsPage";
+import AccountsPage from "./pages/AccountsPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -31,6 +35,17 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+
+      {/* 工作流管线（图文/视频） */}
+      <Route
+        path="/workflow/:type"
+        element={
+          <ProtectedRoute>
+            <WorkflowPage />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/chat"
         element={
@@ -60,6 +75,32 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ContentPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/content/:id"
+        element={
+          <ProtectedRoute>
+            <ContentDetailPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/accounts"
+        element={
+          <ProtectedRoute>
+            <AccountsPage />
           </ProtectedRoute>
         }
       />

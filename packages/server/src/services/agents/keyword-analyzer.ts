@@ -17,50 +17,67 @@ import { keywords } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { eq, and, gte, sql } from "drizzle-orm";
 import type { CrawlerResult } from "../crawler/types.js";
+import { getActiveWords, incrementHitCounts } from "./keyword-dictionary.js";
+import { takeKeywordSnapshot } from "./keyword-trend.js";
 
-// ========== 期刊代发行业关键词库（严格版）==========
+// ========== 动态词库缓存（避免每次分析都查库）==========
 
-// 一级关键词：直接命中即为行业相关（高权重）
-const PRIMARY_KEYWORDS = [
-  // 期刊类型
+let cachedWords: { primary: string[]; secondary: string[]; context: string[] } | null = null;
+let cacheExpiry = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
+
+// 硬编码 fallback（首次未初始化词库时使用）
+const FALLBACK_PRIMARY = [
   "SCI", "SSCI", "EI", "CSCD", "CSSCI", "核心期刊", "北大核心", "南大核心",
-  "学报", "期刊", "杂志",
-  // 期刊指标
-  "影响因子", "IF", "分区", "JCR", "中科院分区", "期刊预警", "降区", "升区",
-  // 发表相关
-  "论文发表", "投稿", "审稿", "拒稿", "退修", "录用", "见刊", "检索",
-  "论文代发", "论文润色", "英文润色", "选刊", "期刊推荐",
-  // 查重/学术规范
+  "学报", "期刊", "杂志", "影响因子", "IF", "分区", "JCR", "中科院分区",
+  "期刊预警", "降区", "升区", "论文发表", "投稿", "审稿", "拒稿", "退修",
+  "录用", "见刊", "检索", "论文代发", "论文润色", "英文润色", "选刊", "期刊推荐",
   "查重", "重复率", "学术不端", "撤稿", "知网", "万方", "维普",
-  // 学术工具/平台
   "LetPub", "小木虫", "Sci-Hub", "PubMed", "Web of Science", "WOS",
-  "Google Scholar", "中国知网", "CNKI",
-  // 升学/科研
-  "考研", "考博", "保研", "硕士", "博士", "导师", "学位论文",
-  "开题", "答辩", "毕业论文",
-  // 基金/课题
-  "国自然", "基金申请", "课题申报", "项目申请", "科研经费",
-  // 学术写作
-  "SCI写作", "论文写作", "文献综述", "Meta分析", "系统综述",
+  "Google Scholar", "中国知网", "CNKI", "考研", "考博", "保研", "硕士", "博士",
+  "导师", "学位论文", "开题", "答辩", "毕业论文", "国自然", "基金申请", "课题申报",
+  "项目申请", "科研经费", "SCI写作", "论文写作", "文献综述", "Meta分析", "系统综述",
   "实验设计", "统计分析", "SPSS", "R语言",
 ];
-
-// 二级关键词：需要与学术语境组合才算行业相关（低权重）
-const SECONDARY_KEYWORDS = [
+const FALLBACK_SECONDARY = [
   "论文", "发表", "科研", "学术", "研究", "高校", "大学", "教授",
   "学科", "专业", "医学", "工程", "教育", "经济", "管理",
   "Nature", "Science", "Lancet", "Cell", "JAMA", "BMJ", "IEEE",
-  "Springer", "Elsevier", "Wiley",
-  "OA", "开放获取", "预印本", "arXiv",
+  "Springer", "Elsevier", "Wiley", "OA", "开放获取", "预印本", "arXiv",
   "临床", "实验", "样本", "数据", "模型", "算法",
 ];
-
-// 学术语境词（用于二级关键词的组合判断）
-const ACADEMIC_CONTEXT = [
+const FALLBACK_CONTEXT = [
   "论文", "期刊", "发表", "投稿", "审稿", "引用", "索引", "检索",
   "研究", "学术", "科研", "课题", "基金", "实验", "数据",
   "综述", "分析", "方法", "结果", "结论",
 ];
+
+/**
+ * 获取词库（带缓存），如果数据库词库为空则用 fallback
+ */
+async function getWordLists(tenantId: string) {
+  if (cachedWords && Date.now() < cacheExpiry) {
+    return cachedWords;
+  }
+
+  try {
+    const words = await getActiveWords(tenantId);
+    if (words.primary.length > 0) {
+      cachedWords = words;
+      cacheExpiry = Date.now() + CACHE_TTL;
+      return words;
+    }
+  } catch (err) {
+    logger.warn({ error: err }, "获取动态词库失败，使用 fallback");
+  }
+
+  // Fallback 到硬编码
+  return {
+    primary: FALLBACK_PRIMARY,
+    secondary: FALLBACK_SECONDARY,
+    context: FALLBACK_CONTEXT,
+  };
+}
 
 interface AnalyzedKeyword {
   keyword: string;
@@ -90,7 +107,7 @@ export async function analyzeKeywords(
 ): Promise<KeywordReport> {
   const today = new Date().toISOString().split("T")[0];
   const totalRawItems = crawlerResults.reduce(
-    (sum, r) => sum + r.items.length,
+    (sum, r) => sum + r.keywords.length + r.journals.length,
     0
   );
 
@@ -105,7 +122,8 @@ export async function analyzeKeywords(
   for (const result of crawlerResults) {
     if (!result.success) continue;
 
-    for (const item of result.items) {
+    // 处理国内核心线的热词
+    for (const item of result.keywords) {
       const normalized = item.keyword.trim().toLowerCase();
       const existing = keywordMap.get(normalized);
 
@@ -120,19 +138,44 @@ export async function analyzeKeywords(
           platforms: [item.platform],
           totalHeatScore: item.heatScore,
           compositeScore: 0,
-          category: null,
-          isIndustryRelated: false,
+          category: item.discipline || null,
+          isIndustryRelated: true, // 国内核心线的关键词已经过定向搜索，默认行业相关
         });
       }
+    }
+
+    // 处理SCI线的期刊数据（将期刊名转为关键词入库）
+    for (const journal of result.journals) {
+      const normalized = journal.name.trim().toLowerCase();
+      if (keywordMap.has(normalized)) continue;
+
+      keywordMap.set(normalized, {
+        keyword: journal.name.trim(),
+        platforms: [journal.platform],
+        totalHeatScore: journal.annualVolume || journal.impactFactor || 100,
+        compositeScore: 0,
+        category: journal.discipline || null,
+        isIndustryRelated: true, // SCI线的期刊数据本身就是行业数据
+      });
     }
   }
 
   const afterDedup = keywordMap.size;
 
-  // Step 2: 严格行业相关性过滤 + 分类
+  // Step 2: 严格行业相关性过滤 + 分类（使用动态词库）
+  const wordLists = await getWordLists(tenantId);
+  const hitWords: string[] = []; // 记录命中的词，用于更新命中计数
+
   for (const [, item] of keywordMap) {
-    item.isIndustryRelated = checkIndustryRelevance(item.keyword);
+    const { isRelated, hitWord } = checkIndustryRelevanceDynamic(
+      item.keyword,
+      wordLists.primary,
+      wordLists.secondary,
+      wordLists.context
+    );
+    item.isIndustryRelated = isRelated;
     item.category = inferCategory(item.keyword);
+    if (hitWord) hitWords.push(hitWord);
   }
 
   // Step 3: 计算综合热度分（跨平台权重更高）
@@ -234,47 +277,61 @@ export async function analyzeKeywords(
     "🔍 Agent 2 完成：关键词分析结束（仅入库行业相关关键词）"
   );
 
+  // Step 6: 写入每日快照（供趋势分析用）
+  try {
+    await takeKeywordSnapshot(tenantId);
+  } catch (err) {
+    logger.warn({ error: err }, "每日快照写入失败（不影响主流程）");
+  }
+
+  // Step 7: 更新动态词库命中计数
+  try {
+    await incrementHitCounts(tenantId, hitWords);
+  } catch (err) {
+    logger.warn({ error: err }, "词库命中计数更新失败（不影响主流程）");
+  }
+
   return report;
 }
 
 /**
- * 严格检查关键词是否与期刊代发行业相关
+ * 使用动态词库检查关键词是否与期刊代发行业相关
+ * 返回是否相关 + 命中的词（用于更新命中计数）
  */
-function checkIndustryRelevance(keyword: string): boolean {
+function checkIndustryRelevanceDynamic(
+  keyword: string,
+  primaryWords: string[],
+  secondaryWords: string[],
+  contextWords: string[]
+): { isRelated: boolean; hitWord: string | null } {
   const lower = keyword.toLowerCase();
 
   // 一级关键词：直接命中即相关
-  if (PRIMARY_KEYWORDS.some((pk) => lower.includes(pk.toLowerCase()))) {
-    return true;
+  const primaryHit = primaryWords.find((pk) => lower.includes(pk.toLowerCase()));
+  if (primaryHit) {
+    return { isRelated: true, hitWord: primaryHit };
   }
-
-  // 二级关键词：需要搭配学术语境词
-  const hasSecondary = SECONDARY_KEYWORDS.some((sk) =>
-    lower.includes(sk.toLowerCase())
-  );
-  const hasContext = ACADEMIC_CONTEXT.some((ac) =>
-    lower.includes(ac.toLowerCase())
-  );
 
   // 二级关键词 + 学术语境 = 行业相关
-  if (hasSecondary && hasContext) {
-    return true;
+  const secondaryHit = secondaryWords.find((sk) => lower.includes(sk.toLowerCase()));
+  const contextHit = contextWords.some((ac) => lower.includes(ac.toLowerCase()));
+
+  if (secondaryHit && contextHit) {
+    return { isRelated: true, hitWord: secondaryHit };
   }
 
-  // 特殊模式匹配
-  // 匹配 "XX期刊" "XX学报" "影响因子XX" 等模式
+  // 特殊模式匹配（保留硬编码兜底）
   if (/期刊|学报|影响因子|分区|投稿|审稿|查重|发表/.test(lower)) {
-    return true;
+    return { isRelated: true, hitWord: null };
   }
 
-  // 学术数据源的关键词默认视为行业相关（因为已经做了定向搜索）
-  // 这些关键词来自 openalex/pubmed/arxiv 的定向抓取
+  // 学术数据源的关键词默认视为行业相关
   if (lower.includes("投稿热点") || lower.includes("热门方向") ||
       lower.includes("期刊：") || lower.includes("（if趋势）")) {
-    return true;
+    return { isRelated: true, hitWord: null };
   }
 
-  return false;
+  return { isRelated: false, hitWord: null };
 }
 
 /**
