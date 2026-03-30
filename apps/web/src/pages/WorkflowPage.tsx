@@ -180,6 +180,7 @@ export default function WorkflowPage() {
   // 多平台发布 state
   const [platformAccounts, setPlatformAccounts] = useState<{ id: string; platform: string; accountName: string; isVerified: boolean; status: string }[]>([]);
   const [platformAccountsLoading, setPlatformAccountsLoading] = useState(false);
+  const [platformAccountsLoaded, setPlatformAccountsLoaded] = useState(false);
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([]);
   const [multiPublishing, setMultiPublishing] = useState(false);
   const [multiPublishResults, setMultiPublishResults] = useState<{ accountId: string; accountName: string; platform: string; success: boolean; message?: string; error?: string }[]>([]);
@@ -198,15 +199,16 @@ export default function WorkflowPage() {
       }).catch(() => setWechatStatus("none"));
     }
     // 加载多平台账号
-    if (currentStep === 7 && platformAccounts.length === 0 && !platformAccountsLoading) {
+    if (currentStep === 7 && !platformAccountsLoaded && !platformAccountsLoading) {
       setPlatformAccountsLoading(true);
-      api.get<any[]>("/accounts").then((res) => {
-        if (res.data && Array.isArray(res.data)) {
-          setPlatformAccounts(res.data);
-        }
-      }).catch(() => {}).finally(() => setPlatformAccountsLoading(false));
+      api.get<any>("/accounts").then((res) => {
+        const list = res.data;
+        setPlatformAccounts(Array.isArray(list) ? list : []);
+      }).catch(() => {
+        setPlatformAccounts([]);
+      }).finally(() => { setPlatformAccountsLoading(false); setPlatformAccountsLoaded(true); });
     }
-  }, [currentStep, generatedArticle, editableArticle, wechatStatus, platformAccounts.length, platformAccountsLoading]);
+  }, [currentStep, generatedArticle, editableArticle, wechatStatus, platformAccountsLoaded, platformAccountsLoading]);
 
   // 发布到微信公众号草稿箱
   const handleWechatPublish = async () => {
