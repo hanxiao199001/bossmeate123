@@ -317,7 +317,7 @@ export default function WorkflowPage() {
     setMatchingJournals(true);
     setMatchedJournals([]);
     try {
-      if (!journalSeeded) { await api.post("/journals/seed", {}).catch(() => {}); setJournalSeeded(true); }
+      if (!journalSeeded) { await api.post("/journals/seed", { force: true }).catch(() => {}); setJournalSeeded(true); }
       const res = await api.post<{ items: any[] }>("/journals/match", {
         keywords: selectedCluster.keywords,
         track: selectedCluster.track,

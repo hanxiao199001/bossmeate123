@@ -276,6 +276,7 @@ export async function journalRoutes(app: FastifyInstance) {
   // ============ 导入种子期刊数据 ============
   app.post("/journals/seed", async (request, reply) => {
     const tenantId = (request as any).tenantId;
+    const { force } = (request.body || {}) as { force?: boolean };
 
     // 检查是否已经有数据
     const existing = await db
@@ -283,18 +284,21 @@ export async function journalRoutes(app: FastifyInstance) {
       .from(journals)
       .where(eq(journals.tenantId, tenantId));
 
-    if (Number(existing[0]?.count) > 0) {
+    if (Number(existing[0]?.count) > 0 && !force) {
       return reply.send({
         code: "ok",
         message: `已有 ${existing[0].count} 条期刊数据，跳过导入`,
       });
     }
 
-    // 种子数据：覆盖詹金晶常用的学科领域
+    // 种子数据：覆盖常用的学科领域
     const seedJournals = getSeedJournals(tenantId);
 
     for (const j of seedJournals) {
-      await db.insert(journals).values(j);
+      // 用 upsert 避免重复插入报错
+      await db.insert(journals).values(j)
+        .onConflictDoNothing()
+        .catch(() => {});
     }
 
     logger.info({ count: seedJournals.length }, "期刊种子数据导入完成");
@@ -353,6 +357,16 @@ function getSeedJournals(tenantId: string) {
     { tenantId, name: "细胞", nameEn: "Cell", issn: "0092-8674", publisher: "Elsevier", discipline: "biology", partition: "Q1", impactFactor: 45.5, annualVolume: 500, acceptanceRate: 0.06, reviewCycle: "4-8周", isWarningList: false, letpubViews: 38000, source: "seed" },
     { tenantId, name: "自然", nameEn: "Nature", issn: "0028-0836", publisher: "Springer Nature", discipline: "biology", partition: "Q1", impactFactor: 50.5, annualVolume: 900, acceptanceRate: 0.07, reviewCycle: "4-8周", isWarningList: false, letpubViews: 55000, source: "seed" },
     { tenantId, name: "科学", nameEn: "Science", issn: "0036-8075", publisher: "AAAS", discipline: "biology", partition: "Q1", impactFactor: 44.7, annualVolume: 800, acceptanceRate: 0.06, reviewCycle: "4-8周", isWarningList: false, letpubViews: 52000, source: "seed" },
+
+    // ===== 农林 =====
+    { tenantId, name: "农业科学前沿", nameEn: "Frontiers in Plant Science", issn: "1664-462X", publisher: "Frontiers", discipline: "agriculture", partition: "Q1", impactFactor: 4.1, annualVolume: 4000, acceptanceRate: 0.40, reviewCycle: "5-8周", isWarningList: false, letpubViews: 26000, source: "seed" },
+    { tenantId, name: "农业与食品化学杂志", nameEn: "Journal of Agricultural and Food Chemistry", issn: "0021-8561", publisher: "ACS", discipline: "agriculture", partition: "Q1", impactFactor: 5.7, annualVolume: 3000, acceptanceRate: 0.30, reviewCycle: "6-10周", isWarningList: false, letpubViews: 22000, source: "seed" },
+    { tenantId, name: "作物学报", nameEn: "Acta Agronomica Sinica", issn: "0496-3490", publisher: "中国作物学会", discipline: "agriculture", partition: "Q3", impactFactor: 1.8, annualVolume: 300, acceptanceRate: 0.25, reviewCycle: "3-6个月", isWarningList: false, letpubViews: 16000, source: "seed" },
+    { tenantId, name: "中国农业科学", nameEn: "Scientia Agricultura Sinica", issn: "0578-1752", publisher: "中国农业科学院", discipline: "agriculture", partition: "Q2", impactFactor: 2.5, annualVolume: 400, acceptanceRate: 0.20, reviewCycle: "2-4个月", isWarningList: false, letpubViews: 19000, source: "seed" },
+    { tenantId, name: "食品科学与技术", nameEn: "Food Science and Technology", issn: "0101-2061", publisher: "SBCTA", discipline: "agriculture", partition: "Q3", impactFactor: 2.1, annualVolume: 600, acceptanceRate: 0.45, reviewCycle: "4-6周", isWarningList: false, letpubViews: 14000, source: "seed" },
+    { tenantId, name: "农业水管理", nameEn: "Agricultural Water Management", issn: "0378-3774", publisher: "Elsevier", discipline: "agriculture", partition: "Q1", impactFactor: 5.4, annualVolume: 500, acceptanceRate: 0.25, reviewCycle: "8-12周", isWarningList: false, letpubViews: 17000, source: "seed" },
+    { tenantId, name: "动物科学杂志", nameEn: "Journal of Animal Science", issn: "0021-8812", publisher: "Oxford", discipline: "agriculture", partition: "Q2", impactFactor: 3.3, annualVolume: 800, acceptanceRate: 0.35, reviewCycle: "6-10周", isWarningList: false, letpubViews: 13000, source: "seed" },
+    { tenantId, name: "园艺研究", nameEn: "Horticulture Research", issn: "2052-7276", publisher: "Oxford", discipline: "agriculture", partition: "Q1", impactFactor: 7.6, annualVolume: 300, acceptanceRate: 0.20, reviewCycle: "6-8周", isWarningList: false, letpubViews: 15000, source: "seed" },
 
     // ===== 中文核心（国内市场重要）=====
     { tenantId, name: "中华医学杂志", nameEn: "National Medical Journal of China", issn: "0376-2491", publisher: "中华医学会", discipline: "medicine", partition: "Q3", impactFactor: 2.4, annualVolume: 500, acceptanceRate: 0.15, reviewCycle: "3-6个月", isWarningList: false, letpubViews: 20000, source: "seed" },
