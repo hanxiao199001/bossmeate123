@@ -1063,7 +1063,18 @@ export default function WorkflowPage() {
                     if (line.startsWith("---")) return <hr key={i} className="my-4 border-gray-200" />;
                     if (line.startsWith("- ") || line.startsWith("* ")) return <li key={i} className="text-gray-700 ml-4">{line.replace(/^[-*]\s/, "")}</li>;
                     const imgMatch = line.match(/^!\[([^\]]*)\]\((.+)\)/);
-                    if (imgMatch) return <div key={i} className="my-3 text-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{imgMatch[1]}</p></div>;
+                    if (imgMatch) {
+                      const src = imgMatch[2];
+                      const alt = imgMatch[1];
+                      // 对SVG data URI: 直接解码内嵌，避免img标签兼容问题
+                      if (src.startsWith("data:image/svg+xml;base64,")) {
+                        try {
+                          const svgContent = atob(src.replace("data:image/svg+xml;base64,", ""));
+                          return <div key={i} className="my-4 flex justify-center"><div className="inline-block rounded-lg border border-gray-200 shadow-sm overflow-hidden" dangerouslySetInnerHTML={{ __html: svgContent }} /><p className="text-xs text-gray-400 mt-1 text-center">{alt}</p></div>;
+                        } catch { /* fallback to img */ }
+                      }
+                      return <div key={i} className="my-3 text-center"><img src={src} alt={alt} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                    }
                     if (line.trim() === "") return <div key={i} className="h-2" />;
                     return <p key={i} className="text-gray-700 leading-relaxed mb-2">{line}</p>;
                   })}
@@ -1425,7 +1436,17 @@ export default function WorkflowPage() {
                       if (trimmed.startsWith("- ")) return <p key={i} className="pl-5 my-1 text-sm text-gray-700 leading-relaxed">{"\u2022 "}{trimmed.slice(2)}</p>;
                       if (/^\d+\. /.test(trimmed)) return <p key={i} className="pl-5 my-1 text-sm text-gray-700 leading-relaxed">{trimmed}</p>;
                       const imgMatch = trimmed.match(/^!\[([^\]]*)\]\((.+)\)/);
-                      if (imgMatch) return <div key={i} className="my-4 text-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{imgMatch[1]}</p></div>;
+                      if (imgMatch) {
+                        const src = imgMatch[2];
+                        const alt = imgMatch[1];
+                        if (src.startsWith("data:image/svg+xml;base64,")) {
+                          try {
+                            const svgContent = atob(src.replace("data:image/svg+xml;base64,", ""));
+                            return <div key={i} className="my-4 flex justify-center"><div className="inline-block rounded-lg border border-gray-200 shadow-sm overflow-hidden" dangerouslySetInnerHTML={{ __html: svgContent }} /><p className="text-xs text-gray-400 mt-1 text-center">{alt}</p></div>;
+                          } catch { /* fallback */ }
+                        }
+                        return <div key={i} className="my-4 text-center"><img src={src} alt={alt} className="inline-block max-w-full rounded-lg border border-gray-200 shadow-sm" style={{ maxHeight: 200 }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                      }
                       return <p key={i} className="text-sm text-gray-700 leading-relaxed my-2 indent-8">{trimmed.replace(/\*\*(.+?)\*\*/g, (_, t) => t)}</p>;
                     })}
                   </div>
