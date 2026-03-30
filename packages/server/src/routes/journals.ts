@@ -294,19 +294,32 @@ export async function journalRoutes(app: FastifyInstance) {
     // 种子数据：覆盖常用的学科领域
     const seedJournals = getSeedJournals(tenantId);
 
+    // 获取当前已有期刊名，避免重复插入
+    const existingJournals = await db
+      .select({ name: journals.name })
+      .from(journals)
+      .where(eq(journals.tenantId, tenantId));
+    const existingNames = new Set(existingJournals.map((j) => j.name));
+
+    let insertedCount = 0;
     for (const j of seedJournals) {
-      // 用 upsert 避免重复插入报错
-      await db.insert(journals).values(j)
-        .onConflictDoNothing()
-        .catch(() => {});
+      if (existingNames.has(j.name)) continue; // 跳过已存在的
+      try {
+        await db.insert(journals).values(j);
+        insertedCount++;
+      } catch {
+        // 忽略个别插入失败
+      }
     }
 
-    logger.info({ count: seedJournals.length }, "期刊种子数据导入完成");
+    logger.info({ total: seedJournals.length, inserted: insertedCount }, "期刊种子数据导入完成");
 
     return reply.send({
       code: "ok",
-      message: `成功导入 ${seedJournals.length} 条期刊数据`,
-      data: { count: seedJournals.length },
+      message: insertedCount > 0
+        ? `新增 ${insertedCount} 条期刊数据（共 ${seedJournals.length} 条种子）`
+        : `所有种子数据已存在，无需导入`,
+      data: { count: insertedCount },
     });
   });
 }

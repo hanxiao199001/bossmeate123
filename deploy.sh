@@ -171,6 +171,13 @@ import('pg').then(({default:pg})=>{
     CREATE INDEX IF NOT EXISTS idx_ik_level ON industry_keywords(level);
     CREATE INDEX IF NOT EXISTS idx_ik_active ON industry_keywords(is_active);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ik_tenant_word_level ON industry_keywords(tenant_id, word, level);
+
+    -- 清理 journals 表重复数据（保留最早的一条）
+    DELETE FROM journals a USING journals b
+    WHERE a.tenant_id = b.tenant_id AND a.name = b.name AND a.id > b.id;
+
+    -- 加唯一约束防止后续重复
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_tenant_name ON journals(tenant_id, name);
   \`)).then(()=>{console.log('   数据库迁移完成');c.end()}).catch(e=>{console.log('   迁移警告:',e.message);c.end()})
 })" 2>/dev/null || echo "   数据库迁移跳过"
 cd ../..
