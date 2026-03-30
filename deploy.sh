@@ -195,7 +195,7 @@ import('pg').then(({default:pg})=>{
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id UUID NOT NULL REFERENCES tenants(id),
       name VARCHAR(100) NOT NULL,
-      "desc" TEXT,
+      description TEXT,
       icon VARCHAR(10) DEFAULT '📝',
       source VARCHAR(50) NOT NULL,
       source_account VARCHAR(200),

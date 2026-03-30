@@ -414,7 +414,7 @@ export const learnedTemplates = pgTable(
       .references(() => tenants.id)
       .notNull(),
     name: varchar("name", { length: 100 }).notNull(),
-    desc: text("desc"),
+    desc: text("description"),
     icon: varchar("icon", { length: 10 }).default("📝"),
     source: varchar("source", { length: 50 }).notNull(), // self_style | peer_style | ai_generated
     sourceAccount: varchar("source_account", { length: 200 }),
