@@ -11,6 +11,7 @@ import { getProvider } from "../services/ai/provider-factory.js";
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
 import { eq, and, ilike, sql } from "drizzle-orm";
+import { fetchJournalImages, generateJournalDataCard, svgToDataUri } from "../services/crawler/journal-image-crawler.js";
 
 export async function workflowRoutes(app: FastifyInstance) {
   /**
@@ -161,7 +162,49 @@ ${dataConstraint}
         }
       }
 
-      logger.info({ title, contentLength: finalContent.length }, "工作流：文章生成完成（含数据槽位修正）");
+      // === 优化: 抓取期刊图片并插入文章 ===
+      let journalImages: Array<{ name: string; coverUrl: string | null; dataCardUri: string }> = [];
+      try {
+        const imageMap = await fetchJournalImages(journals);
+        journalImages = journals.map((j) => {
+          const img = imageMap.get(j.name);
+          return {
+            name: j.name,
+            coverUrl: img?.coverUrl || null,
+            dataCardUri: img?.dataCardUri || svgToDataUri(generateJournalDataCard(j)),
+          };
+        });
+
+        // 在文章中每个期刊段落后插入图片
+        for (const ji of journalImages) {
+          const escaped = ji.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // 找到包含期刊名的二级/三级标题及其后的段落，在段落末尾插入图片
+          const sectionPattern = new RegExp(
+            `(###?\\s*[^\\n]*${escaped}[^\\n]*\\n(?:[^#](?!\\n##))*?)(?=\\n##|\\n---|\$)`,
+            "s"
+          );
+          const sectionMatch = finalContent.match(sectionPattern);
+          if (sectionMatch) {
+            const imageBlock = [
+              "",
+              ji.coverUrl ? `![${ji.name}封面](${ji.coverUrl})` : "",
+              `![${ji.name}数据卡片](${ji.dataCardUri})`,
+              "",
+            ].filter(Boolean).join("\n");
+
+            finalContent = finalContent.replace(
+              sectionMatch[0],
+              sectionMatch[0].trimEnd() + "\n" + imageBlock
+            );
+          }
+        }
+
+        logger.info({ imageCount: journalImages.length }, "工作流：期刊图片注入完成");
+      } catch (imgErr) {
+        logger.warn({ err: imgErr }, "工作流：图片抓取失败，继续输出无图文章");
+      }
+
+      logger.info({ title, contentLength: finalContent.length }, "工作流：文章生成完成（含数据槽位修正+图片）");
 
       return reply.send({
         code: "ok",
@@ -171,6 +214,7 @@ ${dataConstraint}
           keywords,
           template,
           model: "deepseek-chat",
+          journalImages,
         },
       });
     } catch (err) {
@@ -749,8 +793,10 @@ ${fixedContent}
       })
       // 引用
       .replace(/^> (.+)$/gm, '<blockquote style="border-left:3px solid #07c160;padding:10px 15px;margin:15px 0;background:#f8f9fa;color:#666;font-size:14px;line-height:1.7;">$1</blockquote>')
+      // 图片 ![alt](url)
+      .replace(/^!\[([^\]]*)\]\(([^)]+)\)$/gm, '<div style="text-align:center;margin:15px 0;"><img src="$2" alt="$1" style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);" /><p style="font-size:12px;color:#999;margin-top:5px;">$1</p></div>')
       // 段落（非HTML行）
-      .replace(/^(?!<[h|p|b|s])(.+)$/gm, '<p style="font-size:15px;color:#333;line-height:1.9;margin:10px 0;text-indent:2em;">$1</p>');
+      .replace(/^(?!<[h|p|b|s|d])(.+)$/gm, '<p style="font-size:15px;color:#333;line-height:1.9;margin:10px 0;text-indent:2em;">$1</p>');
 
     // 空行清理
     html = html.replace(/\n{2,}/g, '\n');
