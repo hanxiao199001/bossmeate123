@@ -29,6 +29,7 @@ tar czf "$TAR_FILE" \
   packages/server/src/services/crawler/arxiv-crawler.ts \
   packages/server/src/services/crawler/keyword-cluster.ts \
   packages/server/src/services/crawler/journal-image-crawler.ts \
+  packages/server/src/services/style-learner.ts \
   packages/server/src/services/agents/keyword-analyzer.ts \
   packages/server/src/services/agents/keyword-trend.ts \
   packages/server/src/services/agents/keyword-dictionary.ts \
@@ -171,6 +172,46 @@ import('pg').then(({default:pg})=>{
     CREATE INDEX IF NOT EXISTS idx_ik_level ON industry_keywords(level);
     CREATE INDEX IF NOT EXISTS idx_ik_active ON industry_keywords(is_active);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ik_tenant_word_level ON industry_keywords(tenant_id, word, level);
+
+    -- 风格分析结果表
+    CREATE TABLE IF NOT EXISTS style_analyses (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id),
+      account_name VARCHAR(200) NOT NULL,
+      source VARCHAR(20) NOT NULL,
+      article_count INTEGER DEFAULT 0,
+      title_patterns JSONB DEFAULT '{}',
+      content_style JSONB DEFAULT '{}',
+      layout_features JSONB DEFAULT '{}',
+      overall_summary TEXT,
+      created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sa_tenant ON style_analyses(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_sa_source ON style_analyses(source);
+
+    -- 学习生成的模版库
+    CREATE TABLE IF NOT EXISTS learned_templates (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id),
+      name VARCHAR(100) NOT NULL,
+      "desc" TEXT,
+      icon VARCHAR(10) DEFAULT '📝',
+      source VARCHAR(50) NOT NULL,
+      source_account VARCHAR(200),
+      sections JSONB DEFAULT '[]',
+      title_formula TEXT,
+      style_tags JSONB DEFAULT '[]',
+      sample_title TEXT,
+      prompt TEXT,
+      is_active BOOLEAN DEFAULT true,
+      usage_count INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lt_tenant ON learned_templates(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_lt_source ON learned_templates(source);
+    CREATE INDEX IF NOT EXISTS idx_lt_active ON learned_templates(is_active);
 
     -- 清理 journals 表重复数据（保留最早的一条）
     DELETE FROM journals a USING journals b

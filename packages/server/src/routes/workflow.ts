@@ -9,9 +9,10 @@ import type { FastifyInstance } from "fastify";
 import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
 import { db } from "../models/db.js";
-import { journals } from "../models/schema.js";
-import { eq, and, ilike, sql } from "drizzle-orm";
+import { journals, styleAnalyses, learnedTemplates } from "../models/schema.js";
+import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { fetchJournalImages, generateJournalDataCard, svgToDataUri } from "../services/crawler/journal-image-crawler.js";
+import { fetchOwnArticles, fetchPeerArticles, analyzeStyle, generateTemplates } from "../services/style-learner.js";
 
 export async function workflowRoutes(app: FastifyInstance) {
   /**
@@ -25,6 +26,7 @@ export async function workflowRoutes(app: FastifyInstance) {
       template = "recommend",
       discipline = "",
       track = "domestic",
+      stylePrompt = "",
     } = request.body as {
       keywords: string[];
       title: string;
@@ -32,6 +34,7 @@ export async function workflowRoutes(app: FastifyInstance) {
       template: string;
       discipline: string;
       track: string;
+      stylePrompt?: string;
     };
 
     if (!title) {
@@ -125,6 +128,7 @@ ${dataConstraint}
 5. 每个小节用 ## 二级标题分隔
 6. 文末加一句引导语，如"如需了解更多投稿攻略，欢迎关注/私信咨询"
 7. 输出纯Markdown格式，不要加代码块标记
+${stylePrompt ? `\n【风格指令（来自AI学习的模版，请严格遵循）】\n${stylePrompt}` : ""}
 
 请直接输出文章内容（以标题开头）：`;
 
@@ -175,29 +179,45 @@ ${dataConstraint}
           };
         });
 
-        // 在文章中每个期刊段落后插入图片
-        for (const ji of journalImages) {
-          const escaped = ji.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          // 找到包含期刊名的二级/三级标题及其后的段落，在段落末尾插入图片
-          const sectionPattern = new RegExp(
-            `(###?\\s*[^\\n]*${escaped}[^\\n]*\\n(?:[^#](?!\\n##))*?)(?=\\n##|\\n---|\$)`,
-            "s"
-          );
-          const sectionMatch = finalContent.match(sectionPattern);
-          if (sectionMatch) {
-            const imageBlock = [
-              "",
-              ji.coverUrl ? `![${ji.name}封面](${ji.coverUrl})` : "",
-              `![${ji.name}数据卡片](${ji.dataCardUri})`,
-              "",
-            ].filter(Boolean).join("\n");
+        // 在文章中每个期刊首次出现的段落后插入图片
+        const lines = finalContent.split("\n");
+        const insertedJournals = new Set<string>();
+        const newLines: string[] = [];
 
-            finalContent = finalContent.replace(
-              sectionMatch[0],
-              sectionMatch[0].trimEnd() + "\n" + imageBlock
-            );
+        for (let i = 0; i < lines.length; i++) {
+          newLines.push(lines[i]);
+
+          // 检查当前行是否包含某个期刊名（且该期刊还没插入过图片）
+          for (const ji of journalImages) {
+            if (insertedJournals.has(ji.name)) continue;
+            if (!lines[i].includes(ji.name)) continue;
+
+            // 跳过表格分隔行（|:---|）和表头行
+            if (/^\s*\|[\s:-]+\|/.test(lines[i])) continue;
+
+            // 找到了——在当前行后面（跳过连续的表格行）插入图片
+            let insertIdx = i;
+            // 如果当前行是表格行，跳到表格结束
+            if (lines[i].trim().startsWith("|")) {
+              while (insertIdx + 1 < lines.length && lines[insertIdx + 1].trim().startsWith("|")) {
+                newLines.push(lines[++insertIdx]);
+              }
+            }
+
+            // 插入图片
+            newLines.push("");
+            if (ji.coverUrl) newLines.push(`![${ji.name}封面](${ji.coverUrl})`);
+            newLines.push(`![${ji.name}数据卡片](${ji.dataCardUri})`);
+            newLines.push("");
+            insertedJournals.add(ji.name);
+
+            // 更新i跳过已经处理的行
+            i = insertIdx;
+            break;
           }
         }
+
+        finalContent = newLines.join("\n");
 
         logger.info({ imageCount: journalImages.length }, "工作流：期刊图片注入完成");
       } catch (imgErr) {
@@ -823,5 +843,225 @@ ${html}
       code: "ok",
       data: { html: fullHtml },
     });
+  });
+
+  // ===== 风格学习相关接口 =====
+
+  /**
+   * POST /workflow/learn-style
+   * 触发风格学习：抓取自己+同行文章 → AI分析 → 生成模版
+   */
+  app.post("/workflow/learn-style", async (request, reply) => {
+    const tenantId = (request as any).tenantId;
+    if (!tenantId) {
+      return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
+    }
+
+    const {
+      learnSelf = true,
+      learnPeers = true,
+      peerAccounts = [],
+      selfCount = 20,
+      peerMaxPerAccount = 5,
+    } = request.body as {
+      learnSelf?: boolean;
+      learnPeers?: boolean;
+      peerAccounts?: string[];
+      selfCount?: number;
+      peerMaxPerAccount?: number;
+    };
+
+    try {
+      const allAnalyses: any[] = [];
+      const progress: string[] = [];
+
+      // 1. 抓取自己的文章
+      if (learnSelf) {
+        progress.push("正在获取公众号历史文章...");
+        try {
+          const ownArticles = await fetchOwnArticles(tenantId, selfCount);
+          progress.push(`获取到 ${ownArticles.length} 篇自己的文章`);
+
+          if (ownArticles.length > 0) {
+            progress.push("正在分析自己的文章风格...");
+            const selfAnalysis = await analyzeStyle(ownArticles, "我的公众号", "self");
+            if (selfAnalysis) {
+              allAnalyses.push(selfAnalysis);
+              // 保存到数据库
+              await db.insert(styleAnalyses).values({
+                tenantId,
+                accountName: selfAnalysis.accountName,
+                source: "self",
+                articleCount: selfAnalysis.articleCount,
+                titlePatterns: selfAnalysis.titlePatterns,
+                contentStyle: selfAnalysis.contentStyle,
+                layoutFeatures: selfAnalysis.layoutFeatures,
+                overallSummary: selfAnalysis.overallSummary,
+              });
+              progress.push("自己的风格分析完成");
+            }
+          }
+        } catch (err) {
+          progress.push(`自己文章抓取失败: ${String(err)}`);
+          logger.warn({ err }, "自己文章抓取失败");
+        }
+      }
+
+      // 2. 抓取同行文章
+      if (learnPeers) {
+        progress.push("正在搜索同行公众号文章...");
+        try {
+          const peerArticles = await fetchPeerArticles(
+            peerAccounts.length > 0 ? peerAccounts : undefined,
+            peerMaxPerAccount
+          );
+          progress.push(`获取到 ${peerArticles.length} 篇同行文章`);
+
+          // 按账号分组分析
+          const byAccount = new Map<string, typeof peerArticles>();
+          for (const a of peerArticles) {
+            const name = a.accountName || "unknown";
+            if (!byAccount.has(name)) byAccount.set(name, []);
+            byAccount.get(name)!.push(a);
+          }
+
+          for (const [accountName, articles] of byAccount) {
+            progress.push(`正在分析「${accountName}」的风格...`);
+            const peerAnalysis = await analyzeStyle(articles, accountName, "peer");
+            if (peerAnalysis) {
+              allAnalyses.push(peerAnalysis);
+              await db.insert(styleAnalyses).values({
+                tenantId,
+                accountName: peerAnalysis.accountName,
+                source: "peer",
+                articleCount: peerAnalysis.articleCount,
+                titlePatterns: peerAnalysis.titlePatterns,
+                contentStyle: peerAnalysis.contentStyle,
+                layoutFeatures: peerAnalysis.layoutFeatures,
+                overallSummary: peerAnalysis.overallSummary,
+              });
+            }
+          }
+          progress.push(`同行风格分析完成（${byAccount.size} 个账号）`);
+        } catch (err) {
+          progress.push(`同行文章抓取失败: ${String(err)}`);
+          logger.warn({ err }, "同行文章抓取失败");
+        }
+      }
+
+      // 3. 生成模版库
+      let generatedTpls: any[] = [];
+      if (allAnalyses.length > 0) {
+        progress.push("正在根据风格分析生成模版库...");
+        generatedTpls = await generateTemplates(allAnalyses);
+
+        // 保存到数据库
+        for (const tpl of generatedTpls) {
+          await db.insert(learnedTemplates).values({
+            tenantId,
+            name: tpl.name,
+            desc: tpl.desc,
+            icon: tpl.icon,
+            source: tpl.source,
+            sourceAccount: tpl.sourceAccount,
+            sections: tpl.sections,
+            titleFormula: tpl.titleFormula,
+            styleTags: tpl.styleTags,
+            sampleTitle: tpl.sampleTitle,
+            prompt: tpl.prompt,
+          });
+        }
+        progress.push(`成功生成 ${generatedTpls.length} 个文章模版`);
+      }
+
+      return reply.send({
+        code: "ok",
+        data: {
+          analyses: allAnalyses,
+          templates: generatedTpls,
+          progress,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "风格学习失败");
+      return reply.status(500).send({ code: "ERROR", message: String(err) });
+    }
+  });
+
+  /**
+   * GET /workflow/style-analyses
+   * 获取已保存的风格分析结果
+   */
+  app.get("/workflow/style-analyses", async (request, reply) => {
+    const tenantId = (request as any).tenantId;
+    if (!tenantId) {
+      return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
+    }
+
+    const results = await db
+      .select()
+      .from(styleAnalyses)
+      .where(eq(styleAnalyses.tenantId, tenantId))
+      .orderBy(desc(styleAnalyses.createdAt));
+
+    return reply.send({ code: "ok", data: results });
+  });
+
+  /**
+   * GET /workflow/learned-templates
+   * 获取已学习生成的模版库
+   */
+  app.get("/workflow/learned-templates", async (request, reply) => {
+    const tenantId = (request as any).tenantId;
+    if (!tenantId) {
+      return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
+    }
+
+    const results = await db
+      .select()
+      .from(learnedTemplates)
+      .where(
+        and(
+          eq(learnedTemplates.tenantId, tenantId),
+          eq(learnedTemplates.isActive, true)
+        )
+      )
+      .orderBy(desc(learnedTemplates.createdAt));
+
+    return reply.send({ code: "ok", data: results });
+  });
+
+  /**
+   * DELETE /workflow/learned-templates/:id
+   * 停用一个学习模版
+   */
+  app.delete("/workflow/learned-templates/:id", async (request, reply) => {
+    const tenantId = (request as any).tenantId;
+    const { id } = request.params as { id: string };
+
+    await db
+      .update(learnedTemplates)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(
+        and(eq(learnedTemplates.id, id), eq(learnedTemplates.tenantId, tenantId))
+      );
+
+    return reply.send({ code: "ok" });
+  });
+
+  /**
+   * DELETE /workflow/style-analyses
+   * 清空风格分析和学习模版（重新学习前）
+   */
+  app.delete("/workflow/style-analyses", async (request, reply) => {
+    const tenantId = (request as any).tenantId;
+    if (!tenantId) {
+      return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
+    }
+
+    await db.delete(styleAnalyses).where(eq(styleAnalyses.tenantId, tenantId));
+    await db.delete(learnedTemplates).where(eq(learnedTemplates.tenantId, tenantId));
+
+    return reply.send({ code: "ok" });
   });
 }

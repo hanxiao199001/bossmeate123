@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 
@@ -63,6 +63,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function AccountsPage() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const navigate = useNavigate();
 
   // 账号列表状态
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -224,6 +225,11 @@ export default function AccountsPage() {
       {/* 顶部导航 */}
       <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
+          <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-gray-500 hover:text-blue-600 transition-colors">
+            <span className="text-lg">&larr;</span>
+            <span className="text-sm">返回</span>
+          </button>
+          <span className="text-gray-300">|</span>
           <Link to="/" className="flex items-center gap-2">
             <span className="text-lg font-bold text-blue-600">BossMate</span>
             <span className="text-xs text-gray-400">AI超级员工</span>

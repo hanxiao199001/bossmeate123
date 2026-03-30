@@ -381,6 +381,60 @@ export const industryKeywords = pgTable(
   ]
 );
 
+// ============ 风格分析结果 ============
+export const styleAnalyses = pgTable(
+  "style_analyses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    accountName: varchar("account_name", { length: 200 }).notNull(),
+    source: varchar("source", { length: 20 }).notNull(), // self | peer
+    articleCount: integer("article_count").default(0),
+    titlePatterns: jsonb("title_patterns").default({}),
+    contentStyle: jsonb("content_style").default({}),
+    layoutFeatures: jsonb("layout_features").default({}),
+    overallSummary: text("overall_summary"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_sa_tenant").on(table.tenantId),
+    index("idx_sa_source").on(table.source),
+  ]
+);
+
+// ============ 学习生成的模版库 ============
+export const learnedTemplates = pgTable(
+  "learned_templates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    desc: text("desc"),
+    icon: varchar("icon", { length: 10 }).default("📝"),
+    source: varchar("source", { length: 50 }).notNull(), // self_style | peer_style | ai_generated
+    sourceAccount: varchar("source_account", { length: 200 }),
+    sections: jsonb("sections").default([]),
+    titleFormula: text("title_formula"),
+    styleTags: jsonb("style_tags").default([]),
+    sampleTitle: text("sample_title"),
+    prompt: text("prompt"), // 给AI的风格指令
+    isActive: boolean("is_active").default(true),
+    usageCount: integer("usage_count").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_lt_tenant").on(table.tenantId),
+    index("idx_lt_source").on(table.source),
+    index("idx_lt_active").on(table.isActive),
+  ]
+);
+
 // ============ 平台账号管理（多账号+多平台）============
 export const platformAccounts = pgTable(
   "platform_accounts",

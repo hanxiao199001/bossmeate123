@@ -135,6 +135,17 @@ export default function WorkflowPage() {
 
   // ===== Step 5 =====
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
+  // 风格学习
+  const [styleLearning, setStyleLearning] = useState(false);
+  const [styleProgress, setStyleProgress] = useState<string[]>([]);
+  const [learnedTpls, setLearnedTpls] = useState<Array<{
+    id: string; name: string; desc: string; icon: string; source: string;
+    sourceAccount?: string; sections: string[]; titleFormula?: string;
+    styleTags?: string[]; sampleTitle?: string; prompt?: string;
+  }>>([]);
+  const [learnedTplsLoaded, setLearnedTplsLoaded] = useState(false);
+  const [styleAnalysesData, setStyleAnalysesData] = useState<any[]>([]);
+  const [showLearnPanel, setShowLearnPanel] = useState(false);
 
   // ===== Step 6 =====
   const [generating, setGenerating] = useState(false);
@@ -209,6 +220,70 @@ export default function WorkflowPage() {
       }).finally(() => { setPlatformAccountsLoading(false); setPlatformAccountsLoaded(true); });
     }
   }, [currentStep, generatedArticle, editableArticle, wechatStatus, platformAccountsLoaded, platformAccountsLoading]);
+
+  // 进入Step 5时加载已学习的模版
+  useEffect(() => {
+    if (currentStep === 4 && !learnedTplsLoaded) {
+      setLearnedTplsLoaded(true);
+      api.get<any>("/workflow/learned-templates").then((res) => {
+        if (res.data && Array.isArray(res.data)) {
+          setLearnedTpls(res.data.map((t: any) => ({
+            id: t.id, name: t.name, desc: t.desc || "", icon: t.icon || "📝",
+            source: t.source, sourceAccount: t.sourceAccount,
+            sections: Array.isArray(t.sections) ? t.sections : [],
+            titleFormula: t.titleFormula, styleTags: t.styleTags,
+            sampleTitle: t.sampleTitle, prompt: t.prompt,
+          })));
+        }
+      }).catch(() => {});
+      api.get<any>("/workflow/style-analyses").then((res) => {
+        if (res.data && Array.isArray(res.data)) setStyleAnalysesData(res.data);
+      }).catch(() => {});
+    }
+  }, [currentStep, learnedTplsLoaded]);
+
+  // 触发风格学习
+  const handleStyleLearn = async () => {
+    setStyleLearning(true);
+    setStyleProgress(["开始风格学习..."]);
+    try {
+      const res = await api.post<any>("/workflow/learn-style", {
+        learnSelf: true,
+        learnPeers: true,
+        selfCount: 20,
+        peerMaxPerAccount: 5,
+      });
+      if (res.data) {
+        setStyleProgress(res.data.progress || ["学习完成"]);
+        if (res.data.templates && res.data.templates.length > 0) {
+          const newTpls = res.data.templates.map((t: any) => ({
+            id: t.id || `learned_${Date.now()}_${Math.random()}`,
+            name: t.name, desc: t.desc || "", icon: t.icon || "📝",
+            source: t.source, sourceAccount: t.sourceAccount,
+            sections: Array.isArray(t.sections) ? t.sections : [],
+            titleFormula: t.titleFormula, styleTags: t.styleTags,
+            sampleTitle: t.sampleTitle, prompt: t.prompt,
+          }));
+          setLearnedTpls(newTpls);
+        }
+        if (res.data.analyses) setStyleAnalysesData(res.data.analyses);
+      }
+    } catch (err: any) {
+      setStyleProgress((prev) => [...prev, `学习失败: ${err?.message || "未知错误"}`]);
+    } finally {
+      setStyleLearning(false);
+    }
+  };
+
+  // 清空风格学习数据
+  const handleClearStyleData = async () => {
+    try {
+      await api.delete("/workflow/style-analyses");
+      setLearnedTpls([]);
+      setStyleAnalysesData([]);
+      setStyleProgress([]);
+    } catch {}
+  };
 
   // 发布到微信公众号草稿箱
   const handleWechatPublish = async () => {
@@ -366,13 +441,29 @@ export default function WorkflowPage() {
           impactFactor: j.impactFactor, acceptanceRate: j.acceptanceRate, reviewCycle: j.reviewCycle,
         }));
 
+      // 如果选了学习模版，提取其风格指令
+      let templateId = selectedTemplate || "recommend";
+      let stylePrompt = "";
+      if (selectedTemplate.startsWith("learned:")) {
+        const learnedId = selectedTemplate.replace("learned:", "");
+        const lt = learnedTpls.find((t) => t.id === learnedId);
+        if (lt) {
+          templateId = "recommend"; // 用推荐型作为基础结构
+          stylePrompt = lt.prompt || "";
+          if (lt.sections.length > 0) {
+            stylePrompt += `\n\n文章段落结构：${lt.sections.join(" → ")}`;
+          }
+        }
+      }
+
       const res = await api.post<{ content: string }>("/workflow/generate-article", {
         keywords: selectedCluster.keywords,
         title: selectedTitle,
         journals: journalData,
-        template: selectedTemplate || "recommend",
+        template: templateId,
         discipline: selectedCluster.discipline,
         track: selectedCluster.track,
+        stylePrompt,
       });
 
       if (res.data) {
@@ -732,34 +823,163 @@ export default function WorkflowPage() {
             </div>
 
             {workflowType === "article" ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ARTICLE_TEMPLATES.map((t) => {
-                  const isSel = selectedTemplate === t.id;
-                  return (
-                    <div key={t.id} onClick={() => handleSelectTemplate(t.id)}
-                      className={`bg-white rounded-xl border-2 p-5 cursor-pointer transition-all ${isSel ? "border-blue-500 shadow-lg" : "border-gray-200 hover:border-blue-300 hover:shadow-md"}`}>
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-2xl">{t.icon}</span>
-                        <div>
-                          <h3 className="font-bold text-gray-900">{t.name}</h3>
-                          <p className="text-xs text-gray-500">{t.desc}</p>
+              <div>
+                {/* 风格学习面板 */}
+                <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-purple-200 p-5 mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">🧠</span>
+                      <h3 className="font-bold text-purple-900">AI风格学习</h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-600">
+                        {learnedTpls.length > 0 ? `已学习 ${learnedTpls.length} 个模版` : "未学习"}
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      {learnedTpls.length > 0 && (
+                        <button onClick={handleClearStyleData}
+                          className="px-3 py-1.5 text-xs rounded-lg border border-red-200 text-red-500 hover:bg-red-50">
+                          清空重学
+                        </button>
+                      )}
+                      <button onClick={() => setShowLearnPanel(!showLearnPanel)}
+                        className="px-3 py-1.5 text-xs rounded-lg border border-purple-300 text-purple-600 hover:bg-purple-100">
+                        {showLearnPanel ? "收起" : "展开详情"}
+                      </button>
+                      <button onClick={handleStyleLearn} disabled={styleLearning}
+                        className={`px-4 py-1.5 text-xs rounded-lg font-medium text-white ${styleLearning ? "bg-gray-400 cursor-not-allowed" : "bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700"}`}>
+                        {styleLearning ? "学习中..." : "🚀 开始学习"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-purple-600 mb-2">
+                    自动抓取你的公众号历史文章 + 10个头部同行账号，AI深度分析风格后生成专属模版库
+                  </p>
+
+                  {showLearnPanel && (
+                    <div className="mt-3">
+                      {/* 学习进度 */}
+                      {styleProgress.length > 0 && (
+                        <div className="bg-white/70 rounded-lg p-3 mb-3 max-h-40 overflow-y-auto">
+                          {styleProgress.map((msg, i) => (
+                            <div key={i} className="text-xs text-gray-600 py-0.5 flex items-center gap-1">
+                              <span className="text-purple-400">{i === styleProgress.length - 1 && styleLearning ? "⏳" : "✓"}</span>
+                              {msg}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 风格分析摘要 */}
+                      {styleAnalysesData.length > 0 && (
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <h4 className="text-xs font-bold text-gray-700 mb-2">风格分析概览</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {styleAnalysesData.map((sa: any, i: number) => (
+                              <div key={i} className="text-xs p-2 rounded bg-gray-50 border border-gray-100">
+                                <div className="font-medium text-gray-800">
+                                  {sa.source === "self" ? "🏠" : "👥"} {sa.accountName}
+                                  <span className="ml-1 text-gray-400">({sa.articleCount}篇)</span>
+                                </div>
+                                {sa.overallSummary && (
+                                  <div className="text-gray-500 mt-1 line-clamp-2">{sa.overallSummary}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 学习生成的模版 */}
+                {learnedTpls.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1">
+                      <span>🎯</span> AI学习模版（基于风格分析生成）
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      {learnedTpls.map((t) => {
+                        const isSel = selectedTemplate === `learned:${t.id}`;
+                        return (
+                          <div key={t.id} onClick={() => handleSelectTemplate(`learned:${t.id}`)}
+                            className={`bg-white rounded-xl border-2 p-5 cursor-pointer transition-all ${isSel ? "border-purple-500 shadow-lg" : "border-gray-200 hover:border-purple-300 hover:shadow-md"}`}>
+                            <div className="flex items-center gap-3 mb-2">
+                              <span className="text-2xl">{t.icon}</span>
+                              <div className="flex-1">
+                                <h3 className="font-bold text-gray-900">{t.name}</h3>
+                                <p className="text-xs text-gray-500">{t.desc}</p>
+                              </div>
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${t.source === "self_style" ? "bg-green-100 text-green-600" : t.source === "peer_style" ? "bg-blue-100 text-blue-600" : "bg-orange-100 text-orange-600"}`}>
+                                {t.source === "self_style" ? "自己风格" : t.source === "peer_style" ? "同行风格" : "AI创新"}
+                              </span>
+                            </div>
+                            {t.sourceAccount && (
+                              <p className="text-xs text-gray-400 mb-2">参考: {t.sourceAccount}</p>
+                            )}
+                            {t.sampleTitle && (
+                              <p className="text-xs text-purple-600 mb-2 italic">示例: {t.sampleTitle}</p>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                              {t.sections.map((s: string, i: number) => (
+                                <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-600">
+                                  {i + 1}. {s}
+                                </span>
+                              ))}
+                            </div>
+                            {t.styleTags && t.styleTags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {(t.styleTags as string[]).map((tag: string, i: number) => (
+                                  <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">#{tag}</span>
+                                ))}
+                              </div>
+                            )}
+                            <div className="mt-3 text-right">
+                              <span className={`text-sm font-medium ${isSel ? "text-purple-600" : "text-gray-400"}`}>
+                                {isSel ? "\u2713 已选择" : "点击选择 \u2192"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 内置模版 */}
+                <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1">
+                  <span>📋</span> 内置模版
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {ARTICLE_TEMPLATES.map((t) => {
+                    const isSel = selectedTemplate === t.id;
+                    return (
+                      <div key={t.id} onClick={() => handleSelectTemplate(t.id)}
+                        className={`bg-white rounded-xl border-2 p-5 cursor-pointer transition-all ${isSel ? "border-blue-500 shadow-lg" : "border-gray-200 hover:border-blue-300 hover:shadow-md"}`}>
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className="text-2xl">{t.icon}</span>
+                          <div>
+                            <h3 className="font-bold text-gray-900">{t.name}</h3>
+                            <p className="text-xs text-gray-500">{t.desc}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {t.sections.map((s, i) => (
+                            <span key={i} className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">
+                              {i + 1}. {s}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="mt-3 text-right">
+                          <span className={`text-sm font-medium ${isSel ? "text-blue-600" : "text-gray-400"}`}>
+                            {isSel ? "\u2713 已选择" : "点击选择 \u2192"}
+                          </span>
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {t.sections.map((s, i) => (
-                          <span key={i} className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">
-                            {i + 1}. {s}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="mt-3 text-right">
-                        <span className={`text-sm font-medium ${isSel ? "text-blue-600" : "text-gray-400"}`}>
-                          {isSel ? "\u2713 已选择" : "点击选择 \u2192"}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
@@ -795,7 +1015,7 @@ export default function WorkflowPage() {
                     {generating ? "AI创作中..." : "\uD83D\uDD8A\uFE0F 开始AI创作"}
                   </button>
                   {selectedTemplate && (
-                    <span className="text-xs text-gray-500">模版: {ARTICLE_TEMPLATES.find((t) => t.id === selectedTemplate)?.name}</span>
+                    <span className="text-xs text-gray-500">模版: {selectedTemplate.startsWith("learned:") ? (learnedTpls.find((t) => t.id === selectedTemplate.replace("learned:", ""))?.name || "学习模版") : (ARTICLE_TEMPLATES.find((t) => t.id === selectedTemplate)?.name)}</span>
                   )}
                 </div>
               )}
