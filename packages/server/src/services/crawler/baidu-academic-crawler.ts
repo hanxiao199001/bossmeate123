@@ -150,7 +150,7 @@ export class BaiduAcademicCrawler implements CrawlerAdapter {
    * 注意：响应可能是 GBK 编码，需要用 arrayBuffer + TextDecoder 处理
    */
   private async fetchSuggestions(query: string): Promise<string[]> {
-    const url = `https://suggestion.baidu.com/su?wd=${encodeURIComponent(query)}&cb=cb&t=${Date.now()}`;
+    const url = `https://suggestion.baidu.com/su?wd=${encodeURIComponent(query)}&cb=cb&ie=utf-8&t=${Date.now()}`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -166,18 +166,9 @@ export class BaiduAcademicCrawler implements CrawlerAdapter {
 
       if (!response.ok) return [];
 
-      // 百度可能返回 GBK 编码，先拿 arrayBuffer 再手动解码
+      // 已通过 ie=utf-8 参数强制百度返回 UTF-8 编码
       const buffer = await response.arrayBuffer();
-
-      // 先试 UTF-8
-      let text = new TextDecoder("utf-8").decode(buffer);
-
-      // 如果有乱码特征，尝试 GBK（Node.js 原生不支持 GBK，用 latin1 降级）
-      if (text.includes("�") || text.includes("\ufffd")) {
-        // 用 latin1 解码后手动处理中文不理想，但至少不会崩溃
-        // 生产环境建议 npm install iconv-lite
-        text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-      }
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
 
       // 解析 JSONP: cb({q:"...",p:false,s:["a","b","c"]})
       const match = text.match(/\[([^\]]*)\]/);

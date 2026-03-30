@@ -365,16 +365,19 @@ ${keywordList}
  * 返回: cb({q:"query",s:["联想词1","联想词2",...]})
  */
 async function baiduSuggest(query: string): Promise<string[]> {
-  const url = `https://suggestion.baidu.com/su?wd=${encodeURIComponent(query)}&cb=cb&t=${Date.now()}`;
+  const url = `https://suggestion.baidu.com/su?wd=${encodeURIComponent(query)}&cb=cb&ie=utf-8&t=${Date.now()}`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
-    const res = await fetch(url, {
+    // 加 ie=utf-8 强制百度返回 UTF-8 编码
+    const utf8Url = url.includes("ie=") ? url : url + "&ie=utf-8";
+    const res = await fetch(utf8Url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         Referer: "https://www.baidu.com/",
+        "Accept-Charset": "utf-8",
       },
       signal: controller.signal,
     });

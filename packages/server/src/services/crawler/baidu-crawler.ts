@@ -91,19 +91,22 @@ export class BaiduCrawler implements CrawlerAdapter {
   /** 搜索百度资讯 */
   private async searchBaiduNews(term: string, now: string): Promise<RawHotItem[]> {
     // 百度资讯搜索（公开页面）
-    const url = `https://www.baidu.com/s?wd=${encodeURIComponent(term)}&tn=news&rtt=4&bsst=1&cl=2&medium=0`;
+    const url = `https://www.baidu.com/s?wd=${encodeURIComponent(term)}&tn=news&rtt=4&bsst=1&cl=2&medium=0&ie=utf-8`;
 
     const response = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept: "text/html",
+        "Accept-Charset": "utf-8",
         Referer: "https://www.baidu.com/",
       },
     });
 
     if (!response.ok) return [];
 
-    const html = await response.text();
+    // 用 arrayBuffer + TextDecoder 确保 UTF-8 解码正确
+    const buf = await response.arrayBuffer();
+    const html = new TextDecoder("utf-8", { fatal: false }).decode(buf);
 
     // 从搜索结果页面提取标题（简单正则，非完美但够用）
     const titleRegex = /<h3[^>]*class="news-title[^"]*"[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/gi;
