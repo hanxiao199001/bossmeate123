@@ -312,27 +312,30 @@ export default function WorkflowPage() {
     setCurrentStep(3);
   };
 
+  const [journalMatchDone, setJournalMatchDone] = useState(false);
+
   const handleMatchJournals = useCallback(async () => {
     if (!selectedCluster) return;
     setMatchingJournals(true);
     setMatchedJournals([]);
+    setJournalMatchDone(false);
     try {
-      if (!journalSeeded) { await api.post("/journals/seed", { force: true }).catch(() => {}); setJournalSeeded(true); }
+      if (!journalSeeded) { await api.post("/journals/seed", {}).catch(() => {}); setJournalSeeded(true); }
       const res = await api.post<{ items: any[] }>("/journals/match", {
         keywords: selectedCluster.keywords,
         track: selectedCluster.track,
         discipline: selectedCluster.discipline,
       });
-      if (res.data) setMatchedJournals(res.data.items);
+      if (res.data) setMatchedJournals(res.data.items || []);
     } catch (err) { console.error("期刊匹配失败", err); }
-    finally { setMatchingJournals(false); }
+    finally { setMatchingJournals(false); setJournalMatchDone(true); }
   }, [selectedCluster, journalSeeded]);
 
   useEffect(() => {
-    if (currentStep === 3 && selectedCluster && matchedJournals.length === 0 && !matchingJournals) {
+    if (currentStep === 3 && selectedCluster && !journalMatchDone && !matchingJournals) {
       handleMatchJournals();
     }
-  }, [currentStep, selectedCluster, matchedJournals.length, matchingJournals, handleMatchJournals]);
+  }, [currentStep, selectedCluster, journalMatchDone, matchingJournals, handleMatchJournals]);
 
   const toggleJournal = (id: string) => {
     setSelectedJournals((prev) => {
