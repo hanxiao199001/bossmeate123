@@ -28,6 +28,7 @@ tar czf "$TAR_FILE" \
   packages/server/src/services/crawler/pubmed-crawler.ts \
   packages/server/src/services/crawler/arxiv-crawler.ts \
   packages/server/src/services/crawler/keyword-cluster.ts \
+  packages/server/src/services/crawler/journal-image-crawler.ts \
   packages/server/src/services/agents/keyword-analyzer.ts \
   packages/server/src/services/agents/keyword-trend.ts \
   packages/server/src/services/agents/keyword-dictionary.ts \
