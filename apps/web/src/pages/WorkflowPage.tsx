@@ -44,30 +44,30 @@ const ARTICLE_TEMPLATES: ArticleTemplate[] = [
   {
     id: "recommend",
     name: "期刊推荐型",
-    desc: "推荐2-3本期刊，适合引流获客",
+    desc: "深度推荐2-3本期刊，6段式专业结构，适合引流获客",
     icon: "\u2B50",
-    sections: ["导语（痛点切入）", "期刊推荐 x 3", "投稿建议", "总结引导"],
+    sections: ["痛点共鸣", "期刊深度推荐", "投稿策略", "误区提醒", "行动建议", "引导咨询"],
   },
   {
     id: "popular",
     name: "热点科普型",
-    desc: "结合学术热点解读，引发关注",
+    desc: "结合学术热点多角度解读，展现专业权威性",
     icon: "\uD83D\uDD25",
-    sections: ["热点引入", "专业解读", "相关期刊推荐", "投稿指南", "总结"],
+    sections: ["热点引入", "前沿趋势解读", "期刊推荐", "投稿指南", "窗口期提醒", "关注引导"],
   },
   {
     id: "compare",
     name: "对比分析型",
-    desc: "多本期刊横向对比，帮读者选刊",
+    desc: "多本期刊数据表格对比 + 场景化推荐",
     icon: "\uD83D\uDCCA",
-    sections: ["背景介绍", "期刊对比表", "优劣势分析", "推荐方案", "总结"],
+    sections: ["选刊困境", "数据对比表", "逐刊分析", "场景推荐", "总结", "咨询引导"],
   },
   {
     id: "guide",
     name: "速发攻略型",
-    desc: "快速录用攻略，适合急需发表的客户",
+    desc: "快速录用全攻略：选刊+技巧+时间规划表",
     icon: "\uD83D\uDE80",
-    sections: ["痛点开场", "快录期刊推荐", "投稿技巧", "时间规划", "引导咨询"],
+    sections: ["发表慢原因", "快录期刊精选", "5大提速技巧", "时间规划表", "避坑提醒", "总结", "辅导引导"],
   },
 ];
 
@@ -151,6 +151,7 @@ export default function WorkflowPage() {
   const [generating, setGenerating] = useState(false);
   const [generatedArticle, setGeneratedArticle] = useState("");
   const [generateError, setGenerateError] = useState("");
+  const [heroImage, setHeroImage] = useState<string | null>(null);
 
   // ===== Step 7 =====
   const [verifying, setVerifying] = useState(false);
@@ -294,6 +295,7 @@ export default function WorkflowPage() {
         title: selectedTitle,
         content: editableArticle || generatedArticle,
         author: "BossMate AI",
+        heroImageUrl: heroImage || undefined,
       });
       if (res.code === "ok" && res.data?.success) {
         setPublishResult({ ok: true, msg: res.message || "\u6587\u7AE0\u5DF2\u6210\u529F\u6DFB\u52A0\u5230\u516C\u4F17\u53F7\u8349\u7A3F\u7BB1\uFF01", mediaId: res.data.mediaId });
@@ -456,7 +458,7 @@ export default function WorkflowPage() {
         }
       }
 
-      const res = await api.post<{ content: string }>("/workflow/generate-article", {
+      const res = await api.post<{ content: string; heroImage?: string | null }>("/workflow/generate-article", {
         keywords: selectedCluster.keywords,
         title: selectedTitle,
         journals: journalData,
@@ -468,6 +470,7 @@ export default function WorkflowPage() {
 
       if (res.data) {
         setGeneratedArticle(res.data.content);
+        setHeroImage(res.data.heroImage || null);
         setCompletedSteps((prev) => new Set([...prev, 5]));
       }
     } catch (err: any) {
@@ -1066,7 +1069,19 @@ export default function WorkflowPage() {
                     if (imgMatch) {
                       const src = imgMatch[2];
                       const alt = imgMatch[1];
-                      return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                      // SVG data URI 特殊处理：使用 dangerouslySetInnerHTML 渲染
+                      if (src.startsWith("data:image/svg+xml")) {
+                        try {
+                          // 解码 base64 SVG
+                          const b64 = src.replace(/^data:image\/svg\+xml[^,]*,/, "");
+                          const svgText = atob(b64);
+                          return <div key={i} className="my-4 text-center">
+                            <div style={{ display: "inline-block", maxWidth: 600, width: "100%" }} dangerouslySetInnerHTML={{ __html: svgText }} />
+                            <p className="text-xs text-gray-400 mt-1">{alt}</p>
+                          </div>;
+                        } catch { /* fallback to img tag */ }
+                      }
+                      return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
                     }
                     if (line.trim() === "") return <div key={i} className="h-2" />;
                     return <p key={i} className="text-gray-700 leading-relaxed mb-2">{line}</p>;
@@ -1432,7 +1447,17 @@ export default function WorkflowPage() {
                       if (imgMatch) {
                         const src = imgMatch[2];
                         const alt = imgMatch[1];
-                        return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
+                        if (src.startsWith("data:image/svg+xml")) {
+                          try {
+                            const b64 = src.replace(/^data:image\/svg\+xml[^,]*,/, "");
+                            const svgText = atob(b64);
+                            return <div key={i} className="my-4 text-center">
+                              <div style={{ display: "inline-block", maxWidth: 600, width: "100%" }} dangerouslySetInnerHTML={{ __html: svgText }} />
+                              <p className="text-xs text-gray-400 mt-1">{alt}</p>
+                            </div>;
+                          } catch { /* fallback */ }
+                        }
+                        return <div key={i} className="my-4 text-center"><img src={src} alt={alt} style={{ display: "block", margin: "0 auto", maxWidth: "100%", width: 600, height: "auto", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} /><p className="text-xs text-gray-400 mt-1">{alt}</p></div>;
                       }
                       return <p key={i} className="text-sm text-gray-700 leading-relaxed my-2 indent-8">{trimmed.replace(/\*\*(.+?)\*\*/g, (_, t) => t)}</p>;
                     })}
@@ -1440,6 +1465,17 @@ export default function WorkflowPage() {
                 </div>
               )}
             </div>
+
+            {/* 封面图预览 */}
+            {heroImage && !heroImage.startsWith("data:image/svg") && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+                <h3 className="text-sm font-bold text-gray-900 mb-3">{"\uD83D\uDDBC\uFE0F"} 公众号封面图（首图）</h3>
+                <div className="rounded-lg overflow-hidden border border-gray-100" style={{ maxWidth: 400 }}>
+                  <img src={heroImage} alt="期刊封面" className="w-full h-auto" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                </div>
+                <p className="text-xs text-gray-400 mt-2">此图将用作微信公众号文章的封面首图</p>
+              </div>
+            )}
 
             {/* 微信公众号发布 */}
             <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">

@@ -179,11 +179,12 @@ export async function wechatRoutes(app: FastifyInstance) {
   app.post("/wechat/draft", async (request, reply) => {
     const tenantId = (request as any).tenantId;
     const userId = (request as any).userId;
-    const { title, content, author, digest } = request.body as {
+    const { title, content, author, digest, heroImageUrl } = request.body as {
       title: string;
       content: string;
       author?: string;
       digest?: string;
+      heroImageUrl?: string;
     };
 
     if (!title || !content) {
@@ -207,8 +208,8 @@ export async function wechatRoutes(app: FastifyInstance) {
       });
     }
 
-    // 创建草稿
-    const result = await addDraft(tenantId, title, content, author, digest);
+    // 创建草稿（传入期刊封面图作为公众号首图）
+    const result = await addDraft(tenantId, title, content, author, digest, heroImageUrl);
 
     if (result.success) {
       // 保存到内容表

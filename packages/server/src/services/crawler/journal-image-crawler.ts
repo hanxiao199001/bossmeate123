@@ -126,6 +126,88 @@ function extractCoverFromHtml(html: string): string | null {
 }
 
 /**
+ * 从 CrossRef API 获取期刊封面图（备用方案）
+ * CrossRef 提供部分期刊的封面信息，ISSN 匹配效果更好
+ */
+export async function fetchJournalCoverFromCrossRef(
+  journalName: string,
+  issn?: string
+): Promise<string | null> {
+  try {
+    // 用期刊名搜索 CrossRef
+    const query = issn || encodeURIComponent(journalName);
+    const url = issn
+      ? `https://api.crossref.org/journals/${issn}`
+      : `https://api.crossref.org/journals?query=${query}&rows=1`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "BossMate/1.0 (mailto:support@bossmate.com)" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return null;
+
+    const data = await resp.json() as any;
+
+    // 从 CrossRef 结果中提取 ISSN 信息用于封面图
+    let resolvedIssn: string | null = null;
+    if (issn) {
+      resolvedIssn = issn;
+    } else if (data.message?.items?.[0]?.ISSN?.[0]) {
+      resolvedIssn = data.message.items[0].ISSN[0];
+    }
+
+    // 用 ISSN 构造常见的期刊封面图 URL 模式
+    if (resolvedIssn) {
+      const cleanIssn = resolvedIssn.replace("-", "").toLowerCase();
+      // Springer/Nature 封面图模式
+      const springerUrl = `https://media.springernature.com/w92/springer-static/cover-hires/journal/${cleanIssn}`;
+      // 尝试验证图片是否可访问
+      try {
+        const imgResp = await fetch(springerUrl, { method: "HEAD", signal: AbortSignal.timeout(5000) });
+        if (imgResp.ok && imgResp.headers.get("content-type")?.startsWith("image")) {
+          return springerUrl;
+        }
+      } catch { /* 继续 */ }
+    }
+
+    return null;
+  } catch (err) {
+    logger.debug({ journalName, error: String(err) }, "CrossRef封面图查询失败");
+    return null;
+  }
+}
+
+/**
+ * 多源抓取期刊封面图（LetPub → CrossRef → 数据卡片保底）
+ */
+export async function fetchJournalCoverMultiSource(
+  journalName: string,
+  issn?: string
+): Promise<string | null> {
+  // 源1: LetPub
+  let cover = await fetchJournalCoverFromLetPub(journalName, issn);
+  if (cover) {
+    logger.info({ journalName, source: "letpub" }, "期刊封面图抓取成功");
+    return cover;
+  }
+
+  // 源2: CrossRef / Springer
+  cover = await fetchJournalCoverFromCrossRef(journalName, issn);
+  if (cover) {
+    logger.info({ journalName, source: "crossref" }, "期刊封面图抓取成功");
+    return cover;
+  }
+
+  logger.warn({ journalName }, "所有源均未找到封面图，将使用数据卡片");
+  return null;
+}
+
+/**
  * 生成期刊数据信息卡片 SVG
  * 包含：期刊名、IF、分区、录用率、审稿周期
  */
