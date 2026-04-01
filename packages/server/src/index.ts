@@ -17,6 +17,7 @@ import { topicRoutes } from "./routes/topic.js";
 import { workflowRoutes } from "./routes/workflow.js";
 import { wechatRoutes } from "./routes/wechat.js";
 import { accountRoutes } from "./routes/accounts.js";
+import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
@@ -52,6 +53,7 @@ async function bootstrap() {
     await protectedApp.register(workflowRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(accountRoutes, { prefix: `${env.API_PREFIX}` });
+    await protectedApp.register(knowledgeRoutes, { prefix: `${env.API_PREFIX}/knowledge` });
   });
 
   // 初始化 AI 提供商

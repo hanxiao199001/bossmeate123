@@ -435,6 +435,128 @@ export const learnedTemplates = pgTable(
   ]
 );
 
+// ============ 租户 IP 定位（V4 子库10）============
+export const tenantIpProfiles = pgTable(
+  "tenant_ip_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    brandName: varchar("brand_name", { length: 200 }).notNull(),
+    industry: varchar("industry", { length: 100 }).notNull(),
+    subIndustry: varchar("sub_industry", { length: 100 }),
+    targetAudience: text("target_audience"),              // 目标受众描述
+    toneOfVoice: varchar("tone_of_voice", { length: 100 }), // 调性：专业严谨 | 轻松幽默 ...
+    contentGoals: jsonb("content_goals").default([]),     // 内容目标列表
+    tabooTopics: jsonb("taboo_topics").default([]),       // 禁忌话题列表
+    referenceAccounts: jsonb("reference_accounts").default([]), // 参考对标账号
+    visualStyle: jsonb("visual_style").default({}),       // 视觉风格偏好
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ip_tenant").on(table.tenantId),
+    index("idx_ip_industry").on(table.industry),
+  ]
+);
+
+// ============ 生产记录+衍生追踪（V4 子库11）============
+export const productionRecords = pgTable(
+  "production_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    contentId: uuid("content_id").references(() => contents.id), // 关联原始内容
+    parentId: uuid("parent_id"),                          // 衍生来源（自引用，原始稿为 null）
+    format: varchar("format", { length: 50 }).notNull(),  // 形式：long_article | short_video | poster | thread | ...
+    platform: varchar("platform", { length: 50 }),        // 目标平台
+    title: varchar("title", { length: 500 }),
+    body: text("body"),
+    wordCount: integer("word_count").default(0),
+    status: varchar("status", { length: 20 }).notNull().default("draft"), // draft | in_review | approved | published
+    producedBy: varchar("produced_by", { length: 50 }).default("ai"), // ai | human | hybrid
+    tokensUsed: integer("tokens_used").default(0),
+    metadata: jsonb("metadata").default({}),              // 衍生参数、模型配置等
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_prod_tenant").on(table.tenantId),
+    index("idx_prod_content").on(table.contentId),
+    index("idx_prod_parent").on(table.parentId),
+    index("idx_prod_format").on(table.format),
+    index("idx_prod_status").on(table.status),
+  ]
+);
+
+// ============ 内容数据表现（V4 子库12）============
+export const contentMetrics = pgTable(
+  "content_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    contentId: uuid("content_id").references(() => contents.id),
+    distributionId: uuid("distribution_id").references(() => distributionRecords.id),
+    platform: varchar("platform", { length: 50 }).notNull(),
+    snapshotDate: date("snapshot_date").notNull(),         // 数据快照日期
+    views: integer("views").default(0),
+    likes: integer("likes").default(0),
+    comments: integer("comments").default(0),
+    shares: integer("shares").default(0),
+    saves: integer("saves").default(0),
+    followers: integer("followers").default(0),            // 该内容带来的新关注
+    inquiries: integer("inquiries").default(0),            // 咨询/私信转化
+    completionRate: real("completion_rate"),                // 完播率（视频）
+    ctr: real("ctr"),                                      // 点击率
+    metadata: jsonb("metadata").default({}),               // 平台特有指标
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_cm_tenant").on(table.tenantId),
+    index("idx_cm_content").on(table.contentId),
+    index("idx_cm_distribution").on(table.distributionId),
+    index("idx_cm_platform").on(table.platform),
+    index("idx_cm_date").on(table.snapshotDate),
+  ]
+);
+
+// ============ 栏目规划日历（V4 子库16）============
+export const columnCalendars = pgTable(
+  "column_calendars",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    columnName: varchar("column_name", { length: 200 }).notNull(),  // 栏目名称
+    frequency: varchar("frequency", { length: 50 }).notNull(),      // daily | weekly | biweekly | monthly
+    platforms: jsonb("platforms").default([]),             // 目标平台列表
+    contentFormats: jsonb("content_formats").default([]), // 内容形式列表
+    topicPool: jsonb("topic_pool").default([]),           // 选题池
+    scheduledDate: date("scheduled_date"),                 // 计划发布日期
+    assignee: varchar("assignee", { length: 100 }),        // 负责人
+    status: varchar("status", { length: 20 }).notNull().default("planned"), // planned | in_progress | ready | published | cancelled
+    contentId: uuid("content_id").references(() => contents.id), // 关联已生产内容
+    notes: text("notes"),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_cal_tenant").on(table.tenantId),
+    index("idx_cal_column").on(table.columnName),
+    index("idx_cal_date").on(table.scheduledDate),
+    index("idx_cal_status").on(table.status),
+  ]
+);
+
 // ============ 平台账号管理（多账号+多平台）============
 export const platformAccounts = pgTable(
   "platform_accounts",
