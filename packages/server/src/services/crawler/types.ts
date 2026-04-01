@@ -17,10 +17,26 @@ export type PlatformName =
   | "letpub"            // LetPub期刊分类库
   | "openalex"          // OpenAlex学术数据
   | "pubmed"            // PubMed医学论文
-  | "arxiv";            // arXiv预印本
+  | "arxiv"             // arXiv预印本
+  // 社交媒体热搜线：泛流量热点来源
+  | "baidu"             // 百度热搜
+  | "toutiao"           // 今日头条热榜
+  | "weibo"             // 微博热搜
+  | "zhihu";            // 知乎热榜
 
 // ===== 业务线标签 =====
-export type CrawlerTrack = "domestic" | "sci";
+export type CrawlerTrack = "domestic" | "sci" | "social";
+
+// ===== 社交媒体热搜线：原始热点条目 =====
+export interface RawHotItem {
+  keyword: string;
+  heatScore: number;
+  platform: PlatformName;
+  rank?: number;
+  url?: string;
+  description?: string;
+  crawledAt: string;
+}
 
 // ===== 国内核心线：热门关键词 =====
 export interface HotKeywordItem {
@@ -58,9 +74,10 @@ export interface JournalItem {
 // ===== 统一结果 =====
 export interface CrawlerResult {
   platform: PlatformName;
-  track: CrawlerTrack;
-  keywords: HotKeywordItem[];    // 国内核心线产出
-  journals: JournalItem[];       // SCI线产出
+  track?: CrawlerTrack;
+  keywords?: HotKeywordItem[];    // 国内核心线产出
+  journals?: JournalItem[];       // SCI线产出
+  items?: RawHotItem[];           // 社交媒体热搜线产出
   success: boolean;
   error?: string;
   crawledAt: string;
@@ -69,7 +86,7 @@ export interface CrawlerResult {
 // ===== 适配器接口 =====
 export interface CrawlerAdapter {
   platform: PlatformName;
-  track: CrawlerTrack;
+  track?: CrawlerTrack;
   crawl(): Promise<CrawlerResult>;
 }
 
