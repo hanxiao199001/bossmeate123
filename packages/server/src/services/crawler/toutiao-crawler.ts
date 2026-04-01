@@ -77,11 +77,11 @@ export class ToutiaoCrawler implements CrawlerAdapter {
         "头条期刊行业热点抓取完成"
       );
 
-      return { platform: "toutiao", items: top100, success: true, crawledAt: now };
+      return { platform: "toutiao", keywords: [], journals: [], items: top100, success: true, crawledAt: now };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error({ platform: "toutiao", error: errorMsg }, "头条抓取失败");
-      return { platform: "toutiao", items: [], success: false, error: errorMsg, crawledAt: now };
+      return { platform: "toutiao", keywords: [], journals: [], items: [], success: false, error: errorMsg, crawledAt: now };
     }
   }
 

@@ -79,11 +79,11 @@ export class WeiboCrawler implements CrawlerAdapter {
         "微博期刊行业热点抓取完成"
       );
 
-      return { platform: "weibo", items: top100, success: true, crawledAt: now };
+      return { platform: "weibo", keywords: [], journals: [], items: top100, success: true, crawledAt: now };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error({ platform: "weibo", error: errorMsg }, "微博抓取失败");
-      return { platform: "weibo", items: [], success: false, error: errorMsg, crawledAt: now };
+      return { platform: "weibo", keywords: [], journals: [], items: [], success: false, error: errorMsg, crawledAt: now };
     }
   }
 

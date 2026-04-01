@@ -75,8 +75,8 @@ export interface JournalItem {
 export interface CrawlerResult {
   platform: PlatformName;
   track?: CrawlerTrack;
-  keywords?: HotKeywordItem[];    // 国内核心线产出
-  journals?: JournalItem[];       // SCI线产出
+  keywords: HotKeywordItem[];    // 国内核心线产出
+  journals: JournalItem[];       // SCI线产出
   items?: RawHotItem[];           // 社交媒体热搜线产出
   success: boolean;
   error?: string;

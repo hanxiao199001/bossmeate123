@@ -78,11 +78,11 @@ export class ZhihuCrawler implements CrawlerAdapter {
         "知乎期刊行业热点抓取完成"
       );
 
-      return { platform: "zhihu", items: top100, success: true, crawledAt: now };
+      return { platform: "zhihu", keywords: [], journals: [], items: top100, success: true, crawledAt: now };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error({ platform: "zhihu", error: errorMsg }, "知乎抓取失败");
-      return { platform: "zhihu", items: [], success: false, error: errorMsg, crawledAt: now };
+      return { platform: "zhihu", keywords: [], journals: [], items: [], success: false, error: errorMsg, crawledAt: now };
     }
   }
 

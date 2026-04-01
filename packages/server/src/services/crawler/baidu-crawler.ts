@@ -80,11 +80,11 @@ export class BaiduCrawler implements CrawlerAdapter {
         "百度期刊行业热点抓取完成"
       );
 
-      return { platform: "baidu", items: top100, success: true, crawledAt: now };
+      return { platform: "baidu", keywords: [], journals: [], items: top100, success: true, crawledAt: now };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error({ platform: "baidu", error: errorMsg }, "百度抓取失败");
-      return { platform: "baidu", items: [], success: false, error: errorMsg, crawledAt: now };
+      return { platform: "baidu", keywords: [], journals: [], items: [], success: false, error: errorMsg, crawledAt: now };
     }
   }
 
