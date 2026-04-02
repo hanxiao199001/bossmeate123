@@ -6,6 +6,7 @@
 import * as lancedb from "@lancedb/lancedb";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { getEmbeddingDimension } from "./embedding-service.js";
 
 // ============ 10 个子库分区（V4 架构）============
 export const VECTOR_CATEGORIES = [
@@ -39,6 +40,11 @@ export interface VectorRecord {
 
 const TABLE_NAME = "knowledge_vectors";
 
+/** 转义 LanceDB where 子句中的字符串值，防止注入 */
+function escapeFilterValue(val: string): string {
+  return val.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 // ============ 连接管理（单例）============
 
 let dbInstance: lancedb.Connection | null = null;
@@ -71,7 +77,7 @@ export async function getTable(): Promise<lancedb.Table> {
     title: "",
     content: "",
     source: "",
-    vector: new Array(1024).fill(0), // DeepSeek embedding 维度 1024
+    vector: new Array(getEmbeddingDimension()).fill(0), // 动态维度，匹配当前 embedding 后端
     metadata: "{}",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -109,25 +115,27 @@ export async function searchVectors(params: {
   const { vector, tenantId, category, limit = 10, minScore } = params;
   const table = await getTable();
 
+  const safeTenantId = escapeFilterValue(tenantId);
+  let filter = `tenantId = '${safeTenantId}'`;
+  if (category) {
+    const safeCategory = escapeFilterValue(category);
+    filter = `tenantId = '${safeTenantId}' AND category = '${safeCategory}'`;
+  }
+
   let query = table
     .search(vector)
     .limit(limit)
-    .where(`tenantId = '${tenantId}'`);
-
-  if (category) {
-    query = query.where(`tenantId = '${tenantId}' AND category = '${category}'`);
-  }
+    .where(filter);
 
   const results = await query.toArray();
 
   // _distance 越小越相似 (L2)，转为相似度分数过滤
+  const typed = results as unknown as (VectorRecord & { _distance: number })[];
   if (minScore !== undefined) {
-    return results.filter(
-      (r: any) => 1 / (1 + r._distance) >= minScore
-    ) as any;
+    return typed.filter((r) => 1 / (1 + r._distance) >= minScore);
   }
 
-  return results as any;
+  return typed;
 }
 
 /**
@@ -136,7 +144,7 @@ export async function searchVectors(params: {
 export async function deleteVectors(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const table = await getTable();
-  const inClause = ids.map((id) => `'${id}'`).join(", ");
+  const inClause = ids.map((id) => `'${escapeFilterValue(id)}'`).join(", ");
   await table.delete(`id IN (${inClause})`);
   logger.debug(`向量删除 ${ids.length} 条`);
 }
@@ -160,11 +168,12 @@ export async function countVectors(
   category?: VectorCategory
 ): Promise<number> {
   const table = await getTable();
-  let filter = `tenantId = '${tenantId}'`;
+  const safeTid = escapeFilterValue(tenantId);
+  let countFilter = `tenantId = '${safeTid}'`;
   if (category) {
-    filter += ` AND category = '${category}'`;
+    countFilter += ` AND category = '${escapeFilterValue(category)}'`;
   }
-  const rows = await table.query().where(filter).toArray();
+  const rows = await table.query().where(countFilter).toArray();
   return rows.length;
 }
 

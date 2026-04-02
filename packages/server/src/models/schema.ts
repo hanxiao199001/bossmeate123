@@ -557,6 +557,52 @@ export const columnCalendars = pgTable(
   ]
 );
 
+// ============ V4.5: 异步任务表 ============
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    userId: uuid("user_id").references(() => users.id).notNull(),
+    conversationId: uuid("conversation_id").references(() => conversations.id),
+    type: varchar("type", { length: 50 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    progress: integer("progress").default(0),
+    input: jsonb("input").default({}).notNull(),
+    output: jsonb("output").default({}),
+    error: text("error"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_tasks_tenant").on(table.tenantId),
+    index("idx_tasks_status").on(table.status),
+    index("idx_tasks_user").on(table.userId, table.status),
+  ]
+);
+
+// ============ V4.5: 任务执行日志表 ============
+export const taskLogs = pgTable(
+  "task_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }).notNull(),
+    step: varchar("step", { length: 100 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull(),
+    inputTokens: integer("input_tokens").default(0),
+    outputTokens: integer("output_tokens").default(0),
+    model: varchar("model", { length: 50 }),
+    durationMs: integer("duration_ms"),
+    detail: jsonb("detail").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_task_logs_task").on(table.taskId),
+  ]
+);
+
 // ============ 平台账号管理（多账号+多平台）============
 export const platformAccounts = pgTable(
   "platform_accounts",

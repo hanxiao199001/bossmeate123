@@ -72,7 +72,29 @@ function loadEnv(): Env {
     }
     process.exit(1);
   }
-  return result.data;
+
+  const data = result.data;
+
+  // 检查是否至少有一个可用的 Embedding API Key
+  const hasEmbeddingKey =
+    (data.QWEN_API_KEY && data.QWEN_API_KEY !== "your-qwen-api-key") ||
+    (data.DEEPSEEK_API_KEY && data.DEEPSEEK_API_KEY !== "your-deepseek-api-key") ||
+    data.OPENAI_API_KEY;
+
+  if (!hasEmbeddingKey) {
+    if (data.NODE_ENV === "production") {
+      console.error(
+        "❌ 生产环境必须配置至少一个 Embedding API Key (QWEN_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY)"
+      );
+      process.exit(1);
+    } else {
+      console.warn(
+        "⚠️ 未配置 Embedding API Key，知识库功能将使用本地 hash 向量（仅开发环境）"
+      );
+    }
+  }
+
+  return data;
 }
 
 export const env = loadEnv();

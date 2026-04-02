@@ -11,6 +11,8 @@
 
 import { logger } from "../../config/logger.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
+import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
+import { retrieveForArticle } from "../knowledge/rag-retriever.js";
 
 // ============ 类型定义 ============
 
@@ -80,12 +82,68 @@ interface QualityReport {
 
 // ============ 图文线 Skill ============
 
-export class ArticleSkill {
+export class ArticleSkill implements ISkill {
+  // ===== ISkill 接口实现 =====
+  readonly name = "article";
+  readonly displayName = "智能图文";
+  readonly description = "基于 RAG 知识库的学术/行业图文生成，含自动质量检查";
+  readonly preferredTier = "expensive" as const;
+
   private provider: AIProvider;
 
   constructor(provider: AIProvider) {
     this.provider = provider;
   }
+
+  async handle(
+    userInput: string,
+    history: ChatMessage[],
+    context: SkillContext
+  ): Promise<SkillResult> {
+    const { parsed, response } = await this.understandRequirement(userInput, history);
+
+    if (parsed.needsClarification) {
+      return { reply: response };
+    }
+
+    let ragText = context.ragContext;
+    if (!ragText) {
+      try {
+        const ragResult = await retrieveForArticle({
+          tenantId: context.tenantId,
+          topic: parsed.topic,
+          audience: parsed.audience,
+          tone: parsed.tone,
+          keywords: parsed.keyPoints,
+        });
+        ragText = ragResult.text;
+      } catch (err) {
+        logger.warn({ err }, "RAG retrieval failed, proceeding without context");
+      }
+    }
+
+    const { article, quality } = await this.fullGenerate(parsed, ragText);
+
+    return {
+      reply: response,
+      artifact: {
+        type: "article",
+        title: article.title,
+        body: article.body,
+        summary: article.summary,
+        tags: article.tags,
+        metadata: {
+          wordCount: article.wordCount,
+          qualityScore: quality.score,
+          qualityPassed: quality.passed,
+          issues: quality.issues,
+          suggestions: quality.suggestions,
+        },
+      },
+    };
+  }
+
+  // ===== 以下保留原有方法不变 =====
 
   /**
    * 步骤1: 需求理解与拆解

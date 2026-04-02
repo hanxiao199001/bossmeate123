@@ -29,6 +29,9 @@ logs/
 # Test
 coverage/
 
+# Runtime data
+packages/server/data/
+
 # Docker
 docker-compose.override.yml
 .claude/

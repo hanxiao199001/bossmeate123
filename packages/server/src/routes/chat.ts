@@ -8,7 +8,7 @@ import { db } from "../models/db.js";
 import { conversations, messages, contents, tokenLogs } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
-import { ArticleSkill } from "../services/skills/article-skill.js";
+import { SkillRegistry } from "../services/skills/index.js";
 
 const createConversationSchema = z.object({
   title: z.string().optional(),
@@ -66,76 +66,78 @@ export async function chatRoutes(app: FastifyInstance) {
     const history = await db.select().from(messages)
       .where(eq(messages.conversationId, id)).orderBy(messages.createdAt).limit(20);
 
-    // 选择 AI 提供商
-    const provider = getProvider(conv.skillType === "article" ? "expensive" : "cheap");
-
     let aiContent: string;
     let modelUsed = "none";
     let inputTokens = 0;
     let outputTokens = 0;
 
-    if (!provider) {
-      aiContent = "⚠️ 当前没有可用的AI模型，请在 .env 中配置 ANTHROPIC_API_KEY 或 DEEPSEEK_API_KEY。";
-    } else if (conv.skillType === "article") {
-      // ====== 图文线：使用 ArticleSkill ======
-      try {
-        const skill = new ArticleSkill(provider);
-        const chatHistory = history.map((m) => ({
-          role: m.role as "user" | "assistant" | "system",
-          content: m.content,
-        }));
+    const skill = conv.skillType ? SkillRegistry.get(conv.skillType) : null;
 
-        // 步骤1: 需求理解
-        const { parsed, response } = await skill.understandRequirement(body.content, chatHistory);
+    if (skill) {
+      // ===== 走 Skill 统一路径 =====
+      const provider = getProvider(skill.preferredTier) || getProvider("cheap");
+      if (!provider) {
+        aiContent = "⚠️ 当前没有可用的AI模型，请在 .env 中配置 API Key。";
+      } else {
+        try {
+          const chatHistory = history.map((m) => ({
+            role: m.role as "user" | "assistant" | "system",
+            content: m.content,
+          }));
 
-        if (parsed.needsClarification) {
-          // 需要追问，返回问题
-          aiContent = response;
-          modelUsed = provider.name;
-        } else {
-          // 需求明确，直接生成
-          const { article, quality } = await skill.fullGenerate(parsed);
-
-          aiContent = `## ${article.title}\n\n${article.body}\n\n---\n📊 质检评分: ${quality.score}/100 ${quality.passed ? "✅ 通过" : "❌ 未通过"}\n${quality.suggestions.length > 0 ? "\n💡 建议: " + quality.suggestions.join("；") : ""}`;
-          modelUsed = provider.name;
-
-          // 保存内容资产
-          await db.insert(contents).values({
-            tenantId: request.tenantId, userId: request.user.userId,
-            conversationId: id, type: "article",
-            title: article.title, body: article.body,
-            status: quality.passed ? "reviewing" : "draft",
-            tokensTotal: inputTokens + outputTokens,
-            metadata: { quality, parsed },
+          const result = await skill.handle(body.content, chatHistory, {
+            tenantId: request.tenantId,
+            userId: request.user.userId,
+            conversationId: id,
+            provider,
           });
+
+          aiContent = result.reply;
+          modelUsed = provider.name;
+
+          // 如果产出了制品（文章等），保存到 contents 表
+          if (result.artifact) {
+            await db.insert(contents).values({
+              tenantId: request.tenantId, userId: request.user.userId,
+              conversationId: id, type: result.artifact.type,
+              title: result.artifact.title, body: result.artifact.body,
+              status: "draft",
+              metadata: result.artifact.metadata || {},
+            });
+          }
+        } catch (err) {
+          logger.error({ err }, "Skill 调用失败");
+          aiContent = `⚠️ AI 生成遇到问题: ${err instanceof Error ? err.message : "未知错误"}。请稍后重试。`;
         }
-      } catch (err) {
-        logger.error({ err }, "图文线 AI 调用失败");
-        aiContent = `⚠️ AI 生成遇到问题: ${err instanceof Error ? err.message : "未知错误"}。请稍后重试。`;
       }
     } else {
-      // ====== 普通对话：直接调用 AI ======
-      try {
-        const chatMessages = history.slice(-10).map((m) => ({
-          role: m.role as "user" | "assistant" | "system",
-          content: m.content,
-        }));
+      // ===== 通用聊天路径（无特定技能） =====
+      const provider = getProvider("cheap");
+      if (!provider) {
+        aiContent = "⚠️ 当前没有可用的AI模型，请在 .env 中配置 API Key。";
+      } else {
+        try {
+          const chatMessages = history.slice(-10).map((m) => ({
+            role: m.role as "user" | "assistant" | "system",
+            content: m.content,
+          }));
 
-        const result = await provider.chat({
-          messages: [
-            { role: "system", content: "你是BossMate AI超级员工，帮助老板处理各种工作任务。回答要简洁专业。" },
-            ...chatMessages,
-          ],
-          maxTokens: 2048,
-        });
+          const result = await provider.chat({
+            messages: [
+              { role: "system", content: "你是BossMate AI超级员工，帮助老板处理各种工作任务。回答要简洁专业。" },
+              ...chatMessages,
+            ],
+            maxTokens: 2048,
+          });
 
-        aiContent = result.content;
-        modelUsed = result.model;
-        inputTokens = result.inputTokens;
-        outputTokens = result.outputTokens;
-      } catch (err) {
-        logger.error({ err }, "AI 调用失败");
-        aiContent = `⚠️ AI 暂时无法响应: ${err instanceof Error ? err.message : "未知错误"}`;
+          aiContent = result.content;
+          modelUsed = result.model;
+          inputTokens = result.inputTokens;
+          outputTokens = result.outputTokens;
+        } catch (err) {
+          logger.error({ err }, "AI 调用失败");
+          aiContent = `⚠️ AI 暂时无法响应: ${err instanceof Error ? err.message : "未知错误"}`;
+        }
       }
     }
 
@@ -158,5 +160,10 @@ export async function chatRoutes(app: FastifyInstance) {
     await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, id));
 
     return { code: "OK", data: { userMessage: userMsg, aiMessage: aiMsg } };
+  });
+
+  // GET /skills — 返回可用技能列表
+  app.get("/skills", async () => {
+    return { code: "OK", data: SkillRegistry.list() };
   });
 }

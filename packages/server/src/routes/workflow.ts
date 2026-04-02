@@ -13,6 +13,7 @@ import { journals, styleAnalyses, learnedTemplates } from "../models/schema.js";
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../services/crawler/journal-image-crawler.js";
 import { fetchOwnArticles, fetchPeerArticles, analyzeStyle, generateTemplates } from "../services/style-learner.js";
+import { retrieveForWorkflow } from "../services/knowledge/rag-retriever.js";
 
 export async function workflowRoutes(app: FastifyInstance) {
   /**
@@ -254,12 +255,29 @@ ${stylePrompt ? `\n# 风格指令（来自AI学习的模版，请严格遵循）
 - 总字数 1000-1500 字`;
 
     try {
+      // RAG: 从知识库检索相关知识注入 prompt
+      let ragSection = "";
+      try {
+        const rag = await retrieveForWorkflow({
+          tenantId: request.tenantId,
+          title,
+          keywords,
+          discipline,
+        });
+        if (rag.totalHits > 0) {
+          ragSection = `\n\n# 知识库参考资料（请在写作时遵循以下信息）\n${rag.text}`;
+          logger.info({ title, ragHits: rag.totalHits, sources: rag.sources }, "工作流 RAG 注入");
+        }
+      } catch (ragErr) {
+        logger.warn({ err: ragErr }, "工作流 RAG 检索失败，跳过");
+      }
+
       logger.info({ title, keywords, template }, "工作流：开始生成文章");
 
       const result = await provider.chat({
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "user", content: userPrompt + ragSection },
         ],
         model: "deepseek-chat",
       });

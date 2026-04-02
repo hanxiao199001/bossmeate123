@@ -18,10 +18,16 @@ import { workflowRoutes } from "./routes/workflow.js";
 import { wechatRoutes } from "./routes/wechat.js";
 import { accountRoutes } from "./routes/accounts.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
 import { getProviders } from "./services/ai/provider-factory.js";
+import { initializeSkills } from "./services/skills/index.js";
+import { startContentWorker } from "./services/task/content-worker.js";
+import { registerTaskWebSocket } from "./services/task/progress-ws.js";
+import { closeQueues } from "./services/task/queue.js";
+import { taskRoutes } from "./routes/tasks.js";
 
 async function bootstrap() {
   const app = Fastify({ logger: false });
@@ -54,11 +60,32 @@ async function bootstrap() {
     await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(accountRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(knowledgeRoutes, { prefix: `${env.API_PREFIX}/knowledge` });
+    await protectedApp.register(dashboardRoutes, { prefix: `${env.API_PREFIX}/dashboard` });
+    await protectedApp.register(taskRoutes, { prefix: `${env.API_PREFIX}/tasks` });
   });
 
   // 初始化 AI 提供商
   const providers = getProviders();
   logger.info(`🤖 AI模型: 贵模型 ${providers.expensive.length}个, 便宜模型 ${providers.cheap.length}个`);
+
+  // 初始化技能注册
+  initializeSkills();
+
+  // 注册 WebSocket 进度推送
+  registerTaskWebSocket(app);
+
+  // 启动后台 Worker
+  const contentWorker = startContentWorker();
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    await contentWorker.close();
+    await closeQueues();
+    await app.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });

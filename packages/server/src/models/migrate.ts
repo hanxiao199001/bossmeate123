@@ -304,6 +304,176 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
 CREATE INDEX IF NOT EXISTS idx_pa_tenant ON platform_accounts(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_pa_platform ON platform_accounts(platform);
 CREATE INDEX IF NOT EXISTS idx_pa_group ON platform_accounts(group_name);
+
+-- 风格分析结果
+CREATE TABLE IF NOT EXISTS style_analyses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  account_name VARCHAR(200) NOT NULL,
+  source VARCHAR(20) NOT NULL,
+  article_count INTEGER DEFAULT 0,
+  title_patterns JSONB DEFAULT '{}',
+  content_style JSONB DEFAULT '{}',
+  layout_features JSONB DEFAULT '{}',
+  overall_summary TEXT,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sa_tenant ON style_analyses(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sa_source ON style_analyses(source);
+
+-- 学习生成的模板库
+CREATE TABLE IF NOT EXISTS learned_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  icon VARCHAR(10) DEFAULT '📝',
+  source VARCHAR(50) NOT NULL,
+  source_account VARCHAR(200),
+  sections JSONB DEFAULT '[]',
+  title_formula TEXT,
+  style_tags JSONB DEFAULT '[]',
+  sample_title TEXT,
+  prompt TEXT,
+  is_active BOOLEAN DEFAULT true,
+  usage_count INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lt_tenant ON learned_templates(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_lt_source ON learned_templates(source);
+CREATE INDEX IF NOT EXISTS idx_lt_active ON learned_templates(is_active);
+
+-- V4: 租户IP定位
+CREATE TABLE IF NOT EXISTS tenant_ip_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  brand_name VARCHAR(200) NOT NULL,
+  industry VARCHAR(100) NOT NULL,
+  sub_industry VARCHAR(100),
+  target_audience TEXT,
+  tone_of_voice VARCHAR(100),
+  content_goals JSONB DEFAULT '[]',
+  taboo_topics JSONB DEFAULT '[]',
+  reference_accounts JSONB DEFAULT '[]',
+  visual_style JSONB DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ip_tenant ON tenant_ip_profiles(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ip_industry ON tenant_ip_profiles(industry);
+
+-- V4: 生产记录+衍生追踪
+CREATE TABLE IF NOT EXISTS production_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID REFERENCES contents(id),
+  parent_id UUID,
+  format VARCHAR(50) NOT NULL,
+  platform VARCHAR(50),
+  title VARCHAR(500),
+  body TEXT,
+  word_count INTEGER DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  produced_by VARCHAR(50) DEFAULT 'ai',
+  tokens_used INTEGER DEFAULT 0,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prod_tenant ON production_records(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_prod_content ON production_records(content_id);
+CREATE INDEX IF NOT EXISTS idx_prod_parent ON production_records(parent_id);
+CREATE INDEX IF NOT EXISTS idx_prod_format ON production_records(format);
+CREATE INDEX IF NOT EXISTS idx_prod_status ON production_records(status);
+
+-- V4: 内容数据表现
+CREATE TABLE IF NOT EXISTS content_metrics (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID REFERENCES contents(id),
+  distribution_id UUID REFERENCES distribution_records(id),
+  platform VARCHAR(50) NOT NULL,
+  snapshot_date DATE NOT NULL,
+  views INTEGER DEFAULT 0,
+  likes INTEGER DEFAULT 0,
+  comments INTEGER DEFAULT 0,
+  shares INTEGER DEFAULT 0,
+  saves INTEGER DEFAULT 0,
+  followers INTEGER DEFAULT 0,
+  inquiries INTEGER DEFAULT 0,
+  completion_rate REAL,
+  ctr REAL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cm_tenant ON content_metrics(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cm_content ON content_metrics(content_id);
+CREATE INDEX IF NOT EXISTS idx_cm_distribution ON content_metrics(distribution_id);
+CREATE INDEX IF NOT EXISTS idx_cm_platform ON content_metrics(platform);
+CREATE INDEX IF NOT EXISTS idx_cm_date ON content_metrics(snapshot_date);
+
+-- V4: 栏目规划日历
+CREATE TABLE IF NOT EXISTS column_calendars (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  column_name VARCHAR(200) NOT NULL,
+  frequency VARCHAR(50) NOT NULL,
+  platforms JSONB DEFAULT '[]',
+  content_formats JSONB DEFAULT '[]',
+  topic_pool JSONB DEFAULT '[]',
+  scheduled_date DATE,
+  assignee VARCHAR(100),
+  status VARCHAR(20) NOT NULL DEFAULT 'planned',
+  content_id UUID REFERENCES contents(id),
+  notes TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cal_tenant ON column_calendars(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cal_column ON column_calendars(column_name);
+CREATE INDEX IF NOT EXISTS idx_cal_date ON column_calendars(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_cal_status ON column_calendars(status);
+
+-- V4.5: 异步任务表
+CREATE TABLE IF NOT EXISTS tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  user_id UUID NOT NULL REFERENCES users(id),
+  conversation_id UUID REFERENCES conversations(id),
+  type VARCHAR(50) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  progress INTEGER DEFAULT 0,
+  input JSONB NOT NULL DEFAULT '{}',
+  output JSONB DEFAULT '{}',
+  error TEXT,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON tasks(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, status);
+
+-- V4.5: 任务执行日志表
+CREATE TABLE IF NOT EXISTS task_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  step VARCHAR(100) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  input_tokens INTEGER DEFAULT 0,
+  output_tokens INTEGER DEFAULT 0,
+  model VARCHAR(50),
+  duration_ms INTEGER,
+  detail JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id);
 `;
 
 async function migrate() {

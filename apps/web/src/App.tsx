@@ -12,6 +12,8 @@ import KeywordsPage from "./pages/KeywordsPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
+import KnowledgePage from "./pages/KnowledgePage";
+import DataDashboardPage from "./pages/DataDashboardPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -83,6 +85,24 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ContentDetailPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DataDashboardPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/knowledge"
+        element={
+          <ProtectedRoute>
+            <KnowledgePage />
           </ProtectedRoute>
         }
       />

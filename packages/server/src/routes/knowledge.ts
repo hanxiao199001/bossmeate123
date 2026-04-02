@@ -12,6 +12,7 @@ import {
   hybridSearch,
   getStats,
   PG_ONLY_CATEGORIES,
+  type KnowledgeCategory,
 } from "../services/knowledge/knowledge-service.js";
 import { runAuditPipeline, runBatchAudit } from "../services/knowledge/audit-pipeline.js";
 import { runColdStart, type ColdStartConfig } from "../services/knowledge/cold-start.js";
@@ -62,10 +63,20 @@ const auditSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+// seedCompetitors 支持字符串数组或对象数组
+const seedCompetitorItem = z.union([
+  z.string(),
+  z.object({
+    name: z.string(),
+    platform: z.string().optional(),
+    accountId: z.string().optional(),
+  }),
+]);
+
 const coldStartSchema = z.object({
   industry: z.string().min(1),
   subIndustry: z.string().optional(),
-  seedCompetitors: z.array(z.string()).optional(),
+  seedCompetitors: z.array(seedCompetitorItem).optional(),
   platforms: z.array(z.string()).optional(),
   ipQuestionnaire: z
     .object({
@@ -79,6 +90,15 @@ const coldStartSchema = z.object({
     .optional(),
 });
 
+// 英文行业名 → 中文映射（模板用中文key）
+const INDUSTRY_NAME_MAP: Record<string, string> = {
+  education: "教育",
+  medical: "医学",
+  medicine: "医学",
+  tech: "科技",
+  finance: "金融",
+};
+
 // ============ 路由注册 ============
 
 export async function knowledgeRoutes(app: FastifyInstance) {
@@ -89,7 +109,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const body = createSchema.parse(request.body);
     const entry = await createEntry({
       tenantId: request.tenantId,
-      category: body.category as any,
+      category: body.category as KnowledgeCategory,
       title: body.title,
       content: body.content,
       source: body.source,
@@ -118,12 +138,12 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     };
     const entries = await listEntries({
       tenantId: request.tenantId,
-      category: query.category as any,
+      category: query.category as KnowledgeCategory | undefined,
       keyword: query.keyword,
       limit: query.limit ? parseInt(query.limit, 10) : 50,
       offset: query.offset ? parseInt(query.offset, 10) : 0,
     });
-    return { success: true, data: entries, count: entries.length };
+    return { success: true, data: entries, entries, count: entries.length };
   });
 
   /** PUT /knowledge/:id — 更新 */
@@ -159,7 +179,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       limit: body.limit,
       minScore: body.minScore,
     });
-    return { success: true, data: results, count: results.length };
+    return { success: true, data: results, results, count: results.length };
   });
 
   /** POST /knowledge/hybrid-search — 混合搜索 */
@@ -172,7 +192,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       category: body.category as VectorCategory | undefined,
       limit: body.limit,
     });
-    return { success: true, data: results, count: results.length };
+    return { success: true, data: results, results, count: results.length };
   });
 
   // ====== 审核管线 ======
@@ -193,7 +213,9 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
   /** POST /knowledge/audit/batch — 批量审核入库 */
   app.post("/audit/batch", async (request) => {
-    const items = z.array(auditSchema).parse(request.body);
+    const body = request.body as { items?: unknown[] } | unknown[];
+    const rawItems = Array.isArray(body) ? body : (body as { items?: unknown[] }).items;
+    const items = z.array(auditSchema).parse(rawItems);
     const inputs = items.map((item) => ({
       tenantId: request.tenantId,
       category: item.category as VectorCategory,
@@ -205,12 +227,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const result = await runBatchAudit(inputs);
     return {
       success: true,
-      data: {
-        acceptedCount: result.accepted.length,
-        rejectedCount: result.rejected.length,
-        accepted: result.accepted,
-        rejected: result.rejected,
-      },
+      total: items.length,
+      accepted: result.accepted,
+      rejected: result.rejected,
+      results: [...result.accepted, ...result.rejected],
     };
   });
 
@@ -219,9 +239,20 @@ export async function knowledgeRoutes(app: FastifyInstance) {
   /** POST /knowledge/cold-start — 触发冷启动流程 */
   app.post("/cold-start", async (request) => {
     const body = coldStartSchema.parse(request.body);
+
+    // 行业名映射：英文 → 中文
+    const industry = INDUSTRY_NAME_MAP[body.industry.toLowerCase()] || body.industry;
+
+    // seedCompetitors 统一为字符串数组
+    const seedCompetitors = body.seedCompetitors?.map((item) =>
+      typeof item === "string" ? item : item.name
+    );
+
     const config: ColdStartConfig = {
       tenantId: request.tenantId,
       ...body,
+      industry,
+      seedCompetitors,
     };
     const progress = await runColdStart(config);
     return { success: true, data: progress };
@@ -232,6 +263,8 @@ export async function knowledgeRoutes(app: FastifyInstance) {
   /** GET /knowledge/stats — 各子库统计 */
   app.get("/stats", async (request) => {
     const stats = await getStats(request.tenantId);
-    return { success: true, data: stats };
+    const categories = Object.keys(stats);
+    const total = Object.values(stats).reduce((sum, s) => sum + s.pgCount, 0);
+    return { success: true, data: stats, categories, total, count: categories.length };
   });
 }

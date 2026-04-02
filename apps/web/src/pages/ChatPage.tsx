@@ -36,7 +36,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const skillType = searchParams.get("skill") || "article";
+  const skillType = searchParams.get("skill") || "general";
 
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
@@ -213,7 +213,7 @@ export default function ChatPage() {
               >
                 <div className="font-medium truncate">{conv.title}</div>
                 <div className="text-xs text-gray-400 mt-0.5">
-                  {conv.skillType === "article" ? "图文" : "对话"} · {formatTime(conv.updatedAt)}
+                  {conv.skillType === "article" ? "图文" : "助手"} · {formatTime(conv.updatedAt)}
                 </div>
               </button>
             ))}
@@ -239,7 +239,7 @@ export default function ChatPage() {
           </Link>
           <span className="text-gray-300">|</span>
           <span className="font-medium text-gray-900 text-sm">
-            {skillType === "article" ? "图文创作" : "AI对话"}
+            AI 助手
           </span>
           {loading && (
             <span className="ml-auto text-xs text-orange-500 animate-pulse">
@@ -253,36 +253,22 @@ export default function ChatPage() {
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.length === 0 && !loading && (
               <div className="text-center text-gray-400 mt-20">
-                <p className="text-5xl mb-4">
-                  {skillType === "article" ? "\u270D\uFE0F" : "\u{1F916}"}
-                </p>
-                <p className="text-lg font-medium text-gray-600">
-                  {skillType === "article"
-                    ? "图文创作助手"
-                    : "BossMate AI"}
-                </p>
-                <p className="text-sm mt-2">
-                  {skillType === "article"
-                    ? "告诉我你想写什么文章，比如主题、受众、字数"
-                    : "有什么可以帮您的？"}
-                </p>
+                <p className="text-5xl mb-4">&#x1F916;</p>
+                <p className="text-lg font-medium text-gray-600">AI 助手</p>
+                <p className="text-sm mt-2">问答、翻译、总结、头脑风暴，有什么可以帮你的？</p>
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  {skillType === "article" && (
-                    <>
-                      <QuickPrompt
-                        text="写一篇AI技术趋势文章"
-                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                      />
-                      <QuickPrompt
-                        text="帮我写一篇产品发布公告"
-                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                      />
-                      <QuickPrompt
-                        text="写一篇行业分析报告，1000字"
-                        onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                      />
-                    </>
-                  )}
+                  <QuickPrompt
+                    text="帮我总结一下这个概念"
+                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                  />
+                  <QuickPrompt
+                    text="翻译成英文"
+                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                  />
+                  <QuickPrompt
+                    text="帮我想几个选题方向"
+                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
+                  />
                 </div>
               </div>
             )}

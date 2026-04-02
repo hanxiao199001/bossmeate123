@@ -9,6 +9,8 @@ import { competitors, keywords, industryKeywords } from "../../models/schema.js"
 import { eq } from "drizzle-orm";
 import { createEntries, type CreateKnowledgeInput } from "./knowledge-service.js";
 import { runBatchAudit } from "./audit-pipeline.js";
+import { crawlAll } from "../crawler/index.js";
+import type { VectorCategory } from "./vector-store.js";
 
 // ============ 冷启动状态 ============
 
@@ -306,10 +308,9 @@ async function step2SeedCompetitors(config: ColdStartConfig): Promise<number> {
 }
 
 /**
- * 步骤3：触发内容爬取（异步，此处仅记录任务）
+ * 步骤3：触发内容爬取（异步执行，不阻塞冷启动流程）
  */
 async function step3TriggerCrawl(config: ColdStartConfig): Promise<number> {
-  // 冷启动阶段仅标记爬取任务，实际爬取由 scheduler 异步执行
   const platforms = config.platforms || ["wechat", "zhihu", "xiaohongshu"];
   const tasks = platforms.map((p) => ({
     platform: p,
@@ -318,8 +319,18 @@ async function step3TriggerCrawl(config: ColdStartConfig): Promise<number> {
     type: "cold_start_crawl",
   }));
 
-  // TODO: 接入 scheduler.ts 的任务队列
-  logger.info({ platforms, taskCount: tasks.length }, "步骤3: 爬取任务已触发");
+  // 异步触发爬取，不等待结果（避免阻塞 HTTP 响应）
+  setImmediate(async () => {
+    try {
+      logger.info({ platforms }, "冷启动爬取任务开始执行");
+      await crawlAll();
+      logger.info({ platforms }, "冷启动爬取任务执行完成");
+    } catch (err) {
+      logger.error(err, "冷启动爬取任务执行失败（不影响冷启动结果）");
+    }
+  });
+
+  logger.info({ platforms, taskCount: tasks.length }, "步骤3: 爬取任务已异步触发");
   return tasks.length;
 }
 
@@ -353,7 +364,7 @@ async function step4AIAnalysis(config: ColdStartConfig): Promise<number> {
   const { accepted } = await runBatchAudit(
     insights.map((i) => ({
       tenantId: i.tenantId,
-      category: i.category as any,
+      category: i.category as VectorCategory,
       title: i.title,
       content: i.content,
       source: i.source,
