@@ -24,7 +24,7 @@ export async function wechatRoutes(app: FastifyInstance) {
    * GET /wechat/config - 获取公众号配置（脱敏返回）
    */
   app.get("/wechat/config", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     const configs = await db
       .select()
@@ -59,7 +59,7 @@ export async function wechatRoutes(app: FastifyInstance) {
    * POST /wechat/config - 保存公众号配置
    */
   app.post("/wechat/config", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { appId, appSecret, accountName } = request.body as {
       appId: string;
       appSecret: string;
@@ -177,8 +177,8 @@ export async function wechatRoutes(app: FastifyInstance) {
    * POST /wechat/draft - 创建草稿（文章进入公众号草稿箱）
    */
   app.post("/wechat/draft", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
-    const userId = (request as any).userId;
+    const tenantId = request.tenantId;
+    const userId = request.user.userId;
     const { title, content, author, digest, heroImageUrl } = request.body as {
       title: string;
       content: string;
@@ -242,7 +242,7 @@ export async function wechatRoutes(app: FastifyInstance) {
    * POST /wechat/publish - 发布草稿（从草稿箱正式发布）
    */
   app.post("/wechat/publish", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { mediaId } = request.body as { mediaId: string };
 
     if (!mediaId) {

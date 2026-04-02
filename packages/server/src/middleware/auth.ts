@@ -35,6 +35,7 @@ declare module "fastify" {
       tenantId: string;
       role: string;
     };
+    rateLimit(opts?: { max?: number; timeWindow?: string }): Promise<void>;
   }
 }
 

@@ -15,7 +15,7 @@ export async function topicRoutes(app: FastifyInstance) {
   // ============ Step 2: 为选定期刊找噱头 ============
   app.post("/topic/hooks", async (request, reply) => {
     const { journalId } = request.body as { journalId: string };
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     if (!journalId) {
       return reply.status(400).send({ code: "BAD_REQUEST", message: "请选择一本期刊" });
@@ -70,7 +70,7 @@ export async function topicRoutes(app: FastifyInstance) {
       journalId: string;
       hookAngle: string;
     };
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     if (!journalId || !hookAngle) {
       return reply.status(400).send({
@@ -121,8 +121,8 @@ export async function topicRoutes(app: FastifyInstance) {
       title: string;
       hookAngle: string;
     };
-    const tenantId = (request as any).tenantId;
-    const userId = (request as any).userId;
+    const tenantId = request.tenantId;
+    const userId = request.user.userId;
 
     if (!journalId || !title) {
       return reply.status(400).send({

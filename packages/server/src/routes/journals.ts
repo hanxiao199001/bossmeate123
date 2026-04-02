@@ -30,7 +30,7 @@ export async function journalRoutes(app: FastifyInstance) {
       pageSize = 20,
     } = request.query as Record<string, string>;
 
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const conditions: any[] = [eq(journals.tenantId, tenantId)];
 
     if (discipline) conditions.push(eq(journals.discipline, discipline));
@@ -85,7 +85,7 @@ export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取单个期刊详情 ============
   app.get("/journals/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     const result = await db
       .select()
@@ -103,7 +103,7 @@ export async function journalRoutes(app: FastifyInstance) {
   // ============ 检查期刊预警状态 ============
   app.get("/journals/:id/warning-check", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     const result = await db
       .select({
@@ -156,7 +156,7 @@ export async function journalRoutes(app: FastifyInstance) {
 
   // ============ 获取学科列表（用于筛选器）============
   app.get("/journals/meta/disciplines", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
 
     const result = await db
       .select({
@@ -173,7 +173,7 @@ export async function journalRoutes(app: FastifyInstance) {
 
   // ============ 根据关键词智能匹配期刊 ============
   app.post("/journals/match", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { keywords, track, discipline } = request.body as {
       keywords: string[];
       track?: "domestic" | "sci" | "all";
@@ -275,7 +275,7 @@ export async function journalRoutes(app: FastifyInstance) {
 
   // ============ 导入种子期刊数据 ============
   app.post("/journals/seed", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { force } = (request.body || {}) as { force?: boolean };
 
     // 检查是否已经有数据

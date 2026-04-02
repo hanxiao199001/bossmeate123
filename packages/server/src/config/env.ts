@@ -56,6 +56,9 @@ const envSchema = z.object({
   UPLOAD_DIR: z.string().default("./data/uploads"),
   MAX_FILE_SIZE: z.string().default("50mb"),
 
+  // CORS
+  ALLOWED_ORIGINS: z.string().default("http://localhost:5173,http://localhost:3000"),
+
   // 日志
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   LOG_DIR: z.string().default("./logs"),

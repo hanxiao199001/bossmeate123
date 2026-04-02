@@ -422,7 +422,7 @@ ${stylePrompt ? `\n# 风格指令（来自AI学习的模版，请严格遵循）
    * 用AI提取文章中提到的期刊名+数据，然后和数据库对比
    */
   app.post("/workflow/verify-article", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { content, journals: refJournals = [] } = request.body as {
       content: string;
       journals: Array<{ name: string; nameEn?: string; partition?: string; impactFactor?: number; acceptanceRate?: number; reviewCycle?: string }>;
@@ -1023,7 +1023,7 @@ ${html}
    * 触发风格学习：抓取自己+同行文章 → AI分析 → 生成模版
    */
   app.post("/workflow/learn-style", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     if (!tenantId) {
       return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
     }
@@ -1164,7 +1164,7 @@ ${html}
    * 获取已保存的风格分析结果
    */
   app.get("/workflow/style-analyses", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     if (!tenantId) {
       return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
     }
@@ -1183,7 +1183,7 @@ ${html}
    * 获取已学习生成的模版库
    */
   app.get("/workflow/learned-templates", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     if (!tenantId) {
       return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
     }
@@ -1207,7 +1207,7 @@ ${html}
    * 停用一个学习模版
    */
   app.delete("/workflow/learned-templates/:id", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     const { id } = request.params as { id: string };
 
     await db
@@ -1225,7 +1225,7 @@ ${html}
    * 清空风格分析和学习模版（重新学习前）
    */
   app.delete("/workflow/style-analyses", async (request, reply) => {
-    const tenantId = (request as any).tenantId;
+    const tenantId = request.tenantId;
     if (!tenantId) {
       return reply.status(401).send({ code: "NO_TENANT", message: "未找到租户" });
     }

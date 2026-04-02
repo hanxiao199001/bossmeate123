@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 
@@ -28,12 +29,17 @@ import { startContentWorker } from "./services/task/content-worker.js";
 import { registerTaskWebSocket } from "./services/task/progress-ws.js";
 import { closeQueues } from "./services/task/queue.js";
 import { taskRoutes } from "./routes/tasks.js";
+import { startScheduler, stopScheduler } from "./services/scheduler.js";
+import { dataCollectionRoutes } from "./routes/data-collection.js";
+import { contentEngineRoutes } from "./routes/content-engine.js";
 
 async function bootstrap() {
   const app = Fastify({ logger: false });
 
-  await app.register(cors, { origin: true, credentials: true });
+  const allowedOrigins = env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean);
+  await app.register(cors, { origin: allowedOrigins, credentials: true });
   await app.register(jwt, { secret: env.JWT_SECRET, sign: { expiresIn: env.JWT_EXPIRES_IN } });
+  await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
   await app.register(websocket);
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -44,14 +50,26 @@ async function bootstrap() {
 
   // 公开路由
   await app.register(healthRoutes, { prefix: `${env.API_PREFIX}/health` });
-  await app.register(authRoutes, { prefix: `${env.API_PREFIX}/auth` });
+  await app.register(async (authApp) => {
+    authApp.addHook("onRequest", async (request) => {
+      await request.rateLimit({ max: 10, timeWindow: "1 minute" });
+    });
+    await authApp.register(authRoutes, { prefix: `${env.API_PREFIX}/auth` });
+  });
 
   // 需认证路由
   await app.register(async (protectedApp) => {
     protectedApp.addHook("onRequest", authMiddleware);
     protectedApp.addHook("onRequest", tenantMiddleware);
     await protectedApp.register(tenantRoutes, { prefix: `${env.API_PREFIX}/tenant` });
-    await protectedApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
+    await protectedApp.register(async (chatApp) => {
+      chatApp.addHook("onRequest", async (request) => {
+        if (request.url.includes("/send")) {
+          await request.rateLimit({ max: 20, timeWindow: "1 minute" });
+        }
+      });
+      await chatApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
+    });
     await protectedApp.register(contentRoutes, { prefix: `${env.API_PREFIX}/content` });
     await protectedApp.register(keywordRoutes, { prefix: `${env.API_PREFIX}/keywords` });
     await protectedApp.register(journalRoutes, { prefix: `${env.API_PREFIX}` });
@@ -62,6 +80,8 @@ async function bootstrap() {
     await protectedApp.register(knowledgeRoutes, { prefix: `${env.API_PREFIX}/knowledge` });
     await protectedApp.register(dashboardRoutes, { prefix: `${env.API_PREFIX}/dashboard` });
     await protectedApp.register(taskRoutes, { prefix: `${env.API_PREFIX}/tasks` });
+    await protectedApp.register(dataCollectionRoutes, { prefix: `${env.API_PREFIX}/data-collection` });
+    await protectedApp.register(contentEngineRoutes, { prefix: `${env.API_PREFIX}/content-engine` });
   });
 
   // 初始化 AI 提供商
@@ -77,8 +97,12 @@ async function bootstrap() {
   // 启动后台 Worker
   const contentWorker = startContentWorker();
 
+  // 启动 BullMQ 调度器（爬虫 + 热点 + 竞品 + 知识采集）
+  startScheduler();
+
   // Graceful shutdown
   const shutdown = async () => {
+    await stopScheduler();
     await contentWorker.close();
     await closeQueues();
     await app.close();
