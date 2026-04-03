@@ -51,9 +51,7 @@ async function bootstrap() {
   // 公开路由
   await app.register(healthRoutes, { prefix: `${env.API_PREFIX}/health` });
   await app.register(async (authApp) => {
-    authApp.addHook("onRequest", async (request) => {
-      await request.rateLimit({ max: 10, timeWindow: "1 minute" });
-    });
+    await authApp.register(rateLimit, { max: 10, timeWindow: "1 minute" });
     await authApp.register(authRoutes, { prefix: `${env.API_PREFIX}/auth` });
   });
 
@@ -63,11 +61,7 @@ async function bootstrap() {
     protectedApp.addHook("onRequest", tenantMiddleware);
     await protectedApp.register(tenantRoutes, { prefix: `${env.API_PREFIX}/tenant` });
     await protectedApp.register(async (chatApp) => {
-      chatApp.addHook("onRequest", async (request) => {
-        if (request.url.includes("/send")) {
-          await request.rateLimit({ max: 20, timeWindow: "1 minute" });
-        }
-      });
+      await chatApp.register(rateLimit, { max: 20, timeWindow: "1 minute" });
       await chatApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
     });
     await protectedApp.register(contentRoutes, { prefix: `${env.API_PREFIX}/content` });
