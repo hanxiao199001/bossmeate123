@@ -35,20 +35,20 @@ export async function retrieveForArticle(params: {
 }): Promise<RAGContext> {
   const { tenantId, topic, audience, tone, keywords } = params;
 
-  // 并行检索多个子库
+  // 并行检索多个子库（V2: 提高术语/领域知识 limit，提高 minScore）
   const [terms, redlines, audiences, styles, insights, domainKnowledge] = await Promise.all([
-    // 术语库：用主题检索专业术语定义
-    safeSearch(tenantId, topic, "term", 3),
-    // 红线库：检索相关禁忌规则
+    // 术语库：limit 提升到 5（对质量影响最大）
+    safeSearch(tenantId, topic, "term", 5),
+    // 红线库：保持 3 条（精准即可）
     safeSearch(tenantId, topic, "redline", 3),
-    // 人群画像：用受众描述检索
-    audience ? safeSearch(tenantId, audience, "audience", 2) : [],
-    // IP风格：用调性检索
+    // 人群画像
+    audience ? safeSearch(tenantId, audience, "audience", 3) : [],
+    // IP风格
     tone ? safeSearch(tenantId, tone, "style", 2) : [],
-    // 洞察策略：用主题检索
+    // 洞察策略
     safeSearch(tenantId, topic, "insight", 3),
-    // 领域知识：用主题检索
-    safeSearch(tenantId, topic, "domain_knowledge", 3),
+    // 领域知识：limit 提升到 5（对质量影响最大）
+    safeSearch(tenantId, topic, "domain_knowledge", 5),
   ]);
 
   // 如果有关键词，额外检索关键词库
@@ -57,43 +57,56 @@ export async function retrieveForArticle(params: {
     keywordHits = await safeSearch(tenantId, keywords.join(" "), "keyword", 5);
   }
 
-  // 组装上下文文本
+  // 组装上下文文本（V2: 按 score 降序排列，空子库记录日志）
   const sections: string[] = [];
   const sources: RAGContext["sources"] = [];
+  const emptyLibs: string[] = [];
+
+  const sortByScore = (hits: SearchHit[]) => [...hits].sort((a, b) => b.score - a.score);
 
   if (terms.length > 0) {
-    sections.push("【术语定义】\n" + terms.map((t) => `- ${t.title}: ${t.content}`).join("\n"));
+    sections.push("【术语定义】\n" + sortByScore(terms).map((t) => `- ${t.title}: ${t.content}`).join("\n"));
     sources.push({ category: "term", count: terms.length });
+  } else {
+    emptyLibs.push("术语库");
   }
 
   if (redlines.length > 0) {
-    sections.push("【内容红线 — 必须规避】\n" + redlines.map((t) => `- ${t.title}: ${t.content}`).join("\n"));
+    sections.push("【内容红线 — 必须规避】\n" + sortByScore(redlines).map((t) => `- ${t.title}: ${t.content}`).join("\n"));
     sources.push({ category: "redline", count: redlines.length });
   }
 
   if (audiences.length > 0) {
-    sections.push("【目标受众画像】\n" + audiences.map((t) => t.content).join("\n"));
+    sections.push("【目标受众画像】\n" + sortByScore(audiences).map((t) => t.content).join("\n"));
     sources.push({ category: "audience", count: audiences.length });
   }
 
   if (styles.length > 0) {
-    sections.push("【风格要求】\n" + styles.map((t) => t.content).join("\n"));
+    sections.push("【风格要求】\n" + sortByScore(styles).map((t) => t.content).join("\n"));
     sources.push({ category: "style", count: styles.length });
   }
 
   if (insights.length > 0) {
-    sections.push("【策略参考】\n" + insights.map((t) => `- ${t.title}: ${t.content}`).join("\n"));
+    sections.push("【策略参考】\n" + sortByScore(insights).map((t) => `- ${t.title}: ${t.content}`).join("\n"));
     sources.push({ category: "insight", count: insights.length });
   }
 
   if (domainKnowledge.length > 0) {
-    sections.push("【领域知识】\n" + domainKnowledge.map((t) => `- ${t.title}: ${t.content}`).join("\n"));
+    sections.push("【领域知识】\n" + sortByScore(domainKnowledge).map((t) => `- ${t.title}: ${t.content}`).join("\n"));
     sources.push({ category: "domain_knowledge", count: domainKnowledge.length });
+  } else {
+    emptyLibs.push("领域知识库");
   }
 
   if (keywordHits.length > 0) {
-    sections.push("【相关关键词】\n" + keywordHits.map((t) => t.title).join("、"));
+    sections.push("【相关关键词】\n" + sortByScore(keywordHits).map((t) => t.title).join("、"));
     sources.push({ category: "keyword", count: keywordHits.length });
+  }
+
+  // 空子库提醒
+  if (emptyLibs.length > 0) {
+    logger.warn({ tenantId, topic, emptyLibs }, "RAG: 部分知识子库为空");
+    sections.push(`【提示】以下知识库为空，建议补充：${emptyLibs.join("、")}`);
   }
 
   const totalHits = sources.reduce((s, v) => s + v.count, 0);
@@ -179,7 +192,7 @@ async function safeSearch(
   limit: number
 ): Promise<SearchHit[]> {
   try {
-    const results = await semanticSearch({ tenantId, query, category, limit, minScore: 0.15 });
+    const results = await semanticSearch({ tenantId, query, category, limit, minScore: 0.35 });
     return results;
   } catch (err) {
     logger.debug({ category, error: (err as Error).message }, "RAG: 子库检索失败，跳过");
