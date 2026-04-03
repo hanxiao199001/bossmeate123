@@ -65,6 +65,21 @@ export default function ChatPage() {
         if (res.data) {
           setMessages(res.data);
           setTimeout(scrollToBottom, 100);
+
+          // 如果只有 user 消息没有 assistant 回复（推荐创建后刷新），自动触发发送
+          const loadedMessages = res.data;
+          if (
+            loadedMessages &&
+            loadedMessages.length === 1 &&
+            loadedMessages[0].role === "user" &&
+            !autoMessageHandled.current &&
+            !searchParams.get("autoMessage")
+          ) {
+            autoMessageHandled.current = true;
+            setTimeout(() => {
+              sendMessage(loadedMessages[0].content, currentConvId!);
+            }, 300);
+          }
         }
       } catch {
         // 对话可能不存在

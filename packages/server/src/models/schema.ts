@@ -632,3 +632,20 @@ export const platformAccounts = pgTable(
     index("idx_pa_group").on(table.groupName),
   ]
 );
+
+// ============ 每日选题推荐 ============
+export const dailyRecommendations = pgTable(
+  "daily_recommendations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id)
+      .notNull(),
+    date: date("date").notNull(),
+    recommendations: jsonb("recommendations").default([]).notNull(),
+    generatedAt: timestamp("generated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_daily_rec_tenant_date").on(table.tenantId, table.date),
+  ]
+);

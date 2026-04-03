@@ -1,6 +1,8 @@
-import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import SmartInput from "../components/SmartInput";
+import { api } from "../utils/api";
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
@@ -148,6 +150,9 @@ export default function DashboardPage() {
         {/* ====== 智能输入框 ====== */}
         <SmartInput />
 
+        {/* ====== 今日选题推荐 ====== */}
+        <TodayRecommendations />
+
         {/* ====== 工具区：两列对齐 ====== */}
         <div className="grid grid-cols-2 gap-5">
           {/* 左列：内容工具 */}
@@ -170,6 +175,100 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface Recommendation {
+  id: string;
+  keyword: string;
+  trend: string;
+  heatChange: string;
+  relatedJournals: Array<{ name: string; impactFactor: number | null; partition: string | null }>;
+  reason: string;
+}
+
+function TodayRecommendations() {
+  const [recs, setRecs] = useState<Recommendation[]>([]);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    api
+      .get<{ recommendations: Recommendation[] }>("/recommendations/today")
+      .then((res) => {
+        setRecs(res.data?.recommendations || []);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (recs.length === 0) return null;
+
+  async function handleCreate(recId: string) {
+    try {
+      const res = await api.post<{ conversationId: string; autoMessage: string }>(
+        `/recommendations/create-from/${recId}`,
+        {}
+      );
+      if (res.data?.conversationId) {
+        navigate(
+          `/chat/${res.data.conversationId}?autoMessage=${encodeURIComponent(res.data.autoMessage)}`
+        );
+      }
+    } catch (err) {
+      console.error("一键创作失败:", err);
+    }
+  }
+
+  const trendStyle: Record<string, string> = {
+    exploding: "bg-red-50 text-red-600",
+    rising: "bg-orange-50 text-orange-600",
+    new: "bg-blue-50 text-blue-600",
+  };
+  const trendLabel: Record<string, string> = {
+    exploding: "爆发",
+    rising: "上升",
+    new: "新出现",
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto my-6 px-4">
+      <h3 className="text-sm font-medium text-gray-500 mb-3">
+        今日选题推荐
+        <span className="text-xs text-gray-400 ml-2">基于近24小时热词趋势</span>
+      </h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {recs.slice(0, 6).map((rec) => (
+          <div
+            key={rec.id}
+            className="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-md transition"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-800">{rec.keyword}</span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full ${trendStyle[rec.trend] || "bg-gray-50 text-gray-600"}`}
+              >
+                {trendLabel[rec.trend] || rec.trend}
+                {rec.heatChange && ` ${rec.heatChange}`}
+              </span>
+            </div>
+            {rec.relatedJournals.length > 0 && (
+              <p className="text-xs text-gray-500 mb-1">
+                {rec.relatedJournals[0].name}
+                {rec.relatedJournals[0].impactFactor
+                  ? ` (IF ${rec.relatedJournals[0].impactFactor}, ${rec.relatedJournals[0].partition})`
+                  : ""}
+              </p>
+            )}
+            <p className="text-xs text-gray-400 mb-3">{rec.reason}</p>
+            <button
+              onClick={() => handleCreate(rec.id)}
+              className="w-full text-center text-xs bg-blue-50 text-blue-600 rounded-lg py-2 hover:bg-blue-100 transition"
+            >
+              一键写文章
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );

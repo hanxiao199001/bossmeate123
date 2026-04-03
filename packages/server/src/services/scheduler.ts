@@ -65,6 +65,17 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
         }
       }
 
+      // 生成每日选题推荐
+      const { generateDailyRecommendations } = await import("./content-engine/topic-recommender.js");
+      for (const tenant of activeTenants) {
+        try {
+          await generateDailyRecommendations(tenant.id);
+          logger.info({ tenantId: tenant.id }, "今日选题推荐已生成");
+        } catch (err) {
+          logger.error({ tenantId: tenant.id, err }, "选题推荐生成失败");
+        }
+      }
+
       return { totalPlatforms: crawlerResults.length, tenantCount: activeTenants.length };
     }
 

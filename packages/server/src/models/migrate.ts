@@ -474,6 +474,17 @@ CREATE TABLE IF NOT EXISTS task_logs (
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_logs_task ON task_logs(task_id);
+
+-- 每日选题推荐
+CREATE TABLE IF NOT EXISTS daily_recommendations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  date DATE NOT NULL,
+  recommendations JSONB NOT NULL DEFAULT '[]',
+  generated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(tenant_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_rec_tenant_date ON daily_recommendations(tenant_id, date);
 `;
 
 async function migrate() {

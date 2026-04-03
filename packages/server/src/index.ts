@@ -32,6 +32,7 @@ import { taskRoutes } from "./routes/tasks.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { dataCollectionRoutes } from "./routes/data-collection.js";
 import { contentEngineRoutes } from "./routes/content-engine.js";
+import { recommendationRoutes } from "./routes/recommendations.js";
 
 async function bootstrap() {
   const app = Fastify({ logger: false });
@@ -76,6 +77,7 @@ async function bootstrap() {
     await protectedApp.register(taskRoutes, { prefix: `${env.API_PREFIX}/tasks` });
     await protectedApp.register(dataCollectionRoutes, { prefix: `${env.API_PREFIX}/data-collection` });
     await protectedApp.register(contentEngineRoutes, { prefix: `${env.API_PREFIX}/content-engine` });
+    await protectedApp.register(recommendationRoutes, { prefix: `${env.API_PREFIX}/recommendations` });
   });
 
   // 初始化 AI 提供商
