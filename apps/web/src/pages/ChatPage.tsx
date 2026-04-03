@@ -33,22 +33,34 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [convSkillType, setConvSkillType] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const skillType = searchParams.get("skill") || "general";
+  // skillType 优先从当前对话读取，其次从 URL 参数，最后默认 general
+  const urlSkill = searchParams.get("skill");
+  const skillType = convSkillType || urlSkill || "general";
 
   // 滚动到底部
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // 加载对话列表
+  // 加载对话列表，并同步当前对话的 skillType
   useEffect(() => {
     async function loadConversations() {
       try {
         const res = await api.get<Conversation[]>("/chat/conversations");
-        if (res.data) setConversations(res.data);
+        if (res.data) {
+          setConversations(res.data);
+          // 从对话列表中同步当前对话的 skillType
+          if (currentConvId) {
+            const current = res.data.find((c) => c.id === currentConvId);
+            if (current?.skillType) {
+              setConvSkillType(current.skillType);
+            }
+          }
+        }
       } catch {
         // 静默失败
       }
@@ -115,6 +127,7 @@ export default function ChatPage() {
       });
       if (res.data) {
         setCurrentConvId(res.data.id);
+        setConvSkillType(res.data.skillType);
         navigate(`/chat/${res.data.id}`, { replace: true });
         return res.data.id;
       }
@@ -185,6 +198,9 @@ export default function ChatPage() {
   function switchConversation(convId: string) {
     setCurrentConvId(convId);
     setMessages([]);
+    // 同步 skillType
+    const conv = conversations.find((c) => c.id === convId);
+    setConvSkillType(conv?.skillType || null);
     navigate(`/chat/${convId}`, { replace: true });
   }
 
@@ -192,6 +208,7 @@ export default function ChatPage() {
   function handleNewChat() {
     setCurrentConvId(null);
     setMessages([]);
+    setConvSkillType(null);
     navigate(`/chat?skill=${skillType}`, { replace: true });
   }
 
@@ -278,7 +295,7 @@ export default function ChatPage() {
           </Link>
           <span className="text-gray-300">|</span>
           <span className="font-medium text-gray-900 text-sm">
-            AI 助手
+            {skillType === "article" ? "图文创作" : skillType === "video" ? "视频制作" : "AI 助手"}
           </span>
           {loading && (
             <span className="ml-auto text-xs text-orange-500 animate-pulse">
@@ -291,25 +308,10 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto px-4 py-4">
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.length === 0 && !loading && (
-              <div className="text-center text-gray-400 mt-20">
-                <p className="text-5xl mb-4">&#x1F916;</p>
-                <p className="text-lg font-medium text-gray-600">AI 助手</p>
-                <p className="text-sm mt-2">问答、翻译、总结、头脑风暴，有什么可以帮你的？</p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <QuickPrompt
-                    text="帮我总结一下这个概念"
-                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                  />
-                  <QuickPrompt
-                    text="翻译成英文"
-                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                  />
-                  <QuickPrompt
-                    text="帮我想几个选题方向"
-                    onClick={(t) => { setInput(t); inputRef.current?.focus(); }}
-                  />
-                </div>
-              </div>
+              <SkillEmptyState
+                skillType={skillType}
+                onQuickPrompt={(t) => { setInput(t); inputRef.current?.focus(); }}
+              />
             )}
 
             {messages.map((msg) => (
@@ -325,10 +327,13 @@ export default function ChatPage() {
                   }`}
                 >
                   {msg.role === "assistant" ? (
-                    <div
-                      className="text-sm leading-relaxed prose-sm"
-                      dangerouslySetInnerHTML={{ __html: renderContent(msg.content) }}
-                    />
+                    <div>
+                      <MessageProgressBar content={msg.content} skillType={skillType} />
+                      <div
+                        className="text-sm leading-relaxed prose-sm"
+                        dangerouslySetInnerHTML={{ __html: renderContent(msg.content.replace(/<!--progress:.*?-->\n?/, "")) }}
+                      />
+                    </div>
                   ) : (
                     <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                   )}
@@ -347,18 +352,7 @@ export default function ChatPage() {
             ))}
 
             {loading && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                      <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                    </div>
-                    <span className="text-sm text-gray-400">AI正在思考并生成内容...</span>
-                  </div>
-                </div>
-              </div>
+              <LoadingIndicator skillType={skillType} />
             )}
 
             <div ref={messagesEndRef} />
@@ -399,6 +393,225 @@ export default function ChatPage() {
             Enter 发送 · Shift+Enter 换行 · AI生成内容仅供参考
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ 加载指示器（带流水线动画） ============
+
+function LoadingIndicator({ skillType }: { skillType: string }) {
+  const [step, setStep] = useState(0);
+  const isArticle = skillType === "article";
+  const isVideo = skillType === "video";
+  const isPipeline = isArticle || isVideo;
+  const steps = isArticle ? ARTICLE_PIPELINE : isVideo ? VIDEO_PIPELINE : [];
+  const color = isArticle ? "blue" as const : "purple" as const;
+
+  useEffect(() => {
+    if (!isPipeline) return;
+    // 模拟进度：每3秒推进一步，前6步（最后2步等后端返回）
+    const timer = setInterval(() => {
+      setStep((s) => (s < 6 ? s + 1 : s));
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [isPipeline]);
+
+  if (isPipeline) {
+    return (
+      <div className="bg-white border border-gray-200 rounded-2xl px-5 py-4 shadow-sm max-w-xl">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex gap-1">
+            <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+            <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+            <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+          </div>
+          <span className="text-sm text-gray-500">
+            {step < steps.length ? `正在执行: ${steps[step]}` : "即将完成..."}
+          </span>
+        </div>
+        <PipelineBar steps={steps} activeStep={step} color={color} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1">
+            <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+            <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+            <span className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+          </div>
+          <span className="text-sm text-gray-400">AI正在思考...</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ 解析AI回复中的进度信息 ============
+
+function parseProgressFromContent(content: string): { steps: Array<{ label: string; status: string }> } | null {
+  const match = content.match(/<!--progress:(.*?)-->/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function MessageProgressBar({ content, skillType }: { content: string; skillType: string }) {
+  const progress = parseProgressFromContent(content);
+  if (!progress) return null;
+
+  const isArticle = skillType === "article";
+  const steps = isArticle ? ARTICLE_PIPELINE : VIDEO_PIPELINE;
+  const color = isArticle ? "blue" as const : "purple" as const;
+
+  // 找到最后一个完成的步骤
+  const doneCount = progress.steps.filter((s: { status: string }) => s.status === "done").length;
+
+  return (
+    <div className="mb-3">
+      <PipelineBar steps={steps} activeStep={doneCount} color={color} />
+    </div>
+  );
+}
+
+// ============ 8步流水线定义 ============
+
+const ARTICLE_PIPELINE = [
+  "关键词搜索", "关键词聚类", "标题生成", "期刊检索",
+  "匹配模版", "AI+知识库RAG", "质量核查", "发布",
+];
+
+const VIDEO_PIPELINE = [
+  "关键词搜索", "关键词聚类", "标题生成", "期刊检索",
+  "视频脚本", "数字人配音", "质量核查", "发布",
+];
+
+// ============ 水平进度条组件 ============
+
+function PipelineBar({
+  steps,
+  activeStep,
+  color,
+}: {
+  steps: string[];
+  activeStep: number; // -1 = 未开始, 0-7 = 当前步, 8 = 全部完成
+  color: "blue" | "purple";
+}) {
+  const colors = {
+    blue: { done: "bg-blue-500", active: "bg-blue-500 animate-pulse", pending: "bg-gray-200", text: "text-blue-600", activeBg: "bg-blue-50" },
+    purple: { done: "bg-purple-500", active: "bg-purple-500 animate-pulse", pending: "bg-gray-200", text: "text-purple-600", activeBg: "bg-purple-50" },
+  };
+  const c = colors[color];
+
+  return (
+    <div className="w-full">
+      {/* 进度线 */}
+      <div className="flex items-center gap-0 mb-2">
+        {steps.map((_, i) => (
+          <div key={i} className="flex items-center flex-1">
+            {/* 节点圆点 */}
+            <div className={`w-3 h-3 rounded-full shrink-0 transition-all duration-300 ${
+              i < activeStep ? c.done
+                : i === activeStep ? c.active
+                : c.pending
+            }`} />
+            {/* 连接线 */}
+            {i < steps.length - 1 && (
+              <div className={`h-0.5 flex-1 transition-all duration-500 ${
+                i < activeStep ? c.done : "bg-gray-200"
+              }`} />
+            )}
+          </div>
+        ))}
+      </div>
+      {/* 标签 */}
+      <div className="flex">
+        {steps.map((label, i) => (
+          <div key={i} className="flex-1 text-center">
+            <span className={`text-xs leading-none ${
+              i === activeStep ? `font-bold ${c.text}` : i < activeStep ? "text-gray-500" : "text-gray-300"
+            }`}>
+              {label}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============ 技能引导页（空状态） ============
+
+function SkillEmptyState({
+  skillType,
+  onQuickPrompt,
+}: {
+  skillType: string;
+  onQuickPrompt: (text: string) => void;
+}) {
+  const isArticle = skillType === "article";
+  const isVideo = skillType === "video";
+
+  if (isArticle || isVideo) {
+    const steps = isArticle ? ARTICLE_PIPELINE : VIDEO_PIPELINE;
+    const color = isArticle ? "blue" as const : "purple" as const;
+    const title = isArticle ? "图文创作" : "视频制作";
+    const icon = isArticle ? "\u{1F4DD}" : "\u{1F3AC}";
+    const prompts = isArticle
+      ? [
+          "写一篇GLP-1减肥药的科普文章，发到小红书",
+          "写一篇益生菌与肠道健康的长文，发到知乎",
+          "写一篇AI医疗影像应用综述，发到公众号",
+        ]
+      : [
+          "做一个GLP-1减肥药科普短视频，发到抖音",
+          "做一个益生菌科普视频脚本，3分钟",
+          "做一个AI医疗影像的科普视频",
+        ];
+
+    return (
+      <div className="mt-12 max-w-2xl mx-auto">
+        <div className="text-center mb-8">
+          <span className="text-4xl mb-2 block">{icon}</span>
+          <h2 className="text-xl font-bold text-gray-900">{title}</h2>
+          <p className="text-sm text-gray-400 mt-1">告诉我你想写什么，AI自动执行8步流水线</p>
+        </div>
+
+        {/* 水平进度条 */}
+        <div className="bg-white border border-gray-200 rounded-2xl px-6 py-5 mb-8">
+          <PipelineBar steps={steps} activeStep={-1} color={color} />
+        </div>
+
+        {/* 快捷开始 */}
+        <div className="text-center">
+          <p className="text-xs text-gray-400 mb-3">快速开始 — 点击直接执行</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {prompts.map((text) => (
+              <QuickPrompt key={text} text={text} onClick={onQuickPrompt} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ===== AI 助手（默认） =====
+  return (
+    <div className="text-center text-gray-400 mt-20">
+      <p className="text-5xl mb-4">&#x1F916;</p>
+      <p className="text-lg font-medium text-gray-600">AI 助手</p>
+      <p className="text-sm mt-2">问答、翻译、总结、头脑风暴，有什么可以帮你的？</p>
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <QuickPrompt text="帮我总结一下这个概念" onClick={onQuickPrompt} />
+        <QuickPrompt text="翻译成英文" onClick={onQuickPrompt} />
+        <QuickPrompt text="帮我想几个选题方向" onClick={onQuickPrompt} />
       </div>
     </div>
   );

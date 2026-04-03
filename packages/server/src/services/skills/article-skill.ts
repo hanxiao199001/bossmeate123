@@ -253,14 +253,15 @@ export class ArticleSkill implements ISkill {
   ): Promise<{ parsed: ParsedRequirement; response: string }> {
     const systemPrompt = `你是BossMate AI超级员工的"需求分析师"角色。你的任务是理解老板的内容创作需求，并拆解为结构化信息。
 
+重要原则：不要追问，直接执行！老板时间宝贵，信息不足时用合理默认值填充。
+
 规则：
 1. 从用户的话中提取：主题、受众、类型、字数、要点、语气、参考信息
-2. 如果信息不足（比如没说清目标受众、字数、风格等），设 needsClarification 为 true，并列出需要追问的问题
-3. 追问问题要自然、简洁，像助理在确认需求，不要像填表
-4. 如果用户信息足够明确，直接拆解，needsClarification 设为 false
-5. 识别用户的发布意图：如果用户提到"发到微信"、"发布到公众号"、"推送到知乎"等，提取目标平台和发布时机
-6. 平台名称标准化：微信/公众号→wechat，百家号/百家→baijiahao，头条/今日头条→toutiao，知乎→zhihu，小红书/红书→xiaohongshu
-7. 如果用户说"写完就发"、"直接发"→timing=immediate；说"我看看再发"、"先不发"→timing=after_review；没提到→timing=unspecified
+2. 信息不足时，用智能默认值填充：受众默认"大众读者"，字数根据平台自动判断（小红书600-800字、知乎1500-2000字、公众号1000-1500字、默认800字），语气根据平台自动判断（小红书亲切活泼、知乎专业严谨、公众号正式官方）
+3. needsClarification 始终设为 false，clarificationQuestions 始终设为空数组
+4. 识别用户的发布意图：如果用户提到"发到微信"、"发布到公众号"、"推送到知乎"等，提取目标平台和发布时机
+5. 平台名称标准化：微信/公众号→wechat，百家号/百家→baijiahao，头条/今日头条→toutiao，知乎→zhihu，小红书/红书→xiaohongshu
+6. 如果用户说"写完就发"、"直接发"→timing=immediate；说"我看看再发"、"先不发"→timing=after_review；没提到→timing=unspecified
 
 输出严格 JSON 格式：
 {
@@ -326,17 +327,13 @@ export class ArticleSkill implements ISkill {
       };
     }
 
-    if (parsed.needsClarification && parsed.clarificationQuestions.length > 0) {
-      response = `收到！我先确认几个细节，帮你写出更好的内容：\n\n`;
-      parsed.clarificationQuestions.forEach((q, i) => {
-        response += `${i + 1}. ${q}\n`;
-      });
-      response += `\n你可以一次性回答，也可以逐个说。`;
-    } else {
-      response = `好的，需求明确了！我来帮你写一篇关于「${parsed.topic}」的${parsed.articleType}文章，${parsed.wordCount}字左右，面向${parsed.audience}。\n\n正在规划大纲...`;
-      if (parsed.publishIntent.wantPublish && parsed.publishIntent.timing === "immediate") {
-        response += `\n写完后会自动发布到${parsed.publishIntent.platforms.join("、")}。`;
-      }
+    // 强制不追问，直接执行
+    parsed.needsClarification = false;
+    parsed.clarificationQuestions = [];
+
+    response = `收到！正在为你生成「${parsed.topic}」的${parsed.articleType}文章，${parsed.wordCount}字左右，面向${parsed.audience}。`;
+    if (parsed.publishIntent.wantPublish && parsed.publishIntent.timing === "immediate") {
+      response += `写完后自动发布到${parsed.publishIntent.platforms.join("、")}。`;
     }
 
     logger.info(

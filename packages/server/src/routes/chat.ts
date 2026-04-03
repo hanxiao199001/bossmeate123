@@ -284,28 +284,41 @@ function buildProgressInfo(result: { reply: string; artifact?: { metadata?: Reco
   const meta = result.artifact?.metadata;
   if (!meta) return "";
 
-  const steps: string[] = [];
-  steps.push("[1/5] 需求理解 ... 完成");
-  steps.push("[2/5] 大纲规划 ... 完成");
-  steps.push("[3/5] 内容生成 ... 完成");
-
   const score = meta.qualityScore as number | undefined;
   const passed = meta.qualityPassed as boolean | undefined;
+  const publishResults = meta.publishResults as Array<{ success: boolean }> | undefined;
+
+  const steps: string[] = [];
+  steps.push("[1/8] 关键词搜索 ✓");
+  steps.push("[2/8] 关键词聚类 ✓");
+  steps.push("[3/8] 标题生成 ✓");
+  steps.push("[4/8] 期刊检索 ✓");
+  steps.push("[5/8] 匹配模版 ✓");
+  steps.push("[6/8] AI+知识库RAG ✓");
+
   if (score != null) {
-    steps.push(`[4/5] 质量检查 ... ${passed ? "通过" : "需改进"} (${score}分)`);
+    steps.push(`[7/8] 质量核查 ${passed ? "✓" : "⚠"} ${score}分`);
   } else {
-    steps.push("[4/5] 质量检查 ... 完成");
+    steps.push("[7/8] 质量核查 ✓");
   }
 
-  const publishResults = meta.publishResults as Array<{ success: boolean }> | undefined;
   if (publishResults && publishResults.length > 0) {
     const successCount = publishResults.filter((r) => r.success).length;
-    steps.push(`[5/5] 发布推送 ... ${successCount}/${publishResults.length} 成功`);
+    steps.push(`[8/8] 发布 ✓ ${successCount}/${publishResults.length}`);
   } else {
-    steps.push("[5/5] 发布推送 ... 待确认");
+    steps.push("[8/8] 发布 — 待确认");
   }
 
-  return "--- 生成流程 ---\n" + steps.join("\n") + "\n--- 完成 ---";
+  return "<!--progress:" + JSON.stringify({
+    steps: steps.map((s, i) => ({
+      step: i + 1,
+      label: ["关键词搜索", "关键词聚类", "标题生成", "期刊检索", "匹配模版", "AI+知识库RAG", "质量核查", "发布"][i],
+      status: s.includes("✓") ? "done" : s.includes("⚠") ? "warn" : "pending",
+      detail: s,
+    })),
+    score: score ?? null,
+    passed: passed ?? null,
+  }) + "-->\n" + steps.join(" → ");
 }
 
 // ============ 自动发布 ============
