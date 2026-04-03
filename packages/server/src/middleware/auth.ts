@@ -20,7 +20,7 @@ export async function authMiddleware(
     request.user = decoded;
   } catch (err) {
     logger.warn({ err }, "认证失败");
-    reply.code(401).send({
+    return reply.code(401).send({
       code: "UNAUTHORIZED",
       message: "请先登录",
     });

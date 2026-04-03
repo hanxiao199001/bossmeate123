@@ -51,7 +51,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords — 获取关键词列表
    */
   app.get("/", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const query = request.query as {
       page?: string;
       pageSize?: string;
@@ -75,7 +75,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords/today — 获取今日关键词
    */
   app.get("/today", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const query = request.query as { limit?: string };
     const limit = query.limit ? parseInt(query.limit) : 50;
 
@@ -97,7 +97,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords/trends — 获取趋势报告
    */
   app.get("/trends", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const query = request.query as { limit?: string };
     const limit = query.limit ? parseInt(query.limit) : 100;
 
@@ -116,7 +116,7 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.get<{ Params: { keyword: string } }>(
     "/trends/:keyword",
     async (request, reply) => {
-      const { tenantId } = request.user as { tenantId: string };
+      const tenantId = request.tenantId;
       const keyword = decodeURIComponent(request.params.keyword);
       const query = request.query as { days?: string };
       const days = query.days ? parseInt(query.days) : 30;
@@ -137,7 +137,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords/dictionary — 获取行业词库列表
    */
   app.get("/dictionary", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const query = request.query as {
       level?: string;
       category?: string;
@@ -159,7 +159,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords/dictionary/categories — 获取词库分类
    */
   app.get("/dictionary/categories", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const categories = await getDictionaryCategories(tenantId);
     return reply.send({ code: "ok", data: categories });
   });
@@ -168,7 +168,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/dictionary — 添加行业关键词
    */
   app.post("/dictionary", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
     const body = request.body as {
       word: string;
       level: "primary" | "secondary" | "context";
@@ -195,7 +195,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/dictionary/init — 初始化预置词库
    */
   app.post("/dictionary/init", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
 
     const count = await initPresetDictionary(tenantId);
     return reply.send({ code: "ok", data: { inserted: count } });
@@ -207,7 +207,7 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string } }>(
     "/dictionary/:id",
     async (request, reply) => {
-      const { tenantId } = request.user as { tenantId: string };
+      const tenantId = request.tenantId;
       const body = request.body as {
         category?: string;
         weight?: number;
@@ -226,7 +226,7 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/dictionary/:id",
     async (request, reply) => {
-      const { tenantId } = request.user as { tenantId: string };
+      const tenantId = request.tenantId;
       const success = await deleteWord(tenantId, request.params.id);
 
       if (!success) {
@@ -258,7 +258,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/crawl — 手动触发全量抓取（两条线并发）
    */
   app.post("/crawl", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
 
     logger.info({ tenantId }, "手动触发全量热点抓取（国内核心+SCI）");
     const startTime = Date.now();
@@ -293,7 +293,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/crawl/domestic — 只抓国内核心线
    */
   app.post("/crawl/domestic", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
 
     logger.info({ tenantId }, "手动触发国内核心线抓取");
     const startTime = Date.now();
@@ -326,7 +326,7 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/crawl/sci — 只抓SCI线
    */
   app.post("/crawl/sci", async (request, reply) => {
-    const { tenantId } = request.user as { tenantId: string };
+    const tenantId = request.tenantId;
 
     logger.info({ tenantId }, "手动触发SCI线抓取");
     const startTime = Date.now();
@@ -361,7 +361,7 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.post<{ Params: { platform: string } }>(
     "/crawl/:platform",
     async (request, reply) => {
-      const { tenantId } = request.user as { tenantId: string };
+      const tenantId = request.tenantId;
       const platform = request.params.platform as PlatformName;
 
       // 防止和 /crawl/domestic、/crawl/sci 冲突

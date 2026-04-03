@@ -98,7 +98,7 @@ export async function taskRoutes(app: FastifyInstance) {
     }
 
     await db.update(tasks).set({ status: "cancelled", updatedAt: new Date() })
-      .where(eq(tasks.id, id));
+      .where(and(eq(tasks.id, id), eq(tasks.tenantId, request.tenantId)));
 
     return { code: "OK", data: { message: "任务已取消" } };
   });

@@ -42,9 +42,10 @@ async function request<T>(
   }
 
   if (!response.ok) {
-    // 401 自动登出
+    // 401 自动登出并跳转登录页
     if (response.status === 401) {
       useAuthStore.getState().logout();
+      window.location.href = "/login";
     }
     throw new Error(data.message || `请求失败 (${response.status})`);
   }

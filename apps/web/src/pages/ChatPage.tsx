@@ -163,10 +163,17 @@ export default function ChatPage() {
     navigate(`/chat?skill=${skillType}`, { replace: true });
   }
 
-  // 简单的 Markdown 渲染
+  // 简单的 Markdown 渲染（带 XSS 清洗）
   function renderContent(content: string) {
+    // 先清洗 HTML 标签，防止 XSS
+    let safe = content
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
     // 处理标题
-    let html = content
+    let html = safe
       .replace(/^### (.+)$/gm, '<h3 class="text-base font-bold mt-3 mb-1">$1</h3>')
       .replace(/^## (.+)$/gm, '<h2 class="text-lg font-bold mt-4 mb-2">$1</h2>')
       .replace(/^# (.+)$/gm, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>');

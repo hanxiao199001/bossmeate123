@@ -44,7 +44,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     // 创建租户
     const slug = `tenant-${nanoid(8)}`;
-    const [tenant] = await db
+    const tenantResult = await db
       .insert(tenants)
       .values({
         name: body.tenantName,
@@ -52,9 +52,14 @@ export async function authRoutes(app: FastifyInstance) {
       })
       .returning();
 
+    const tenant = tenantResult[0];
+    if (!tenant) {
+      return reply.code(500).send({ code: "SERVER_ERROR", message: "租户创建失败" });
+    }
+
     // 创建用户（owner角色）
     const passwordHash = await bcrypt.hash(body.password, 12);
-    const [user] = await db
+    const userResult = await db
       .insert(users)
       .values({
         tenantId: tenant.id,
@@ -65,6 +70,11 @@ export async function authRoutes(app: FastifyInstance) {
         role: "owner",
       })
       .returning();
+
+    const user = userResult[0];
+    if (!user) {
+      return reply.code(500).send({ code: "SERVER_ERROR", message: "用户创建失败" });
+    }
 
     // 签发 JWT
     const token = app.jwt.sign({

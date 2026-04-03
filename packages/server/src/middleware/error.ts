@@ -1,11 +1,12 @@
 import type { FastifyError, FastifyRequest, FastifyReply } from "fastify";
+import { ZodError } from "zod";
 import { logger } from "../config/logger.js";
 
 /**
  * 全局错误处理器
  */
 export function errorHandler(
-  error: FastifyError,
+  error: FastifyError | ZodError | Error,
   request: FastifyRequest,
   reply: FastifyReply
 ) {
@@ -18,20 +19,33 @@ export function errorHandler(
     "请求处理异常"
   );
 
-  // Zod 验证错误
-  if (error.validation) {
+  // Zod 校验错误（来自路由中的 schema.parse()）
+  if (error instanceof ZodError) {
     return reply.code(400).send({
       code: "VALIDATION_ERROR",
       message: "参数校验失败",
-      details: error.validation,
+      details: error.errors.map((e) => ({
+        path: e.path.join("."),
+        message: e.message,
+      })),
+    });
+  }
+
+  // Fastify 原生验证错误
+  if ("validation" in error && (error as FastifyError).validation) {
+    return reply.code(400).send({
+      code: "VALIDATION_ERROR",
+      message: "参数校验失败",
+      details: (error as FastifyError).validation,
     });
   }
 
   // 业务错误（自定义 statusCode）
-  if (error.statusCode && error.statusCode < 500) {
-    return reply.code(error.statusCode).send({
-      code: error.code || "CLIENT_ERROR",
-      message: error.message,
+  const fastifyErr = error as FastifyError;
+  if (fastifyErr.statusCode && fastifyErr.statusCode < 500) {
+    return reply.code(fastifyErr.statusCode).send({
+      code: fastifyErr.code || "CLIENT_ERROR",
+      message: fastifyErr.message,
     });
   }
 

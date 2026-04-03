@@ -1,22 +1,30 @@
 import { Queue, QueueEvents } from "bullmq";
 import IORedis from "ioredis";
 import { env } from "../../config/env.js";
+import { logger } from "../../config/logger.js";
 
 type RedisInstance = InstanceType<typeof IORedis.default>;
 let connection: RedisInstance | null = null;
+let connecting = false;
 
 export function getRedisConnection(): RedisInstance {
-  if (!connection) {
-    connection = new IORedis.default(env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-    });
-    connection.on("error", (err: Error) => {
-      console.error("Redis connection error:", err.message);
-    });
-    connection.on("connect", () => {
-      console.log("Redis connected for task queue");
-    });
+  if (connection) return connection;
+  if (connecting) {
+    // 防止并发初始化，复用正在创建的连接
+    connection = new IORedis.default(env.REDIS_URL, { maxRetriesPerRequest: null });
+    return connection;
   }
+  connecting = true;
+  connection = new IORedis.default(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    retryStrategy: (times: number) => Math.min(times * 500, 5000),
+  });
+  connection.on("error", (err: Error) => {
+    logger.error({ err: err.message }, "Redis 连接错误");
+  });
+  connection.on("connect", () => {
+    logger.info("Redis 连接成功");
+  });
   return connection;
 }
 

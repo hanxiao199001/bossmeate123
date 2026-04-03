@@ -10,8 +10,7 @@ const pool = new pg.Pool({
 });
 
 pool.on("error", (err) => {
-  logger.fatal(err, "PostgreSQL 连接池错误");
-  process.exit(1);
+  logger.error(err, "PostgreSQL 连接池错误（连接池将自动重试）");
 });
 
 pool.on("connect", () => {

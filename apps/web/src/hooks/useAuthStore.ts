@@ -57,7 +57,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   setTenant: (tenant) => {
-    const current = JSON.parse(localStorage.getItem("bossmate_auth") || "{}");
+    let current: Record<string, unknown> = {};
+    try {
+      current = JSON.parse(localStorage.getItem("bossmate_auth") || "{}");
+    } catch {
+      // localStorage 数据损坏，忽略
+    }
     localStorage.setItem("bossmate_auth", JSON.stringify({ ...current, tenant }));
     set({ tenant });
   },
