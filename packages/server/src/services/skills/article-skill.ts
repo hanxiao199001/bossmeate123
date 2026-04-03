@@ -1,13 +1,13 @@
 /**
- * 图文线 Skill - BossMate 第一条业务线（V3 一句话生成+发布）
+ * 图文线 Skill - BossMate 第一条业务线（V4 期刊数据驱动）
  *
  * 完整流程：
- * 需求理解(含发布意图) → 大纲生成 → 基于大纲生成 → 质检(AI+硬指标) → 修改式重试 → 自动发布
+ * 需求理解 → 期刊数据采集 → RAG检索 → 大纲生成 → 基于大纲生成(含期刊图片) → 质检 → 修改式重试 → 发布
  *
- * V3 新增：
- * 1. 需求理解阶段识别发布意图（平台、时机）
- * 2. 质检通过后自动发布到指定平台
- * 3. 支持"后续说发布"的场景
+ * V4 新增：
+ * 1. 生成前自动采集相关期刊数据（PubMed摘要+期刊卡片）
+ * 2. 文章中插入期刊封面图和数据信息卡片
+ * 3. AI 基于真实论文摘要创作，而非凭空编造
  */
 
 import { logger } from "../../config/logger.js";
@@ -16,6 +16,7 @@ import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { retrieveForArticle } from "../knowledge/rag-retriever.js";
 import { modelRouter } from "../ai/model-router.js";
 import { publishToAccounts, type PublishResult } from "../publisher/index.js";
+import { collectJournalContent, type CollectionResult } from "../data-collection/journal-content-collector.js";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
@@ -131,7 +132,24 @@ export class ArticleSkill implements ISkill {
       return { reply: response };
     }
 
-    // RAG 检索
+    // V4: 先采集期刊数据到知识库（确保 RAG 有真实内容可查）
+    let collectionResult: CollectionResult | undefined;
+    try {
+      collectionResult = await collectJournalContent({
+        tenantId: context.tenantId,
+        topic: parsed.topic,
+        keywords: parsed.keyPoints,
+      });
+      logger.info({
+        journals: collectionResult.journals.length,
+        abstracts: collectionResult.abstracts.length,
+        knowledgeEntries: collectionResult.knowledgeEntriesCreated,
+      }, "期刊数据采集完成");
+    } catch (err) {
+      logger.warn({ err }, "期刊数据采集失败，继续使用已有知识库");
+    }
+
+    // RAG 检索（此时知识库已有最新期刊数据）
     let ragText = context.ragContext;
     if (!ragText) {
       try {
@@ -150,8 +168,8 @@ export class ArticleSkill implements ISkill {
 
     const previousFeedback = (context.metadata?.previousFeedback as string) || "";
 
-    // 生成流程
-    const { article, quality } = await this.fullGenerate(parsed, ragText, previousFeedback);
+    // 生成流程（传入期刊数据用于图片插入）
+    const { article, quality } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult);
 
     // V3: 生成后自动发布
     let publishResults: PublishResult[] | undefined;
@@ -439,7 +457,8 @@ export class ArticleSkill implements ISkill {
     requirement: ParsedRequirement,
     outline: ArticleOutline,
     ragContext?: string,
-    previousFeedback?: string
+    previousFeedback?: string,
+    journalData?: CollectionResult
   ): Promise<GeneratedArticle> {
     const outlineText = outline.sections
       .map((s, i) => `${i + 1}. ${s.heading}（约${s.estimatedWords}字）\n   要点：${s.keyPoints.join("、")}`)
@@ -470,6 +489,31 @@ ${outlineText}
     if (ragContext) {
       systemPrompt += `\n\n以下是知识库中的参考资料，请在文章中适当引用：\n${ragContext}`;
     }
+
+    // V4: 注入真实期刊数据
+    if (journalData && (journalData.abstracts.length > 0 || journalData.journals.length > 0)) {
+      systemPrompt += `\n\n【真实期刊研究数据 — 必须引用】`;
+
+      if (journalData.abstracts.length > 0) {
+        systemPrompt += `\n以下是 PubMed 最新研究摘要，请在文章中引用这些真实研究：`;
+        for (const a of journalData.abstracts.slice(0, 3)) {
+          systemPrompt += `\n- [${a.journal}] ${a.title}\n  摘要：${a.abstractText.slice(0, 300)}`;
+        }
+      }
+
+      if (journalData.journals.length > 0) {
+        systemPrompt += `\n\n以下期刊有数据信息卡片，请在文章适当位置插入（使用 Markdown 图片语法）：`;
+        for (const j of journalData.journals) {
+          systemPrompt += `\n- ${j.name}（IF: ${j.impactFactor || "N/A"}, ${j.partition || "N/A"}区）`;
+          systemPrompt += `\n  数据卡片：![${j.name}数据卡片](${j.dataCardUri})`;
+          if (j.coverUrl) {
+            systemPrompt += `\n  封面图：![${j.name}](${j.coverUrl})`;
+          }
+        }
+        systemPrompt += `\n\n规则：在文章中提到某个期刊时，紧跟其后插入该期刊的数据卡片图片。`;
+      }
+    }
+
     if (previousFeedback) {
       systemPrompt += `\n\n用户历史偏好反馈：${previousFeedback}，请在生成时参考这些偏好。`;
     }
@@ -477,7 +521,7 @@ ${outlineText}
     systemPrompt += `\n\n请输出 JSON 格式：
 {
   "title": "文章标题",
-  "body": "文章正文（Markdown格式）",
+  "body": "文章正文（Markdown格式，可包含图片标记）",
   "summary": "一句话摘要",
   "tags": ["标签1", "标签2"],
   "wordCount": 实际字数
@@ -727,14 +771,15 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
   async fullGenerate(
     requirement: ParsedRequirement,
     ragContext?: string,
-    previousFeedback?: string
+    previousFeedback?: string,
+    journalData?: CollectionResult
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
   }> {
     const outline = await this.generateOutline(requirement, ragContext);
-    const article = await this.generateArticle(requirement, outline, ragContext, previousFeedback);
+    const article = await this.generateArticle(requirement, outline, ragContext, previousFeedback, journalData);
     const quality = await this.qualityCheck(article, requirement);
 
     if (!quality.passed) {
