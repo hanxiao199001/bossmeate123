@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
+import SmartInput from "../components/SmartInput";
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
@@ -143,6 +144,9 @@ export default function DashboardPage() {
             </div>
           </Link>
         </div>
+
+        {/* ====== 智能输入框 ====== */}
+        <SmartInput />
 
         {/* ====== 工具区：两列对齐 ====== */}
         <div className="grid grid-cols-2 gap-5">

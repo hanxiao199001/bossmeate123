@@ -73,6 +73,24 @@ export default function ChatPage() {
     loadMessages();
   }, [currentConvId, scrollToBottom]);
 
+  // V3: autoMessage — SmartInput 跳转后自动发送
+  const autoMessageHandled = useRef(false);
+  useEffect(() => {
+    const autoMsg = searchParams.get("autoMessage");
+    if (!autoMsg || autoMessageHandled.current || !currentConvId) return;
+    autoMessageHandled.current = true;
+
+    // 清掉 URL 参数，避免刷新重复发送
+    navigate(`/chat/${currentConvId}`, { replace: true });
+
+    // 延迟一帧，确保对话已加载
+    setTimeout(() => {
+      setInput(autoMsg);
+      // 自动触发发送
+      sendMessage(autoMsg, currentConvId);
+    }, 200);
+  }, [currentConvId, searchParams]);
+
   // 创建新对话
   async function createConversation(): Promise<string | null> {
     try {
@@ -91,25 +109,10 @@ export default function ChatPage() {
     return null;
   }
 
-  // 发送消息
-  async function handleSend() {
-    if (!input.trim() || loading) return;
-
-    const userContent = input.trim();
-    setInput("");
+  // 发送消息核心逻辑（handleSend 和 autoMessage 共用）
+  async function sendMessage(userContent: string, convId: string) {
     setLoading(true);
 
-    // 如果还没有对话，先创建
-    let convId = currentConvId;
-    if (!convId) {
-      convId = await createConversation();
-      if (!convId) {
-        setLoading(false);
-        return;
-      }
-    }
-
-    // 立即在UI显示用户消息
     const tempUserMsg: Message = {
       id: "temp-user-" + Date.now(),
       role: "user",
@@ -126,7 +129,6 @@ export default function ChatPage() {
       }>(`/chat/conversations/${convId}/send`, { content: userContent });
 
       if (res.data) {
-        // 替换临时消息为真实消息，并添加AI回复
         setMessages((prev) => [
           ...prev.filter((m) => m.id !== tempUserMsg.id),
           res.data!.userMessage,
@@ -135,7 +137,6 @@ export default function ChatPage() {
         setTimeout(scrollToBottom, 100);
       }
     } catch (err: any) {
-      // 显示错误
       const errorMsg: Message = {
         id: "error-" + Date.now(),
         role: "assistant",
@@ -147,6 +148,22 @@ export default function ChatPage() {
       setLoading(false);
       inputRef.current?.focus();
     }
+  }
+
+  // 发送按钮/Enter 触发
+  async function handleSend() {
+    if (!input.trim() || loading) return;
+
+    const userContent = input.trim();
+    setInput("");
+
+    let convId = currentConvId;
+    if (!convId) {
+      convId = await createConversation();
+      if (!convId) return;
+    }
+
+    await sendMessage(userContent, convId);
   }
 
   // 切换对话
