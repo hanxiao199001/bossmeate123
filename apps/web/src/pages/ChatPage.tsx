@@ -157,12 +157,20 @@ export default function ChatPage() {
       }>(`/chat/conversations/${convId}/send`, { content: userContent });
 
       if (res.data) {
-        setMessages((prev) => [
-          ...prev.filter((m) => m.id !== tempUserMsg.id),
-          res.data!.userMessage,
-          res.data!.aiMessage,
-        ]);
-        setTimeout(scrollToBottom, 100);
+        // 如果是 pipeline 类型，延迟1秒让用户看到进度条走完
+        const isPipeline = skillType === "article" || skillType === "video";
+        const delay = isPipeline ? 1000 : 0;
+
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== tempUserMsg.id),
+            res.data!.userMessage,
+            res.data!.aiMessage,
+          ]);
+          setLoading(false);
+          setTimeout(scrollToBottom, 100);
+        }, delay);
+        return; // 提前返回，setLoading 在 setTimeout 里处理
       }
     } catch (err: any) {
       const errorMsg: Message = {
@@ -410,10 +418,10 @@ function LoadingIndicator({ skillType }: { skillType: string }) {
 
   useEffect(() => {
     if (!isPipeline) return;
-    // 模拟进度：每3秒推进一步，前6步（最后2步等后端返回）
+    // 模拟进度：每1.5秒推进一步，前7步（最后1步等后端返回）
     const timer = setInterval(() => {
-      setStep((s) => (s < 6 ? s + 1 : s));
-    }, 3000);
+      setStep((s) => (s < 7 ? s + 1 : s));
+    }, 1500);
     return () => clearInterval(timer);
   }, [isPipeline]);
 
