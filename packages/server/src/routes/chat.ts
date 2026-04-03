@@ -1,5 +1,7 @@
 /**
  * 对话路由 - 集成图文线 Skill、AI 调用、一句话发布
+ *
+ * V4: 智能 skill 路由 + 进度展示
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -13,17 +15,17 @@ import { publishToAccounts } from "../services/publisher/index.js";
 
 const createConversationSchema = z.object({
   title: z.string().optional(),
-  skillType: z.enum(["article", "video", "customer_service"]).optional(),
+  skillType: z.enum(["article", "video", "customer_service", "general"]).optional(),
 });
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, "消息不能为空"),
 });
 
-// V3: 发布指令关键词
+// 发布指令关键词
 const PUBLISH_KEYWORDS = ["发布", "可以发了", "发到", "推送", "发出去", "发吧", "发送"];
 
-// V3: 平台名称映射
+// 平台名称映射
 const PLATFORM_MAP: Record<string, string> = {
   "微信": "wechat", "公众号": "wechat",
   "百家号": "baijiahao", "百家": "baijiahao",
@@ -32,6 +34,20 @@ const PLATFORM_MAP: Record<string, string> = {
   "小红书": "xiaohongshu", "红书": "xiaohongshu",
   "所有": "all", "全部": "all", "全平台": "all",
 };
+
+// 智能判断是否应该走 article skill（当 skillType 未指定或为 general 时）
+function shouldUseArticleSkill(message: string): boolean {
+  const patterns = [
+    /写.{0,5}(文章|图文|内容|科普|分析|报告)/,
+    /生成.{0,5}(文章|图文|内容)/,
+    /创作/,
+    /帮我写/,
+    /一篇/,
+    /发(到|布).{0,5}(微信|公众号|知乎|头条|百家|小红书)/,
+    /关于.{2,20}(的|写|发)/,
+  ];
+  return patterns.some((p) => p.test(message));
+}
 
 export async function chatRoutes(app: FastifyInstance) {
   // 获取对话列表
@@ -45,9 +61,10 @@ export async function chatRoutes(app: FastifyInstance) {
   // 创建新对话
   app.post("/conversations", async (request, reply) => {
     const body = createConversationSchema.parse(request.body);
+    const skillType = body.skillType === "general" ? null : (body.skillType || null);
     const [conv] = await db.insert(conversations).values({
       tenantId: request.tenantId, userId: request.user.userId,
-      title: body.title || "新对话", skillType: body.skillType,
+      title: body.title || "新对话", skillType,
     }).returning();
     return reply.code(201).send({ code: "OK", data: conv });
   });
@@ -77,22 +94,15 @@ export async function chatRoutes(app: FastifyInstance) {
       tenantId: request.tenantId, conversationId: id, role: "user", content: userMessage,
     }).returning();
 
-    // V3: 检测"后续说发布"场景
+    // 检测"后续说发布"场景
     const isPublishCommand = PUBLISH_KEYWORDS.some((k) => userMessage.includes(k));
-    if (isPublishCommand && conv.skillType === "article") {
-      const publishReply = await handlePublishCommand(
-        userMessage,
-        id,
-        request.tenantId,
-      );
-
+    if (isPublishCommand) {
+      const publishReply = await handlePublishCommand(userMessage, id, request.tenantId);
       if (publishReply) {
-        // 存储 AI 回复
         const [aiMsg] = await db.insert(messages).values({
           tenantId: request.tenantId, conversationId: id, role: "assistant",
           content: publishReply, model: "system",
         }).returning();
-
         await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, id));
         return { code: "OK", data: { userMessage: userMsg, aiMessage: aiMsg } };
       }
@@ -107,7 +117,21 @@ export async function chatRoutes(app: FastifyInstance) {
     let inputTokens = 0;
     let outputTokens = 0;
 
-    const skill = conv.skillType ? SkillRegistry.get(conv.skillType) : null;
+    // V4: 智能 skill 路由
+    // 1. 对话已绑定 skillType → 直接用
+    // 2. 对话没绑定 → 根据用户消息智能判断
+    let skill = conv.skillType ? SkillRegistry.get(conv.skillType) : null;
+
+    if (!skill && shouldUseArticleSkill(userMessage)) {
+      skill = SkillRegistry.get("article");
+      // 更新对话的 skillType，后续消息不用再判断
+      if (skill) {
+        await db.update(conversations)
+          .set({ skillType: "article" })
+          .where(eq(conversations.id, id));
+        logger.info({ conversationId: id }, "智能路由：识别为图文创作，切换到 ArticleSkill");
+      }
+    }
 
     if (skill) {
       const provider = getProvider(skill.preferredTier) || getProvider("cheap");
@@ -120,45 +144,78 @@ export async function chatRoutes(app: FastifyInstance) {
             content: m.content,
           }));
 
-          // V3: 先创建 draft content 记录，拿到 contentId 传给 Skill
-          const [contentRow] = await db.insert(contents).values({
-            tenantId: request.tenantId,
-            userId: request.user.userId,
-            conversationId: id,
-            type: "article",
-            title: "生成中...",
-            body: "",
-            status: "generating" as any,
-          }).returning();
-
+          // 先调用 skill.handle，不预创建 content（避免追问阶段创建空记录）
           const result = await skill.handle(body.content, chatHistory, {
             tenantId: request.tenantId,
             userId: request.user.userId,
             conversationId: id,
             provider,
-            metadata: {
-              contentId: contentRow.id,
-            },
+            metadata: {},
           });
 
-          aiContent = result.reply;
-          modelUsed = provider.name;
-
-          // V3: 生成完成后更新 content 记录
+          // 只有产出制品时才写入 contents 表
           if (result.artifact) {
-            await db.update(contents)
-              .set({
-                title: result.artifact.title,
-                body: result.artifact.body,
-                status: (result.artifact.metadata?.qualityPassed ? "draft" : "draft") as any,
-                metadata: result.artifact.metadata || {},
-                updatedAt: new Date(),
-              })
-              .where(eq(contents.id, contentRow.id));
-          } else {
-            // 没产出制品（比如追问阶段），删除占位记录
-            await db.delete(contents).where(eq(contents.id, contentRow.id));
+            const [contentRow] = await db.insert(contents).values({
+              tenantId: request.tenantId,
+              userId: request.user.userId,
+              conversationId: id,
+              type: result.artifact.type,
+              title: result.artifact.title,
+              body: result.artifact.body,
+              status: "draft",
+              metadata: result.artifact.metadata || {},
+            }).returning();
+
+            // 如果 artifact 中有 publishIntent 且需要自动发布，补充 contentId 后发布
+            const publishIntent = result.artifact.metadata?.publishIntent as
+              { wantPublish?: boolean; platforms?: string[]; timing?: string } | undefined;
+
+            if (
+              publishIntent?.wantPublish &&
+              publishIntent.timing !== "after_review" &&
+              result.artifact.metadata?.qualityPassed &&
+              contentRow
+            ) {
+              try {
+                const publishResults = await autoPublishForContent(
+                  request.tenantId,
+                  contentRow.id,
+                  publishIntent.platforms || [],
+                );
+                // 追加发布结果到回复
+                if (publishResults.length > 0) {
+                  const successList = publishResults.filter((r) => r.success);
+                  const failList = publishResults.filter((r) => !r.success);
+                  let publishInfo = "";
+                  if (successList.length > 0) {
+                    publishInfo += `\n\n已成功发布到：\n`;
+                    successList.forEach((r) => {
+                      publishInfo += `- ${r.accountName}（${r.platform}）${r.url ? ": " + r.url : ""}\n`;
+                    });
+                  }
+                  if (failList.length > 0) {
+                    publishInfo += `\n以下平台发布失败：\n`;
+                    failList.forEach((r) => {
+                      publishInfo += `- ${r.accountName}: ${r.error}\n`;
+                    });
+                  }
+                  result.reply += publishInfo;
+                }
+              } catch (err) {
+                logger.error({ err }, "自动发布失败");
+              }
+            }
           }
+
+          // 构建带进度标记的回复
+          aiContent = result.reply;
+          if (result.artifact) {
+            // 在回复前面加上流程进度
+            const progressInfo = buildProgressInfo(result);
+            aiContent = progressInfo + "\n\n" + result.reply;
+          }
+
+          modelUsed = provider.name;
         } catch (err) {
           logger.error({ err }, "Skill 调用失败");
           aiContent = `AI 生成遇到问题: ${err instanceof Error ? err.message : "未知错误"}。请稍后重试。`;
@@ -221,14 +278,75 @@ export async function chatRoutes(app: FastifyInstance) {
   });
 }
 
-// ============ V3: 处理"后续说发布"指令 ============
+// ============ 进度信息构建 ============
+
+function buildProgressInfo(result: { reply: string; artifact?: { metadata?: Record<string, unknown> } }): string {
+  const meta = result.artifact?.metadata;
+  if (!meta) return "";
+
+  const steps: string[] = [];
+  steps.push("[1/5] 需求理解 ... 完成");
+  steps.push("[2/5] 大纲规划 ... 完成");
+  steps.push("[3/5] 内容生成 ... 完成");
+
+  const score = meta.qualityScore as number | undefined;
+  const passed = meta.qualityPassed as boolean | undefined;
+  if (score != null) {
+    steps.push(`[4/5] 质量检查 ... ${passed ? "通过" : "需改进"} (${score}分)`);
+  } else {
+    steps.push("[4/5] 质量检查 ... 完成");
+  }
+
+  const publishResults = meta.publishResults as Array<{ success: boolean }> | undefined;
+  if (publishResults && publishResults.length > 0) {
+    const successCount = publishResults.filter((r) => r.success).length;
+    steps.push(`[5/5] 发布推送 ... ${successCount}/${publishResults.length} 成功`);
+  } else {
+    steps.push("[5/5] 发布推送 ... 待确认");
+  }
+
+  return "--- 生成流程 ---\n" + steps.join("\n") + "\n--- 完成 ---";
+}
+
+// ============ 自动发布 ============
+
+async function autoPublishForContent(
+  tenantId: string,
+  contentId: string,
+  platforms: string[],
+) {
+  const accounts = await db
+    .select()
+    .from(platformAccounts)
+    .where(
+      and(
+        eq(platformAccounts.tenantId, tenantId),
+        eq(platformAccounts.status, "active"),
+        eq(platformAccounts.isVerified, true),
+        inArray(platformAccounts.platform, platforms),
+      )
+    );
+
+  if (accounts.length === 0) {
+    return [{
+      accountId: "", accountName: "", platform: platforms.join(","),
+      success: false, error: `未找到${platforms.join("、")}平台的已验证账号`,
+    }];
+  }
+
+  return publishToAccounts({
+    contentId, tenantId,
+    accountIds: accounts.map((a) => a.id),
+  });
+}
+
+// ============ 处理"后续说发布"指令 ============
 
 async function handlePublishCommand(
   userMessage: string,
   conversationId: string,
   tenantId: string,
 ): Promise<string | null> {
-  // 找到最近的 draft 内容
   const [latestContent] = await db
     .select()
     .from(contents)
@@ -243,10 +361,9 @@ async function handlePublishCommand(
     .limit(1);
 
   if (!latestContent || !latestContent.body) {
-    return null; // 没有待发布内容，走正常 Skill 流程
+    return null;
   }
 
-  // 解析用户提到的平台
   const targetPlatforms: string[] = [];
   for (const [keyword, platform] of Object.entries(PLATFORM_MAP)) {
     if (userMessage.includes(keyword)) {
@@ -260,7 +377,6 @@ async function handlePublishCommand(
     }
   }
 
-  // 如果没指定平台，查找该租户所有已验证的账号平台
   if (targetPlatforms.length === 0) {
     const accounts = await db
       .select({ platform: platformAccounts.platform })
@@ -281,7 +397,6 @@ async function handlePublishCommand(
     targetPlatforms.push(...uniquePlatforms);
   }
 
-  // 查找目标平台的活跃已验证账号
   const accounts = await db
     .select()
     .from(platformAccounts)
@@ -298,7 +413,6 @@ async function handlePublishCommand(
     return `未找到${targetPlatforms.join("、")}平台的已验证账号，请先在"账号管理"中绑定。`;
   }
 
-  // 执行发布
   try {
     const results = await publishToAccounts({
       contentId: latestContent.id,
@@ -306,31 +420,21 @@ async function handlePublishCommand(
       accountIds: accounts.map((a) => a.id),
     });
 
-    // 更新内容状态
-    await db
-      .update(contents)
-      .set({ status: "published", updatedAt: new Date() })
+    await db.update(contents).set({ status: "published", updatedAt: new Date() })
       .where(eq(contents.id, latestContent.id));
 
-    // 构造回复
     const successList = results.filter((r) => r.success);
     const failList = results.filter((r) => !r.success);
 
     let reply = `正在发布「${latestContent.title}」...\n\n`;
-
     if (successList.length > 0) {
       reply += `已成功发布到：\n`;
-      successList.forEach((r) => {
-        reply += `- ${r.accountName}（${r.platform}）${r.url ? ": " + r.url : ""}\n`;
-      });
+      successList.forEach((r) => { reply += `- ${r.accountName}（${r.platform}）${r.url ? ": " + r.url : ""}\n`; });
     }
     if (failList.length > 0) {
       reply += `\n以下平台发布失败：\n`;
-      failList.forEach((r) => {
-        reply += `- ${r.accountName}: ${r.error}\n`;
-      });
+      failList.forEach((r) => { reply += `- ${r.accountName}: ${r.error}\n`; });
     }
-
     return reply;
   } catch (err) {
     logger.error({ err, contentId: latestContent.id }, "发布指令执行失败");

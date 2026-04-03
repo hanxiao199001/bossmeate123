@@ -32,7 +32,7 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
           {/* 图文创作 */}
           <Link
-            to="/workflow/article"
+            to="/chat?skill=article"
             className="group bg-white rounded-2xl p-6 border-2 border-gray-200 hover:border-blue-400 hover:shadow-lg transition-all"
           >
             <div className="flex items-center gap-3 mb-4">
@@ -68,7 +68,7 @@ export default function DashboardPage() {
 
           {/* 视频制作 */}
           <Link
-            to="/workflow/video"
+            to="/chat?skill=video"
             className="group bg-white rounded-2xl p-6 border-2 border-gray-200 hover:border-purple-400 hover:shadow-lg transition-all"
           >
             <div className="flex items-center gap-3 mb-4">
