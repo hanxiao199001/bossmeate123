@@ -30,8 +30,14 @@ export default function DashboardPage() {
         </h1>
         <p className="text-gray-400 text-sm mb-6">选择工作流开始内容生产，或使用下方工具</p>
 
-        {/* ====== 今日选题推荐（最醒目位置） ====== */}
+        {/* ====== 待审核提醒（最重要行动项） ====== */}
+        <PendingReviewBanner />
+
+        {/* ====== 今日选题推荐 ====== */}
         <TodayRecommendations />
+
+        {/* ====== Agent 运行状态 ====== */}
+        <AgentStatusBar />
 
         {/* ====== 核心：三个主入口并列 ====== */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
@@ -179,6 +185,101 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+// ============ Agent 运行状态条 ============
+
+function AgentStatusBar() {
+  const [agents, setAgents] = useState<Array<{ name: string; displayName: string; status: string }>>([]);
+  const [plan, setPlan] = useState<{ tasks?: Array<{ status: string }> } | null>(null);
+
+  useEffect(() => {
+    api.get<{ agents: Array<{ name: string; displayName: string; status: string }> }>("/agents/status")
+      .then((res) => setAgents(res.data?.agents || []))
+      .catch(() => {});
+    api.get<{ plan: { tasks?: Array<{ status: string }> } | null }>("/agents/daily-plan")
+      .then((res) => setPlan(res.data?.plan || null))
+      .catch(() => {});
+  }, []);
+
+  if (agents.length === 0) return null;
+
+  const statusColors: Record<string, string> = {
+    running: "bg-green-500",
+    idle: "bg-gray-300",
+    error: "bg-red-500",
+    paused: "bg-yellow-400",
+  };
+
+  const completed = plan?.tasks?.filter((t) => t.status === "published").length || 0;
+  const total = plan?.tasks?.length || 0;
+  const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return (
+    <div className="mb-6 bg-white border border-gray-200 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-gray-700">Agent 运行状态</h3>
+        {total > 0 && (
+          <span className="text-xs text-gray-400">
+            今日计划: {completed}/{total} 已完成 ({progress}%)
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-4">
+        {agents.map((a) => (
+          <div key={a.name} className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${statusColors[a.status] || "bg-gray-300"}`} />
+            <span className="text-xs text-gray-600">{a.displayName}</span>
+          </div>
+        ))}
+      </div>
+      {total > 0 && (
+        <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-blue-500 to-green-500 rounded-full transition-all"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ 待审核提醒横幅 ============
+
+function PendingReviewBanner() {
+  const [count, setCount] = useState(0);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    api.get<{ items: unknown[]; count: number }>("/agents/review/pending")
+      .then((res) => setCount(res.data?.count || 0))
+      .catch(() => {});
+  }, []);
+
+  if (count === 0) return null;
+
+  return (
+    <div className="mb-6 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">&#x1F4DD;</span>
+        <div>
+          <p className="text-sm font-bold text-amber-800">
+            有 {count} 篇文章等待审核
+          </p>
+          <p className="text-xs text-amber-600">Agent 已完成写作和质检，等待您确认后发布</p>
+        </div>
+      </div>
+      <button
+        onClick={() => navigate("/content?status=pending_review")}
+        className="px-4 py-2 bg-amber-500 text-white text-sm font-medium rounded-xl hover:bg-amber-600 transition"
+      >
+        去审核
+      </button>
+    </div>
+  );
+}
+
+// ============ 今日选题推荐 ============
 
 interface Recommendation {
   id: string;

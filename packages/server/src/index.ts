@@ -34,6 +34,7 @@ import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { dataCollectionRoutes } from "./routes/data-collection.js";
 import { contentEngineRoutes } from "./routes/content-engine.js";
 import { recommendationRoutes } from "./routes/recommendations.js";
+import { agentRoutes } from "./routes/agent-status.js";
 import { agentRegistry } from "./services/agents/base/registry.js";
 import { KnowledgeEngine } from "./services/agents/knowledge-engine.js";
 import { ContentDirector } from "./services/agents/content-director.js";
@@ -83,6 +84,7 @@ async function bootstrap() {
     await protectedApp.register(dataCollectionRoutes, { prefix: `${env.API_PREFIX}/data-collection` });
     await protectedApp.register(contentEngineRoutes, { prefix: `${env.API_PREFIX}/content-engine` });
     await protectedApp.register(recommendationRoutes, { prefix: `${env.API_PREFIX}/recommendations` });
+    await protectedApp.register(agentRoutes, { prefix: `${env.API_PREFIX}/agents` });
   });
 
   // 初始化 AI 提供商
