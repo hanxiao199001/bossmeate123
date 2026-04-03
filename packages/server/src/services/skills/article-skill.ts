@@ -1,14 +1,13 @@
 /**
- * 图文线 Skill - BossMate 第一条业务线（V2 质量优化版）
+ * 图文线 Skill - BossMate 第一条业务线（V3 一句话生成+发布）
  *
  * 完整流程：
- * 需求理解 → 大纲生成 → 基于大纲逐章节生成 → 质检(AI+硬指标) → 修改式重试
+ * 需求理解(含发布意图) → 大纲生成 → 基于大纲生成 → 质检(AI+硬指标) → 修改式重试 → 自动发布
  *
- * V2 改进：
- * 1. 新增大纲生成阶段（3个候选标题 + 结构化章节 + 写作策略）
- * 2. 质检改用独立模型 + 硬指标（字数偏差/段落数/关键词覆盖）
- * 3. 重试改为"修改"而非"重写"
- * 4. 支持用户历史偏好反馈注入
+ * V3 新增：
+ * 1. 需求理解阶段识别发布意图（平台、时机）
+ * 2. 质检通过后自动发布到指定平台
+ * 3. 支持"后续说发布"的场景
  */
 
 import { logger } from "../../config/logger.js";
@@ -16,16 +15,21 @@ import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { retrieveForArticle } from "../knowledge/rag-retriever.js";
 import { modelRouter } from "../ai/model-router.js";
+import { publishToAccounts, type PublishResult } from "../publisher/index.js";
+import { db } from "../../models/db.js";
+import { platformAccounts } from "../../models/schema.js";
+import { eq, and, inArray } from "drizzle-orm";
 
 // ============ 类型定义 ============
 
 export type ArticleStage =
   | "understanding"
   | "clarifying"
-  | "outlining"       // V2 新增
+  | "outlining"
   | "generating"
   | "quality_check"
-  | "revising"        // V2 新增
+  | "revising"
+  | "publishing"       // V3 新增
   | "editing"
   | "ready"
   | "published";
@@ -34,7 +38,7 @@ export interface ArticleContext {
   originalRequest: string;
   parsedRequirement?: ParsedRequirement;
   clarifications: Array<{ question: string; answer: string }>;
-  outline?: ArticleOutline;   // V2 新增
+  outline?: ArticleOutline;
   ragContext?: string;
   article?: GeneratedArticle;
   qualityReport?: QualityReport;
@@ -51,25 +55,31 @@ interface ParsedRequirement {
   references: string[];
   needsClarification: boolean;
   clarificationQuestions: string[];
+
+  /** V3 新增：发布意图 */
+  publishIntent: {
+    wantPublish: boolean;
+    platforms: string[];
+    timing: "immediate" | "after_review" | "unspecified";
+  };
 }
 
-// V2: 大纲结构
 interface ArticleOutline {
-  titleCandidates: string[];          // 3 个候选标题
-  selectedTitle: string;              // 选中的标题
-  sections: OutlineSection[];         // 章节结构
+  titleCandidates: string[];
+  selectedTitle: string;
+  sections: OutlineSection[];
   writingStrategy: {
-    opening: string;                  // 开头切入方式
-    argumentStructure: string;        // 论证结构
-    closing: string;                  // 结尾收束方式
+    opening: string;
+    argumentStructure: string;
+    closing: string;
   };
   totalEstimatedWords: number;
 }
 
 interface OutlineSection {
-  heading: string;                    // 小标题
-  keyPoints: string[];                // 该章节要覆盖的要点
-  estimatedWords: number;             // 预计字数
+  heading: string;
+  keyPoints: string[];
+  estimatedWords: number;
 }
 
 interface GeneratedArticle {
@@ -80,18 +90,17 @@ interface GeneratedArticle {
   wordCount: number;
 }
 
-// V2: 质检报告增强
 interface QualityReport {
-  aiScore: number;            // AI 评分 0-100
+  aiScore: number;
   hardMetrics: {
-    wordDeviation: number;    // 字数偏差率（0-1）
+    wordDeviation: number;
     wordDeviationScore: number;
     paragraphCount: number;
     paragraphScore: number;
-    keyPointCoverage: number; // 关键词覆盖率（0-1）
+    keyPointCoverage: number;
     keyPointScore: number;
   };
-  totalScore: number;         // 综合分 (AI 50% + 硬指标 50%)
+  totalScore: number;
   passed: boolean;
   issues: string[];
   suggestions: string[];
@@ -102,7 +111,7 @@ interface QualityReport {
 export class ArticleSkill implements ISkill {
   readonly name = "article";
   readonly displayName = "智能图文";
-  readonly description = "基于 RAG 知识库的学术/行业图文生成，含大纲规划和自动质检";
+  readonly description = "基于 RAG 知识库的学术/行业图文生成，含大纲规划、质检和一键发布";
   readonly preferredTier = "expensive" as const;
 
   private provider: AIProvider;
@@ -139,14 +148,58 @@ export class ArticleSkill implements ISkill {
       }
     }
 
-    // V2: 提取用户历史偏好反馈
     const previousFeedback = (context.metadata?.previousFeedback as string) || "";
 
-    // V2 流程: 大纲 → 生成 → 质检 → (修改)
+    // 生成流程
     const { article, quality } = await this.fullGenerate(parsed, ragText, previousFeedback);
 
+    // V3: 生成后自动发布
+    let publishResults: PublishResult[] | undefined;
+    let reply = response;
+
+    if (
+      quality.passed &&
+      parsed.publishIntent.wantPublish &&
+      parsed.publishIntent.timing !== "after_review"
+    ) {
+      const contentId = context.metadata?.contentId as string;
+      if (contentId) {
+        try {
+          publishResults = await this.autoPublish({
+            tenantId: context.tenantId,
+            contentId,
+            platforms: parsed.publishIntent.platforms,
+            article,
+          });
+        } catch (err) {
+          logger.error({ err }, "自动发布失败");
+        }
+      }
+    }
+
+    // V3: 构造带发布结果的回复
+    if (publishResults && publishResults.length > 0) {
+      const successList = publishResults.filter((r) => r.success);
+      const failList = publishResults.filter((r) => !r.success);
+
+      if (successList.length > 0) {
+        reply += `\n\n已成功发布到：\n`;
+        successList.forEach((r) => {
+          reply += `- ${r.accountName}（${r.platform}）${r.url ? ": " + r.url : ""}\n`;
+        });
+      }
+      if (failList.length > 0) {
+        reply += `\n以下平台发布失败：\n`;
+        failList.forEach((r) => {
+          reply += `- ${r.accountName}: ${r.error}\n`;
+        });
+      }
+    } else if (parsed.publishIntent.wantPublish && parsed.publishIntent.timing === "after_review") {
+      reply += `\n\n文章已生成，等你确认后说"发布"即可一键推送到${parsed.publishIntent.platforms.join("、")}。`;
+    }
+
     return {
-      reply: response,
+      reply,
       artifact: {
         type: "article",
         title: article.title,
@@ -161,12 +214,20 @@ export class ArticleSkill implements ISkill {
           hardMetrics: quality.hardMetrics,
           issues: quality.issues,
           suggestions: quality.suggestions,
+          publishIntent: parsed.publishIntent,
+          publishResults: publishResults?.map((r) => ({
+            platform: r.platform,
+            accountName: r.accountName,
+            success: r.success,
+            url: r.url,
+            error: r.error,
+          })),
         },
       },
     };
   }
 
-  // ============ 步骤 1: 需求理解 ============
+  // ============ 步骤 1: 需求理解（V3: 含发布意图）============
 
   async understandRequirement(
     userInput: string,
@@ -179,6 +240,9 @@ export class ArticleSkill implements ISkill {
 2. 如果信息不足（比如没说清目标受众、字数、风格等），设 needsClarification 为 true，并列出需要追问的问题
 3. 追问问题要自然、简洁，像助理在确认需求，不要像填表
 4. 如果用户信息足够明确，直接拆解，needsClarification 设为 false
+5. 识别用户的发布意图：如果用户提到"发到微信"、"发布到公众号"、"推送到知乎"等，提取目标平台和发布时机
+6. 平台名称标准化：微信/公众号→wechat，百家号/百家→baijiahao，头条/今日头条→toutiao，知乎→zhihu，小红书/红书→xiaohongshu
+7. 如果用户说"写完就发"、"直接发"→timing=immediate；说"我看看再发"、"先不发"→timing=after_review；没提到→timing=unspecified
 
 输出严格 JSON 格式：
 {
@@ -190,7 +254,12 @@ export class ArticleSkill implements ISkill {
   "tone": "专业严谨|轻松活泼|正式官方|亲切温和",
   "references": ["参考信息"],
   "needsClarification": true,
-  "clarificationQuestions": ["问题1", "问题2"]
+  "clarificationQuestions": ["问题1", "问题2"],
+  "publishIntent": {
+    "wantPublish": false,
+    "platforms": [],
+    "timing": "unspecified"
+  }
 }`;
 
     const messages: ChatMessage[] = [
@@ -211,7 +280,11 @@ export class ArticleSkill implements ISkill {
     try {
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
+        const raw = JSON.parse(jsonMatch[0]);
+        parsed = {
+          ...raw,
+          publishIntent: raw.publishIntent || { wantPublish: false, platforms: [], timing: "unspecified" },
+        };
       } else {
         throw new Error("未找到 JSON");
       }
@@ -231,6 +304,7 @@ export class ArticleSkill implements ISkill {
           "希望多少字左右？",
           "有什么重点想要突出的吗？",
         ],
+        publishIntent: { wantPublish: false, platforms: [], timing: "unspecified" },
       };
     }
 
@@ -242,17 +316,24 @@ export class ArticleSkill implements ISkill {
       response += `\n你可以一次性回答，也可以逐个说。`;
     } else {
       response = `好的，需求明确了！我来帮你写一篇关于「${parsed.topic}」的${parsed.articleType}文章，${parsed.wordCount}字左右，面向${parsed.audience}。\n\n正在规划大纲...`;
+      if (parsed.publishIntent.wantPublish && parsed.publishIntent.timing === "immediate") {
+        response += `\n写完后会自动发布到${parsed.publishIntent.platforms.join("、")}。`;
+      }
     }
 
     logger.info(
-      { topic: parsed.topic, needsClarification: parsed.needsClarification },
+      {
+        topic: parsed.topic,
+        needsClarification: parsed.needsClarification,
+        publishIntent: parsed.publishIntent,
+      },
       "需求理解完成"
     );
 
     return { parsed, response };
   }
 
-  // ============ 步骤 2: 大纲生成（V2 新增，最关键的一步）============
+  // ============ 步骤 2: 大纲生成 ============
 
   async generateOutline(
     requirement: ParsedRequirement,
@@ -284,18 +365,16 @@ export class ArticleSkill implements ISkill {
     }
   ],
   "writingStrategy": {
-    "opening": "开头切入方式（如：用数据冲击开头/讲故事引入/直接抛出问题）",
-    "argumentStructure": "论证结构（如：总分总/递进式/对比论证/问题-分析-解决方案）",
-    "closing": "结尾收束方式（如：总结要点+CTA/展望未来/金句收尾）"
+    "opening": "开头切入方式",
+    "argumentStructure": "论证结构",
+    "closing": "结尾收束方式"
   }
 }
 
 要求：
 - 3-6个章节，每个章节有2-4个具体要点
 - 各章节字数之和应接近目标字数 ${requirement.wordCount}
-- 标题要有吸引力，25字以内
-- 章节结构逻辑递进，不要堆砌
-- 写作策略要具体可执行`;
+- 标题要有吸引力，25字以内`;
 
     const result = await this.provider.chat({
       messages: [
@@ -332,7 +411,6 @@ export class ArticleSkill implements ISkill {
         throw new Error("未找到 JSON");
       }
     } catch {
-      // 兜底大纲
       outline = {
         titleCandidates: [requirement.topic],
         selectedTitle: requirement.topic,
@@ -348,11 +426,7 @@ export class ArticleSkill implements ISkill {
     }
 
     logger.info(
-      {
-        title: outline.selectedTitle,
-        sectionCount: outline.sections.length,
-        totalWords: outline.totalEstimatedWords,
-      },
+      { title: outline.selectedTitle, sectionCount: outline.sections.length },
       "大纲生成完成"
     );
 
@@ -367,7 +441,6 @@ export class ArticleSkill implements ISkill {
     ragContext?: string,
     previousFeedback?: string
   ): Promise<GeneratedArticle> {
-    // 构建章节大纲文本
     const outlineText = outline.sections
       .map((s, i) => `${i + 1}. ${s.heading}（约${s.estimatedWords}字）\n   要点：${s.keyPoints.join("、")}`)
       .join("\n");
@@ -397,8 +470,6 @@ ${outlineText}
     if (ragContext) {
       systemPrompt += `\n\n以下是知识库中的参考资料，请在文章中适当引用：\n${ragContext}`;
     }
-
-    // V2: 注入用户历史偏好反馈
     if (previousFeedback) {
       systemPrompt += `\n\n用户历史偏好反馈：${previousFeedback}，请在生成时参考这些偏好。`;
     }
@@ -406,7 +477,7 @@ ${outlineText}
     systemPrompt += `\n\n请输出 JSON 格式：
 {
   "title": "文章标题",
-  "body": "文章正文（Markdown格式，用 ## 分隔章节）",
+  "body": "文章正文（Markdown格式）",
   "summary": "一句话摘要",
   "tags": ["标签1", "标签2"],
   "wordCount": 实际字数
@@ -415,58 +486,36 @@ ${outlineText}
     const result = await this.provider.chat({
       messages: [
         { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: `请按照大纲生成完整文章。参考信息：${requirement.references.join("；") || "无"}`,
-        },
+        { role: "user", content: `请按照大纲生成完整文章。参考信息：${requirement.references.join("；") || "无"}` },
       ],
       temperature: 0.7,
       maxTokens: 8192,
     });
 
     let article: GeneratedArticle;
-
     try {
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         article = JSON.parse(jsonMatch[0]);
       } else {
-        article = {
-          title: outline.selectedTitle,
-          body: result.content,
-          summary: result.content.slice(0, 100),
-          tags: [requirement.articleType],
-          wordCount: result.content.length,
-        };
+        article = { title: outline.selectedTitle, body: result.content, summary: result.content.slice(0, 100), tags: [requirement.articleType], wordCount: result.content.length };
       }
     } catch {
-      article = {
-        title: outline.selectedTitle,
-        body: result.content,
-        summary: result.content.slice(0, 100),
-        tags: [requirement.articleType],
-        wordCount: result.content.length,
-      };
+      article = { title: outline.selectedTitle, body: result.content, summary: result.content.slice(0, 100), tags: [requirement.articleType], wordCount: result.content.length };
     }
 
-    logger.info(
-      { title: article.title, wordCount: article.wordCount },
-      "图文生成完成"
-    );
-
+    logger.info({ title: article.title, wordCount: article.wordCount }, "图文生成完成");
     return article;
   }
 
-  // ============ 步骤 4: 质检（V2: AI + 硬指标）============
+  // ============ 步骤 4: 质检（AI + 硬指标）============
 
   async qualityCheck(
     article: GeneratedArticle,
     requirement: ParsedRequirement
   ): Promise<QualityReport> {
-    // V2: 硬指标自动计算
     const hardMetrics = this.calculateHardMetrics(article, requirement);
 
-    // V2: 质检优先用 cheap 模型（不同模型评判更客观）
     const cheapProvider = modelRouter.selectModel("daily_chat");
     const checkProvider = cheapProvider
       ? { name: cheapProvider.name, model: cheapProvider.model, apiKey: cheapProvider.apiKey, baseUrl: cheapProvider.baseUrl }
@@ -493,15 +542,11 @@ ${outlineText}
     let suggestions: string[] = [];
 
     try {
-      // 使用 cheap 模型做质检（如果可用）
       let result;
       if (checkProvider && checkProvider.name !== "anthropic") {
         const response = await fetch(`${checkProvider.baseUrl}/chat/completions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${checkProvider.apiKey}`,
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${checkProvider.apiKey}` },
           body: JSON.stringify({
             model: checkProvider.model,
             messages: [
@@ -536,92 +581,48 @@ ${outlineText}
       logger.warn({ err }, "AI质检调用失败，使用默认分");
     }
 
-    // V2: 综合分 = AI 50% + 硬指标 50%
     const hardScore = (hardMetrics.wordDeviationScore + hardMetrics.paragraphScore + hardMetrics.keyPointScore) / 3;
     const totalScore = Math.round(aiScore * 0.5 + hardScore * 0.5);
 
-    // 硬指标问题追加到 issues
     if (hardMetrics.wordDeviationScore < 70) {
-      const deviation = Math.round(hardMetrics.wordDeviation * 100);
-      issues.push(`字数偏差 ${deviation}%（要求 ${requirement.wordCount} 字，实际 ${article.wordCount} 字）`);
+      issues.push(`字数偏差 ${Math.round(hardMetrics.wordDeviation * 100)}%（要求 ${requirement.wordCount} 字，实际 ${article.wordCount} 字）`);
     }
     if (hardMetrics.paragraphScore < 70) {
       issues.push(`段落数量不合理（${hardMetrics.paragraphCount} 段）`);
     }
     if (hardMetrics.keyPointScore < 70) {
-      const coverage = Math.round(hardMetrics.keyPointCoverage * 100);
-      issues.push(`关键要点覆盖率仅 ${coverage}%`);
+      issues.push(`关键要点覆盖率仅 ${Math.round(hardMetrics.keyPointCoverage * 100)}%`);
     }
 
-    const report: QualityReport = {
-      aiScore,
-      hardMetrics,
-      totalScore,
-      passed: totalScore >= 70,
-      issues,
-      suggestions,
-    };
-
-    logger.info(
-      { aiScore, hardScore: Math.round(hardScore), totalScore, passed: report.passed },
-      "质检完成"
-    );
-
+    const report: QualityReport = { aiScore, hardMetrics, totalScore, passed: totalScore >= 70, issues, suggestions };
+    logger.info({ aiScore, hardScore: Math.round(hardScore), totalScore, passed: report.passed }, "质检完成");
     return report;
   }
 
-  /**
-   * V2: 硬指标自动计算
-   */
-  private calculateHardMetrics(
-    article: GeneratedArticle,
-    requirement: ParsedRequirement
-  ): QualityReport["hardMetrics"] {
-    // a. 字数偏差率
+  private calculateHardMetrics(article: GeneratedArticle, requirement: ParsedRequirement): QualityReport["hardMetrics"] {
     const actualWords = article.body.length;
     const targetWords = requirement.wordCount;
     const wordDeviation = Math.abs(actualWords - targetWords) / targetWords;
-    const wordDeviationScore = wordDeviation <= 0.1 ? 100
-      : wordDeviation <= 0.2 ? 85
-      : wordDeviation <= 0.3 ? 70
-      : wordDeviation <= 0.5 ? 50
-      : 30;
+    const wordDeviationScore = wordDeviation <= 0.1 ? 100 : wordDeviation <= 0.2 ? 85 : wordDeviation <= 0.3 ? 70 : wordDeviation <= 0.5 ? 50 : 30;
 
-    // b. 段落数量
-    const paragraphs = article.body
-      .split(/\n\n+/)
-      .filter((p) => p.trim().length > 10);
+    const paragraphs = article.body.split(/\n\n+/).filter((p) => p.trim().length > 10);
     const paragraphCount = paragraphs.length;
-    const paragraphScore = (paragraphCount >= 3 && paragraphCount <= 20) ? 100
-      : (paragraphCount >= 2 && paragraphCount <= 25) ? 70
-      : 40;
+    const paragraphScore = (paragraphCount >= 3 && paragraphCount <= 20) ? 100 : (paragraphCount >= 2 && paragraphCount <= 25) ? 70 : 40;
 
-    // c. 关键词覆盖率
     const keyPoints = requirement.keyPoints;
     if (keyPoints.length === 0) {
-      return {
-        wordDeviation, wordDeviationScore,
-        paragraphCount, paragraphScore,
-        keyPointCoverage: 1, keyPointScore: 100,
-      };
+      return { wordDeviation, wordDeviationScore, paragraphCount, paragraphScore, keyPointCoverage: 1, keyPointScore: 100 };
     }
 
     const bodyLower = article.body.toLowerCase();
     const covered = keyPoints.filter((kp) => bodyLower.includes(kp.toLowerCase()));
     const keyPointCoverage = covered.length / keyPoints.length;
-    const keyPointScore = keyPointCoverage >= 0.8 ? 100
-      : keyPointCoverage >= 0.6 ? 80
-      : keyPointCoverage >= 0.4 ? 60
-      : 40;
+    const keyPointScore = keyPointCoverage >= 0.8 ? 100 : keyPointCoverage >= 0.6 ? 80 : keyPointCoverage >= 0.4 ? 60 : 40;
 
-    return {
-      wordDeviation, wordDeviationScore,
-      paragraphCount, paragraphScore,
-      keyPointCoverage, keyPointScore,
-    };
+    return { wordDeviation, wordDeviationScore, paragraphCount, paragraphScore, keyPointCoverage, keyPointScore };
   }
 
-  // ============ 步骤 5: 修改式重试（V2: 不重写，而是修改）============
+  // ============ 步骤 5: 修改式重试 ============
 
   async reviseArticle(
     originalArticle: GeneratedArticle,
@@ -645,15 +646,9 @@ ${outlineText}
 
 ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
 
-要求：
-- 保持原文的整体结构和好的段落
-- 只修改有问题的部分
-- 修改后的文章要更加完善
-- 输出完整的修改后文章
-
 输出 JSON 格式：
 {
-  "title": "修改后的标题（如无需改可保持原标题）",
+  "title": "修改后的标题",
   "body": "修改后的完整正文（Markdown格式）",
   "summary": "一句话摘要",
   "tags": ["标签1", "标签2"],
@@ -670,36 +665,61 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
     });
 
     let revised: GeneratedArticle;
-
     try {
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         revised = JSON.parse(jsonMatch[0]);
       } else {
-        revised = {
-          title: originalArticle.title,
-          body: result.content,
-          summary: originalArticle.summary,
-          tags: originalArticle.tags,
-          wordCount: result.content.length,
-        };
+        revised = { title: originalArticle.title, body: result.content, summary: originalArticle.summary, tags: originalArticle.tags, wordCount: result.content.length };
       }
     } catch {
-      revised = {
-        title: originalArticle.title,
-        body: result.content,
-        summary: originalArticle.summary,
-        tags: originalArticle.tags,
-        wordCount: result.content.length,
-      };
+      revised = { title: originalArticle.title, body: result.content, summary: originalArticle.summary, tags: originalArticle.tags, wordCount: result.content.length };
     }
 
-    logger.info(
-      { title: revised.title, wordCount: revised.wordCount },
-      "文章修改完成"
-    );
-
+    logger.info({ title: revised.title, wordCount: revised.wordCount }, "文章修改完成");
     return revised;
+  }
+
+  // ============ V3: 自动发布 ============
+
+  private async autoPublish(params: {
+    tenantId: string;
+    contentId: string;
+    platforms: string[];
+    article: GeneratedArticle;
+  }): Promise<PublishResult[]> {
+    const { tenantId, contentId, platforms } = params;
+
+    const accounts = await db
+      .select()
+      .from(platformAccounts)
+      .where(
+        and(
+          eq(platformAccounts.tenantId, tenantId),
+          eq(platformAccounts.status, "active"),
+          eq(platformAccounts.isVerified, true),
+          inArray(platformAccounts.platform, platforms)
+        )
+      );
+
+    if (accounts.length === 0) {
+      logger.warn({ tenantId, platforms }, "自动发布：未找到已验证的活跃账号");
+      return [
+        {
+          accountId: "",
+          accountName: "",
+          platform: platforms.join(","),
+          success: false,
+          error: `未找到${platforms.join("、")}平台的已验证账号，请先在"账号管理"中绑定`,
+        },
+      ];
+    }
+
+    return publishToAccounts({
+      contentId,
+      tenantId,
+      accountIds: accounts.map((a) => a.id),
+    });
   }
 
   // ============ 完整流程 ============
@@ -713,22 +733,14 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
     quality: QualityReport;
     outline: ArticleOutline;
   }> {
-    // 1. 生成大纲
     const outline = await this.generateOutline(requirement, ragContext);
-
-    // 2. 基于大纲生成文章
     const article = await this.generateArticle(requirement, outline, ragContext, previousFeedback);
-
-    // 3. 质检
     const quality = await this.qualityCheck(article, requirement);
 
-    // 4. 质检不通过 → 修改式重试（不重写）
     if (!quality.passed) {
       logger.info({ score: quality.totalScore }, "质检未通过，执行修改式重试");
-
       const revisedArticle = await this.reviseArticle(article, quality, outline, ragContext);
       const revisedQuality = await this.qualityCheck(revisedArticle, requirement);
-
       return { article: revisedArticle, quality: revisedQuality, outline };
     }
 
