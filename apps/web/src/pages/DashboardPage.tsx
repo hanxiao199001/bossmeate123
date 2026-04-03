@@ -28,7 +28,10 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-bold text-gray-900 mb-1">
           你好，{user?.name}
         </h1>
-        <p className="text-gray-400 text-sm mb-8">选择工作流开始内容生产，或使用下方工具</p>
+        <p className="text-gray-400 text-sm mb-6">选择工作流开始内容生产，或使用下方工具</p>
+
+        {/* ====== 今日选题推荐（最醒目位置） ====== */}
+        <TodayRecommendations />
 
         {/* ====== 核心：三个主入口并列 ====== */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
@@ -150,9 +153,6 @@ export default function DashboardPage() {
         {/* ====== 智能输入框 ====== */}
         <SmartInput />
 
-        {/* ====== 今日选题推荐 ====== */}
-        <TodayRecommendations />
-
         {/* ====== 工具区：两列对齐 ====== */}
         <div className="grid grid-cols-2 gap-5">
           {/* 左列：内容工具 */}
@@ -191,6 +191,7 @@ interface Recommendation {
 
 function TodayRecommendations() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -199,10 +200,20 @@ function TodayRecommendations() {
       .then((res) => {
         setRecs(res.data?.recommendations || []);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
-  if (recs.length === 0) return null;
+  if (loading) {
+    return (
+      <div className="mb-8 bg-gradient-to-r from-orange-50 to-amber-50 border border-orange-200 rounded-2xl p-6">
+        <div className="animate-pulse flex items-center gap-3">
+          <div className="w-10 h-10 bg-orange-200 rounded-xl" />
+          <div className="h-4 bg-orange-200 rounded w-40" />
+        </div>
+      </div>
+    );
+  }
 
   async function handleCreate(recId: string) {
     try {
@@ -220,56 +231,135 @@ function TodayRecommendations() {
     }
   }
 
-  const trendStyle: Record<string, string> = {
-    exploding: "bg-red-50 text-red-600",
-    rising: "bg-orange-50 text-orange-600",
-    new: "bg-blue-50 text-blue-600",
-  };
-  const trendLabel: Record<string, string> = {
-    exploding: "爆发",
-    rising: "上升",
-    new: "新出现",
+  const trendConfig: Record<string, { bg: string; text: string; label: string; dot: string }> = {
+    exploding: { bg: "bg-red-50", text: "text-red-600", label: "爆发", dot: "bg-red-500" },
+    rising: { bg: "bg-orange-50", text: "text-orange-600", label: "上升", dot: "bg-orange-400" },
+    new: { bg: "bg-blue-50", text: "text-blue-600", label: "新词", dot: "bg-blue-400" },
+    stable: { bg: "bg-gray-50", text: "text-gray-500", label: "稳定", dot: "bg-gray-400" },
   };
 
-  return (
-    <div className="max-w-4xl mx-auto my-6 px-4">
-      <h3 className="text-sm font-medium text-gray-500 mb-3">
-        今日选题推荐
-        <span className="text-xs text-gray-400 ml-2">基于近24小时热词趋势</span>
-      </h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {recs.slice(0, 6).map((rec) => (
-          <div
-            key={rec.id}
-            className="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-md transition"
+  // 标题栏（始终显示）
+  const headerEl = (
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-2.5">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center text-white text-lg shadow-sm">
+          &#x1F525;
+        </div>
+        <div>
+          <h2 className="text-base font-bold text-gray-900">今日选题推荐</h2>
+          <p className="text-xs text-gray-400">基于近24小时学术热词趋势 · 点击即可一键创作</p>
+        </div>
+      </div>
+      <Link
+        to="/keywords"
+        className="text-xs text-gray-400 hover:text-blue-500 transition"
+      >
+        查看全部热词 &#x2192;
+      </Link>
+    </div>
+  );
+
+  // 空状态
+  if (recs.length === 0) {
+    return (
+      <div className="mb-8">
+        {headerEl}
+        <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-yellow-50 border-2 border-dashed border-orange-200 rounded-2xl p-8 text-center">
+          <div className="text-3xl mb-3">&#x1F50D;</div>
+          <p className="text-sm font-medium text-gray-700 mb-1">今日推荐正在生成中...</p>
+          <p className="text-xs text-gray-400">爬虫每天 7:00 自动抓取学术热词并生成选题推荐</p>
+          <Link
+            to="/keywords"
+            className="inline-block mt-4 px-4 py-2 text-xs bg-white border border-orange-200 text-orange-600 rounded-lg hover:bg-orange-50 transition"
           >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-800">{rec.keyword}</span>
-              <span
-                className={`text-xs px-2 py-0.5 rounded-full ${trendStyle[rec.trend] || "bg-gray-50 text-gray-600"}`}
-              >
-                {trendLabel[rec.trend] || rec.trend}
-                {rec.heatChange && ` ${rec.heatChange}`}
+            手动查看关键词库
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // 第一个推荐作为焦点卡片
+  const featured = recs[0];
+  const rest = recs.slice(1, 7);
+  const featuredTrend = trendConfig[featured.trend] || trendConfig.stable;
+
+  return (
+    <div className="mb-8">
+      {headerEl}
+
+      {/* 焦点推荐（大卡片） */}
+      <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-yellow-50 border-2 border-orange-200 rounded-2xl p-5 mb-4 hover:shadow-lg transition-all group">
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium ${featuredTrend.bg} ${featuredTrend.text}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${featuredTrend.dot} animate-pulse`} />
+                {featuredTrend.label}
+                {featured.heatChange && ` ${featured.heatChange}`}
               </span>
+              <span className="text-xs text-orange-400 font-medium">TOP 1 推荐</span>
             </div>
-            {rec.relatedJournals.length > 0 && (
-              <p className="text-xs text-gray-500 mb-1">
-                {rec.relatedJournals[0].name}
-                {rec.relatedJournals[0].impactFactor
-                  ? ` (IF ${rec.relatedJournals[0].impactFactor}, ${rec.relatedJournals[0].partition})`
-                  : ""}
+            <h3 className="text-lg font-bold text-gray-900 mb-1.5">{featured.keyword}</h3>
+            {featured.relatedJournals.length > 0 && (
+              <p className="text-sm text-gray-600 mb-1">
+                相关期刊：{featured.relatedJournals.map((j, i) => (
+                  <span key={i}>
+                    {i > 0 && "、"}
+                    <span className="font-medium">{j.name}</span>
+                    {j.impactFactor ? <span className="text-gray-400"> (IF {j.impactFactor})</span> : ""}
+                  </span>
+                ))}
               </p>
             )}
-            <p className="text-xs text-gray-400 mb-3">{rec.reason}</p>
-            <button
-              onClick={() => handleCreate(rec.id)}
-              className="w-full text-center text-xs bg-blue-50 text-blue-600 rounded-lg py-2 hover:bg-blue-100 transition"
-            >
-              一键写文章
-            </button>
+            <p className="text-sm text-gray-500 mt-2 leading-relaxed">{featured.reason}</p>
           </div>
-        ))}
+          <button
+            onClick={() => handleCreate(featured.id)}
+            className="shrink-0 ml-4 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 text-white text-sm font-medium rounded-xl hover:shadow-md hover:scale-105 transition-all active:scale-95"
+          >
+            一键写文章
+          </button>
+        </div>
       </div>
+
+      {/* 其余推荐（小卡片网格） */}
+      {rest.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {rest.map((rec) => {
+            const t = trendConfig[rec.trend] || trendConfig.stable;
+            return (
+              <div
+                key={rec.id}
+                className="bg-white border border-gray-150 rounded-xl p-4 hover:border-orange-300 hover:shadow-md transition-all group cursor-pointer"
+                onClick={() => handleCreate(rec.id)}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-bold text-gray-800 group-hover:text-orange-600 transition-colors truncate">
+                    {rec.keyword}
+                  </span>
+                  <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full shrink-0 ${t.bg} ${t.text}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />
+                    {t.label}
+                  </span>
+                </div>
+                {rec.relatedJournals.length > 0 && (
+                  <p className="text-xs text-gray-500 mb-1.5 truncate">
+                    {rec.relatedJournals[0].name}
+                    {rec.relatedJournals[0].impactFactor
+                      ? ` (IF ${rec.relatedJournals[0].impactFactor})`
+                      : ""}
+                  </p>
+                )}
+                <p className="text-xs text-gray-400 line-clamp-2 mb-3">{rec.reason}</p>
+                <div className="text-xs text-orange-500 font-medium opacity-0 group-hover:opacity-100 transition-opacity">
+                  点击一键创作 &#x2192;
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

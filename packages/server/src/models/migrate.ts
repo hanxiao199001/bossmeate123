@@ -485,6 +485,96 @@ CREATE TABLE IF NOT EXISTS daily_recommendations (
   UNIQUE(tenant_id, date)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_rec_tenant_date ON daily_recommendations(tenant_id, date);
+
+-- Agent: 每日内容计划
+CREATE TABLE IF NOT EXISTS daily_content_plans (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  date VARCHAR(10) NOT NULL,
+  tasks JSONB NOT NULL DEFAULT '[]',
+  total_articles INTEGER DEFAULT 0,
+  total_videos INTEGER DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'draft',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  UNIQUE(tenant_id, date)
+);
+
+-- Agent: 执行日志
+CREATE TABLE IF NOT EXISTS agent_logs (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  agent_name VARCHAR(50) NOT NULL,
+  action VARCHAR(100) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'running',
+  input JSONB,
+  output JSONB,
+  error TEXT,
+  duration_ms INTEGER,
+  tokens_used INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_logs_tenant_date ON agent_logs(tenant_id, created_at);
+
+-- Agent: 老板审核/修改记录
+CREATE TABLE IF NOT EXISTS boss_edits (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID NOT NULL REFERENCES contents(id),
+  action VARCHAR(20) NOT NULL,
+  original_title TEXT,
+  edited_title TEXT,
+  original_body TEXT,
+  edited_body TEXT,
+  reject_reason TEXT,
+  edit_distance INTEGER,
+  patterns_extracted JSONB,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_boss_edits_tenant ON boss_edits(tenant_id, created_at);
+
+-- Agent: 每日运营报告
+CREATE TABLE IF NOT EXISTS daily_reports (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  date VARCHAR(10) NOT NULL,
+  report JSONB NOT NULL,
+  ai_summary TEXT,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  UNIQUE(tenant_id, date)
+);
+
+-- Agent: 同行内容抓取记录
+CREATE TABLE IF NOT EXISTS peer_content_crawls (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  competitor_id VARCHAR(100) NOT NULL,
+  platform VARCHAR(30) NOT NULL,
+  original_url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content_hash VARCHAR(64) NOT NULL,
+  read_count INTEGER,
+  like_count INTEGER,
+  knowledge_extracted BOOLEAN DEFAULT false,
+  entries_created INTEGER DEFAULT 0,
+  crawled_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  UNIQUE(tenant_id, content_hash)
+);
+
+-- Agent: 定时发布队列
+CREATE TABLE IF NOT EXISTS scheduled_publishes (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID NOT NULL REFERENCES contents(id),
+  platform VARCHAR(30) NOT NULL,
+  account_id VARCHAR(100) NOT NULL,
+  scheduled_at TIMESTAMP NOT NULL,
+  status VARCHAR(20) DEFAULT 'pending',
+  published_at TIMESTAMP,
+  error TEXT,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sp_pending ON scheduled_publishes(status, scheduled_at);
 `;
 
 async function migrate() {

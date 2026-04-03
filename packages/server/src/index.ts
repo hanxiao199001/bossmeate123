@@ -26,6 +26,7 @@ import { errorHandler } from "./middleware/error.js";
 import { getProviders } from "./services/ai/provider-factory.js";
 import { initializeSkills } from "./services/skills/index.js";
 import { startContentWorker } from "./services/task/content-worker.js";
+import { startPublishWorker, stopPublishWorker } from "./services/task/publish-worker.js";
 import { registerTaskWebSocket } from "./services/task/progress-ws.js";
 import { closeQueues } from "./services/task/queue.js";
 import { taskRoutes } from "./routes/tasks.js";
@@ -33,6 +34,10 @@ import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { dataCollectionRoutes } from "./routes/data-collection.js";
 import { contentEngineRoutes } from "./routes/content-engine.js";
 import { recommendationRoutes } from "./routes/recommendations.js";
+import { agentRegistry } from "./services/agents/base/registry.js";
+import { KnowledgeEngine } from "./services/agents/knowledge-engine.js";
+import { ContentDirector } from "./services/agents/content-director.js";
+import { Orchestrator } from "./services/agents/orchestrator.js";
 
 async function bootstrap() {
   const app = Fastify({ logger: false });
@@ -90,15 +95,26 @@ async function bootstrap() {
   // 注册 WebSocket 进度推送
   registerTaskWebSocket(app);
 
+  // 注册 Agent
+  agentRegistry.register(new KnowledgeEngine());
+  agentRegistry.register(new ContentDirector());
+  agentRegistry.register(new Orchestrator());
+  logger.info(`Agent 注册完成: ${agentRegistry.list().map(a => a.name).join(", ")}`);
+
   // 启动后台 Worker
   const contentWorker = startContentWorker();
 
-  // 启动 BullMQ 调度器（爬虫 + 热点 + 竞品 + 知识采集）
+  // 启动发布 Worker
+  startPublishWorker();
+
+  // 启动 BullMQ 调度器（爬虫 + 热点 + 竞品 + 知识采集 + Agent）
   startScheduler();
 
   // Graceful shutdown
   const shutdown = async () => {
     await stopScheduler();
+    stopPublishWorker();
+    await agentRegistry.shutdownAll();
     await contentWorker.close();
     await closeQueues();
     await app.close();

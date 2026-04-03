@@ -29,7 +29,11 @@ export type SchedulerJobType =
   | "domain-knowledge"     // 领域知识采集
   | "competitor-analysis"  // 竞品内容拆解
   | "style-learning"       // 风格学习
-  | "quality-check";       // 批量质检
+  | "quality-check"        // 批量质检
+  | "knowledge-engine"     // 知识引擎 Agent
+  | "orchestrator"         // 总指挥 Agent
+  | "midday-knowledge"     // 午间知识补充
+  | "evening-knowledge";   // 晚间知识补充
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -141,6 +145,58 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return result;
     }
 
+    case "knowledge-engine":
+    case "midday-knowledge":
+    case "evening-knowledge": {
+      const { agentRegistry } = await import("./agents/base/registry.js");
+      const activeTenants = tenantId
+        ? [{ id: tenantId }]
+        : await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
+
+      const agent = agentRegistry.get("knowledge-engine");
+      if (!agent) throw new Error("KnowledgeEngine agent not registered");
+
+      let totalCompleted = 0;
+      for (const t of activeTenants) {
+        try {
+          const result = await agent.execute({
+            tenantId: t.id,
+            date: new Date().toISOString().slice(0, 10),
+            triggeredBy: "scheduler",
+          });
+          if (result.success) totalCompleted++;
+        } catch (err) {
+          logger.error({ tenantId: t.id, err }, "KnowledgeEngine execution failed");
+        }
+      }
+      return { tenantsProcessed: activeTenants.length, totalCompleted };
+    }
+
+    case "orchestrator": {
+      const { agentRegistry: registry } = await import("./agents/base/registry.js");
+      const activeTenants = tenantId
+        ? [{ id: tenantId }]
+        : await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
+
+      const agent = registry.get("orchestrator");
+      if (!agent) throw new Error("Orchestrator agent not registered");
+
+      let totalCompleted = 0;
+      for (const t of activeTenants) {
+        try {
+          const result = await agent.execute({
+            tenantId: t.id,
+            date: new Date().toISOString().slice(0, 10),
+            triggeredBy: "scheduler",
+          });
+          if (result.success) totalCompleted++;
+        } catch (err) {
+          logger.error({ tenantId: t.id, err }, "Orchestrator execution failed");
+        }
+      }
+      return { tenantsProcessed: activeTenants.length, totalCompleted };
+    }
+
     default:
       throw new Error(`未知任务类型: ${type}`);
   }
@@ -224,6 +280,46 @@ async function registerCronJobs() {
     {
       name: "style-learning",
       data: { type: "style-learning" as SchedulerJobType },
+    }
+  );
+
+  // 每日 6:30 知识引擎
+  await crawlerQueue.upsertJobScheduler(
+    "knowledge-engine-schedule",
+    { pattern: "30 6 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "knowledge-engine",
+      data: { type: "knowledge-engine" as SchedulerJobType },
+    }
+  );
+
+  // 每日 7:00 总指挥（知识+选题+排队生产）
+  await crawlerQueue.upsertJobScheduler(
+    "orchestrator-schedule",
+    { pattern: "0 7 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "orchestrator",
+      data: { type: "orchestrator" as SchedulerJobType },
+    }
+  );
+
+  // 每日 11:00 午间知识补充
+  await crawlerQueue.upsertJobScheduler(
+    "midday-knowledge-schedule",
+    { pattern: "0 11 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "midday-knowledge",
+      data: { type: "midday-knowledge" as SchedulerJobType },
+    }
+  );
+
+  // 每日 20:00 晚间知识补充
+  await crawlerQueue.upsertJobScheduler(
+    "evening-knowledge-schedule",
+    { pattern: "0 20 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "evening-knowledge",
+      data: { type: "evening-knowledge" as SchedulerJobType },
     }
   );
 

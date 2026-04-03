@@ -649,3 +649,125 @@ export const dailyRecommendations = pgTable(
     uniqueIndex("idx_daily_rec_tenant_date").on(table.tenantId, table.date),
   ]
 );
+
+// ============ Agent 系统表 ============
+
+// 1. 每日内容计划
+export const dailyContentPlans = pgTable(
+  "daily_content_plans",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    date: varchar("date", { length: 10 }).notNull(),
+    tasks: jsonb("tasks").notNull().default([]),
+    totalArticles: integer("total_articles").default(0),
+    totalVideos: integer("total_videos").default(0),
+    status: varchar("status", { length: 20 }).default("draft"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_dcp_tenant_date").on(table.tenantId, table.date),
+  ]
+);
+
+// 2. Agent 执行日志
+export const agentLogs = pgTable(
+  "agent_logs",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    agentName: varchar("agent_name", { length: 50 }).notNull(),
+    action: varchar("action", { length: 100 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("running"),
+    input: jsonb("input"),
+    output: jsonb("output"),
+    error: text("error"),
+    durationMs: integer("duration_ms"),
+    tokensUsed: integer("tokens_used").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_agent_logs_tenant_date").on(table.tenantId, table.createdAt),
+  ]
+);
+
+// 3. 老板审核/修改记录
+export const bossEdits = pgTable(
+  "boss_edits",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    contentId: uuid("content_id").references(() => contents.id).notNull(),
+    action: varchar("action", { length: 20 }).notNull(),
+    originalTitle: text("original_title"),
+    editedTitle: text("edited_title"),
+    originalBody: text("original_body"),
+    editedBody: text("edited_body"),
+    rejectReason: text("reject_reason"),
+    editDistance: integer("edit_distance"),
+    patternsExtracted: jsonb("patterns_extracted"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_boss_edits_tenant").on(table.tenantId, table.createdAt),
+  ]
+);
+
+// 4. 每日运营报告
+export const dailyReports = pgTable(
+  "daily_reports",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    date: varchar("date", { length: 10 }).notNull(),
+    report: jsonb("report").notNull(),
+    aiSummary: text("ai_summary"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_daily_reports_tenant_date").on(table.tenantId, table.date),
+  ]
+);
+
+// 5. 同行内容抓取记录
+export const peerContentCrawls = pgTable(
+  "peer_content_crawls",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    competitorId: varchar("competitor_id", { length: 100 }).notNull(),
+    platform: varchar("platform", { length: 30 }).notNull(),
+    originalUrl: text("original_url").notNull(),
+    title: text("title").notNull(),
+    contentHash: varchar("content_hash", { length: 64 }).notNull(),
+    readCount: integer("read_count"),
+    likeCount: integer("like_count"),
+    knowledgeExtracted: boolean("knowledge_extracted").default(false),
+    entriesCreated: integer("entries_created").default(0),
+    crawledAt: timestamp("crawled_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_pcc_tenant_hash").on(table.tenantId, table.contentHash),
+  ]
+);
+
+// 6. 定时发布队列
+export const scheduledPublishes = pgTable(
+  "scheduled_publishes",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    contentId: uuid("content_id").references(() => contents.id).notNull(),
+    platform: varchar("platform", { length: 30 }).notNull(),
+    accountId: varchar("account_id", { length: 100 }).notNull(),
+    scheduledAt: timestamp("scheduled_at").notNull(),
+    status: varchar("status", { length: 20 }).default("pending"),
+    publishedAt: timestamp("published_at"),
+    error: text("error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_sp_pending").on(table.status, table.scheduledAt),
+  ]
+);
