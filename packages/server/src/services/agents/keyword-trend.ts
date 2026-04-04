@@ -10,7 +10,7 @@
 import { db } from "../../models/db.js";
 import { keywords, keywordHistory } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
-import { eq, and, gte, lte, sql, desc } from "drizzle-orm";
+import { eq, and, gte, lte, sql, desc, inArray } from "drizzle-orm";
 
 // ========== 类型定义 ==========
 
@@ -184,7 +184,7 @@ export async function getTrendReport(
           and(
             eq(keywordHistory.tenantId, tenantId),
             gte(keywordHistory.snapshotDate, day30Str),
-            sql`${keywordHistory.keyword} = ANY(${keywordNames})`
+            inArray(keywordHistory.keyword, keywordNames)
           )
         )
         .orderBy(keywordHistory.snapshotDate)
