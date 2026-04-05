@@ -136,8 +136,9 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
   const { taskId, tenantId, userInput, history, agentMeta } = job.data;
 
   // 更新 plan 中该 task 的状态（plan tasks 是 JSON，不在 tasks 表中）
+  // 使用 "writing" 与 Dashboard 前端状态名对齐
   if (agentMeta?.planId && taskId) {
-    await updatePlanTaskStatus(agentMeta.planId, taskId, "running");
+    await updatePlanTaskStatus(agentMeta.planId, taskId, "writing");
   }
 
   // 查找 tenant owner 的 userId（contents 表需要 UUID 类型的 userId）
@@ -243,9 +244,13 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     }
   }
 
-  // 更新 plan 中该 task 的状态为 completed
+  // 更新 plan 中该 task 的状态，与 Dashboard 前端状态名对齐
   if (agentMeta?.planId && taskId) {
-    await updatePlanTaskStatus(agentMeta.planId, taskId, "completed");
+    // learning 阶段 → "review"（待审核），full_auto/semi_auto 高分 → "published"
+    const planTaskStatus = (stage === "learning" || (stage === "semi_auto" && qualityScore < threshold))
+      ? "review"
+      : "published";
+    await updatePlanTaskStatus(agentMeta.planId, taskId, planTaskStatus);
   }
 
   await job.updateProgress(100);
