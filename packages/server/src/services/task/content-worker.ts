@@ -3,7 +3,8 @@ import { getRedisConnection } from "./queue.js";
 import { SkillRegistry } from "../skills/index.js";
 import { getProvider } from "../ai/provider-factory.js";
 import { db } from "../../models/db.js";
-import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans } from "../../models/schema.js";
+import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans, users } from "../../models/schema.js";
+import { and } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { logger } from "../../config/logger.js";
@@ -52,12 +53,17 @@ export function startContentWorker(): Worker {
     console.error(`Task failed: ${job?.id}`, err.message);
     if (job) {
       const { taskId, agentMeta } = job.data;
-      await db.update(tasks).set({
-        status: "failed", error: err.message, updatedAt: new Date(),
-      }).where(eq(tasks.id, taskId));
 
-      if (agentMeta?.planId && taskId) {
-        await updatePlanTaskStatus(agentMeta.planId, taskId, "failed");
+      // article-write 的 taskId 是 nanoid（在 plan JSON 中），不在 tasks 表
+      if (job.name === "article-write") {
+        if (agentMeta?.planId && taskId) {
+          await updatePlanTaskStatus(agentMeta.planId, taskId, "failed");
+        }
+      } else {
+        // 普通任务的 taskId 是 UUID，在 tasks 表中
+        await db.update(tasks).set({
+          status: "failed", error: err.message, updatedAt: new Date(),
+        }).where(eq(tasks.id, taskId));
       }
     }
   });
@@ -129,17 +135,18 @@ async function handleDefaultContent(job: Job<ContentJobData>) {
 async function handleArticleWrite(job: Job<ContentJobData>) {
   const { taskId, tenantId, userInput, history, agentMeta } = job.data;
 
-  // 更新 task 状态为 running
-  if (taskId) {
-    await db.update(tasks).set({
-      status: "running", startedAt: new Date(), updatedAt: new Date(),
-    }).where(eq(tasks.id, taskId));
-  }
-
-  // 更新 plan 中该 task 的状态
-  if (agentMeta?.planId) {
+  // 更新 plan 中该 task 的状态（plan tasks 是 JSON，不在 tasks 表中）
+  if (agentMeta?.planId && taskId) {
     await updatePlanTaskStatus(agentMeta.planId, taskId, "running");
   }
+
+  // 查找 tenant owner 的 userId（contents 表需要 UUID 类型的 userId）
+  const [owner] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.tenantId, tenantId), eq(users.role, "owner")))
+    .limit(1);
+  const ownerUserId = owner?.id || tenantId; // fallback to tenantId
 
   const skill = SkillRegistry.get("article");
   if (!skill) throw new Error('ArticleSkill not registered');
@@ -160,7 +167,7 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     history as Array<{ role: "user" | "assistant" | "system"; content: string }>,
     {
       tenantId,
-      userId: "system",
+      userId: ownerUserId,
       conversationId: agentMeta?.planId || nanoid(),
       provider,
     }
@@ -173,7 +180,7 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
   if (result.artifact) {
     const [inserted] = await db.insert(contents).values({
       tenantId,
-      userId: "system" as any, // system-generated
+      userId: ownerUserId,
       type: result.artifact.type,
       title: result.artifact.title,
       body: result.artifact.body,
@@ -236,29 +243,8 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     }
   }
 
-  // 写入 taskLogs
-  await db.insert(taskLogs).values({
-    taskId: taskId || nanoid(),
-    step: "article_write",
-    status: "completed",
-    model: provider.name,
-    durationMs: Date.now() - stepStart,
-    detail: { contentId, hasArtifact: !!result.artifact, qualityScore, stage },
-  });
-
-  // 更新 task 状态为 completed
-  if (taskId) {
-    await db.update(tasks).set({
-      status: "completed",
-      progress: 100,
-      output: { contentId, qualityScore, stage },
-      completedAt: new Date(),
-      updatedAt: new Date(),
-    }).where(eq(tasks.id, taskId));
-  }
-
-  // 更新 plan 中该 task 的状态
-  if (agentMeta?.planId) {
+  // 更新 plan 中该 task 的状态为 completed
+  if (agentMeta?.planId && taskId) {
     await updatePlanTaskStatus(agentMeta.planId, taskId, "completed");
   }
 
