@@ -3,7 +3,7 @@ import { getRedisConnection } from "./queue.js";
 import { SkillRegistry } from "../skills/index.js";
 import { getProvider } from "../ai/provider-factory.js";
 import { db } from "../../models/db.js";
-import { tasks, taskLogs, contents, scheduledPublishes, tenants } from "../../models/schema.js";
+import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans } from "../../models/schema.js";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { logger } from "../../config/logger.js";
@@ -51,9 +51,14 @@ export function startContentWorker(): Worker {
   worker.on("failed", async (job, err) => {
     console.error(`Task failed: ${job?.id}`, err.message);
     if (job) {
+      const { taskId, agentMeta } = job.data;
       await db.update(tasks).set({
         status: "failed", error: err.message, updatedAt: new Date(),
-      }).where(eq(tasks.id, job.data.taskId));
+      }).where(eq(tasks.id, taskId));
+
+      if (agentMeta?.planId && taskId) {
+        await updatePlanTaskStatus(agentMeta.planId, taskId, "failed");
+      }
     }
   });
 
@@ -122,7 +127,19 @@ async function handleDefaultContent(job: Job<ContentJobData>) {
 // ============ article-write 处理（Agent 自动写作）============
 
 async function handleArticleWrite(job: Job<ContentJobData>) {
-  const { tenantId, userInput, history, agentMeta } = job.data;
+  const { taskId, tenantId, userInput, history, agentMeta } = job.data;
+
+  // 更新 task 状态为 running
+  if (taskId) {
+    await db.update(tasks).set({
+      status: "running", startedAt: new Date(), updatedAt: new Date(),
+    }).where(eq(tasks.id, taskId));
+  }
+
+  // 更新 plan 中该 task 的状态
+  if (agentMeta?.planId) {
+    await updatePlanTaskStatus(agentMeta.planId, taskId, "running");
+  }
 
   const skill = SkillRegistry.get("article");
   if (!skill) throw new Error('ArticleSkill not registered');
@@ -219,6 +236,32 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     }
   }
 
+  // 写入 taskLogs
+  await db.insert(taskLogs).values({
+    taskId: taskId || nanoid(),
+    step: "article_write",
+    status: "completed",
+    model: provider.name,
+    durationMs: Date.now() - stepStart,
+    detail: { contentId, hasArtifact: !!result.artifact, qualityScore, stage },
+  });
+
+  // 更新 task 状态为 completed
+  if (taskId) {
+    await db.update(tasks).set({
+      status: "completed",
+      progress: 100,
+      output: { contentId, qualityScore, stage },
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(tasks.id, taskId));
+  }
+
+  // 更新 plan 中该 task 的状态
+  if (agentMeta?.planId) {
+    await updatePlanTaskStatus(agentMeta.planId, taskId, "completed");
+  }
+
   await job.updateProgress(100);
 
   logger.info(
@@ -232,6 +275,39 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     stage,
     qualityScore,
   };
+}
+
+// ============ updatePlanTaskStatus helper ============
+
+async function updatePlanTaskStatus(
+  planId: string,
+  taskId: string,
+  newStatus: string
+): Promise<void> {
+  try {
+    const [plan] = await db
+      .select()
+      .from(dailyContentPlans)
+      .where(eq(dailyContentPlans.id, planId))
+      .limit(1);
+
+    if (!plan) return;
+
+    const planTasks = (plan.tasks || []) as any[];
+    const updated = planTasks.map((t) =>
+      t.id === taskId ? { ...t, status: newStatus } : t
+    );
+
+    const allDone = updated.every((t) => t.status === "completed" || t.status === "failed");
+    const planStatus = allDone ? "completed" : "executing";
+
+    await db
+      .update(dailyContentPlans)
+      .set({ tasks: updated, status: planStatus, updatedAt: new Date() })
+      .where(eq(dailyContentPlans.id, planId));
+  } catch (err) {
+    logger.error({ planId, taskId, err }, "更新 plan task 状态失败");
+  }
 }
 
 // ============ schedulePublish helper ============
