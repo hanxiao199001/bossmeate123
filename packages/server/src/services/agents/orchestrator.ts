@@ -10,12 +10,18 @@
  */
 
 import { db } from "../../models/db.js";
-import { dailyContentPlans, tenants } from "../../models/schema.js";
-import { eq, and } from "drizzle-orm";
+import { dailyContentPlans, tenants, contents } from "../../models/schema.js";
+import { eq, and, gte, sql } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { contentQueue } from "../task/queue.js";
 import { logAgentAction, updateAgentLog } from "./base/agent-logger.js";
 import { agentRegistry } from "./base/registry.js";
+import { emitProgress, emitDone } from "./base/progress-emitter.js";
+import { crawlAll } from "../crawler/index.js";
+import { analyzeKeywords } from "./keyword-analyzer.js";
+import { getTrendReport } from "./keyword-trend.js";
+import { sinkTrendData, sinkRecommendations } from "../data-collection/crawl-data-sink.js";
+import { prefetchJournalCovers } from "../crawler/journal-cover-prefetch.js";
 import type { ContentTask } from "./content-director.js";
 import type {
   IAgent,
@@ -32,7 +38,7 @@ export class Orchestrator implements IAgent {
   readonly displayName = "Orchestrator";
 
   private status: AgentStatus = "idle";
-  private config: AgentConfig = { concurrency: 1, maxRetries: 3, timeoutMs: 600_000 };
+  private config: AgentConfig = { concurrency: 1, maxRetries: 3, timeoutMs: 1_800_000 };
 
   async initialize(config: AgentConfig): Promise<void> {
     this.config = config;
@@ -75,6 +81,7 @@ export class Orchestrator implements IAgent {
   async execute(context: AgentContext): Promise<AgentResult> {
     const start = Date.now();
     this.status = "running";
+    const runId = context.runId || "";
 
     const logId = await logAgentAction({
       tenantId: context.tenantId,
@@ -88,43 +95,135 @@ export class Orchestrator implements IAgent {
     let tasksCompleted = 0;
     let tasksFailed = 0;
 
-    // Step 1: Call KnowledgeEngine
+    // ── Step 0a: 数据抓取（仅手动触发时执行） ──
+    if (context.triggeredBy === "manual") {
+      if (runId) emitProgress({ runId, step: "data-crawl", label: "数据抓取", status: "running", progress: 0 });
+
+      try {
+        const crawlerResults = await crawlAll();
+        details.push({ step: "data-crawl", platforms: crawlerResults.length });
+        tasksCompleted++;
+        if (runId) emitProgress({ runId, step: "data-crawl", label: "数据抓取", status: "completed", progress: 10 });
+
+        // ── Step 0b: 关键词分析 ──
+        if (runId) emitProgress({ runId, step: "keyword-analysis", label: "关键词分析", status: "running", progress: 10 });
+
+        const activeTenants = context.tenantId
+          ? [{ id: context.tenantId }]
+          : await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
+
+        for (const t of activeTenants) {
+          try {
+            await analyzeKeywords(crawlerResults, t.id);
+            logger.info({ tenantId: t.id }, "关键词分析完成");
+          } catch (err) {
+            logger.error({ tenantId: t.id, err }, "关键词分析失败");
+          }
+        }
+
+        // 生成每日选题推荐
+        const { generateDailyRecommendations } = await import("../content-engine/topic-recommender.js");
+        for (const t of activeTenants) {
+          try {
+            await generateDailyRecommendations(t.id);
+            logger.info({ tenantId: t.id }, "选题推荐已生成");
+          } catch (err) {
+            logger.error({ tenantId: t.id, err }, "选题推荐生成失败");
+          }
+        }
+
+        tasksCompleted++;
+        details.push({ step: "keyword-analysis", tenants: activeTenants.length });
+        if (runId) emitProgress({ runId, step: "keyword-analysis", label: "关键词分析", status: "completed", progress: 25 });
+      } catch (err: any) {
+        logger.error({ err }, "数据抓取失败");
+        details.push({ step: "data-crawl", error: err.message });
+        tasksFailed++;
+        if (runId) {
+          emitProgress({ runId, step: "data-crawl", label: "数据抓取", status: "failed", progress: 10, error: err.message });
+          emitProgress({ runId, step: "keyword-analysis", label: "关键词分析", status: "failed", progress: 25, error: "数据抓取失败，跳过" });
+        }
+      }
+    }
+
+    // ── Step 1: Call KnowledgeEngine ──
+    if (runId) emitProgress({ runId, step: "knowledge-engine", label: "知识引擎", status: "running", progress: 30 });
+
     const knowledgeEngine = agentRegistry.get("knowledge-engine");
     if (knowledgeEngine) {
       try {
         const keResult = await knowledgeEngine.execute(context);
         details.push({ step: "knowledge-engine", ...keResult });
-        if (keResult.success) tasksCompleted++;
-        else tasksFailed++;
+        if (keResult.success) {
+          tasksCompleted++;
+          if (runId) emitProgress({ runId, step: "knowledge-engine", label: "知识引擎", status: "completed", progress: 45 });
+        } else {
+          tasksFailed++;
+          if (runId) emitProgress({ runId, step: "knowledge-engine", label: "知识引擎", status: "failed", progress: 45, error: keResult.summary });
+        }
       } catch (err: any) {
         logger.error({ err }, "KnowledgeEngine execution failed in orchestrator");
         details.push({ step: "knowledge-engine", error: err.message });
         tasksFailed++;
+        if (runId) emitProgress({ runId, step: "knowledge-engine", label: "知识引擎", status: "failed", progress: 45, error: err.message });
       }
     } else {
       logger.warn("KnowledgeEngine not registered, skipping");
       details.push({ step: "knowledge-engine", skipped: true });
+      if (runId) emitProgress({ runId, step: "knowledge-engine", label: "知识引擎", status: "completed", progress: 45 });
     }
 
-    // Step 2: Call ContentDirector
+    // ── Step 2: Call ContentDirector ──
+    if (runId) emitProgress({ runId, step: "content-director", label: "内容规划", status: "running", progress: 45 });
+
     const contentDirector = agentRegistry.get("content-director");
     if (contentDirector) {
       try {
         const cdResult = await contentDirector.execute(context);
         details.push({ step: "content-director", ...cdResult });
-        if (cdResult.success) tasksCompleted++;
-        else tasksFailed++;
+        if (cdResult.success) {
+          tasksCompleted++;
+          if (runId) emitProgress({ runId, step: "content-director", label: "内容规划", status: "completed", progress: 60 });
+        } else {
+          tasksFailed++;
+          if (runId) emitProgress({ runId, step: "content-director", label: "内容规划", status: "failed", progress: 60, error: cdResult.summary });
+        }
       } catch (err: any) {
         logger.error({ err }, "ContentDirector execution failed in orchestrator");
         details.push({ step: "content-director", error: err.message });
         tasksFailed++;
+        if (runId) emitProgress({ runId, step: "content-director", label: "内容规划", status: "failed", progress: 60, error: err.message });
       }
     } else {
       logger.warn("ContentDirector not registered, skipping");
       details.push({ step: "content-director", skipped: true });
+      if (runId) emitProgress({ runId, step: "content-director", label: "内容规划", status: "completed", progress: 60 });
     }
 
-    // Step 3: Read today's plan
+    // ── Step 2.5: 知识沉淀（趋势 + 推荐 → 知识库）──
+    // 非阻塞：沉淀失败不影响主流程
+    try {
+      // 钩子1：趋势关键词 → hot_event 子库
+      const trendReport = await getTrendReport(context.tenantId);
+      const allTrends = [...trendReport.exploding, ...trendReport.rising];
+      if (allTrends.length > 0) {
+        const sinkResult1 = await sinkTrendData(allTrends, context.tenantId, context.date);
+        details.push({ step: "sink-trends", ingested: sinkResult1.ingested, rejected: sinkResult1.rejected });
+      }
+
+      // 钩子2：选题推荐 → insight 子库
+      const sinkResult2 = await sinkRecommendations(context.tenantId, context.date);
+      details.push({ step: "sink-recommendations", ingested: sinkResult2.ingested, rejected: sinkResult2.rejected });
+
+      logger.info({ tenantId: context.tenantId }, "知识沉淀完成");
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "知识沉淀失败（非阻塞，不影响主流程）");
+      details.push({ step: "knowledge-sink", error: err.message });
+    }
+
+    // ── Step 3: Read today's plan ──
+    if (runId) emitProgress({ runId, step: "read-plan", label: "读取计划", status: "running", progress: 60 });
+
     const [plan] = await db
       .select()
       .from(dailyContentPlans)
@@ -140,6 +239,10 @@ export class Orchestrator implements IAgent {
       const durationMs = Date.now() - start;
       await updateAgentLog(logId, { status: "completed", output: { details, note: "no plan found" }, durationMs });
       this.status = "idle";
+      if (runId) {
+        emitProgress({ runId, step: "read-plan", label: "读取计划", status: "failed", progress: 75, error: "未生成今日计划" });
+        emitDone({ runId, success: false, summary: "未生成今日内容计划" });
+      }
       return {
         agentName: this.name,
         success: false,
@@ -151,7 +254,35 @@ export class Orchestrator implements IAgent {
       };
     }
 
-    // Step 4: Read tenant automationConfig.stage
+    if (runId) emitProgress({ runId, step: "read-plan", label: "读取计划", status: "completed", progress: 75 });
+
+    // ── Step 3.5: 根据今日选题，定向预抓取相关期刊封面图 ──
+    try {
+      const planTasks = (plan.tasks || []) as ContentTask[];
+      const articleTasks = planTasks.filter((t) => t.type === "article");
+
+      // 提取选题关键词 + 显式引用的期刊名
+      const topics = [...new Set(articleTasks.map((t) => t.topic).filter(Boolean))];
+      const refJournals = [...new Set(articleTasks.flatMap((t) => t.referenceJournals || []).filter(Boolean))];
+
+      if (topics.length > 0 || refJournals.length > 0) {
+        const coverResult = await prefetchJournalCovers(context.tenantId, topics, refJournals);
+        details.push({
+          step: "cover-prefetch",
+          topics: topics.length,
+          matched: coverResult.total + coverResult.skipped,
+          success: coverResult.success,
+          failed: coverResult.failed,
+          alreadyCached: coverResult.skipped,
+          sources: coverResult.sources,
+        });
+      }
+    } catch (err: any) {
+      logger.warn({ err: err.message }, "期刊封面定向预抓取失败（非阻塞）");
+      details.push({ step: "cover-prefetch", error: err.message });
+    }
+
+    // ── Step 4: Read tenant automationConfig.stage ──
     const [tenant] = await db
       .select()
       .from(tenants)
@@ -162,7 +293,9 @@ export class Orchestrator implements IAgent {
     const automationConfig = tenantConfig.automationConfig || {};
     const stage = automationConfig.stage || "learning"; // learning | semi_auto | full_auto
 
-    // Step 5: Add article tasks to contentQueue
+    // ── Step 5: Add article tasks to contentQueue ──
+    if (runId) emitProgress({ runId, step: "queue-tasks", label: "任务排队", status: "running", progress: 80 });
+
     const planTasks = (plan.tasks || []) as ContentTask[];
     let queued = 0;
 
@@ -201,13 +334,15 @@ export class Orchestrator implements IAgent {
       queued++;
     }
 
-    // Step 6: Update plan status
+    // ── Step 6: Update plan status ──
     await db
       .update(dailyContentPlans)
       .set({ status: "executing", updatedAt: new Date() })
       .where(eq(dailyContentPlans.id, plan.id));
 
     tasksCompleted++;
+
+    if (runId) emitProgress({ runId, step: "queue-tasks", label: "任务排队", status: "completed", progress: 100 });
 
     const durationMs = Date.now() - start;
     await updateAgentLog(logId, {
@@ -217,7 +352,8 @@ export class Orchestrator implements IAgent {
     });
 
     this.status = "idle";
-    return {
+
+    const result: AgentResult = {
       agentName: this.name,
       success: true,
       tasksCompleted,
@@ -226,23 +362,36 @@ export class Orchestrator implements IAgent {
       details: [...details, { step: "queue", queued, stage, planId: plan.id }],
       durationMs,
     };
+
+    if (runId) emitDone({ runId, success: true, summary: result.summary });
+
+    return result;
   }
 }
 
 // ============ Helpers ============
 
 function buildArticleInstruction(task: ContentTask): string {
-  const parts = [
-    `请撰写一篇关于"${task.topic}"的文章。`,
-    `目标平台: ${task.platform}`,
-    `写作风格: ${task.style}`,
-    `目标字数: ${task.wordCount}字`,
-    `目标受众: ${task.audience}`,
-  ];
-  if (task.referenceJournals.length > 0) {
-    parts.push(`参考期刊: ${task.referenceJournals.join("、")}`);
+  // V6: 期刊推荐文章模式
+  // 如果有参考期刊，以第一个期刊为主角；否则用关键词找期刊
+  const targetJournal = task.referenceJournals?.[0] || "";
+
+  if (targetJournal) {
+    // 有明确期刊 → 直接推荐该期刊
+    return [
+      `请生成一篇关于期刊"${targetJournal}"的推荐文章。`,
+      `研究方向关键词: ${task.topic}`,
+      `目标平台: ${task.platform}`,
+      `目标受众: ${task.audience}`,
+    ].join("\n");
   }
-  return parts.join("\n");
+
+  // 无明确期刊 → 根据关键词推荐合适的期刊
+  return [
+    `请根据研究方向"${task.topic}"推荐一个适合投稿的SCI/SSCI期刊，并生成期刊推荐文章。`,
+    `目标平台: ${task.platform}`,
+    `目标受众: ${task.audience}`,
+  ].join("\n");
 }
 
 function calculateDelay(scheduledTime: string): number {
@@ -279,6 +428,28 @@ export async function getDailyProgress(tenantId: string) {
     statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
   }
 
+  // 查询今日 AI 生成的 contents 状态统计
+  const todayStart = new Date(`${today}T00:00:00`);
+  let contentStatusCounts: Record<string, number> = {};
+  try {
+    const todayContents = await db
+      .select({ status: contents.status })
+      .from(contents)
+      .where(
+        and(
+          eq(contents.tenantId, tenantId),
+          gte(contents.createdAt, todayStart),
+          sql`(${contents.metadata}->>'agentGenerated')::boolean = true`
+        )
+      );
+
+    for (const c of todayContents) {
+      contentStatusCounts[c.status] = (contentStatusCounts[c.status] || 0) + 1;
+    }
+  } catch (err) {
+    logger.warn({ err }, "getDailyProgress: 查询 contents 统计失败");
+  }
+
   return {
     date: today,
     hasPlan: true,
@@ -287,6 +458,7 @@ export async function getDailyProgress(tenantId: string) {
     totalVideos: plan.totalVideos,
     planStatus: plan.status,
     taskStatusCounts: statusCounts,
+    contentStatusCounts,
     tasks: tasks.map((t) => ({
       id: t.id,
       topic: t.topic,

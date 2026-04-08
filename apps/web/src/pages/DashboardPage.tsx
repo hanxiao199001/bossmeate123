@@ -75,6 +75,15 @@ export default function DashboardPage() {
   );
 }
 
+// ============ 进度步骤类型 ============
+
+interface StepProgress {
+  step: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed";
+  error?: string;
+}
+
 // ============ 1. 工厂指挥中心（Hero） ============
 
 function FactoryHero() {
@@ -84,12 +93,24 @@ function FactoryHero() {
   const [launchDone, setLaunchDone] = useState(false);
   const [error, setError] = useState("");
 
+  // 实时进度状态
+  const [runProgress, setRunProgress] = useState(0);
+  const [steps, setSteps] = useState<StepProgress[]>([]);
+  const [showSteps, setShowSteps] = useState(false);
+
   const fetchData = () => {
     api.get<{ agents: AgentInfo[] }>("/agents/status").then((r) => setAgents(r.data?.agents || [])).catch(() => {});
     api.get<{ plan: any }>("/agents/daily-plan").then((r) => setPlan(r.data?.plan || null)).catch(() => {});
   };
 
-  useEffect(() => { fetchData(); const id = setInterval(fetchData, 10_000); return () => clearInterval(id); }, []);
+  // plan 执行中时加快轮询（3s），否则 10s
+  const isExecuting = plan?.status === "executing";
+  useEffect(() => {
+    fetchData();
+    const interval = isExecuting ? 3_000 : 10_000;
+    const id = setInterval(fetchData, interval);
+    return () => clearInterval(id);
+  }, [isExecuting]);
 
   const isAnyRunning = agents.some((a) => a.status === "running");
   const hasPlan = plan && plan.tasks && plan.tasks.length > 0;
@@ -100,16 +121,112 @@ function FactoryHero() {
   const pending = tasks.filter((t) => t.status === "pending").length;
   const failed = tasks.filter((t) => t.status === "failed").length;
   const total = tasks.length;
-  const progress = total > 0 ? Math.round((published / total) * 100) : 0;
+  // 进度 = 已完成写作的任务（review + approved + published）/ 总数
+  const done = published + reviewing + tasks.filter((t) => t.status === "approved").length;
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const stDot: Record<string, string> = { running: "bg-green-500", idle: "bg-gray-300", error: "bg-red-500", paused: "bg-yellow-400" };
 
+  // 轮询进度
+  const pollRef = { current: 0 as any };
+
   async function handleLaunch() {
-    setLaunching(true); setError("");
-    try { await api.post("/agents/orchestrator/trigger", {}); setLaunchDone(true); setTimeout(fetchData, 2000); }
-    catch (err: any) { setError(err?.message || "启动失败"); }
-    finally { setLaunching(false); }
+    setLaunching(true);
+    setError("");
+    setRunProgress(0);
+    setShowSteps(true);
+    setSteps([
+      { step: "data-crawl", label: "数据抓取", status: "pending" },
+      { step: "keyword-analysis", label: "关键词分析", status: "pending" },
+      { step: "knowledge-engine", label: "知识引擎", status: "pending" },
+      { step: "content-director", label: "内容规划", status: "pending" },
+      { step: "read-plan", label: "读取计划", status: "pending" },
+      { step: "queue-tasks", label: "任务排队", status: "pending" },
+    ]);
+
+    try {
+      // 1. 触发执行（立即返回）
+      await api.post("/agents/orchestrator/trigger", {});
+
+      // 2. 开始轮询进度（每 500ms）
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await api.get<any>("/agents/orchestrator/progress");
+          const d = res.data;
+          if (!d || !d.running && !d.done) return;
+
+          // 更新进度条
+          setRunProgress(d.progress || 0);
+
+          // 更新步骤状态
+          if (d.steps) {
+            setSteps(d.steps);
+          }
+
+          // 执行完成
+          if (d.done) {
+            clearInterval(pollRef.current);
+            setLaunching(false);
+
+            if (d.success) {
+              setRunProgress(100);
+              setLaunchDone(true);
+            } else {
+              setError(d.summary || "执行异常");
+            }
+
+            // 刷新数据，3秒后收起
+            setTimeout(fetchData, 500);
+            setTimeout(() => setShowSteps(false), 8000);
+          }
+        } catch {
+          // 轮询失败不中断，下次重试
+        }
+      }, 500);
+
+      // 安全超时：10分钟后停止轮询（含数据抓取，耗时较长）
+      setTimeout(() => {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          setLaunching(false);
+          fetchData();
+        }
+      }, 600_000);
+
+    } catch (err: any) {
+      setError(err?.message || "启动失败");
+      setLaunching(false);
+    }
   }
+
+  const stepIcon = (status: StepProgress["status"]) => {
+    switch (status) {
+      case "completed":
+        return (
+          <span className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center">
+            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </span>
+        );
+      case "running":
+        return (
+          <span className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-white" />
+          </span>
+        );
+      case "failed":
+        return (
+          <span className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
+            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </span>
+        );
+      default:
+        return <span className="w-5 h-5 rounded-full bg-gray-200 border-2 border-gray-300" />;
+    }
+  };
 
   return (
     <div className="mb-6 bg-white rounded-2xl border border-gray-200 overflow-hidden">
@@ -153,13 +270,72 @@ function FactoryHero() {
                   : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
             }`}
           >
-            {launching ? "启动中..." : isAnyRunning ? "运行中" : launchDone ? "已启动" : hasPlan ? "重新执行" : "一键启动"}
+            {launching ? "执行中..." : isAnyRunning ? "运行中" : launchDone ? "已启动" : hasPlan ? "重新执行" : "一键启动"}
           </button>
         </div>
       </div>
 
-      {/* 进度条（有计划时显示） */}
-      {hasPlan && (
+      {/* 实时执行进度（执行过程中显示） */}
+      {showSteps && (
+        <div className="px-5 pb-4">
+          {/* 总进度条 */}
+          <div className="mb-3">
+            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500 ease-out"
+                style={{
+                  width: `${runProgress}%`,
+                  background: error
+                    ? "linear-gradient(90deg, #3b82f6, #ef4444)"
+                    : runProgress >= 100
+                      ? "linear-gradient(90deg, #3b82f6, #22c55e)"
+                      : "linear-gradient(90deg, #3b82f6, #60a5fa)",
+                }}
+              />
+            </div>
+            <div className="flex justify-between mt-1">
+              <span className="text-xs text-gray-400">
+                {runProgress >= 100 ? "执行完成" : launching ? "正在执行..." : "准备中"}
+              </span>
+              <span className="text-xs text-gray-400">{runProgress}%</span>
+            </div>
+          </div>
+
+          {/* 步骤列表 */}
+          <div className="flex items-center gap-1">
+            {steps.map((s, i) => (
+              <div key={s.step} className="flex items-center">
+                <div className="flex items-center gap-1.5" title={s.error || ""}>
+                  {stepIcon(s.status)}
+                  <span className={`text-xs font-medium ${
+                    s.status === "completed" ? "text-green-600" :
+                    s.status === "running" ? "text-blue-600" :
+                    s.status === "failed" ? "text-red-500" :
+                    "text-gray-400"
+                  }`}>
+                    {s.label}
+                  </span>
+                </div>
+                {i < steps.length - 1 && (
+                  <div className={`w-6 h-px mx-1.5 ${
+                    s.status === "completed" ? "bg-green-300" : "bg-gray-200"
+                  }`} />
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* 错误提示（在步骤下方） */}
+          {error && (
+            <div className="mt-2 px-3 py-1.5 bg-red-50 border border-red-100 rounded-lg">
+              <p className="text-xs text-red-600">{error}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 进度条（有计划时显示，不在执行时） */}
+      {hasPlan && !showSteps && (
         <>
           <div className="px-5">
             <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -188,7 +364,8 @@ function FactoryHero() {
         </>
       )}
 
-      {error && <div className="px-5 pb-3 text-xs text-red-500">{error}</div>}
+      {/* 非执行期间的错误提示 */}
+      {error && !showSteps && <div className="px-5 pb-3 text-xs text-red-500">{error}</div>}
     </div>
   );
 }

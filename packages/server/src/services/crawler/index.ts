@@ -22,21 +22,33 @@ import { LetPubCrawler } from "./letpub-crawler.js";
 import { OpenAlexCrawler } from "./openalex-crawler.js";
 import { PubMedCrawler } from "./pubmed-crawler.js";
 import { ArxivCrawler } from "./arxiv-crawler.js";
+import { SpringerLinkCrawler } from "./springer-link-crawler.js";
+import { BaiduCrawler } from "./baidu-crawler.js";
+import { WeiboCrawler } from "./weibo-crawler.js";
+import { ZhihuCrawler } from "./zhihu-crawler.js";
+import { ToutiaoCrawler } from "./toutiao-crawler.js";
 import type { CrawlerAdapter, CrawlerResult, CrawlerTrack, PlatformName } from "./types.js";
 
 // ===== 注册所有爬虫 =====
 const crawlerRegistry = new Map<PlatformName, CrawlerAdapter>();
 
-// 国内核心线
+// 国内核心线（热度信号）
 crawlerRegistry.set("baidu-academic", new BaiduAcademicCrawler());
 crawlerRegistry.set("wechat-index", new WechatIndexCrawler());
 crawlerRegistry.set("policy-monitor", new PolicyCrawler());
 
-// SCI线
+// SCI线（期刊数据 + 热度信号）
 crawlerRegistry.set("letpub", new LetPubCrawler());
 crawlerRegistry.set("openalex", new OpenAlexCrawler());
 crawlerRegistry.set("pubmed", new PubMedCrawler());
 crawlerRegistry.set("arxiv", new ArxivCrawler());
+crawlerRegistry.set("springer-link", new SpringerLinkCrawler());
+
+// 社交热搜线（泛热度信号）
+crawlerRegistry.set("baidu", new BaiduCrawler());
+crawlerRegistry.set("weibo", new WeiboCrawler());
+crawlerRegistry.set("zhihu", new ZhihuCrawler());
+crawlerRegistry.set("toutiao", new ToutiaoCrawler());
 
 // ===== 公开接口 =====
 
@@ -72,7 +84,7 @@ export async function crawlPlatform(platform: PlatformName): Promise<CrawlerResu
 /** 按业务线批量抓取（并发执行） */
 export async function crawlByTrack(track: CrawlerTrack): Promise<CrawlerResult[]> {
   const platforms = getPlatformsByTrack(track);
-  const trackLabel = track === "domestic" ? "国内核心" : "SCI";
+  const trackLabel = track === "domestic" ? "国内核心" : track === "social" ? "社交热搜" : "SCI";
 
   logger.info(
     { track, platforms, count: platforms.length },
@@ -117,17 +129,18 @@ export async function crawlByTrack(track: CrawlerTrack): Promise<CrawlerResult[]
   return crawlerResults;
 }
 
-/** 全部抓取（两条线并发） */
+/** 全部抓取（三条线并发） */
 export async function crawlAll(): Promise<CrawlerResult[]> {
-  logger.info("🕷️ 全量抓取启动：国内核心线 + SCI线");
+  logger.info("🕷️ 全量抓取启动：国内核心线 + SCI线 + 社交热搜线");
   const startTime = Date.now();
 
-  const [domesticResults, sciResults] = await Promise.all([
+  const [domesticResults, sciResults, socialResults] = await Promise.all([
     crawlByTrack("domestic"),
     crawlByTrack("sci"),
+    crawlByTrack("social"),
   ]);
 
-  const allResults = [...domesticResults, ...sciResults];
+  const allResults = [...domesticResults, ...sciResults, ...socialResults];
 
   logger.info(
     { totalPlatforms: allResults.length, durationMs: Date.now() - startTime },
@@ -136,6 +149,9 @@ export async function crawlAll(): Promise<CrawlerResult[]> {
 
   return allResults;
 }
+
+/** 导出 SpringerLinkCrawler 供月度基础库任务使用 */
+export { SpringerLinkCrawler } from "./springer-link-crawler.js";
 
 // ===== 导出类型 =====
 export type { CrawlerResult, HotKeywordItem, JournalItem, PlatformName, CrawlerTrack } from "./types.js";

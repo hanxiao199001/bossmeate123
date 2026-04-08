@@ -116,7 +116,30 @@ export async function analyzeKeywords(
     "🔍 Agent 2 启动：开始关键词分析（期刊行业专用）"
   );
 
-  // Step 1: 去重 + 跨平台合并
+  // Step 1: 按平台收集原始分数（用于归一化）
+  const platformScores = new Map<string, number[]>();
+
+  for (const result of crawlerResults) {
+    if (!result.success) continue;
+    const scores: number[] = [];
+    for (const item of result.keywords) scores.push(item.heatScore);
+    for (const journal of result.journals) scores.push(journal.annualVolume || journal.impactFactor || 100);
+    if (scores.length > 0) platformScores.set(result.platform, scores);
+  }
+
+  // 计算每个平台的 max 值，用于归一化到 0-100
+  const platformMax = new Map<string, number>();
+  for (const [platform, scores] of platformScores) {
+    platformMax.set(platform, Math.max(...scores, 1)); // 避免除以0
+  }
+
+  /** 将原始热度分归一化到 0-100 范围 */
+  function normalizeScore(rawScore: number, platform: string): number {
+    const max = platformMax.get(platform) || 1;
+    return Math.round((rawScore / max) * 100);
+  }
+
+  // Step 2: 去重 + 跨平台合并（使用归一化分数）
   const keywordMap = new Map<string, AnalyzedKeyword>();
 
   for (const result of crawlerResults) {
@@ -125,10 +148,11 @@ export async function analyzeKeywords(
     // 处理国内核心线的热词
     for (const item of result.keywords) {
       const normalized = item.keyword.trim().toLowerCase();
+      const normScore = normalizeScore(item.heatScore, item.platform);
       const existing = keywordMap.get(normalized);
 
       if (existing) {
-        existing.totalHeatScore += item.heatScore;
+        existing.totalHeatScore += normScore;
         if (!existing.platforms.includes(item.platform)) {
           existing.platforms.push(item.platform);
         }
@@ -136,7 +160,7 @@ export async function analyzeKeywords(
         keywordMap.set(normalized, {
           keyword: item.keyword.trim(),
           platforms: [item.platform],
-          totalHeatScore: item.heatScore,
+          totalHeatScore: normScore,
           compositeScore: 0,
           category: item.discipline || null,
           isIndustryRelated: true, // 国内核心线的关键词已经过定向搜索，默认行业相关
@@ -149,10 +173,13 @@ export async function analyzeKeywords(
       const normalized = journal.name.trim().toLowerCase();
       if (keywordMap.has(normalized)) continue;
 
+      const rawScore = journal.annualVolume || journal.impactFactor || 100;
+      const normScore = normalizeScore(rawScore, journal.platform);
+
       keywordMap.set(normalized, {
         keyword: journal.name.trim(),
         platforms: [journal.platform],
-        totalHeatScore: journal.annualVolume || journal.impactFactor || 100,
+        totalHeatScore: normScore,
         compositeScore: 0,
         category: journal.discipline || null,
         isIndustryRelated: true, // SCI线的期刊数据本身就是行业数据
@@ -162,7 +189,7 @@ export async function analyzeKeywords(
 
   const afterDedup = keywordMap.size;
 
-  // Step 2: 严格行业相关性过滤 + 分类（使用动态词库）
+  // Step 3: 严格行业相关性过滤 + 分类（使用动态词库）
   const wordLists = await getWordLists(tenantId);
   const hitWords: string[] = []; // 记录命中的词，用于更新命中计数
 
@@ -178,7 +205,7 @@ export async function analyzeKeywords(
     if (hitWord) hitWords.push(hitWord);
   }
 
-  // Step 3: 计算综合热度分（跨平台权重更高）
+  // Step 4: 计算综合热度分（跨平台权重更高）
   for (const [, item] of keywordMap) {
     const platformMultiplier = 1 + (item.platforms.length - 1) * 0.5;
     // 行业相关的权重 ×3
@@ -186,7 +213,7 @@ export async function analyzeKeywords(
     item.compositeScore = item.totalHeatScore * platformMultiplier * industryMultiplier;
   }
 
-  // Step 4: 只保留行业相关的关键词入库
+  // Step 5: 只保留行业相关的关键词入库
   const allKeywords = Array.from(keywordMap.values());
   allKeywords.sort((a, b) => b.compositeScore - a.compositeScore);
 
@@ -194,7 +221,7 @@ export async function analyzeKeywords(
   const industryKeywords = allKeywords.filter((k) => k.isIndustryRelated);
   const topKeywords = industryKeywords.slice(0, 100); // 最多入库100个
 
-  // Step 5: 入库 + 与历史比对
+  // Step 6: 入库 + 与历史比对
   const newKeywords: string[] = [];
   const sustainedKeywords: string[] = [];
 
@@ -277,14 +304,14 @@ export async function analyzeKeywords(
     "🔍 Agent 2 完成：关键词分析结束（仅入库行业相关关键词）"
   );
 
-  // Step 6: 写入每日快照（供趋势分析用）
+  // Step 7: 写入每日快照（供趋势分析用）
   try {
     await takeKeywordSnapshot(tenantId);
   } catch (err) {
     logger.warn({ error: err }, "每日快照写入失败（不影响主流程）");
   }
 
-  // Step 7: 更新动态词库命中计数
+  // Step 8: 更新动态词库命中计数
   try {
     await incrementHitCounts(tenantId, hitWords);
   } catch (err) {

@@ -13,6 +13,22 @@ interface WechatConfig {
   updatedAt: string;
 }
 
+// 所有可选学科
+const ALL_DISCIPLINES = [
+  { code: "medicine", label: "医学" },
+  { code: "education", label: "教育" },
+  { code: "economics", label: "经济管理" },
+  { code: "engineering", label: "工程技术" },
+  { code: "computer", label: "计算机" },
+  { code: "agriculture", label: "农林" },
+  { code: "environment", label: "环境科学" },
+  { code: "law", label: "法学" },
+  { code: "psychology", label: "心理学" },
+  { code: "biology", label: "生物" },
+  { code: "chemistry", label: "化学" },
+  { code: "physics", label: "物理" },
+];
+
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
@@ -27,9 +43,17 @@ export default function SettingsPage() {
   const [saveResult, setSaveResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [showSecret, setShowSecret] = useState(false);
 
+  // 内容偏好状态
+  const [focusDisciplines, setFocusDisciplines] = useState<string[]>([]);
+  const [dailyArticleLimit, setDailyArticleLimit] = useState(5);
+  const [prefLoading, setPrefLoading] = useState(true);
+  const [prefSaving, setPrefSaving] = useState(false);
+  const [prefResult, setPrefResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   // 加载现有配置
   useEffect(() => {
     loadConfig();
+    loadPreferences();
   }, []);
 
   const loadConfig = async () => {
@@ -46,6 +70,42 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadPreferences = async () => {
+    setPrefLoading(true);
+    try {
+      const res = await api.get<any>("/agents/config");
+      const cfg = res.data?.config || {};
+      setFocusDisciplines(cfg.focusDisciplines || []);
+      setDailyArticleLimit(cfg.dailyArticleLimit || 5);
+    } catch (err) {
+      console.error("加载内容偏好失败", err);
+    } finally {
+      setPrefLoading(false);
+    }
+  };
+
+  const handleSavePreferences = async () => {
+    setPrefSaving(true);
+    setPrefResult(null);
+    try {
+      await api.patch<any>("/agents/config", {
+        focusDisciplines,
+        dailyArticleLimit,
+      });
+      setPrefResult({ ok: true, msg: "内容偏好已保存，下次执行时生效" });
+    } catch (err: any) {
+      setPrefResult({ ok: false, msg: err?.message || "保存失败" });
+    } finally {
+      setPrefSaving(false);
+    }
+  };
+
+  const toggleDiscipline = (code: string) => {
+    setFocusDisciplines((prev) =>
+      prev.includes(code) ? prev.filter((d) => d !== code) : [...prev, code]
+    );
   };
 
   const handleSave = async () => {
@@ -121,6 +181,93 @@ export default function SettingsPage() {
               </div>
             </div>
           </Link>
+        </div>
+
+        {/* 内容方向偏好 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-xl">{"\uD83C\uDFAF"}</div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">内容方向偏好</h2>
+              <p className="text-sm text-gray-500">选择你关注的学科方向，AI会优先生成这些领域的内容。不选则覆盖全部学科。</p>
+            </div>
+          </div>
+
+          {prefLoading ? (
+            <div className="text-center py-6 text-gray-400">加载中...</div>
+          ) : (
+            <div className="space-y-5">
+              {/* 学科选择 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">关注学科（可多选）</label>
+                <div className="flex flex-wrap gap-2">
+                  {ALL_DISCIPLINES.map((d) => {
+                    const isSelected = focusDisciplines.includes(d.code);
+                    return (
+                      <button
+                        key={d.code}
+                        onClick={() => toggleDiscipline(d.code)}
+                        className={`px-4 py-2 rounded-full text-sm font-medium border transition-all ${
+                          isSelected
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600"
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  {focusDisciplines.length === 0
+                    ? "当前：全学科模式（每个学科均衡推荐）"
+                    : `已选 ${focusDisciplines.length} 个学科`}
+                </p>
+              </div>
+
+              {/* 每日文章数 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">每日生成文章数</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={20}
+                    value={dailyArticleLimit}
+                    onChange={(e) => setDailyArticleLimit(Number(e.target.value))}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  />
+                  <span className="text-sm font-bold text-blue-600 w-8 text-center">{dailyArticleLimit}</span>
+                </div>
+              </div>
+
+              {/* 保存结果 */}
+              {prefResult && (
+                <div className={`p-3 rounded-lg text-sm ${prefResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
+                  {prefResult.msg}
+                </div>
+              )}
+
+              {/* 保存按钮 */}
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  onClick={handleSavePreferences}
+                  disabled={prefSaving}
+                  className={`px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-all ${prefSaving ? "bg-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 active:scale-95"}`}
+                >
+                  {prefSaving ? "保存中..." : "保存偏好"}
+                </button>
+                {focusDisciplines.length > 0 && (
+                  <button
+                    onClick={() => setFocusDisciplines([])}
+                    className="px-4 py-2.5 rounded-lg text-sm text-gray-500 hover:text-red-500"
+                  >
+                    清空选择
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 微信公众号配置 */}

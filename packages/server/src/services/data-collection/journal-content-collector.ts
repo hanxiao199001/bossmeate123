@@ -12,7 +12,7 @@
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
-import { eq, and, desc, or, ilike } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
 import { createEntry } from "../knowledge/knowledge-service.js";
 import {
   fetchJournalCoverMultiSource,
@@ -23,15 +23,38 @@ import type { VectorCategory } from "../knowledge/vector-store.js";
 
 // ============ 类型 ============
 
+export interface JournalInfo {
+  name: string;
+  nameEn: string | null;
+  issn: string | null;
+  publisher: string | null;
+  discipline: string | null;
+  partition: string | null;
+  impactFactor: number | null;
+  acceptanceRate: number | null;
+  reviewCycle: string | null;
+  annualVolume: number | null;
+  isWarningList: boolean;
+  warningYear: string | null;
+  coverUrl: string | null;
+  dataCardUri: string;
+  // V6 新增：顺仕美途模板所需字段
+  abbreviation: string | null;
+  foundingYear: number | null;
+  country: string | null;
+  website: string | null;
+  apcFee: number | null;
+  selfCitationRate: number | null;
+  casPartition: string | null;
+  casPartitionNew: string | null;
+  jcrSubjects: string | null; // JSON string
+  topInstitutions: string | null; // JSON string
+  scopeDescription: string | null;
+}
+
 export interface CollectionResult {
   hotKeywords: string[];
-  journals: Array<{
-    name: string;
-    impactFactor: number | null;
-    partition: string | null;
-    coverUrl: string | null;
-    dataCardUri: string;
-  }>;
+  journals: JournalInfo[];
   abstracts: Array<{
     title: string;
     journal: string;
@@ -78,7 +101,7 @@ export async function collectJournalContent(params: {
   // 合并用户传入的关键词
   const allKeywords = [...new Set([topic, ...hotKeywords, ...(params.keywords || [])])];
 
-  // B: 匹配 journals 表中的期刊
+  // B: 匹配 journals 表中的期刊（优先有封面图的）
   const matchedJournals = await db
     .select()
     .from(journals)
@@ -94,7 +117,11 @@ export async function collectJournalContent(params: {
         )
       )
     )
-    .orderBy(desc(journals.impactFactor))
+    .orderBy(
+      // 有封面图的排前面（cover_image_url IS NOT NULL → 0, NULL → 1）
+      sql`CASE WHEN ${journals.coverImageUrl} IS NOT NULL THEN 0 ELSE 1 END`,
+      desc(journals.impactFactor)
+    )
     .limit(5);
 
   // C: PubMed 抓取摘要
@@ -134,14 +161,28 @@ export async function collectJournalContent(params: {
     }
   }
 
-  // D: 期刊封面和数据卡片
+  // D: 期刊封面和数据卡片（优先使用 DB 缓存，无缓存时尝试实时抓取）
   const journalResults: CollectionResult["journals"] = [];
   for (const journal of matchedJournals) {
-    let coverUrl: string | null = null;
-    try {
-      coverUrl = await fetchJournalCoverMultiSource(journal.name, journal.issn || undefined);
-    } catch {
-      // 封面获取失败不影响主流程
+    // 优先用 DB 中缓存的封面 URL
+    let coverUrl: string | null = (journal as any).coverImageUrl || null;
+
+    // 无缓存时尝试实时抓取（并回写 DB）
+    if (!coverUrl) {
+      try {
+        coverUrl = await fetchJournalCoverMultiSource(journal.name, journal.issn || undefined);
+        // 回写缓存
+        if (coverUrl) {
+          await db.update(journals).set({
+            coverImageUrl: coverUrl,
+            coverImageSource: "realtime",
+            coverFetchedAt: new Date(),
+            updatedAt: new Date(),
+          }).where(eq(journals.id, journal.id));
+        }
+      } catch {
+        // 封面获取失败不影响主流程
+      }
     }
 
     const dataCardSvg = generateJournalDataCard({
@@ -157,8 +198,28 @@ export async function collectJournalContent(params: {
 
     journalResults.push({
       name: journal.name,
-      impactFactor: journal.impactFactor,
+      nameEn: journal.nameEn,
+      issn: journal.issn,
+      publisher: journal.publisher,
+      discipline: journal.discipline,
       partition: journal.partition,
+      impactFactor: journal.impactFactor,
+      acceptanceRate: journal.acceptanceRate,
+      reviewCycle: journal.reviewCycle,
+      annualVolume: journal.annualVolume,
+      isWarningList: journal.isWarningList,
+      warningYear: journal.warningYear,
+      abbreviation: (journal as any).abbreviation || null,
+      foundingYear: (journal as any).foundingYear || null,
+      country: (journal as any).country || null,
+      website: (journal as any).website || null,
+      apcFee: (journal as any).apcFee || null,
+      selfCitationRate: (journal as any).selfCitationRate || null,
+      casPartition: (journal as any).casPartition || null,
+      casPartitionNew: (journal as any).casPartitionNew || null,
+      jcrSubjects: (journal as any).jcrSubjects || null,
+      topInstitutions: (journal as any).topInstitutions || null,
+      scopeDescription: (journal as any).scopeDescription || null,
       coverUrl,
       dataCardUri,
     });

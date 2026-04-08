@@ -56,6 +56,10 @@ const envSchema = z.object({
   UPLOAD_DIR: z.string().default("./data/uploads"),
   MAX_FILE_SIZE: z.string().default("50mb"),
 
+  // Springer Nature API
+  SPRINGER_API_KEY: z.string().optional(),
+  SPRINGER_PROXY: z.string().optional(), // 代理地址（如 http://127.0.0.1:7890）
+
   // CORS
   ALLOWED_ORIGINS: z.string().default("http://localhost:5173,http://localhost:3000"),
 

@@ -174,10 +174,14 @@ export async function getTrendReport(
     .limit(limit);
 
   // 批量获取这些关键词的30天历史
-  const keywordNames = topKeywords.map((k) => k.keyword);
+  const keywordNames = topKeywords
+    .map((k) => k.keyword)
+    .filter((k): k is string => typeof k === "string" && k.length > 0);
 
-  const allHistory = keywordNames.length > 0
-    ? await db
+  let allHistory: (typeof keywordHistory.$inferSelect)[] = [];
+  if (keywordNames.length > 0) {
+    try {
+      allHistory = await db
         .select()
         .from(keywordHistory)
         .where(
@@ -187,8 +191,24 @@ export async function getTrendReport(
             inArray(keywordHistory.keyword, keywordNames)
           )
         )
-        .orderBy(keywordHistory.snapshotDate)
-    : [];
+        .orderBy(keywordHistory.snapshotDate);
+    } catch (err: any) {
+      // Fallback: query without inArray if ANY/ALL fails (Drizzle/pg edge case)
+      logger.warn({ err: err.message, keywordCount: keywordNames.length }, "inArray query failed, using fallback");
+      const keywordSet = new Set(keywordNames.map((k) => k.toLowerCase()));
+      const allRows = await db
+        .select()
+        .from(keywordHistory)
+        .where(
+          and(
+            eq(keywordHistory.tenantId, tenantId),
+            gte(keywordHistory.snapshotDate, day30Str)
+          )
+        )
+        .orderBy(keywordHistory.snapshotDate);
+      allHistory = allRows.filter((r) => keywordSet.has(r.keyword.toLowerCase()));
+    }
+  }
 
   // 按关键词分组
   const historyMap = new Map<string, typeof allHistory>();

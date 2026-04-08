@@ -34,6 +34,7 @@ const INDUSTRY_FILTER_WORDS = [
 
 export class ToutiaoCrawler implements CrawlerAdapter {
   platform = "toutiao" as const;
+  track = "social" as const;
 
   async crawl(): Promise<CrawlerResult> {
     const now = new Date().toISOString();

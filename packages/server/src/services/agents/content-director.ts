@@ -136,7 +136,7 @@ export class ContentDirector implements IAgent {
     });
 
     try {
-      const plan = await this.generatePlan(context.tenantId, context.date);
+      const plan = await this.generatePlan(context.tenantId, context.date, context.triggeredBy === "manual");
       const durationMs = Date.now() - start;
 
       await updateAgentLog(logId, {
@@ -170,7 +170,7 @@ export class ContentDirector implements IAgent {
     }
   }
 
-  private async generatePlan(tenantId: string, date: string): Promise<DailyContentPlan> {
+  private async generatePlan(tenantId: string, date: string, forceRegenerate = false): Promise<DailyContentPlan> {
     // Check existing plan for today
     const existing = await db
       .select()
@@ -183,7 +183,7 @@ export class ContentDirector implements IAgent {
       )
       .limit(1);
 
-    if (existing.length > 0) {
+    if (existing.length > 0 && !forceRegenerate) {
       logger.info({ tenantId, date }, "Daily plan already exists, returning it");
       return {
         id: existing[0].id,
@@ -195,6 +195,13 @@ export class ContentDirector implements IAgent {
         status: (existing[0].status || "draft") as DailyContentPlan["status"],
         generatedAt: existing[0].createdAt.toISOString(),
       };
+    }
+
+    if (existing.length > 0 && forceRegenerate) {
+      logger.info({ tenantId, date }, "手动触发，删除旧计划，重新生成");
+      await db.delete(dailyContentPlans).where(
+        and(eq(dailyContentPlans.tenantId, tenantId), eq(dailyContentPlans.date, date))
+      );
     }
 
     // 1. Get recommendations
@@ -226,7 +233,7 @@ export class ContentDirector implements IAgent {
 
     const tenantConfig = (tenant?.config || {}) as Record<string, any>;
     const automationConfig = tenantConfig.automationConfig || {};
-    const maxDailyArticles = automationConfig.maxDailyArticles || 5;
+    const maxDailyArticles = automationConfig.dailyArticleLimit || automationConfig.maxDailyArticles || 5;
 
     // 4. Generate ContentTask for each topic x platform
     const contentTasks: ContentTask[] = [];
@@ -268,7 +275,7 @@ export class ContentDirector implements IAgent {
     const planId = nanoid(16);
     const now = new Date();
 
-    // 5. Save to daily_content_plans
+    // 5. Save to daily_content_plans（upsert 防止重复）
     await db.insert(dailyContentPlans).values({
       id: planId,
       tenantId,
@@ -279,6 +286,15 @@ export class ContentDirector implements IAgent {
       status: "draft",
       createdAt: now,
       updatedAt: now,
+    }).onConflictDoUpdate({
+      target: [dailyContentPlans.tenantId, dailyContentPlans.date],
+      set: {
+        tasks: contentTasks as any,
+        totalArticles,
+        totalVideos,
+        status: "draft",
+        updatedAt: now,
+      },
     });
 
     logger.info(

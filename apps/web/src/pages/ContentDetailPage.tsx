@@ -256,6 +256,12 @@ export default function ContentDetailPage() {
 
   // 简易 Markdown 转 HTML
   const renderMarkdown = (md: string) => {
+    // V6: 如果内容已经是 HTML（期刊推荐模板），直接渲染，不做 markdown 转换
+    const trimmed = md.trim();
+    if (trimmed.startsWith("<div") || trimmed.startsWith("<section") || trimmed.startsWith("<!")) {
+      return trimmed;
+    }
+
     let html = md
       // 标题
       .replace(/^### (.+)$/gm, '<h3 class="text-base font-bold text-gray-800 mt-4 mb-2">$1</h3>')

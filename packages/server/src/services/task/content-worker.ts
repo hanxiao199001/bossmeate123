@@ -8,6 +8,7 @@ import { and } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { logger } from "../../config/logger.js";
+import { sinkGeneratedContent } from "../data-collection/crawl-data-sink.js";
 
 interface ContentJobData {
   taskId: string;
@@ -244,6 +245,20 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     }
   }
 
+  // 写入 taskLogs，记录写作详情
+  try {
+    await db.insert(taskLogs).values({
+      taskId: taskId || nanoid(),
+      step: "article_write",
+      status: "completed",
+      model: provider.name,
+      durationMs: Date.now() - stepStart,
+      detail: { contentId, hasArtifact: !!result.artifact, qualityScore, stage, platform: agentMeta?.platform },
+    });
+  } catch (logErr) {
+    logger.warn({ taskId, logErr }, "写入 taskLogs 失败（非阻塞）");
+  }
+
   // 更新 plan 中该 task 的状态，与 Dashboard 前端状态名对齐
   if (agentMeta?.planId && taskId) {
     // learning 阶段 → "review"（待审核），full_auto/semi_auto 高分 → "published"
@@ -260,6 +275,25 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
     "article-write completed"
   );
 
+  // ===== 钩子3：高质量文章 → 知识库沉淀（异步，非阻塞）=====
+  if (contentId && result.artifact) {
+    sinkGeneratedContent(
+      {
+        contentId,
+        title: result.artifact.title || "",
+        body: result.artifact.body || "",
+        platform: agentMeta?.platform || "unknown",
+        qualityScore,
+        style: agentMeta?.style,
+        audience: agentMeta?.audience,
+        planId: agentMeta?.planId,
+      },
+      tenantId
+    ).catch((err) => {
+      logger.warn({ contentId, err }, "钩子3: 文章沉淀失败（非阻塞）");
+    });
+  }
+
   return {
     contentId,
     hasArtifact: !!result.artifact,
@@ -273,31 +307,45 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
 async function updatePlanTaskStatus(
   planId: string,
   taskId: string,
-  newStatus: string
+  newStatus: string,
+  retries = 2
 ): Promise<void> {
-  try {
-    const [plan] = await db
-      .select()
-      .from(dailyContentPlans)
-      .where(eq(dailyContentPlans.id, planId))
-      .limit(1);
+  // NOTE: read-modify-write 在并发 worker 同时完成时可能竞态，
+  // 通过重试缓解（后续可升级为 PostgreSQL jsonb_set 原子更新）
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const [plan] = await db
+        .select()
+        .from(dailyContentPlans)
+        .where(eq(dailyContentPlans.id, planId))
+        .limit(1);
 
-    if (!plan) return;
+      if (!plan) return;
 
-    const planTasks = (plan.tasks || []) as any[];
-    const updated = planTasks.map((t) =>
-      t.id === taskId ? { ...t, status: newStatus } : t
-    );
+      const planTasks = (plan.tasks || []) as any[];
+      const updated = planTasks.map((t) =>
+        t.id === taskId ? { ...t, status: newStatus } : t
+      );
 
-    const allDone = updated.every((t) => t.status === "completed" || t.status === "failed");
-    const planStatus = allDone ? "completed" : "executing";
+      // 终态：review(待审核)、approved(已审批)、published(已发布)、failed(失败)
+      const DONE_STATUSES = ["review", "approved", "published", "failed"];
+      const allDone = updated.every((t) => DONE_STATUSES.includes(t.status));
+      const planStatus = allDone ? "completed" : "executing";
 
-    await db
-      .update(dailyContentPlans)
-      .set({ tasks: updated, status: planStatus, updatedAt: new Date() })
-      .where(eq(dailyContentPlans.id, planId));
-  } catch (err) {
-    logger.error({ planId, taskId, err }, "更新 plan task 状态失败");
+      await db
+        .update(dailyContentPlans)
+        .set({ tasks: updated, status: planStatus, updatedAt: new Date() })
+        .where(eq(dailyContentPlans.id, planId));
+
+      return; // 成功，退出
+    } catch (err) {
+      if (attempt === retries) {
+        logger.error({ planId, taskId, err }, "更新 plan task 状态失败（已重试）");
+      } else {
+        // 短暂延迟后重试，缓解竞态
+        await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+      }
+    }
   }
 }
 

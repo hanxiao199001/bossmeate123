@@ -17,6 +17,7 @@ export interface AgentContext {
   date: string;            // YYYY-MM-DD
   plan?: unknown;
   triggeredBy: "scheduler" | "manual" | "event";
+  runId?: string;          // 用于 SSE 进度推送
 }
 
 export interface AgentTask {

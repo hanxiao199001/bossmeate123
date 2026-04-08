@@ -206,6 +206,37 @@ export const journals = pgTable(
     peerWriteCount: integer("peer_write_count").default(0), // 同行近期写作次数
     status: varchar("status", { length: 20 }).notNull().default("active"),
     source: varchar("source", { length: 50 }), // 数据来源: letpub | manual | crawl
+    abbreviation: varchar("abbreviation", { length: 50 }), // 简称如 EHO
+    foundingYear: integer("founding_year"), // 创刊年份
+    country: varchar("country", { length: 50 }), // 出版国家
+    website: text("website"), // 期刊官网
+    apcFee: real("apc_fee"), // 版面费（美元）
+    selfCitationRate: real("self_citation_rate"), // 自引率 %
+    casPartition: varchar("cas_partition", { length: 50 }), // 中科院分区 如 "医学2区"
+    casPartitionNew: varchar("cas_partition_new", { length: 50 }), // 新锐分区 如 "医学1区TOP"
+    jcrSubjects: text("jcr_subjects"), // JCR学科分区详情 JSON 如 [{"subject":"Oncology","rank":"Q1","position":"9/100"}]
+    topInstitutions: text("top_institutions"), // 国内投稿活跃机构 JSON
+    scopeDescription: text("scope_description"), // 收稿范围描述（AI生成后缓存）
+    coverImageUrl: text("cover_image_url"), // 期刊封面图 URL（缓存）
+    coverImageSource: varchar("cover_image_source", { length: 50 }), // 封面来源
+    coverFetchedAt: timestamp("cover_fetched_at"), // 封面抓取时间
+    springerFetchedAt: timestamp("springer_fetched_at"), // Springer 数据抓取时间
+
+    // === 国内核心期刊字段 ===
+    catalogType: varchar("catalog_type", { length: 30 }), // "sci" | "pku-core" | "cssci" | "sci-core" | "cscd"
+    catalogYear: varchar("catalog_year", { length: 20 }), // 目录版本: "2023" | "2025-2026"
+    cnNumber: varchar("cn_number", { length: 30 }), // 国内统一刊号 CN
+    coreLevel: varchar("core_level", { length: 20 }), // "核心" | "扩展" | "来源"
+    catalogs: jsonb("catalogs").default([]), // 所属多个目录 ["cssci","pku-core"]
+    frequency: varchar("frequency", { length: 20 }), // 刊期: 月刊/双月刊/季刊
+
+    // === Springer Link 批量爬取字段 ===
+    springerJournalId: varchar("springer_journal_id", { length: 20 }), // Springer Link 期刊 ID
+    citeScore: real("cite_score"), // CiteScore
+    timeToFirstDecisionDays: integer("time_to_first_decision_days"), // 首次审稿决定天数
+    isHybrid: boolean("is_hybrid").default(false), // 是否混合 OA
+    isOA: boolean("is_oa").default(false), // 是否完全 OA
+
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -215,6 +246,8 @@ export const journals = pgTable(
     index("idx_journal_discipline").on(table.discipline),
     index("idx_journal_partition").on(table.partition),
     index("idx_journal_warning").on(table.isWarningList),
+    index("idx_journal_catalog_type").on(table.catalogType),
+    index("idx_journal_springer_id").on(table.springerJournalId),
   ]
 );
 

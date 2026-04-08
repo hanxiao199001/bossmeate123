@@ -21,19 +21,21 @@ import type { PlatformName, CrawlerTrack } from "./crawler/types.js";
 // ============ 任务类型 ============
 
 export type SchedulerJobType =
-  | "daily-crawl"          // 每日全量爬虫
-  | "crawl-track"          // 按业务线爬虫
-  | "crawl-platform"       // 单平台爬虫
-  | "keyword-analysis"     // 关键词分析
-  | "hot-event-monitor"    // 热点事件监控
-  | "domain-knowledge"     // 领域知识采集
-  | "competitor-analysis"  // 竞品内容拆解
-  | "style-learning"       // 风格学习
-  | "quality-check"        // 批量质检
-  | "knowledge-engine"     // 知识引擎 Agent
-  | "orchestrator"         // 总指挥 Agent
-  | "midday-knowledge"     // 午间知识补充
-  | "evening-knowledge";   // 晚间知识补充
+  | "daily-crawl"              // 每日全量爬虫（三条线）
+  | "crawl-track"              // 按业务线爬虫
+  | "crawl-platform"           // 单平台爬虫
+  | "keyword-analysis"         // 关键词分析
+  | "hot-event-monitor"        // 热点事件监控
+  | "domain-knowledge"         // 领域知识采集
+  | "competitor-analysis"      // 竞品内容拆解
+  | "style-learning"           // 风格学习
+  | "quality-check"            // 批量质检
+  | "knowledge-engine"         // 知识引擎 Agent
+  | "orchestrator"             // 总指挥 Agent
+  | "midday-knowledge"         // 午间知识补充
+  | "evening-knowledge"        // 晚间知识补充
+  | "journal-catalog-update"   // 月度期刊基础库更新（Springer + LetPub）
+  | "heat-journal-match";      // 热度×期刊交叉匹配
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -197,6 +199,39 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenants.length, totalCompleted };
     }
 
+    case "journal-catalog-update": {
+      // 月度：Springer Link 期刊基础库更新
+      const { SpringerLinkCrawler } = await import("./crawler/springer-link-crawler.js");
+      const springerCrawler = new SpringerLinkCrawler();
+
+      const proxy = process.env.SPRINGER_PROXY || undefined;
+      const result = await springerCrawler.crawlJournalCatalog({
+        proxy,
+        maxDetails: 30,
+      });
+      return result;
+    }
+
+    case "heat-journal-match": {
+      // 热度信号 × 期刊库交叉匹配
+      const { getTodayHeatMatches } = await import("./content-engine/journal-heat-matcher.js");
+      const activeTenants = tenantId
+        ? [{ id: tenantId }]
+        : await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
+
+      let totalMatches = 0;
+      for (const t of activeTenants) {
+        try {
+          const matches = await getTodayHeatMatches(t.id, 20);
+          totalMatches += matches.length;
+          logger.info({ tenantId: t.id, matches: matches.length }, "Heat-journal match completed");
+        } catch (err) {
+          logger.error({ tenantId: t.id, err }, "Heat-journal match failed");
+        }
+      }
+      return { tenantsProcessed: activeTenants.length, totalMatches };
+    }
+
     default:
       throw new Error(`未知任务类型: ${type}`);
   }
@@ -323,7 +358,27 @@ async function registerCronJobs() {
     }
   );
 
-  logger.info("📅 Cron 定时任务注册完成");
+  // 每月1号 3:00 期刊基础库全量更新（Springer Link）
+  await crawlerQueue.upsertJobScheduler(
+    "journal-catalog-schedule",
+    { pattern: "0 3 1 * *", tz: "Asia/Shanghai" },
+    {
+      name: "journal-catalog-update",
+      data: { type: "journal-catalog-update" as SchedulerJobType },
+    }
+  );
+
+  // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）
+  await crawlerQueue.upsertJobScheduler(
+    "heat-journal-match-schedule",
+    { pattern: "30 7 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "heat-journal-match",
+      data: { type: "heat-journal-match" as SchedulerJobType },
+    }
+  );
+
+  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配）");
 }
 
 // ============ 手动触发接口 ============
