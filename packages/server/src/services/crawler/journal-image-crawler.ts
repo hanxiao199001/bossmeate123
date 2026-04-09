@@ -164,15 +164,17 @@ export async function fetchJournalCoverFromCrossRef(
     // 用 ISSN 构造常见的期刊封面图 URL 模式
     if (resolvedIssn) {
       const cleanIssn = resolvedIssn.replace("-", "").toLowerCase();
-      // Springer/Nature 封面图模式
-      const springerUrl = `https://media.springernature.com/w92/springer-static/cover-hires/journal/${cleanIssn}`;
-      // 尝试验证图片是否可访问
-      try {
-        const imgResp = await fetch(springerUrl, { method: "HEAD", signal: AbortSignal.timeout(5000) });
-        if (imgResp.ok && imgResp.headers.get("content-type")?.startsWith("image")) {
-          return springerUrl;
-        }
-      } catch { /* 继续 */ }
+      // Springer/Nature 封面图模式 — 优先高清大图（w316），回退中等（w153）
+      const sizes = ["w316", "w153", "w92"];
+      for (const size of sizes) {
+        const springerUrl = `https://media.springernature.com/${size}/springer-static/cover-hires/journal/${cleanIssn}`;
+        try {
+          const imgResp = await fetch(springerUrl, { method: "HEAD", signal: AbortSignal.timeout(5000) });
+          if (imgResp.ok && imgResp.headers.get("content-type")?.startsWith("image")) {
+            return springerUrl;
+          }
+        } catch { /* 尝试下一个尺寸 */ }
+      }
     }
 
     return null;
@@ -213,12 +215,12 @@ export async function fetchJournalCoverMultiSource(
  */
 export function generateJournalDataCard(journal: {
   name: string;
-  nameEn?: string;
-  impactFactor?: number;
-  partition?: string;
-  acceptanceRate?: number;
-  reviewCycle?: string;
-  isWarningList?: boolean;
+  nameEn?: string | null;
+  impactFactor?: number | null;
+  partition?: string | null;
+  acceptanceRate?: number | null;
+  reviewCycle?: string | null;
+  isWarningList?: boolean | null;
 }): string {
   const ifText = journal.impactFactor ? journal.impactFactor.toFixed(1) : "N/A";
   const partition = journal.partition || "N/A";

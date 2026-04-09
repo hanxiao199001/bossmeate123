@@ -103,7 +103,7 @@ export async function chatRoutes(app: FastifyInstance) {
           tenantId: request.tenantId, conversationId: id, role: "assistant",
           content: publishReply, model: "system",
         }).returning();
-        await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, id));
+        await db.update(conversations).set({ updatedAt: new Date() }).where(and(eq(conversations.id, id), eq(conversations.tenantId, request.tenantId)));
         return { code: "OK", data: { userMessage: userMsg, aiMessage: aiMsg } };
       }
     }
@@ -128,7 +128,7 @@ export async function chatRoutes(app: FastifyInstance) {
       if (skill) {
         await db.update(conversations)
           .set({ skillType: "article" })
-          .where(eq(conversations.id, id));
+          .where(and(eq(conversations.id, id), eq(conversations.tenantId, request.tenantId)));
         logger.info({ conversationId: id }, "智能路由：识别为图文创作，切换到 ArticleSkill");
       }
     }
@@ -267,7 +267,7 @@ export async function chatRoutes(app: FastifyInstance) {
       });
     }
 
-    await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, id));
+    await db.update(conversations).set({ updatedAt: new Date() }).where(and(eq(conversations.id, id), eq(conversations.tenantId, request.tenantId)));
 
     return { code: "OK", data: { userMessage: userMsg, aiMessage: aiMsg } };
   });
@@ -434,7 +434,7 @@ async function handlePublishCommand(
     });
 
     await db.update(contents).set({ status: "published", updatedAt: new Date() })
-      .where(eq(contents.id, latestContent.id));
+      .where(and(eq(contents.id, latestContent.id), eq(contents.tenantId, tenantId)));
 
     const successList = results.filter((r) => r.success);
     const failList = results.filter((r) => !r.success);

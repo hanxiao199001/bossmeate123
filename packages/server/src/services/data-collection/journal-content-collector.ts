@@ -19,6 +19,8 @@ import {
   generateJournalDataCard,
   svgToDataUri,
 } from "../crawler/journal-image-crawler.js";
+import { scrapeLetPubDetail } from "../crawler/letpub-detail-scraper.js";
+import { scrapeCnkiJournal, scrapeWanfangJournal } from "../crawler/cnki-journal-scraper.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
 
 // ============ 类型 ============
@@ -50,6 +52,42 @@ export interface JournalInfo {
   jcrSubjects: string | null; // JSON string
   topInstitutions: string | null; // JSON string
   scopeDescription: string | null;
+  // V7 新增：LetPub 详情数据（用于生成图表插图）
+  ifHistory?: Array<{ year: number; value: number }>;           // 影响因子历年
+  pubVolumeHistory?: Array<{ year: number; count: number }>;    // 发文量历年
+  letpubCasPartitions?: Array<{
+    version: string;
+    publishDate?: string;
+    majorCategory: string;
+    subCategories: Array<{ zone: string; subject: string }>;
+    isTop: boolean;
+    isReview: boolean;
+  }>;
+  letpubJcrPartitions?: Array<{
+    subject: string;
+    database: string;
+    zone: string;
+    rank: string;
+  }>;
+  letpubJciPartitions?: Array<{
+    subject: string;
+    database: string;
+    zone: string;
+    rank: string;
+  }>;
+  // V10 新增：国内期刊专有字段
+  cnNumber?: string | null;                  // 国内统一刊号 CN xx-xxxx/X
+  catalogType?: string | null;               // "sci" | "pku-core" | "cssci" | "cscd" 等
+  catalogs?: string[];                       // 所属核心目录列表 ["cssci","pku-core","cscd"]
+  coreLevel?: string | null;                 // "核心" | "扩展" | "来源"
+  frequency?: string | null;                 // "月刊" | "双月刊" | "季刊"
+  compositeIF?: number | null;               // 复合影响因子（知网）
+  comprehensiveIF?: number | null;           // 综合影响因子（知网）
+  cnkiUrl?: string | null;                   // 知网期刊主页 URL
+  coreSubjects?: string[];                   // 核心版学科分类（如 ["计算机科学","自动化"]）
+  organizerName?: string | null;             // 主办单位
+  supervisorName?: string | null;            // 主管单位
+  synthetic?: boolean;                       // 是否为 AI 推荐的合成期刊（非数据库真实数据）
 }
 
 export interface CollectionResult {
@@ -110,7 +148,8 @@ export async function collectJournalContent(params: {
         eq(journals.tenantId, tenantId),
         or(
           ilike(journals.discipline, `%${topic}%`),
-          ilike(journals.name, `%${topic}%`),
+          ilike(journals.name, `%${topic}%`),       // 中文刊名匹配
+          ilike(journals.nameEn, `%${topic}%`),     // 英文名匹配
           ...(hotKeywords.length > 0
             ? [ilike(journals.discipline, `%${hotKeywords[0]}%`)]
             : [])
@@ -118,8 +157,10 @@ export async function collectJournalContent(params: {
       )
     )
     .orderBy(
-      // 有封面图的排前面（cover_image_url IS NOT NULL → 0, NULL → 1）
+      // 有封面图的排前面
       sql`CASE WHEN ${journals.coverImageUrl} IS NOT NULL THEN 0 ELSE 1 END`,
+      // 国际期刊按 IF 排序，国内期刊按 core_level 排序（核心 > 来源 > 其他）
+      sql`CASE WHEN ${journals.impactFactor} IS NOT NULL THEN 0 ELSE 1 END`,
       desc(journals.impactFactor)
     )
     .limit(5);
@@ -196,6 +237,140 @@ export async function collectJournalContent(params: {
     });
     const dataCardUri = svgToDataUri(dataCardSvg);
 
+    // E: 从 LetPub 抓取详情数据（IF 历年、发文量、分区表）用于文章图表
+    let ifHistory: Array<{ year: number; value: number }> | undefined;
+    let pubVolumeHistory: Array<{ year: number; count: number }> | undefined;
+    let letpubCasPartitions: JournalInfo["letpubCasPartitions"];
+    let letpubJcrPartitions: JournalInfo["letpubJcrPartitions"];
+    let letpubJciPartitions: JournalInfo["letpubJciPartitions"];
+
+    try {
+      const letpubDetail = await scrapeLetPubDetail(
+        journal.name,
+        journal.issn || undefined
+      );
+      if (letpubDetail) {
+        ifHistory = letpubDetail.ifHistory.length > 0 ? letpubDetail.ifHistory : undefined;
+        pubVolumeHistory = letpubDetail.pubVolumeHistory.length > 0 ? letpubDetail.pubVolumeHistory : undefined;
+        letpubCasPartitions = letpubDetail.casPartitions.length > 0 ? letpubDetail.casPartitions : undefined;
+        letpubJcrPartitions = letpubDetail.jcrPartitions.length > 0 ? letpubDetail.jcrPartitions : undefined;
+        letpubJciPartitions = letpubDetail.jciPartitions.length > 0 ? letpubDetail.jciPartitions : undefined;
+
+        // 如果 LetPub 返回了封面而之前没有，也用上
+        if (!coverUrl && letpubDetail.coverImageUrl) {
+          coverUrl = letpubDetail.coverImageUrl;
+        }
+
+        logger.info(
+          {
+            journal: journal.name,
+            ifYears: ifHistory?.length || 0,
+            pubYears: pubVolumeHistory?.length || 0,
+          },
+          "LetPub 详情数据已采集"
+        );
+      }
+    } catch (err) {
+      logger.debug({ journal: journal.name, err: String(err) }, "LetPub 详情采集失败（不影响主流程）");
+    }
+
+    // F: 国内期刊数据采集（知网 + 万方）
+    // 触发条件：中国出版 或 DB 中有 catalogType 或 没有国际 IF 数据
+    let cnNumber: string | null = (journal as any).cnNumber || null;
+    let catalogs: string[] = ((journal as any).catalogs as string[]) || [];
+    let compositeIF: number | null = null;
+    let comprehensiveIF: number | null = null;
+    let cnkiUrl: string | null = null;
+    let coreSubjects: string[] = [];
+    let organizerName: string | null = (journal as any).publisher || null;
+    let supervisorName: string | null = null;
+    let frequency: string | null = (journal as any).frequency || null;
+    let coreLevel: string | null = (journal as any).coreLevel || null;
+    let catalogType: string | null = (journal as any).catalogType || null;
+
+    const isDomestic = (journal as any).country === "中国"
+      || (journal as any).catalogType
+      || cnNumber
+      || (!journal.impactFactor && /[\u4e00-\u9fa5]/.test(journal.name));
+
+    if (isDomestic) {
+      try {
+        const cnkiDetail = await scrapeCnkiJournal(journal.name, journal.issn || undefined);
+        if (cnkiDetail) {
+          cnNumber = cnNumber || cnkiDetail.cnNumber;
+          compositeIF = cnkiDetail.compositeIF;
+          comprehensiveIF = cnkiDetail.comprehensiveIF;
+          cnkiUrl = cnkiDetail.cnkiUrl;
+          coreSubjects = cnkiDetail.coreSubjects.length > 0 ? cnkiDetail.coreSubjects : coreSubjects;
+          organizerName = cnkiDetail.organizer || organizerName;
+          supervisorName = cnkiDetail.supervisor;
+          frequency = cnkiDetail.frequency || frequency;
+
+          // 合并核心目录（去重）
+          if (cnkiDetail.catalogs.length > 0) {
+            const allCatalogs = new Set([...catalogs, ...cnkiDetail.catalogs]);
+            catalogs = Array.from(allCatalogs);
+          }
+
+          // 补充缺失的基本信息
+          if (!journal.nameEn && cnkiDetail.nameEn) {
+            journal.nameEn = cnkiDetail.nameEn;
+          }
+          if (!(journal as any).foundingYear && cnkiDetail.foundingYear) {
+            (journal as any).foundingYear = cnkiDetail.foundingYear;
+          }
+
+          logger.info(
+            {
+              journal: journal.name,
+              compositeIF,
+              catalogs,
+              cnNumber,
+            },
+            "知网期刊数据已采集"
+          );
+        }
+      } catch (err) {
+        logger.debug({ journal: journal.name, err: String(err) }, "知网采集失败（不影响主流程）");
+      }
+
+      // 万方作为补充（知网没拿到关键数据时尝试）
+      if (!compositeIF && !cnNumber) {
+        try {
+          const wfDetail = await scrapeWanfangJournal(journal.name, journal.issn || undefined);
+          if (wfDetail) {
+            cnNumber = cnNumber || wfDetail.cnNumber;
+            compositeIF = compositeIF || wfDetail.compositeIF;
+            organizerName = organizerName || wfDetail.organizer;
+            if (wfDetail.catalogs.length > 0) {
+              const allCatalogs = new Set([...catalogs, ...wfDetail.catalogs]);
+              catalogs = Array.from(allCatalogs);
+            }
+            logger.info({ journal: journal.name }, "万方期刊补充数据已采集");
+          }
+        } catch (err) {
+          logger.debug({ journal: journal.name, err: String(err) }, "万方采集失败（不影响主流程）");
+        }
+      }
+
+      // 推断 catalogType（如果 DB 没有）
+      if (!catalogType && catalogs.length > 0) {
+        if (catalogs.includes("cssci")) catalogType = "cssci";
+        else if (catalogs.includes("cscd")) catalogType = "cscd";
+        else if (catalogs.includes("pku-core")) catalogType = "pku-core";
+        else if (catalogs.includes("cstpcd")) catalogType = "cstpcd";
+      }
+
+      // 推断 coreLevel
+      if (!coreLevel && catalogs.length > 0) {
+        if (catalogs.includes("pku-core") || catalogs.includes("cssci") || catalogs.includes("cscd")) {
+          coreLevel = "核心";
+        } else if (catalogs.includes("cstpcd")) {
+          coreLevel = "来源";
+        }
+      }
+    }
+
     journalResults.push({
       name: journal.name,
       nameEn: journal.nameEn,
@@ -222,6 +397,24 @@ export async function collectJournalContent(params: {
       scopeDescription: (journal as any).scopeDescription || null,
       coverUrl,
       dataCardUri,
+      // V7: LetPub 图表数据
+      ifHistory,
+      pubVolumeHistory,
+      letpubCasPartitions,
+      letpubJcrPartitions,
+      letpubJciPartitions,
+      // V10: 国内期刊字段
+      cnNumber,
+      catalogType,
+      catalogs: catalogs.length > 0 ? catalogs : undefined,
+      coreLevel,
+      frequency,
+      compositeIF,
+      comprehensiveIF,
+      cnkiUrl,
+      coreSubjects: coreSubjects.length > 0 ? coreSubjects : undefined,
+      organizerName,
+      supervisorName,
     });
   }
 

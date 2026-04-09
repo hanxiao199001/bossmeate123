@@ -13,8 +13,8 @@ import { logger } from "../config/logger.js";
 import { crawlAll, crawlByTrack, crawlPlatform } from "./crawler/index.js";
 import { analyzeKeywords } from "./agents/keyword-analyzer.js";
 import { db } from "../models/db.js";
-import { tenants } from "../models/schema.js";
-import { eq } from "drizzle-orm";
+import { tenants, contents } from "../models/schema.js";
+import { eq, and, lt, inArray } from "drizzle-orm";
 import { getRedisConnection, crawlerQueue } from "./task/queue.js";
 import type { PlatformName, CrawlerTrack } from "./crawler/types.js";
 
@@ -35,7 +35,9 @@ export type SchedulerJobType =
   | "midday-knowledge"         // 午间知识补充
   | "evening-knowledge"        // 晚间知识补充
   | "journal-catalog-update"   // 月度期刊基础库更新（Springer + LetPub）
-  | "heat-journal-match";      // 热度×期刊交叉匹配
+  | "heat-journal-match"       // 热度×期刊交叉匹配
+  | "journal-cover-prefetch"   // 期刊封面图预抓取
+  | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -232,6 +234,76 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenants.length, totalMatches };
     }
 
+    case "journal-cover-prefetch": {
+      // 期刊封面图预抓取 — 根据今日选题定向抓取
+      const { prefetchJournalCovers } = await import("./crawler/journal-cover-prefetch.js");
+      const { keywords: kwTable } = await import("../models/schema.js");
+      const { desc: descOrder } = await import("drizzle-orm");
+
+      const activeTenantsForCover = tenantId
+        ? [{ id: tenantId }]
+        : await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, "active"));
+
+      let totalSuccess = 0;
+      let totalFailed = 0;
+
+      for (const t of activeTenantsForCover) {
+        try {
+          // 获取今日热门关键词作为选题
+          const topKeywords = await db
+            .select({ keyword: kwTable.keyword })
+            .from(kwTable)
+            .where(eq(kwTable.tenantId, t.id))
+            .orderBy(descOrder(kwTable.compositeScore))
+            .limit(10);
+
+          const topics = topKeywords.map((k) => k.keyword);
+          const result = await prefetchJournalCovers(t.id, topics);
+          totalSuccess += result.success;
+          totalFailed += result.failed;
+          logger.info({ tenantId: t.id, ...result }, "期刊封面预抓取完成");
+        } catch (err) {
+          logger.error({ tenantId: t.id, err }, "期刊封面预抓取失败");
+        }
+      }
+      return { tenantsProcessed: activeTenantsForCover.length, totalSuccess, totalFailed };
+    }
+
+    case "stale-review-cleanup": {
+      // 清理超过 3 天仍处于 reviewing / draft 状态的内容
+      const STALE_DAYS = 3;
+      const cutoff = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
+
+      const staleRows = await db
+        .select({ id: contents.id, title: contents.title, status: contents.status })
+        .from(contents)
+        .where(
+          and(
+            inArray(contents.status, ["reviewing", "draft"]),
+            lt(contents.createdAt, cutoff)
+          )
+        );
+
+      if (staleRows.length === 0) {
+        logger.info("🧹 无超时未审核内容需要清理");
+        return { deleted: 0 };
+      }
+
+      const staleIds = staleRows.map((r) => r.id);
+
+      // 分批删除关联的 production_records 和 distribution_records
+      const { productionRecords, distributionRecords } = await import("../models/schema.js");
+      await db.delete(distributionRecords).where(inArray(distributionRecords.contentId, staleIds));
+      await db.delete(productionRecords).where(inArray(productionRecords.contentId, staleIds));
+      await db.delete(contents).where(inArray(contents.id, staleIds));
+
+      logger.info(
+        { count: staleRows.length, titles: staleRows.map((r) => r.title).slice(0, 5) },
+        `🧹 已清理 ${staleRows.length} 条超过 ${STALE_DAYS} 天未审核的内容`
+      );
+      return { deleted: staleRows.length, cutoffDate: cutoff.toISOString() };
+    }
+
     default:
       throw new Error(`未知任务类型: ${type}`);
   }
@@ -378,7 +450,27 @@ async function registerCronJobs() {
     }
   );
 
-  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配）");
+  // 每日 7:45 期刊封面图预抓取（在热度匹配之后，内容生产之前）
+  await crawlerQueue.upsertJobScheduler(
+    "journal-cover-prefetch-schedule",
+    { pattern: "45 7 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "journal-cover-prefetch",
+      data: { type: "journal-cover-prefetch" as SchedulerJobType },
+    }
+  );
+
+  // 每日 2:00 清理超过 3 天未审核的内容
+  await crawlerQueue.upsertJobScheduler(
+    "stale-review-cleanup-schedule",
+    { pattern: "0 2 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "stale-review-cleanup",
+      data: { type: "stale-review-cleanup" as SchedulerJobType },
+    }
+  );
+
+  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理）");
 }
 
 // ============ 手动触发接口 ============

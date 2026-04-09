@@ -223,7 +223,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
     await db.update(contents)
       .set({ status: "approved", updatedAt: new Date() })
-      .where(eq(contents.id, id));
+      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
 
     await db.insert(bossEdits).values({
       id: nanoid(16),
@@ -268,7 +268,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const updates: Record<string, unknown> = { status: "approved", updatedAt: new Date() };
     if (title) updates.title = title;
     if (body) updates.body = body;
-    await db.update(contents).set(updates).where(eq(contents.id, id));
+    await db.update(contents).set(updates).where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
 
     const editDistance = calculateEditDistance(original.body || "", body || original.body || "");
     await db.insert(bossEdits).values({
@@ -303,7 +303,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
     await db.update(contents)
       .set({ status: "draft", updatedAt: new Date() })
-      .where(eq(contents.id, id));
+      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
 
     await db.insert(bossEdits).values({
       id: nanoid(16),
