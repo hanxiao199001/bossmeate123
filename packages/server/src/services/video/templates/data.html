@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_base.css"/>
+<style>
+  body { background: linear-gradient(145deg, #0b1a3a 0%, #0f3a5e 45%, #14b8a6 100%); }
+  .title { font-size: 72px; font-weight: 800; letter-spacing: 4px; text-align: center; }
+  .sub-title {
+    font-size: 32px; opacity: 0.75; text-align: center; letter-spacing: 3px;
+    margin-top: 8px; margin-bottom: 24px;
+  }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; width: 100%; }
+  .metric {
+    text-align: center;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 36px;
+    padding: 56px 24px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  .metric .value {
+    font-family: var(--font-en);
+    font-size: 132px;
+    font-weight: 900;
+    line-height: 1;
+    background: linear-gradient(180deg, #fff 0%, #a7f3d0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    letter-spacing: -2px;
+  }
+  .metric .label-sm {
+    font-size: 32px; font-weight: 600; margin-top: 18px; letter-spacing: 2px;
+    opacity: 0.9;
+  }
+  .metric .label-en {
+    font-family: var(--font-en); font-size: 22px; font-weight: 400;
+    opacity: 0.55; margin-top: 6px; text-transform: uppercase; letter-spacing: 3px;
+  }
+  .note {
+    margin-top: 16px; text-align: center; font-size: 28px; opacity: 0.7;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div>
+    <div class="title">核心指标</div>
+    <div class="sub-title">KEY METRICS</div>
+  </div>
+  <div class="metrics">
+    <div class="metric">
+      <div class="value">{{impactFactor}}</div>
+      <div class="label-sm">影响因子</div>
+      <div class="label-en">Impact Factor</div>
+    </div>
+    <div class="metric">
+      <div class="value">{{citeScore}}</div>
+      <div class="label-sm">CiteScore</div>
+      <div class="label-en">近 4 年引用</div>
+    </div>
+    <div class="metric">
+      <div class="value">{{partition}}</div>
+      <div class="label-sm">中科院分区</div>
+      <div class="label-en">{{casPartition}}</div>
+    </div>
+  </div>
+  <div class="note">{{journalName}} · {{discipline}}</div>
+  <div class="footer-brand">学术投稿 · 期刊洞察</div>
+</div>
+</body>
+</html>

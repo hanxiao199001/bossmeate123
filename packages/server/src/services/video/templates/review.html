@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_base.css"/>
+<style>
+  body { background: linear-gradient(145deg, #0d3a2e 0%, #137a5c 45%, #34d399 100%); }
+  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
+  .sub-title {
+    font-size: 32px; opacity: 0.75; text-align: center; letter-spacing: 3px;
+    margin-top: 8px; margin-bottom: 24px;
+  }
+  .review-list { display: flex; flex-direction: column; gap: 28px; width: 100%; }
+  .review-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 40px 48px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 28px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  .review-row .label-cn {
+    font-size: 38px; font-weight: 700;
+  }
+  .review-row .label-en {
+    font-family: var(--font-en);
+    font-size: 22px; opacity: 0.55; letter-spacing: 2px;
+    margin-top: 4px; text-transform: uppercase;
+  }
+  .review-row .value {
+    font-family: var(--font-en);
+    font-size: 72px; font-weight: 900; color: #fde68a;
+    line-height: 1;
+    letter-spacing: -1px;
+  }
+  .review-row .value .unit {
+    font-size: 34px; font-weight: 600; opacity: 0.8; margin-left: 6px;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div>
+    <div class="title">审稿信息</div>
+    <div class="sub-title">PEER REVIEW PROFILE</div>
+  </div>
+  <div class="review-list">
+    <div class="review-row">
+      <div>
+        <div class="label-cn">审稿周期</div>
+        <div class="label-en">Review Cycle</div>
+      </div>
+      <div class="value">{{reviewCycle}}</div>
+    </div>
+    <div class="review-row">
+      <div>
+        <div class="label-cn">首次决定</div>
+        <div class="label-en">Time to First Decision</div>
+      </div>
+      <div class="value">{{timeToFirstDecision}}<span class="unit">天</span></div>
+    </div>
+    <div class="review-row">
+      <div>
+        <div class="label-cn">录用率</div>
+        <div class="label-en">Acceptance Rate</div>
+      </div>
+      <div class="value">{{acceptanceRate}}<span class="unit">%</span></div>
+    </div>
+    <div class="review-row">
+      <div>
+        <div class="label-cn">年发文量</div>
+        <div class="label-en">Annual Volume</div>
+      </div>
+      <div class="value">{{annualVolume}}<span class="unit">篇</span></div>
+    </div>
+  </div>
+  <div class="footer-brand">{{journalName}}</div>
+</div>
+</body>
+</html>

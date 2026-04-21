@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_base.css"/>
+<style>
+  body { background: linear-gradient(145deg, #1e293b 0%, #1e40af 50%, #3b82f6 100%); }
+  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
+  .sub-title {
+    font-size: 32px; opacity: 0.78; text-align: center; letter-spacing: 3px;
+    margin-top: 8px; margin-bottom: 16px;
+  }
+  .tips-list { display: flex; flex-direction: column; gap: 28px; width: 100%; }
+  .tip-card {
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    padding: 36px 42px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 28px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  .tip-num {
+    flex: 0 0 auto;
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #fde047, #f97316);
+    color: #1e293b;
+    font-family: var(--font-en);
+    font-size: 48px;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 20px rgba(249, 115, 22, 0.4);
+  }
+  .tip-body {
+    flex: 1 1 0;
+    font-size: 36px;
+    font-weight: 500;
+    line-height: 1.45;
+    padding-top: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div>
+    <div class="title">投稿建议</div>
+    <div class="sub-title">SUBMISSION TIPS</div>
+  </div>
+  <div class="tips-list">
+    {{{tipsHtml}}}
+  </div>
+  <div class="footer-brand">{{journalName}}</div>
+</div>
+</body>
+</html>
