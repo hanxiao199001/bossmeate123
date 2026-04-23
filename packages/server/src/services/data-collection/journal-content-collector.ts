@@ -88,6 +88,10 @@ export interface JournalInfo {
   organizerName?: string | null;             // 主办单位
   supervisorName?: string | null;            // 主管单位
   synthetic?: boolean;                       // 是否为 AI 推荐的合成期刊（非数据库真实数据）
+  // V12 新增：高清封面 & Springer CDN 字段（供 cover-fetcher 使用）
+  id?: string;                               // DB journal.id（用于缓存写回）
+  coverUrlHd?: string | null;                // 高清封面 URL（Springer CDN 缓存）
+  springerJournalId?: string | null;         // Springer Link journal ID
 }
 
 export interface CollectionResult {
@@ -211,18 +215,30 @@ export async function collectJournalContent(params: {
     // 无缓存时尝试实时抓取（并回写 DB）
     if (!coverUrl) {
       try {
-        coverUrl = await fetchJournalCoverMultiSource(journal.name, journal.issn || undefined);
+        // 优先用英文名搜索 LetPub（LetPub 以英文名为主），中文名做兜底
+        const searchName = journal.nameEn || journal.name;
+        logger.info({ searchName, issn: journal.issn, journalId: journal.id }, "开始抓取期刊封面图");
+        coverUrl = await fetchJournalCoverMultiSource(searchName, journal.issn || undefined);
+
+        // 英文名没找到，用中文名再试一次
+        if (!coverUrl && journal.nameEn && journal.name !== journal.nameEn) {
+          coverUrl = await fetchJournalCoverMultiSource(journal.name, journal.issn || undefined);
+        }
+
         // 回写缓存
         if (coverUrl) {
+          logger.info({ coverUrl, journal: journal.name }, "期刊封面图抓取成功，回写 DB 缓存");
           await db.update(journals).set({
             coverImageUrl: coverUrl,
             coverImageSource: "realtime",
             coverFetchedAt: new Date(),
             updatedAt: new Date(),
           }).where(eq(journals.id, journal.id));
+        } else {
+          logger.warn({ journal: journal.name, searchName }, "期刊封面图未找到");
         }
-      } catch {
-        // 封面获取失败不影响主流程
+      } catch (err) {
+        logger.warn({ err, journal: journal.name }, "期刊封面图抓取异常");
       }
     }
 
@@ -397,6 +413,10 @@ export async function collectJournalContent(params: {
       scopeDescription: (journal as any).scopeDescription || null,
       coverUrl,
       dataCardUri,
+      // V12: 高清封面 & Springer CDN（供 cover-fetcher 使用）
+      id: journal.id,
+      coverUrlHd: (journal as any).coverUrlHd || null,
+      springerJournalId: (journal as any).springerJournalId || null,
       // V7: LetPub 图表数据
       ifHistory,
       pubVolumeHistory,

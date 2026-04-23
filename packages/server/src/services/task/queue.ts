@@ -54,10 +54,27 @@ export const contentQueueEvents = new QueueEvents("content-generation", {
   connection: getRedisConnection(),
 });
 
+/** 视频合成队列 */
+export const videoQueue = new Queue("video-generation", {
+  connection: getRedisConnection(),
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 10000 },
+    removeOnComplete: 50,
+    removeOnFail: 30,
+  },
+});
+
+export const videoQueueEvents = new QueueEvents("video-generation", {
+  connection: getRedisConnection(),
+});
+
 export async function closeQueues(): Promise<void> {
   await contentQueue.close();
   await crawlerQueue.close();
+  await videoQueue.close();
   await contentQueueEvents.close();
+  await videoQueueEvents.close();
   if (connection) {
     await connection.quit();
     connection = null;

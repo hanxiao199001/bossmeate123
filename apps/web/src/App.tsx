@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./hooks/useAuthStore";
+import { ToastContainer } from "./components/Toast";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 // 页面
 import LoginPage from "./pages/LoginPage";
@@ -14,6 +16,8 @@ import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import DataDashboardPage from "./pages/DataDashboardPage";
+import SalesPage from "./pages/SalesPage";
+import VideoCreationPage from "./pages/VideoCreationPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -23,7 +27,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      <ToastContainer />
+      <ErrorBoundary>
+        <Routes>
       {/* 公开页面 */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
@@ -116,6 +123,26 @@ export default function App() {
         }
       />
 
+      {import.meta.env.VITE_SALES_ENABLED === "true" && (
+        <Route
+          path="/sales"
+          element={
+            <ProtectedRoute>
+              <SalesPage />
+            </ProtectedRoute>
+          }
+        />
+      )}
+
+      <Route
+        path="/video/create"
+        element={
+          <ProtectedRoute>
+            <VideoCreationPage />
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/accounts"
         element={
@@ -127,6 +154,8 @@ export default function App() {
 
       {/* 404 */}
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        </Routes>
+      </ErrorBoundary>
+    </>
   );
 }

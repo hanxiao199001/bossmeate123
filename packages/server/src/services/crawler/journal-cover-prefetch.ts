@@ -18,7 +18,6 @@ import { journals } from "../../models/schema.js";
 import { eq, isNull, desc, and, or, ilike, sql } from "drizzle-orm";
 import {
   fetchJournalCoverFromLetPub,
-  fetchJournalCoverFromCrossRef,
 } from "./journal-image-crawler.js";
 
 export interface PrefetchResult {
@@ -187,16 +186,7 @@ export async function prefetchJournalCovers(
       );
       source = "letpub";
 
-      // 源 2：CrossRef / Springer
-      if (!coverUrl) {
-        coverUrl = await fetchJournalCoverFromCrossRef(
-          journal.name,
-          journal.issn || undefined
-        );
-        source = "crossref";
-      }
-
-      // 源 3：英文名再试 LetPub
+      // 源 2：英文名再试 LetPub
       if (!coverUrl && journal.nameEn) {
         coverUrl = await fetchJournalCoverFromLetPub(
           journal.nameEn,

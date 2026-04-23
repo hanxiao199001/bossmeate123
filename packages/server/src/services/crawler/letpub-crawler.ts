@@ -212,6 +212,12 @@ export class LetPubCrawler implements CrawlerAdapter {
 
       if (!name || name.length < 2) continue;
 
+      // 过滤 UI 元素和导航文本（不是真正的期刊名）
+      // 期刊名通常不超过80字符，不含冒号+大量空格分隔的列表
+      if (name.length > 80) continue;
+      if (/^[^:：]{0,10}[:：]\s/.test(name)) continue; // 如"大类学科: ..."、"期刊名:"
+      if (/全流程|投稿协助|套餐服务/.test(name)) continue;
+
       // 尝试提取 ISSN
       const issnMatch = row.match(/(\d{4}-\d{3}[\dxX])/);
       const issn = issnMatch ? issnMatch[1] : undefined;

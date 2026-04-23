@@ -14,10 +14,61 @@
  */
 
 import { execSync } from "node:child_process";
+import { createHmac, randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { rateLimiter } from "../rate-limiter/index.js";
 import { storage } from "../storage/index.js";
+
+/** 阿里云 RPC API 百分号编码（RFC 3986） */
+function aliyunEncode(s: string): string {
+  return encodeURIComponent(s).replace(/\*/g, "%2A");
+}
+
+/** 调用阿里云 NLS Meta API 换取 Token */
+async function fetchNlsToken(
+  akId: string,
+  akSecret: string
+): Promise<{ token: string; expireAt: number }> {
+  const params: Record<string, string> = {
+    AccessKeyId: akId,
+    Action: "CreateToken",
+    Format: "JSON",
+    RegionId: "cn-shanghai",
+    SignatureMethod: "HMAC-SHA1",
+    SignatureNonce: randomUUID(),
+    SignatureVersion: "1.0",
+    Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    Version: "2019-02-28",
+  };
+
+  const canonical = Object.keys(params)
+    .sort()
+    .map((k) => `${aliyunEncode(k)}=${aliyunEncode(params[k])}`)
+    .join("&");
+
+  const stringToSign = `GET&${aliyunEncode("/")}&${aliyunEncode(canonical)}`;
+  const signature = createHmac("sha1", `${akSecret}&`)
+    .update(stringToSign)
+    .digest("base64");
+
+  const url = `https://nls-meta.cn-shanghai.aliyuncs.com/?${canonical}&Signature=${aliyunEncode(signature)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`NLS Token API ${resp.status}: ${await resp.text()}`);
+  }
+  const data = (await resp.json()) as {
+    Token?: { Id: string; ExpireTime: number };
+    Message?: string;
+  };
+  if (!data.Token?.Id) {
+    throw new Error(`NLS Token 换取失败: ${data.Message || JSON.stringify(data)}`);
+  }
+  return {
+    token: data.Token.Id,
+    expireAt: data.Token.ExpireTime * 1000,
+  };
+}
 
 export interface TTSResult {
   url: string;           // storage 访问 URL
@@ -30,6 +81,8 @@ export interface TTSResult {
 export class TTSService {
   private readonly provider = env.TTS_PROVIDER;
   private readonly voice = env.TTS_VOICE_ID;
+  private tokenCache: { token: string; expireAt: number } | null = null;
+  private tokenPromise: Promise<string> | null = null;
 
   /**
    * 将文字合成语音并上传到 storage
@@ -45,13 +98,22 @@ export class TTSService {
     await rateLimiter.acquireOrWait("aliyun-tts");
 
     let audio: Buffer;
-    if (!env.TTS_API_KEY) {
-      logger.warn("TTS_API_KEY 未配置，生成占位静音音频");
-      audio = this.silentMp3(estimateDurationMs(text));
-    } else if (this.provider === "aliyun") {
-      audio = await this.synthesizeAliyun(text, voice, fmt);
-    } else {
+    const hasAliyunCreds =
+      env.ALIYUN_AK_ID && env.ALIYUN_AK_SECRET && env.ALIYUN_NLS_APPKEY;
+    const hasStaticToken = env.TTS_API_KEY && env.ALIYUN_NLS_APPKEY;
+
+    if (this.provider === "aliyun" && (hasAliyunCreds || hasStaticToken)) {
+      try {
+        audio = await this.synthesizeAliyun(text, voice, fmt);
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 TTS 合成失败，降级静音");
+        audio = this.silentMp3(estimateDurationMs(text));
+      }
+    } else if (this.provider === "azure" && env.TTS_API_KEY) {
       audio = await this.synthesizeAzure(text, voice, fmt);
+    } else {
+      logger.warn("TTS 凭证未配置，生成占位静音音频");
+      audio = this.silentMp3(estimateDurationMs(text));
     }
 
     const remotePath = `tts/${tenantId}/${Date.now()}.${fmt}`;
@@ -70,12 +132,50 @@ export class TTSService {
     };
   }
 
+  /** 取阿里云 NLS Token，带缓存和并发去重 */
+  private async getNlsToken(): Promise<string> {
+    const now = Date.now();
+    // 提前 1 小时刷新
+    if (this.tokenCache && this.tokenCache.expireAt > now + 60 * 60 * 1000) {
+      return this.tokenCache.token;
+    }
+    if (this.tokenPromise) return this.tokenPromise;
+
+    this.tokenPromise = (async () => {
+      try {
+        // 优先用 AccessKey 动态换取；fallback 到静态 TTS_API_KEY（调试用）
+        if (env.ALIYUN_AK_ID && env.ALIYUN_AK_SECRET) {
+          const { token, expireAt } = await fetchNlsToken(
+            env.ALIYUN_AK_ID,
+            env.ALIYUN_AK_SECRET
+          );
+          this.tokenCache = { token, expireAt };
+          logger.info(
+            { expireAt: new Date(expireAt).toISOString() },
+            "阿里云 NLS Token 已刷新"
+          );
+          return token;
+        }
+        if (env.TTS_API_KEY) return env.TTS_API_KEY;
+        throw new Error("阿里云 NLS 凭证未配置（需 ALIYUN_AK_ID + ALIYUN_AK_SECRET）");
+      } finally {
+        this.tokenPromise = null;
+      }
+    })();
+    return this.tokenPromise;
+  }
+
   // --- 阿里云 NLS 短文本合成 ---
   private async synthesizeAliyun(
     text: string,
     voice: string,
     fmt: "mp3" | "wav"
   ): Promise<Buffer> {
+    const appkey = env.ALIYUN_NLS_APPKEY;
+    if (!appkey) throw new Error("ALIYUN_NLS_APPKEY 未配置");
+
+    const token = await this.getNlsToken();
+
     // 阿里云 NLS TTS 一次上限 300 字符，超出需分段合成
     const chunks = this.splitText(text, 280);
     const buffers: Buffer[] = [];
@@ -83,14 +183,13 @@ export class TTSService {
     for (const chunk of chunks) {
       const url =
         "https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/tts" +
-        `?text=${encodeURIComponent(chunk)}` +
+        `?appkey=${encodeURIComponent(appkey)}` +
+        `&text=${encodeURIComponent(chunk)}` +
         `&voice=${encodeURIComponent(voice)}` +
         `&format=${fmt}`;
 
       const resp = await fetch(url, {
-        headers: {
-          "X-NLS-Token": env.TTS_API_KEY!,
-        },
+        headers: { "X-NLS-Token": token },
       });
       if (!resp.ok) {
         const errText = await resp.text().catch(() => "");

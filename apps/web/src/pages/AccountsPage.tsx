@@ -24,6 +24,8 @@ const PLATFORM_INFO: Record<string, { name: string; icon: string; color: string 
   toutiao: { name: "头条号", icon: "📱", color: "bg-red-100 text-red-700" },
   zhihu: { name: "知乎", icon: "🔍", color: "bg-blue-100 text-blue-600" },
   xiaohongshu: { name: "小红书", icon: "📕", color: "bg-pink-100 text-pink-700" },
+  douyin: { name: "抖音", icon: "🎵", color: "bg-gray-100 text-gray-800" },
+  wechat_video: { name: "视频号", icon: "📹", color: "bg-green-100 text-green-600" },
 };
 
 const CREDENTIAL_FIELDS: Record<string, Array<{ key: string; label: string; type: "input" | "textarea" | "password"; placeholder: string; required: boolean }>> = {
@@ -43,6 +45,16 @@ const CREDENTIAL_FIELDS: Record<string, Array<{ key: string; label: string; type
   ],
   xiaohongshu: [
     { key: "cookie", label: "Cookie", type: "textarea", placeholder: "浏览器登录小红书后获取的Cookie", required: true },
+  ],
+  douyin: [
+    { key: "clientKey", label: "Client Key", type: "input", placeholder: "抖音开放平台 Client Key", required: true },
+    { key: "clientSecret", label: "Client Secret", type: "password", placeholder: "抖音开放平台 Client Secret", required: true },
+    { key: "accessToken", label: "Access Token", type: "textarea", placeholder: "OAuth2 授权获取的 access_token", required: true },
+    { key: "openId", label: "Open ID", type: "input", placeholder: "用户 open_id（授权回调返回）", required: false },
+  ],
+  wechat_video: [
+    { key: "appId", label: "AppID", type: "input", placeholder: "公众号 AppID（需绑定视频号）", required: true },
+    { key: "appSecret", label: "AppSecret", type: "password", placeholder: "公众号 AppSecret", required: true },
   ],
 };
 
@@ -80,6 +92,7 @@ export default function AccountsPage() {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [accountName, setAccountName] = useState("");
   const [groupName, setGroupName] = useState("");
+  const [isCertified, setIsCertified] = useState(false); // 已认证(full capability)
   const [adding, setAdding] = useState(false);
   const [addMsg, setAddMsg] = useState("");
 
@@ -147,6 +160,8 @@ export default function AccountsPage() {
         accountName: accountName.trim(),
         credentials: formData,
         groupName: groupName.trim() || undefined,
+        // 仅微信需要这个字段；默认 draft_only 保守兜底
+        capability: selectedPlatform === "wechat" && isCertified ? "full" : "draft_only",
       });
 
       if (res.data) {
@@ -154,6 +169,7 @@ export default function AccountsPage() {
         setShowAddForm(false);
         setAccountName("");
         setGroupName("");
+        setIsCertified(false);
         const newFields = CREDENTIAL_FIELDS[selectedPlatform] || [];
         const resetFormData: Record<string, string> = {};
         newFields.forEach(f => {
@@ -348,6 +364,27 @@ export default function AccountsPage() {
                 </div>
               </div>
             </div>
+
+            {/* 认证状态（仅微信显示） */}
+            {selectedPlatform === "wechat" && (
+              <div className="mb-6 border-t border-gray-200 pt-4">
+                <label className="flex items-start gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={isCertified}
+                    onChange={(e) => setIsCertified(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium text-gray-800">此账号已通过微信认证（可自动群发）</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">
+                      未认证订阅号只能建草稿，需手动发送。勾选后系统会尝试调用 freepublish 接口自动群发；
+                      若后续被微信拒（errcode 48001），系统会自动降级为草稿箱模式，不丢内容。
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
 
             {/* 操作按钮 */}
             <div className="flex gap-3">

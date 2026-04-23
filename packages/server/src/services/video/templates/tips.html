@@ -1,60 +1,136 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="_base.css"/>
+<meta charset="utf-8">
 <style>
-  body { background: linear-gradient(145deg, #1e293b 0%, #1e40af 50%, #3b82f6 100%); }
-  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
-  .sub-title {
-    font-size: 32px; opacity: 0.78; text-align: center; letter-spacing: 3px;
-    margin-top: 8px; margin-bottom: 16px;
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1920px; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, #1a0000 0%, #3b1515 45%, #0d0d0d 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", sans-serif;
+    color: white;
   }
-  .tips-list { display: flex; flex-direction: column; gap: 28px; width: 100%; }
-  .tip-card {
-    display: flex;
-    gap: 28px;
-    align-items: flex-start;
-    padding: 36px 42px;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 28px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+  .deco-1 { position: absolute; top: 220px; right: -160px;
+    width: 540px; height: 540px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(198,40,40,0.18), transparent 70%); }
+  .deco-2 { position: absolute; bottom: 420px; left: -140px;
+    width: 460px; height: 460px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,152,0,0.14), transparent 70%); }
+  .top-bar { position: absolute; top: 0; left: 0; right: 0;
+    height: 8px; background: linear-gradient(90deg, #ef5350, #ff9800, #ef5350); }
+  .header {
+    padding: 96px 0 42px;
+    background: linear-gradient(180deg, rgba(26,0,0,0.7), transparent);
+    text-align: center;
   }
+  .title {
+    font-size: 62px; font-weight: 900; letter-spacing: 12px;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .subtitle {
+    font-size: 32px; color: #ef9a9a;
+    margin-top: 20px; letter-spacing: 6px; opacity: 0.85;
+  }
+  .sub-badge {
+    text-align: center; margin-top: 14px;
+    font-size: 26px; color: #bdbdbd; letter-spacing: 3px;
+  }
+  .tips-list { padding: 34px 50px 0; }
+  .tip {
+    margin-bottom: 26px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+    border-radius: 22px;
+    padding: 32px 36px;
+    display: flex; align-items: center; gap: 32px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.3);
+    border-left: 6px solid;
+    position: relative; overflow: hidden;
+  }
+  .tip-1 { border-left-color: #e91e63; }
+  .tip-1::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(233,30,99,0.08)); }
+  .tip-2 { border-left-color: #ff9800; }
+  .tip-2::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255,152,0,0.08)); }
+  .tip-3 { border-left-color: #009688; }
+  .tip-3::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(0,150,136,0.08)); }
+  .tip-4 { border-left-color: #3f51b5; }
+  .tip-4::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(63,81,181,0.08)); }
   .tip-num {
-    flex: 0 0 auto;
-    width: 80px; height: 80px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #fde047, #f97316);
-    color: #1e293b;
-    font-family: var(--font-en);
-    font-size: 48px;
-    font-weight: 900;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 8px 20px rgba(249, 115, 22, 0.4);
+    flex: 0 0 90px; height: 90px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 48px; font-weight: 900; color: white;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+    z-index: 1;
   }
-  .tip-body {
-    flex: 1 1 0;
-    font-size: 36px;
-    font-weight: 500;
-    line-height: 1.45;
-    padding-top: 10px;
+  .tip-1 .tip-num { background: linear-gradient(135deg, #e91e63, #ad1457); }
+  .tip-2 .tip-num { background: linear-gradient(135deg, #ff9800, #e65100); }
+  .tip-3 .tip-num { background: linear-gradient(135deg, #009688, #00695c); }
+  .tip-4 .tip-num { background: linear-gradient(135deg, #3f51b5, #283593); }
+  .tip-content { flex: 1; z-index: 1; }
+  .tip-title {
+    font-size: 34px; font-weight: 700; letter-spacing: 3px; margin-bottom: 10px;
   }
+  .tip-1 .tip-title { color: #f8bbd0; }
+  .tip-2 .tip-title { color: #ffcc80; }
+  .tip-3 .tip-title { color: #80cbc4; }
+  .tip-4 .tip-title { color: #9fa8da; }
+  .tip-body { font-size: 28px; color: #e0e0e0; line-height: 1.5; }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: 470px;
+    text-align: center;
+  }
+  .footer-line {
+    width: 600px; height: 2px; margin: 0 auto 22px;
+    background: linear-gradient(90deg, transparent, #ef5350, transparent);
+  }
+  .footer-text { font-size: 26px; color: #9e9e9e; letter-spacing: 3px; }
 </style>
 </head>
 <body>
-<div class="stage">
-  <div>
-    <div class="title">投稿建议</div>
-    <div class="sub-title">SUBMISSION TIPS</div>
+  <div class="deco-1"></div>
+  <div class="deco-2"></div>
+  <div class="top-bar"></div>
+  <div class="header">
+    <div class="title">投 稿 建 议</div>
+    <div class="subtitle">Submission Tips</div>
   </div>
+  <div class="sub-badge">{{badge}}</div>
   <div class="tips-list">
-    {{{tipsHtml}}}
+    <div class="tip tip-1">
+      <div class="tip-num">1</div>
+      <div class="tip-content">
+        <div class="tip-title">选 题 匹 配</div>
+        <div class="tip-body">紧贴{{discipline}}核心研究方向，避免偏题</div>
+      </div>
+    </div>
+    <div class="tip tip-2">
+      <div class="tip-num">2</div>
+      <div class="tip-content">
+        <div class="tip-title">格 式 规 范</div>
+        <div class="tip-body">图表分辨率 ≥300 DPI，严格遵守作者须知</div>
+      </div>
+    </div>
+    <div class="tip tip-3">
+      <div class="tip-num">3</div>
+      <div class="tip-content">
+        <div class="tip-title">参 考 文 献</div>
+        <div class="tip-body">格式须与期刊要求完全一致，勿用自动工具</div>
+      </div>
+    </div>
+    <div class="tip tip-4">
+      <div class="tip-num">4</div>
+      <div class="tip-content">
+        <div class="tip-title">语 言 润 色</div>
+        <div class="tip-body">投稿前建议委托专业机构进行学术英语润色</div>
+      </div>
+    </div>
   </div>
-  <div class="footer-brand">{{journalName}}</div>
-</div>
+  <div class="footer">
+    <div class="footer-line"></div>
+    <div class="footer-text">投 稿 成 功 四 大 关 键</div>
+  </div>
 </body>
 </html>

@@ -11,7 +11,7 @@
 
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
-import { journals, dailyRecommendations, tenants } from "../../models/schema.js";
+import { journals, dailyRecommendations, tenants, keywordHistory } from "../../models/schema.js";
 import { eq, and, desc, or, ilike } from "drizzle-orm";
 import { getTrendReport, type TrendLabel } from "../agents/keyword-trend.js";
 import { chat } from "../ai/chat-service.js";
@@ -132,7 +132,7 @@ export async function generateDailyRecommendations(
   // Step 2: 获取趋势数据
   const trendReport = await getTrendReport(tenantId);
 
-  const allCandidates = [
+  let allCandidates = [
     ...trendReport.exploding.map((t) => ({ ...t, priority: 3 })),
     ...trendReport.rising.map((t) => ({ ...t, priority: 2 })),
     ...trendReport.newKeywords.map((t) => ({ ...t, priority: 1 })),
@@ -141,6 +141,43 @@ export async function generateDailyRecommendations(
       if (a.priority !== b.priority) return b.priority - a.priority;
       return b.currentScore - a.currentScore;
     });
+
+  // Fallback: 首日冷启动，无跨天对比数据 → 取当天 keyword_history heat_score 前 20
+  // 触发条件：trendReport 三个分类合计为 0（意味着 keyword_history 只有 1 天快照，无法算 score7d）
+  if (allCandidates.length === 0) {
+    const seedRows = await db
+      .select()
+      .from(keywordHistory)
+      .where(
+        and(
+          eq(keywordHistory.tenantId, tenantId),
+          eq(keywordHistory.snapshotDate, today)
+        )
+      )
+      .orderBy(desc(keywordHistory.heatScore))
+      .limit(20);
+
+    if (seedRows.length > 0) {
+      logger.info(
+        { tenantId, date: today, count: seedRows.length },
+        "首日冷启动：用当天 keyword_history heat_score 前 20 作候选"
+      );
+      allCandidates = seedRows.map((k) => ({
+        keyword: k.keyword,
+        trend: "new" as const,
+        score7d: 0,
+        score30d: 0,
+        currentScore: k.heatScore ?? 0,
+        avgScore7d: k.heatScore ?? 0,
+        avgScore30d: k.heatScore ?? 0,
+        sparkline: [k.heatScore ?? 0],
+        platforms: (k.platforms as string[]) ?? [],
+        category: k.category ?? null,
+        firstSeenDaysAgo: 0,
+        priority: 1,
+      }));
+    }
+  }
 
   // Step 3: 按学科偏好过滤
   let filteredCandidates = allCandidates;
@@ -186,7 +223,8 @@ export async function generateDailyRecommendations(
     const categoryCode = topic.category || inferCategoryFromKeyword(topic.keyword) || "general";
     const template = DISCIPLINE_TEMPLATES[categoryCode] || DEFAULT_TEMPLATE;
 
-    const matchedJournals = await db
+    // 先查本租户期刊，如果没有则查全局期刊
+    let matchedJournals = await db
       .select()
       .from(journals)
       .where(
@@ -200,6 +238,21 @@ export async function generateDailyRecommendations(
       )
       .orderBy(desc(journals.impactFactor))
       .limit(3);
+
+    if (matchedJournals.length === 0) {
+      // Fallback: 查全局期刊（跨租户）
+      matchedJournals = await db
+        .select()
+        .from(journals)
+        .where(
+          or(
+            ilike(journals.discipline, `%${discipline}%`),
+            ilike(journals.name, `%${topic.keyword}%`)
+          )
+        )
+        .orderBy(desc(journals.impactFactor))
+        .limit(3);
+    }
 
     const heatChange =
       topic.score7d > 0

@@ -32,10 +32,14 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [convSkillType, setConvSkillType] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesTopRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // skillType 优先从当前对话读取，其次从 URL 参数，最后默认 general
   const urlSkill = searchParams.get("skill");
@@ -73,13 +77,18 @@ export default function ChatPage() {
     if (!currentConvId) return;
     async function loadMessages() {
       try {
-        const res = await api.get<Message[]>(`/chat/conversations/${currentConvId}/messages`);
+        const res = await api.get<{
+          items: Message[];
+          hasMore: boolean;
+          oldestId?: string;
+        }>(`/chat/conversations/${currentConvId}/messages`);
         if (res.data) {
-          setMessages(res.data);
+          setMessages(res.data.items);
+          setHasMore(res.data.hasMore);
           setTimeout(scrollToBottom, 100);
 
           // 如果只有 user 消息没有 assistant 回复（推荐创建后刷新），自动触发发送
-          const loadedMessages = res.data;
+          const loadedMessages = res.data.items;
           if (
             loadedMessages &&
             loadedMessages.length === 1 &&
@@ -202,10 +211,63 @@ export default function ChatPage() {
     await sendMessage(userContent, convId);
   }
 
+  // 加载更多消息（向上分页）
+  async function loadMoreMessages() {
+    if (!currentConvId || !hasMore || messages.length === 0 || loadingMore) return;
+
+    setLoadingMore(true);
+    try {
+      const oldestId = messages[0].id;
+      const res = await api.get<{
+        items: Message[];
+        hasMore: boolean;
+        oldestId?: string;
+      }>(`/chat/conversations/${currentConvId}/messages?before=${oldestId}&limit=50`);
+
+      if (res.data && res.data.items.length > 0) {
+        // 保持滚动位置
+        const container = messagesContainerRef.current;
+        const scrollHeight = container?.scrollHeight || 0;
+
+        setMessages((prev) => [...res.data!.items, ...prev]);
+        setHasMore(res.data.hasMore);
+
+        // 恢复滚动位置
+        setTimeout(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = newScrollHeight - scrollHeight;
+          }
+        }, 0);
+      }
+    } catch (err: any) {
+      console.error("加载历史消息失败:", err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  // 监听滚动到顶部事件
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      // 当滚动到顶部距离小于100px时，加载更多
+      if (container.scrollTop < 100 && hasMore && !loadingMore) {
+        loadMoreMessages();
+      }
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [hasMore, loadingMore, currentConvId, messages]);
+
   // 切换对话
   function switchConversation(convId: string) {
     setCurrentConvId(convId);
     setMessages([]);
+    setHasMore(false);
     // 同步 skillType
     const conv = conversations.find((c) => c.id === convId);
     setConvSkillType(conv?.skillType || null);
@@ -313,8 +375,23 @@ export default function ChatPage() {
         </nav>
 
         {/* 消息区域 */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="flex-1 overflow-y-auto px-4 py-4" ref={messagesContainerRef}>
           <div className="max-w-3xl mx-auto space-y-4">
+            {/* 加载更多提示 */}
+            {hasMore && (
+              <div className="flex justify-center">
+                <button
+                  onClick={loadMoreMessages}
+                  disabled={loadingMore}
+                  className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-50 transition-colors"
+                >
+                  {loadingMore ? "加载中..." : "↑ 加载更早的消息"}
+                </button>
+              </div>
+            )}
+
+            <div ref={messagesTopRef} />
+
             {messages.length === 0 && !loading && (
               <SkillEmptyState
                 skillType={skillType}

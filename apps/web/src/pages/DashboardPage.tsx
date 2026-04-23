@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import SmartInput from "../components/SmartInput";
@@ -8,7 +8,7 @@ import { api } from "../utils/api";
 
 interface AgentInfo { name: string; displayName: string; status: string }
 interface PlanTask { id: string; status: string; type: string; topic: string; platform: string; scheduledPublishAt: string }
-interface ReviewItem { id: string; topic: string; platform: string; type: string; createdAt: string; summary?: string }
+interface ReviewItem { id: string; topic: string; status?: string; platform: string; type: string; createdAt: string; summary?: string }
 interface Recommendation {
   id: string; keyword: string; trend: string; heatChange: string;
   relatedJournals: Array<{ name: string; impactFactor: number | null; partition: string | null }>;
@@ -127,8 +127,15 @@ function FactoryHero() {
 
   const stDot: Record<string, string> = { running: "bg-green-500", idle: "bg-gray-300", error: "bg-red-500", paused: "bg-yellow-400" };
 
-  // 轮询进度
-  const pollRef = { current: 0 as any };
+  // 轮询进度：必须用 useRef，否则每次 render 都会新建对象，clearInterval 指向错乱
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const launchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 组件卸载时清理所有定时器，避免泄漏与状态竞争
+  useEffect(() => () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (launchTimeoutRef.current) { clearTimeout(launchTimeoutRef.current); launchTimeoutRef.current = null; }
+  }, []);
 
   async function handleLaunch() {
     setLaunching(true);
@@ -143,6 +150,10 @@ function FactoryHero() {
       { step: "read-plan", label: "读取计划", status: "pending" },
       { step: "queue-tasks", label: "任务排队", status: "pending" },
     ]);
+
+    // 先清理上一次的定时器（用户连续点击启动时）
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (launchTimeoutRef.current) { clearTimeout(launchTimeoutRef.current); launchTimeoutRef.current = null; }
 
     try {
       // 1. 触发执行（立即返回）
@@ -165,7 +176,8 @@ function FactoryHero() {
 
           // 执行完成
           if (d.done) {
-            clearInterval(pollRef.current);
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            if (launchTimeoutRef.current) { clearTimeout(launchTimeoutRef.current); launchTimeoutRef.current = null; }
             setLaunching(false);
 
             if (d.success) {
@@ -184,13 +196,15 @@ function FactoryHero() {
         }
       }, 500);
 
-      // 安全超时：10分钟后停止轮询（含数据抓取，耗时较长）
-      setTimeout(() => {
+      // 安全超时：10分钟后停止轮询（含数据抓取，耗时较长）；timeout 句柄放进 ref 以便 unmount 清理
+      launchTimeoutRef.current = setTimeout(() => {
         if (pollRef.current) {
           clearInterval(pollRef.current);
+          pollRef.current = null;
           setLaunching(false);
           fetchData();
         }
+        launchTimeoutRef.current = null;
       }, 600_000);
 
     } catch (err: any) {
@@ -370,11 +384,12 @@ function FactoryHero() {
   );
 }
 
-// ============ 2. 待审核队列 ============
+// ============ 2. 最近内容 + 内容快捷入口 ============
 
 function PendingReviewQueue() {
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [loaded, setLoaded] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -383,17 +398,20 @@ function PendingReviewQueue() {
         setItems(res.data?.items || []);
         setTotal(res.data?.count || 0);
       })
-      .catch(() => {});
+      .catch((err) => { console.warn("内容查询失败:", err); })
+      .finally(() => setLoaded(true));
   }, []);
 
-  if (total === 0) return null;
+  if (!loaded) return null;
 
-  const platformColors: Record<string, string> = {
-    xiaohongshu: "bg-red-50 text-red-600",
-    zhihu: "bg-blue-50 text-blue-600",
-    wechat: "bg-green-50 text-green-600",
-    douyin: "bg-gray-800 text-white",
-    toutiao: "bg-red-50 text-red-500",
+  const statusLabels: Record<string, string> = {
+    draft: "草稿", reviewing: "待审核", approved: "已通过", published: "已发布",
+  };
+  const statusColors: Record<string, string> = {
+    draft: "bg-gray-100 text-gray-600",
+    reviewing: "bg-amber-100 text-amber-700",
+    approved: "bg-green-100 text-green-700",
+    published: "bg-blue-100 text-blue-700",
   };
   const platformNames: Record<string, string> = {
     xiaohongshu: "小红书", zhihu: "知乎", wechat: "公众号", douyin: "抖音", toutiao: "头条",
@@ -403,38 +421,55 @@ function PendingReviewQueue() {
 
   return (
     <div className="mb-6">
+      {/* 标题 — 始终显示 */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-bold text-gray-900">待你审核</h2>
-          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded-md">{total}</span>
+          <h2 className="text-sm font-bold text-gray-900">最近内容</h2>
+          {total > 0 && (
+            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-md">{total}</span>
+          )}
         </div>
         <button
-          onClick={() => navigate("/content?status=pending_review")}
+          onClick={() => navigate("/content")}
           className="text-xs text-gray-400 hover:text-blue-500 transition"
         >
-          查看全部 &rarr;
+          内容管理 &rarr;
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {displayed.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => navigate(`/content?status=pending_review&id=${item.id}`)}
-            className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-amber-300 hover:shadow-sm transition-all group"
-          >
-            <p className="text-sm font-medium text-gray-800 line-clamp-2 mb-2 group-hover:text-amber-700 transition-colors">
-              {item.topic}
-            </p>
-            <div className="flex items-center gap-2">
-              <span className={`text-xs px-1.5 py-0.5 rounded ${platformColors[item.platform] || "bg-gray-100 text-gray-500"}`}>
-                {platformNames[item.platform] || item.platform}
-              </span>
-              <span className="text-xs text-gray-300">{item.type === "article" ? "图文" : "视频"}</span>
-            </div>
-          </button>
-        ))}
-      </div>
+      {/* 有内容时显示卡片 */}
+      {total > 0 ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {displayed.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => navigate(`/content/${item.id}`)}
+              className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-blue-300 hover:shadow-sm transition-all group"
+            >
+              <p className="text-sm font-medium text-gray-800 line-clamp-2 mb-2 group-hover:text-blue-700 transition-colors">
+                {item.topic}
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-xs px-1.5 py-0.5 rounded ${statusColors[item.status || "draft"] || "bg-gray-100 text-gray-500"}`}>
+                  {statusLabels[item.status || "draft"] || item.status}
+                </span>
+                <span className="text-xs text-gray-300">{item.type === "article" ? "图文" : "视频"}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        /* 没有内容时显示空状态 */
+        <div
+          className="bg-white rounded-xl border border-dashed border-gray-200 p-6 text-center cursor-pointer hover:border-blue-300 hover:bg-blue-50/30 transition-all"
+          onClick={() => navigate("/content")}
+        >
+          <div className="text-2xl mb-2">📭</div>
+          <p className="text-sm text-gray-500">
+            暂无内容，点击「一键启动」或「开始图文创作」生成第一篇图文
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -627,42 +662,62 @@ function WorkflowSection() {
           </div>
         </Link>
 
-        {/* AI 助手 */}
-        <Link
-          to="/chat"
-          className="group bg-white rounded-2xl border border-gray-200 hover:border-emerald-400 hover:shadow-md transition-all overflow-hidden"
-        >
-          <div className="px-5 pt-5 pb-3 flex items-center gap-3">
-            <span className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-xl">&#x1F916;</span>
-            <div>
-              <h3 className="text-base font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">AI 助手</h3>
-              <p className="text-xs text-gray-400">智能问答 · 随时可用</p>
-            </div>
-          </div>
-          <div className="px-5 pb-4 space-y-1">
-            {[
-              { icon: "\u2713", label: "知识问答", desc: "基于知识库回答" },
-              { icon: "\u2713", label: "内容总结", desc: "长文提炼要点" },
-              { icon: "\u2713", label: "翻译润色", desc: "中英互译优化" },
-              { icon: "\u2713", label: "头脑风暴", desc: "选题灵感发散" },
-              { icon: "\u2713", label: "数据解读", desc: "分析报表数据" },
-              { icon: "\u2713", label: "文案改写", desc: "调整风格调性" },
-              { icon: "\u2713", label: "竞品分析", desc: "拆解对手策略" },
-              { icon: "\u2713", label: "自由对话", desc: "任何工作问题" },
-            ].map((item, i) => (
-              <div key={i} className="flex items-center gap-2.5 py-1">
-                <span className="w-5 h-5 rounded-full bg-emerald-50 text-emerald-600 text-xs flex items-center justify-center shrink-0">
-                  {item.icon}
-                </span>
-                <span className="text-sm text-gray-700">{item.label}</span>
-                <span className="text-xs text-gray-300 hidden lg:inline">— {item.desc}</span>
+        {/* AI 销售对话（占据原 AI 助手位置，作为第一入口） */}
+        {(() => {
+          const salesEnabled = import.meta.env.VITE_SALES_ENABLED === "true";
+          const cardBody = (
+            <>
+              <span className="absolute top-3 right-3 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                Beta · 即将上线
+              </span>
+              <div className="px-5 pt-5 pb-3 flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center text-xl">&#x1F3AF;</span>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900 group-hover:text-rose-600 transition-colors">AI 销售对话</h3>
+                  <p className="text-xs text-gray-400">管理客户沟通 · 实时接管</p>
+                </div>
               </div>
-            ))}
-          </div>
-          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
-            <span className="text-sm text-emerald-600 font-medium group-hover:underline">打开 AI 助手 &rarr;</span>
-          </div>
-        </Link>
+              <div className="px-5 pb-4 space-y-1">
+                {[
+                  { label: "线索收集", desc: "多渠道统一入口" },
+                  { label: "AI 自动回复", desc: "拟人化『小王老师』" },
+                  { label: "一键接管", desc: "关键节点真人上场" },
+                  { label: "未读提醒", desc: "红点 + 需关注徽章" },
+                  { label: "意向评分", desc: "实时排序跟进" },
+                  { label: "全量对话", desc: "入库可回溯" },
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-2.5 py-1">
+                    <span className="w-5 h-5 rounded-full bg-rose-50 text-rose-600 text-xs flex items-center justify-center shrink-0">
+                      &#x2713;
+                    </span>
+                    <span className="text-sm text-gray-700">{item.label}</span>
+                    <span className="text-xs text-gray-300 hidden lg:inline">— {item.desc}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+                <span className="text-sm text-rose-600 font-medium group-hover:underline">
+                  {salesEnabled ? "打开销售管理台 →" : "敬请期待"}
+                </span>
+              </div>
+            </>
+          );
+          return salesEnabled ? (
+            <Link
+              to="/sales"
+              className="relative group bg-white rounded-2xl border border-gray-200 hover:border-rose-400 hover:shadow-md transition-all overflow-hidden"
+            >
+              {cardBody}
+            </Link>
+          ) : (
+            <div
+              className="relative group bg-white rounded-2xl border border-gray-200 overflow-hidden cursor-not-allowed opacity-70"
+              aria-disabled="true"
+            >
+              {cardBody}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -674,9 +729,11 @@ function ToolGrid() {
   const tools = [
     { to: "/keywords", icon: "&#x1F4CA;", label: "关键词库", desc: "热词趋势" },
     { to: "/content", icon: "&#x1F4C2;", label: "内容管理", desc: "审核发布" },
+    { to: "/chat", icon: "&#x1F916;", label: "AI 助手", desc: "通用对话" },
     { to: "/knowledge", icon: "&#x1F4D6;", label: "知识库", desc: "语义搜索" },
     { to: "/dashboard", icon: "&#x1F4C8;", label: "数据看板", desc: "统计分析" },
     { to: "/accounts", icon: "&#x1F4F1;", label: "账号管理", desc: "多平台" },
+    { to: "/video/create", icon: "&#x1F3AC;", label: "图片转视频", desc: "产品宣传" },
     { to: "/settings", icon: "&#x2699;&#xFE0F;", label: "系统设置", desc: "模型配置" },
   ];
 

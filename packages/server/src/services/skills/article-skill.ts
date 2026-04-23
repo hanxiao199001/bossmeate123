@@ -18,6 +18,7 @@ import { modelRouter } from "../ai/model-router.js";
 import { publishToAccounts, type PublishResult } from "../publisher/index.js";
 import { collectJournalContent, type CollectionResult, type JournalInfo } from "../data-collection/journal-content-collector.js";
 import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGeneratedContent } from "./journal-template.js";
+import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
@@ -980,11 +981,9 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
         logger.debug({ err: e, journal: journal.name }, "AI 期刊封面抓取失败");
       }
 
-      // 生成 dataCardUri 备用图
-      if (!journal.coverUrl) {
-        const svg = generateJournalDataCard(journal);
-        journal.dataCardUri = svgToDataUri(svg);
-      }
+      // 始终生成 dataCardUri 备用图（即使有 coverUrl 也作为 onerror 回退）
+      const svg = generateJournalDataCard(journal);
+      journal.dataCardUri = svgToDataUri(svg);
 
       logger.info({ journal: journal.nameEn || journal.name, if: journal.impactFactor, hasCover: !!journal.coverUrl }, "AI 推荐期刊数据生成完成");
       return journal;
@@ -1061,8 +1060,8 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
       }
     }
 
-    // 1.6 如果还是没有封面，生成数据卡片作为备用
-    if (!journal.coverUrl && !journal.dataCardUri) {
+    // 1.6 始终生成数据卡片作为备用（coverUrl 加载失败时 onerror 回退）
+    {
       const svg = generateJournalDataCard(journal);
       journal.dataCardUri = svgToDataUri(svg);
     }
@@ -1100,7 +1099,9 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
     }
 
     // 3. 模板组装完整文章 HTML
-    const articleBody = generateJournalArticleHtml(
+    // 默认走微信专用 table 模板（当前产品主要分发渠道是微信公众号）
+    // web 版模板保留用于前端预览（网页端可渲染 flex/grid）
+    const articleBody = await generateWechatJournalArticleHtml(
       journal,
       aiContent,
       journalData.abstracts

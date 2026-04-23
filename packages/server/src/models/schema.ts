@@ -217,7 +217,8 @@ export const journals = pgTable(
     jcrSubjects: text("jcr_subjects"), // JCR学科分区详情 JSON 如 [{"subject":"Oncology","rank":"Q1","position":"9/100"}]
     topInstitutions: text("top_institutions"), // 国内投稿活跃机构 JSON
     scopeDescription: text("scope_description"), // 收稿范围描述（AI生成后缓存）
-    coverImageUrl: text("cover_image_url"), // 期刊封面图 URL（缓存）
+    coverImageUrl: text("cover_image_url"), // 期刊封面图 URL（LetPub 缩略图缓存）
+    coverUrlHd: text("cover_url_hd"), // 高清封面 URL（Springer CDN 316×419 等）
     coverImageSource: varchar("cover_image_source", { length: 50 }), // 封面来源
     coverFetchedAt: timestamp("cover_fetched_at"), // 封面抓取时间
     springerFetchedAt: timestamp("springer_fetched_at"), // Springer 数据抓取时间
@@ -653,6 +654,9 @@ export const platformAccounts = pgTable(
     // xiaohongshu: { cookie, token }
     status: varchar("status", { length: 20 }).notNull().default("active"), // active | disabled | expired
     isVerified: boolean("is_verified").default(false),
+    // 发布能力: full = 全流程自动群发；draft_only = 仅建草稿，需人工到公众号后台手动发送
+    // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
+    capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
     metadata: jsonb("metadata").default({}), // 扩展信息
     lastPublishedAt: timestamp("last_published_at"),
@@ -782,6 +786,80 @@ export const peerContentCrawls = pgTable(
   },
   (table) => [
     uniqueIndex("idx_pcc_tenant_hash").on(table.tenantId, table.contentHash),
+  ]
+);
+
+// ============ AI 销售模块 (V3) ============
+
+/** 潜在客户 / 意向线索 */
+export const leads = pgTable(
+  "leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    /** 来源渠道: comment_wechat | comment_zhihu | dm | wechat_work | manual ... */
+    channel: varchar("channel", { length: 50 }).notNull(),
+    /** 渠道方原始ID（用于去重） */
+    externalId: varchar("external_id", { length: 200 }),
+    /** 展示名 */
+    name: varchar("name", { length: 200 }),
+    /** 企业微信 userId / openId */
+    contactId: varchar("contact_id", { length: 200 }),
+    phone: varchar("phone", { length: 50 }),
+    email: varchar("email", { length: 200 }),
+    /** 触达内容 */
+    sourceContentId: uuid("source_content_id").references(() => contents.id),
+    /** 客户画像 JSON (学科/学历/意向期刊等) */
+    profile: jsonb("profile").default({}),
+    /** 销售阶段: new | contacted | qualified | negotiating | won | lost | need_human */
+    stage: varchar("stage", { length: 30 }).notNull().default("new"),
+    /** 意向分 0-100 */
+    intentScore: integer("intent_score").default(0),
+    assignedUserId: uuid("assigned_user_id").references(() => users.id),
+    lastMessageAt: timestamp("last_message_at"),
+    /** 对话模式：ai | human */
+    handoverMode: varchar("handover_mode", { length: 10 }).notNull().default("ai"),
+    /** 真人接管者的 userId */
+    takenOverBy: uuid("taken_over_by").references(() => users.id),
+    /** 接管时间戳 */
+    takenOverAt: timestamp("taken_over_at"),
+    /** 销售最后一次查看该 lead 的时间（用于计算未读数） */
+    lastReadAt: timestamp("last_read_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_leads_tenant").on(table.tenantId),
+    index("idx_leads_stage").on(table.stage),
+    uniqueIndex("idx_leads_channel_external").on(
+      table.tenantId,
+      table.channel,
+      table.externalId
+    ),
+  ]
+);
+
+/** 销售对话消息（与 conversations 区分：这是客户↔AI Sales 的对外沟通） */
+export const salesMessages = pgTable(
+  "sales_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id).notNull(),
+    /** inbound (客户发来) | outbound (AI/人工回复) */
+    direction: varchar("direction", { length: 10 }).notNull(),
+    /** text | image | card | link */
+    kind: varchar("kind", { length: 20 }).notNull().default("text"),
+    content: text("content").notNull(),
+    /** AI 生成标记: true 表示此条由 ConversationAgent 生成，待发或已发 */
+    isAiGenerated: boolean("is_ai_generated").default(false),
+    sentAt: timestamp("sent_at"),
+    metadata: jsonb("metadata").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_sm_lead").on(table.leadId),
+    index("idx_sm_tenant").on(table.tenantId),
   ]
 );
 

@@ -1,71 +1,113 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="_base.css"/>
+<meta charset="utf-8">
 <style>
-  body { background: linear-gradient(145deg, #d63384 0%, #ff6b35 55%, #ffb86b 100%); }
-  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
-  .sub-title {
-    font-size: 32px; opacity: 0.82; text-align: center; letter-spacing: 3px;
-    margin-top: 8px; margin-bottom: 16px;
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1920px; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, #12002a 0%, #2d1b69 45%, #1a0040 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", sans-serif;
+    color: white;
   }
-  .discipline-tag {
-    display: inline-block;
-    padding: 12px 32px;
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.25);
-    font-size: 30px;
-    font-weight: 600;
-    letter-spacing: 2px;
-    margin: 0 auto 36px;
-  }
-  .topics {
-    display: flex; flex-wrap: wrap; gap: 20px;
-    justify-content: center; align-items: center;
-    width: 100%;
-  }
-  .topic-pill {
-    padding: 22px 42px;
-    background: rgba(255, 255, 255, 0.22);
-    border: 1px solid rgba(255, 255, 255, 0.45);
-    border-radius: 999px;
-    font-size: 38px;
-    font-weight: 600;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-  }
-  .topic-pill.accent {
-    background: rgba(255, 255, 255, 0.9);
-    color: #b3390a;
-    border-color: #fff;
-    font-weight: 800;
-    transform: scale(1.05);
-  }
-  .scope-note {
+  .deco-1 { position: absolute; top: 220px; right: -180px;
+    width: 580px; height: 580px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(156,39,176,0.22), transparent 70%); }
+  .deco-2 { position: absolute; bottom: 380px; left: -140px;
+    width: 460px; height: 460px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(124,77,255,0.18), transparent 70%); }
+  .deco-3 { position: absolute; top: 900px; right: 200px;
+    width: 260px; height: 260px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(233,30,99,0.12), transparent 70%); }
+  .top-bar { position: absolute; top: 0; left: 0; right: 0;
+    height: 8px; background: linear-gradient(90deg, #9c27b0, #7c4dff, #9c27b0); }
+  .header {
+    padding: 96px 0 42px;
+    background: linear-gradient(180deg, rgba(18,0,42,0.6), transparent);
     text-align: center;
-    font-size: 30px;
-    opacity: 0.85;
-    line-height: 1.5;
-    padding: 0 32px;
-    max-width: 880px;
-    margin-top: 16px;
   }
+  .title {
+    font-size: 62px; font-weight: 900; letter-spacing: 12px;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .subtitle {
+    font-size: 32px; color: #ce93d8;
+    margin-top: 20px; letter-spacing: 6px; opacity: 0.85;
+  }
+  .scope-card {
+    margin: 40px 50px 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+    border-radius: 22px;
+    padding: 46px 50px;
+    border: 1px solid rgba(156,39,176,0.3);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.3);
+    position: relative; overflow: hidden;
+  }
+  .scope-card::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
+    background: linear-gradient(90deg, #9c27b0, #e91e63, #9c27b0);
+  }
+  .scope-label {
+    font-size: 28px; color: #ce93d8;
+    letter-spacing: 4px; margin-bottom: 24px;
+    text-align: center;
+  }
+  .scope-text {
+    font-size: 34px; line-height: 1.7;
+    color: #f3e5f5; text-align: center;
+  }
+  .subjects-section { margin: 50px 50px 0; text-align: center; }
+  .subjects-label {
+    display: inline-block;
+    padding: 12px 40px; border-radius: 30px;
+    background: linear-gradient(135deg, rgba(156,39,176,0.7), rgba(124,77,255,0.6));
+    font-size: 28px; font-weight: bold; letter-spacing: 4px;
+    margin-bottom: 36px;
+    box-shadow: 0 10px 24px rgba(156,39,176,0.3);
+  }
+  .subjects {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 22px 18px;
+    padding: 0 10px;
+  }
+  .subject-tag {
+    padding: 16px 32px; border-radius: 30px;
+    font-size: 28px; font-weight: 600;
+    color: white;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.25);
+    letter-spacing: 1px;
+  }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: 470px;
+    text-align: center;
+  }
+  .footer-line {
+    width: 600px; height: 2px; margin: 0 auto 22px;
+    background: linear-gradient(90deg, transparent, #9c27b0, transparent);
+  }
+  .footer-text { font-size: 26px; color: #8a7999; letter-spacing: 3px; }
 </style>
 </head>
 <body>
-<div class="stage">
-  <div style="text-align:center;">
-    <div class="title">收稿方向</div>
-    <div class="sub-title">SCOPE &amp; TOPICS</div>
-    <div class="discipline-tag">{{discipline}}</div>
+  <div class="deco-1"></div>
+  <div class="deco-2"></div>
+  <div class="deco-3"></div>
+  <div class="top-bar"></div>
+  <div class="header">
+    <div class="title">收 稿 方 向</div>
+    <div class="subtitle">Research Scope</div>
   </div>
-  <div class="topics">
-    {{{topicsHtml}}}
+  <div class="scope-card">
+    <div class="scope-label">— 收 稿 范 围 —</div>
+    <div class="scope-text">{{scopeDescription}}</div>
   </div>
-  <div class="scope-note">{{scopeDescription}}</div>
-  <div class="footer-brand">{{journalName}}</div>
-</div>
+  <div class="subjects-section">
+    <div class="subjects-label">JCR 学 科 分 区</div>
+    <div class="subjects">{{subjectsHtml}}</div>
+  </div>
+  <div class="footer">
+    <div class="footer-line"></div>
+    <div class="footer-text">期 刊 收 稿 范 围 参 考</div>
+  </div>
 </body>
 </html>

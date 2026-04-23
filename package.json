@@ -23,5 +23,8 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@9.15.0",
+  "dependencies": {
+    "puppeteer": "^23.11.0"
+  }
 }

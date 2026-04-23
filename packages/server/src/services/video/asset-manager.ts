@@ -1,10 +1,12 @@
 /**
  * AssetManager - 视频素材管理
  *
- * 负责：
- *  - 根据脚本中的 visualElements 关键词从 Pexels 拉取免费素材
- *  - 本地缓存（避免同 tenant 重复付费请求）
- *  - 下载到 storage，返回可访问 URL
+ * 素材优先级（期刊科普短视频）：
+ *  1. journals 表的封面图（coverUrlHd > coverImageUrl）
+ *  2. 期刊官网截图（TODO：待接入 headless browser，目前返回 null）
+ *  3. Pexels 关键词搜图兜底
+ *
+ * 不使用纯色占位图（视频效果差）。若全部失败则放弃该场景。
  *
  * 依赖：
  *  - rateLimiter (provider=pexels)
@@ -12,6 +14,10 @@
  *  - env.PEXELS_API_KEY
  */
 
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readFile, unlink } from "node:fs/promises";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { rateLimiter } from "../rate-limiter/index.js";
@@ -24,7 +30,17 @@ export interface SceneAsset {
   type: "image" | "video";
   width: number;
   height: number;
-  sourceUrl: string;    // 原始 Pexels URL
+  sourceUrl: string;    // 原始 URL（Pexels / 期刊封面 / 官网）
+  source: "journal_cover" | "journal_website" | "pexels";
+}
+
+/** 最小化的期刊信息接口，asset-manager 只关心封面相关字段 */
+export interface JournalAssetInput {
+  id?: string;
+  name?: string | null;
+  coverImageUrl?: string | null;
+  coverUrlHd?: string | null;
+  website?: string | null;
 }
 
 interface PexelsPhoto {
@@ -44,15 +60,69 @@ export class AssetManager {
   private readonly endpoint = "https://api.pexels.com/v1/search";
 
   /**
-   * 为一组关键词获取素材
+   * 期刊封面抓取（优先级 1）
+   * 将远程封面下载到 storage，保证 FFmpeg 合成时本地可访问
+   */
+  async fetchJournalCover(
+    tenantId: string,
+    journal: JournalAssetInput
+  ): Promise<SceneAsset | null> {
+    const coverUrl = journal.coverUrlHd || journal.coverImageUrl;
+    if (!coverUrl) return null;
+    if (!/^https?:\/\//i.test(coverUrl)) {
+      logger.warn({ journalId: journal.id, coverUrl }, "期刊封面 URL 非法，跳过");
+      return null;
+    }
+
+    try {
+      const resp = await fetch(coverUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const ext = this.inferExt(coverUrl, resp.headers.get("content-type"));
+      const remotePath = `assets/${tenantId}/journal-cover/${journal.id || "unknown"}-${Date.now()}.${ext}`;
+      const accessUrl = await storage.upload(buf, remotePath, `image/${ext === "jpg" ? "jpeg" : ext}`);
+      logger.info({ journalId: journal.id, coverUrl }, "期刊封面下载完成");
+      return {
+        keyword: "__journal_cover__",
+        url: accessUrl,
+        remotePath,
+        type: "image",
+        width: 0,
+        height: 0,
+        sourceUrl: coverUrl,
+        source: "journal_cover",
+      };
+    } catch (err) {
+      logger.warn(
+        { journalId: journal.id, coverUrl, err: err instanceof Error ? err.message : err },
+        "期刊封面下载失败，回退到下一级素材"
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 期刊官网截图（优先级 2） — 预留接口
+   * TODO: 接入 Playwright/Puppeteer headless browser
+   * 目前始终返回 null，直接走 Pexels 兜底
+   */
+  async fetchJournalScreenshot(
+    _tenantId: string,
+    _journal: JournalAssetInput
+  ): Promise<SceneAsset | null> {
+    return null;
+  }
+
+  /**
+   * Pexels 关键词搜图（优先级 3，兜底）
    */
   async fetchAssets(
     tenantId: string,
     keywords: string[]
   ): Promise<SceneAsset[]> {
     if (!env.PEXELS_API_KEY) {
-      logger.warn("PEXELS_API_KEY 未配置，使用纯色占位图");
-      return this.generatePlaceholders(tenantId, keywords);
+      logger.warn("PEXELS_API_KEY 未配置，无法获取 Pexels 兜底素材");
+      return [];
     }
     const results: SceneAsset[] = [];
     for (const kw of keywords) {
@@ -62,7 +132,7 @@ export class AssetManager {
       } catch (err) {
         logger.warn(
           { kw, err: err instanceof Error ? err.message : err },
-          "素材抓取失败，跳过"
+          "Pexels 素材抓取失败，跳过"
         );
       }
     }
@@ -73,7 +143,6 @@ export class AssetManager {
     tenantId: string,
     keyword: string
   ): Promise<SceneAsset | null> {
-    // 限流
     await rateLimiter.acquireOrWait("pexels");
 
     const q = encodeURIComponent(keyword);
@@ -104,55 +173,58 @@ export class AssetManager {
       width: photo.width,
       height: photo.height,
       sourceUrl: photo.url,
+      source: "pexels",
     };
   }
+
   /**
-   * 无 Pexels API 时生成有内容的占位图（1080×1920 竖版）
-   * 渐变背景 + 关键词文字 + 装饰元素，保证视频有画面不是纯色块
+   * 纯色背景占位图（最终兜底）
+   * 用 FFmpeg lavfi color 生成 1080×1920 深色 JPEG，无需任何外部 API
    */
-  private async generatePlaceholders(tenantId: string, keywords: string[]): Promise<SceneAsset[]> {
-    const sharp = (await import("sharp")).default;
-    const themes = [
-      { bg1: "#0D47A1", bg2: "#1565C0", accent: "#FFD54F" }, // 蓝金
-      { bg1: "#1B5E20", bg2: "#2E7D32", accent: "#A5D6A7" }, // 绿
-      { bg1: "#B71C1C", bg2: "#D32F2F", accent: "#FFCDD2" }, // 红
-      { bg1: "#4A148C", bg2: "#7B1FA2", accent: "#CE93D8" }, // 紫
-      { bg1: "#E65100", bg2: "#F57C00", accent: "#FFE0B2" }, // 橙
-      { bg1: "#006064", bg2: "#00838F", accent: "#80DEEA" }, // 青
-    ];
-    const results: SceneAsset[] = [];
-    for (let i = 0; i < keywords.length; i++) {
-      const kw = keywords[i];
-      const t = themes[i % themes.length];
-      // 用 SVG 生成有内容的图：渐变底 + 装饰圆 + 序号 + 关键词
-      const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg">
-  <defs><linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-    <stop offset="0%" style="stop-color:${t.bg1}"/>
-    <stop offset="100%" style="stop-color:${t.bg2}"/>
-  </linearGradient></defs>
-  <rect width="1080" height="1920" fill="url(#bg)"/>
-  <circle cx="900" cy="300" r="200" fill="rgba(255,255,255,0.05)"/>
-  <circle cx="200" cy="1600" r="300" fill="rgba(255,255,255,0.03)"/>
-  <circle cx="540" cy="960" r="400" fill="rgba(255,255,255,0.02)"/>
-  <rect x="80" y="800" width="6" height="120" rx="3" fill="${t.accent}"/>
-  <text x="540" y="700" text-anchor="middle" font-size="120" font-weight="bold" fill="rgba(255,255,255,0.08)" font-family="sans-serif">${String(i + 1).padStart(2, "0")}</text>
-  <text x="540" y="1700" text-anchor="middle" font-size="28" fill="rgba(255,255,255,0.3)" font-family="sans-serif">BossMate AI</text>
-</svg>`;
-      const buf = await sharp(Buffer.from(svg)).jpeg({ quality: 85 }).toBuffer();
-      const remotePath = `assets/${tenantId}/placeholder/${Date.now()}-${i}.jpg`;
-      const url = await storage.upload(buf, remotePath, "image/jpeg");
-      results.push({
-        keyword: kw,
-        url,
+  async generateColorPlaceholder(tenantId: string): Promise<SceneAsset | null> {
+    const outPath = join(tmpdir(), `bm-placeholder-${Date.now()}.jpg`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const p = spawn("ffmpeg", [
+          "-y",
+          "-f", "lavfi",
+          "-i", "color=c=0x0d1b2a:size=1080x1920:rate=1",
+          "-frames:v", "1",
+          "-q:v", "2",
+          outPath,
+        ]);
+        p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`))));
+        p.on("error", reject);
+      });
+      const buf = await readFile(outPath);
+      const remotePath = `assets/${tenantId}/placeholder/bg-${Date.now()}.jpg`;
+      const accessUrl = await storage.upload(buf, remotePath, "image/jpeg");
+      logger.info({ remotePath }, "生成纯色占位背景图");
+      return {
+        keyword: "__placeholder__",
+        url: accessUrl,
         remotePath,
         type: "image",
         width: 1080,
         height: 1920,
-        sourceUrl: "placeholder",
-      });
+        sourceUrl: "",
+        source: "pexels",  // 复用已有 source 类型，避免改接口
+      };
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "纯色占位图生成失败");
+      return null;
+    } finally {
+      unlink(outPath).catch(() => {});
     }
-    logger.info({ count: results.length }, "生成占位图完成");
-    return results;
+  }
+
+  private inferExt(url: string, contentType: string | null): string {
+    const m = url.match(/\.([a-z0-9]{2,4})(?:\?|#|$)/i);
+    if (m) return m[1].toLowerCase();
+    if (contentType?.includes("jpeg")) return "jpg";
+    if (contentType?.includes("png")) return "png";
+    if (contentType?.includes("webp")) return "webp";
+    return "jpg";
   }
 }
 

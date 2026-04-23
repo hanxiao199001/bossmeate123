@@ -7,8 +7,9 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { logger } from "../config/logger.js";
 import { agentRegistry } from "../services/agents/base/registry.js";
 import { createRun, getRunState } from "../services/agents/base/progress-emitter.js";
 import { db } from "../models/db.js";
@@ -25,85 +26,111 @@ export async function agentRoutes(app: FastifyInstance) {
   // ===== Agent 状态 =====
 
   // GET /agents/status
-  app.get("/status", async (request) => {
-    const agents = agentRegistry.list();
-    return { code: "OK", data: { agents } };
+  app.get("/status", async (request, reply) => {
+    try {
+      const agents = agentRegistry.list();
+      return { code: "OK", data: { agents } };
+    } catch (err) {
+      logger.error({ err }, "获取Agent状态失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // GET /agents/daily-plan
-  app.get("/daily-plan", async (request) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const [plan] = await db
-      .select()
-      .from(dailyContentPlans)
-      .where(
-        and(
-          eq(dailyContentPlans.tenantId, request.tenantId),
-          eq(dailyContentPlans.date, today)
+  app.get("/daily-plan", async (request, reply) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const [plan] = await db
+        .select()
+        .from(dailyContentPlans)
+        .where(
+          and(
+            eq(dailyContentPlans.tenantId, request.tenantId),
+            eq(dailyContentPlans.date, today)
+          )
         )
-      )
-      .limit(1);
-    return { code: "OK", data: { plan: plan || null } };
+        .limit(1);
+      return { code: "OK", data: { plan: plan || null } };
+    } catch (err) {
+      logger.error({ err }, "获取每日计划失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // GET /agents/logs?limit=20
-  app.get("/logs", async (request) => {
-    const { limit = "20" } = request.query as { limit?: string };
-    const logs = await db
-      .select()
-      .from(agentLogs)
-      .where(eq(agentLogs.tenantId, request.tenantId))
-      .orderBy(desc(agentLogs.createdAt))
-      .limit(Number(limit));
-    return { code: "OK", data: { logs } };
+  app.get("/logs", async (request, reply) => {
+    try {
+      const { limit = "20" } = request.query as { limit?: string };
+      const logs = await db
+        .select()
+        .from(agentLogs)
+        .where(eq(agentLogs.tenantId, request.tenantId))
+        .orderBy(desc(agentLogs.createdAt))
+        .limit(Number(limit));
+      return { code: "OK", data: { logs } };
+    } catch (err) {
+      logger.error({ err }, "获取Agent日志失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // POST /agents/:name/trigger — 手动触发（异步执行 + 轮询进度）
   app.post("/:name/trigger", async (request, reply) => {
-    const { name } = request.params as { name: string };
-    const agent = agentRegistry.get(name);
-    if (!agent) {
-      return reply.code(404).send({ code: "NOT_FOUND", message: `Agent "${name}" not found` });
-    }
+    try {
+      const { name } = request.params as { name: string };
+      const agent = agentRegistry.get(name);
+      if (!agent) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: `Agent "${name}" not found` });
+      }
 
-    if (name === "orchestrator") {
-      // Orchestrator：异步执行，前端通过轮询获取进度
-      const runId = nanoid(12);
-      createRun(request.tenantId, runId);
+      if (name === "orchestrator") {
+        // Orchestrator：异步执行，前端通过轮询获取进度
+        const runId = nanoid(12);
+        createRun(request.tenantId, runId);
 
-      // 后台异步执行，不阻塞响应
-      agent.execute({
+        // 后台异步执行，不阻塞响应
+        agent.execute({
+          tenantId: request.tenantId,
+          date: new Date().toISOString().slice(0, 10),
+          triggeredBy: "manual",
+          runId,
+        }).catch(() => { /* 错误在 emitDone 中处理 */ });
+
+        return { code: "OK", data: { runId, async: true } };
+      }
+
+      // 其他 agent：同步执行
+      const result = await agent.execute({
         tenantId: request.tenantId,
         date: new Date().toISOString().slice(0, 10),
         triggeredBy: "manual",
-        runId,
-      }).catch(() => { /* 错误在 emitDone 中处理 */ });
-
-      return { code: "OK", data: { runId, async: true } };
+      });
+      return { code: "OK", data: result };
+    } catch (err) {
+      logger.error({ err }, "触发Agent失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
-
-    // 其他 agent：同步执行
-    const result = await agent.execute({
-      tenantId: request.tenantId,
-      date: new Date().toISOString().slice(0, 10),
-      triggeredBy: "manual",
-    });
-    return { code: "OK", data: result };
   });
 
   // GET /agents/orchestrator/progress — 轮询执行进度
-  app.get("/orchestrator/progress", async (request) => {
-    const state = getRunState(request.tenantId);
-    if (!state) {
-      return { code: "OK", data: { running: false } };
+  app.get("/orchestrator/progress", async (request, reply) => {
+    try {
+      const state = getRunState(request.tenantId);
+      if (!state) {
+        return { code: "OK", data: { running: false } };
+      }
+      return { code: "OK", data: { running: !state.done, ...state } };
+    } catch (err) {
+      logger.error({ err }, "获取Agent执行进度失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
-    return { code: "OK", data: { running: !state.done, ...state } };
   });
 
   // GET /agents/diagnostic — 系统诊断
-  app.get("/diagnostic", async (request) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const tenantId = request.tenantId;
+  app.get("/diagnostic", async (request, reply) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const tenantId = request.tenantId;
 
     // 1. 今日计划
     const [plan] = await db
@@ -176,190 +203,238 @@ export async function agentRoutes(app: FastifyInstance) {
       redisInfo = { error: err.message };
     }
 
-    return {
-      code: "OK",
-      data: {
-        date: today,
-        plan: planInfo,
-        contents: contentCount,
-        queue: queueInfo,
-        providers: providerInfo,
-        redis: redisInfo,
-      },
-    };
+      return {
+        code: "OK",
+        data: {
+          date: today,
+          plan: planInfo,
+          contents: contentCount,
+          queue: queueInfo,
+          providers: providerInfo,
+          redis: redisInfo,
+        },
+      };
+    } catch (err) {
+      logger.error({ err }, "获取系统诊断信息失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // ===== 审核 =====
 
-  // GET /agents/review/pending
-  app.get("/review/pending", async (request) => {
-    const pending = await db
-      .select()
-      .from(contents)
-      .where(
-        and(
-          eq(contents.tenantId, request.tenantId),
-          eq(contents.status, "reviewing")
+  // GET /agents/review/pending — 返回所有未发布的内容（draft / reviewing / approved）
+  app.get("/review/pending", async (request, reply) => {
+    try {
+      const pending = await db
+        .select()
+        .from(contents)
+        .where(
+          and(
+            eq(contents.tenantId, request.tenantId),
+            inArray(contents.status, ["draft", "reviewing", "approved"])
+          )
         )
-      )
-      .orderBy(desc(contents.createdAt))
-      .limit(50);
-    return { code: "OK", data: { items: pending, count: pending.length } };
+        .orderBy(desc(contents.createdAt))
+        .limit(50);
+
+      // 映射为前端 ReviewItem 格式
+      const items = pending.map((c) => {
+        const platforms = (c.platforms as Array<{ platform?: string }>) || [];
+        return {
+          id: c.id,
+          topic: c.title || "未命名内容",
+          status: c.status,
+          platform: platforms[0]?.platform || "wechat",
+          type: c.type,
+          createdAt: c.createdAt,
+          summary: c.body ? c.body.slice(0, 100) : undefined,
+        };
+      });
+      return { code: "OK", data: { items, count: items.length } };
+    } catch (err) {
+      logger.error({ err }, "获取待审核内容失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // POST /agents/review/:id/approve
   app.post("/review/:id/approve", async (request, reply) => {
-    const { id } = request.params as { id: string };
+    try {
+      const { id } = request.params as { id: string };
 
-    const [content] = await db
-      .select()
-      .from(contents)
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
-      .limit(1);
+      const [content] = await db
+        .select()
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
 
-    if (!content) {
-      return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      if (!content) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      await db.update(contents)
+        .set({ status: "approved", updatedAt: new Date() })
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+
+      await db.insert(bossEdits).values({
+        id: nanoid(16),
+        tenantId: request.tenantId,
+        contentId: id,
+        action: "approve",
+      });
+
+      // 查找是否有待发布任务
+      const pendingPublishes = await db
+        .select()
+        .from(scheduledPublishes)
+        .where(
+          and(
+            eq(scheduledPublishes.contentId, id),
+            eq(scheduledPublishes.status, "pending")
+          )
+        );
+
+      if (pendingPublishes.length === 0) {
+        // 没有定时发布任务，标记为 approved 等待手动发布
+      }
+
+      return { code: "OK", data: { success: true, message: "已通过审核" } };
+    } catch (err) {
+      logger.error({ err }, "审核通过失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
-
-    await db.update(contents)
-      .set({ status: "approved", updatedAt: new Date() })
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
-
-    await db.insert(bossEdits).values({
-      id: nanoid(16),
-      tenantId: request.tenantId,
-      contentId: id,
-      action: "approve",
-    });
-
-    // 查找是否有待发布任务
-    const pendingPublishes = await db
-      .select()
-      .from(scheduledPublishes)
-      .where(
-        and(
-          eq(scheduledPublishes.contentId, id),
-          eq(scheduledPublishes.status, "pending")
-        )
-      );
-
-    if (pendingPublishes.length === 0) {
-      // 没有定时发布任务，标记为 approved 等待手动发布
-    }
-
-    return { code: "OK", data: { success: true, message: "已通过审核" } };
   });
 
   // POST /agents/review/:id/edit
   app.post("/review/:id/edit", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const { title, body } = request.body as { title?: string; body?: string };
+    try {
+      const { id } = request.params as { id: string };
+      const { title, body } = request.body as { title?: string; body?: string };
 
-    const [original] = await db
-      .select()
-      .from(contents)
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
-      .limit(1);
+      const [original] = await db
+        .select()
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
 
-    if (!original) {
-      return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      if (!original) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      const updates: Record<string, unknown> = { status: "approved", updatedAt: new Date() };
+      if (title) updates.title = title;
+      if (body) updates.body = body;
+      await db.update(contents).set(updates).where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+
+      const editDistance = calculateEditDistance(original.body || "", body || original.body || "");
+      await db.insert(bossEdits).values({
+        id: nanoid(16),
+        tenantId: request.tenantId,
+        contentId: id,
+        action: "edit",
+        originalTitle: original.title,
+        editedTitle: title || original.title,
+        originalBody: original.body,
+        editedBody: body || original.body,
+        editDistance,
+      });
+
+      return { code: "OK", data: { success: true, message: "修改已保存" } };
+    } catch (err) {
+      logger.error({ err }, "编辑内容失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
-
-    const updates: Record<string, unknown> = { status: "approved", updatedAt: new Date() };
-    if (title) updates.title = title;
-    if (body) updates.body = body;
-    await db.update(contents).set(updates).where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
-
-    const editDistance = calculateEditDistance(original.body || "", body || original.body || "");
-    await db.insert(bossEdits).values({
-      id: nanoid(16),
-      tenantId: request.tenantId,
-      contentId: id,
-      action: "edit",
-      originalTitle: original.title,
-      editedTitle: title || original.title,
-      originalBody: original.body,
-      editedBody: body || original.body,
-      editDistance,
-    });
-
-    return { code: "OK", data: { success: true, message: "修改已保存" } };
   });
 
   // POST /agents/review/:id/reject
   app.post("/review/:id/reject", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const { reason } = request.body as { reason?: string };
+    try {
+      const { id } = request.params as { id: string };
+      const { reason } = request.body as { reason?: string };
 
-    const [content] = await db
-      .select()
-      .from(contents)
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
-      .limit(1);
+      const [content] = await db
+        .select()
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
 
-    if (!content) {
-      return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      if (!content) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      await db.update(contents)
+        .set({ status: "draft", updatedAt: new Date() })
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+
+      await db.insert(bossEdits).values({
+        id: nanoid(16),
+        tenantId: request.tenantId,
+        contentId: id,
+        action: "reject",
+        rejectReason: reason || "",
+      });
+
+      return { code: "OK", data: { success: true, message: "已打回" } };
+    } catch (err) {
+      logger.error({ err }, "拒绝内容失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
-
-    await db.update(contents)
-      .set({ status: "draft", updatedAt: new Date() })
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
-
-    await db.insert(bossEdits).values({
-      id: nanoid(16),
-      tenantId: request.tenantId,
-      contentId: id,
-      action: "reject",
-      rejectReason: reason || "",
-    });
-
-    return { code: "OK", data: { success: true, message: "已打回" } };
   });
 
   // ===== 自动化配置 =====
 
   // GET /agents/config
-  app.get("/config", async (request) => {
-    const [tenant] = await db
-      .select()
-      .from(tenants)
-      .where(eq(tenants.id, request.tenantId))
-      .limit(1);
+  app.get("/config", async (request, reply) => {
+    try {
+      const [tenant] = await db
+        .select()
+        .from(tenants)
+        .where(eq(tenants.id, request.tenantId))
+        .limit(1);
 
-    const config = (tenant?.config as Record<string, unknown>)?.automationConfig || {
-      stage: "learning",
-      autoPublishThreshold: 85,
-      pauseThreshold: 60,
-      dailyArticleLimit: 5,
-      dailyVideoLimit: 5,
-      focusDisciplines: [],
-      enabledPlatforms: { wechat: true, baijiahao: true, toutiao: true, zhihu: true, xiaohongshu: true },
-      topicBlacklist: [],
-      autoUpgrade: true,
-    };
-    return { code: "OK", data: { config } };
+      const config = (tenant?.config as Record<string, unknown>)?.automationConfig || {
+        stage: "learning",
+        autoPublishThreshold: 85,
+        pauseThreshold: 60,
+        dailyArticleLimit: 5,
+        dailyVideoLimit: 5,
+        focusDisciplines: [],
+        enabledPlatforms: { wechat: true, baijiahao: true, toutiao: true, zhihu: true, xiaohongshu: true },
+        topicBlacklist: [],
+        autoUpgrade: true,
+      };
+      return { code: "OK", data: { config } };
+    } catch (err) {
+      logger.error({ err }, "获取Agent配置失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 
   // PATCH /agents/config
-  app.patch("/config", async (request) => {
-    const updates = request.body as Record<string, unknown>;
+  app.patch("/config", async (request, reply) => {
+    try {
+      const updates = request.body as Record<string, unknown>;
 
-    const [tenant] = await db
-      .select()
-      .from(tenants)
-      .where(eq(tenants.id, request.tenantId))
-      .limit(1);
+      const [tenant] = await db
+        .select()
+        .from(tenants)
+        .where(eq(tenants.id, request.tenantId))
+        .limit(1);
 
-    const currentConfig = (tenant?.config as Record<string, unknown>) || {};
-    const currentAuto = (currentConfig.automationConfig as Record<string, unknown>) || {};
+      const currentConfig = (tenant?.config as Record<string, unknown>) || {};
+      const currentAuto = (currentConfig.automationConfig as Record<string, unknown>) || {};
 
-    currentConfig.automationConfig = { ...currentAuto, ...updates };
+      currentConfig.automationConfig = { ...currentAuto, ...updates };
 
-    await db.update(tenants)
-      .set({ config: currentConfig })
-      .where(eq(tenants.id, request.tenantId));
+      await db.update(tenants)
+        .set({ config: currentConfig })
+        .where(eq(tenants.id, request.tenantId));
 
-    return { code: "OK", data: { config: currentConfig.automationConfig } };
+      return { code: "OK", data: { config: currentConfig.automationConfig } };
+    } catch (err) {
+      logger.error({ err }, "更新Agent配置失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
   });
 }
 
