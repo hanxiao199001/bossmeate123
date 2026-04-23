@@ -51,44 +51,54 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords — 获取关键词列表
    */
   app.get("/", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const query = request.query as {
-      page?: string;
-      pageSize?: string;
-      platform?: string;
-      category?: string;
-      status?: string;
-    };
+    try {
+      const tenantId = request.tenantId;
+      const query = request.query as {
+        page?: string;
+        pageSize?: string;
+        platform?: string;
+        category?: string;
+        status?: string;
+      };
 
-    const result = await getKeywords(tenantId, {
-      page: query.page ? parseInt(query.page) : 1,
-      pageSize: query.pageSize ? parseInt(query.pageSize) : 50,
-      platform: query.platform,
-      category: query.category,
-      status: query.status,
-    });
+      const result = await getKeywords(tenantId, {
+        page: query.page ? parseInt(query.page) : 1,
+        pageSize: query.pageSize ? parseInt(query.pageSize) : 50,
+        platform: query.platform,
+        category: query.category,
+        status: query.status,
+      });
 
-    return reply.send({ code: "ok", data: result });
+      return reply.send({ code: "ok", data: result });
+    } catch (err) {
+      logger.error({ err }, "获取关键词列表失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   /**
    * GET /keywords/today — 获取今日关键词
    */
   app.get("/today", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const query = request.query as { limit?: string };
-    const limit = query.limit ? parseInt(query.limit) : 50;
+    try {
+      const tenantId = request.tenantId;
+      const query = request.query as { limit?: string };
+      const limit = query.limit ? parseInt(query.limit) : 50;
 
-    const todayKeywords = await getTodayKeywords(tenantId, limit);
+      const todayKeywords = await getTodayKeywords(tenantId, limit);
 
-    return reply.send({
-      code: "ok",
-      data: {
-        date: new Date().toISOString().split("T")[0],
-        count: todayKeywords.length,
-        keywords: todayKeywords,
-      },
-    });
+      return reply.send({
+        code: "ok",
+        data: {
+          date: new Date().toISOString().split("T")[0],
+          count: todayKeywords.length,
+          keywords: todayKeywords,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "获取今日关键词失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   // ========== 趋势分析路由 ==========
@@ -168,26 +178,27 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/dictionary — 添加行业关键词
    */
   app.post("/dictionary", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const body = request.body as {
-      word: string;
-      level: "primary" | "secondary" | "context";
-      category?: string;
-      weight?: number;
-    };
-
-    if (!body.word || !body.level) {
-      return reply.status(400).send({ code: "error", message: "word 和 level 必填" });
-    }
-
     try {
+      const tenantId = request.tenantId;
+      const body = request.body as {
+        word: string;
+        level: "primary" | "secondary" | "context";
+        category?: string;
+        weight?: number;
+      };
+
+      if (!body.word || !body.level) {
+        return reply.status(400).send({ code: "error", message: "word 和 level 必填" });
+      }
+
       const result = await addWord(tenantId, body);
       return reply.send({ code: "ok", data: result });
     } catch (err: any) {
       if (err.code === "23505") {
         return reply.status(409).send({ code: "error", message: "该词已存在" });
       }
-      throw err;
+      logger.error({ err }, "添加关键词失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
   });
 
@@ -195,10 +206,15 @@ export async function keywordRoutes(app: FastifyInstance) {
    * POST /keywords/dictionary/init — 初始化预置词库
    */
   app.post("/dictionary/init", async (request, reply) => {
-    const tenantId = request.tenantId;
+    try {
+      const tenantId = request.tenantId;
 
-    const count = await initPresetDictionary(tenantId);
-    return reply.send({ code: "ok", data: { inserted: count } });
+      const count = await initPresetDictionary(tenantId);
+      return reply.send({ code: "ok", data: { inserted: count } });
+    } catch (err) {
+      logger.error({ err }, "初始化词库失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   /**
@@ -207,16 +223,21 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string } }>(
     "/dictionary/:id",
     async (request, reply) => {
-      const tenantId = request.tenantId;
-      const body = request.body as {
-        category?: string;
-        weight?: number;
-        isActive?: boolean;
-        level?: string;
-      };
+      try {
+        const tenantId = request.tenantId;
+        const body = request.body as {
+          category?: string;
+          weight?: number;
+          isActive?: boolean;
+          level?: string;
+        };
 
-      await updateWord(tenantId, request.params.id, body);
-      return reply.send({ code: "ok" });
+        await updateWord(tenantId, request.params.id, body);
+        return reply.send({ code: "ok" });
+      } catch (err) {
+        logger.error({ err }, "更新关键词失败");
+        return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+      }
     }
   );
 
@@ -226,17 +247,22 @@ export async function keywordRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>(
     "/dictionary/:id",
     async (request, reply) => {
-      const tenantId = request.tenantId;
-      const success = await deleteWord(tenantId, request.params.id);
+      try {
+        const tenantId = request.tenantId;
+        const success = await deleteWord(tenantId, request.params.id);
 
-      if (!success) {
-        return reply.status(400).send({
-          code: "error",
-          message: "系统预置关键词不能删除，可以通过禁用来隐藏",
-        });
+        if (!success) {
+          return reply.status(400).send({
+            code: "error",
+            message: "系统预置关键词不能删除，可以通过禁用来隐藏",
+          });
+        }
+
+        return reply.send({ code: "ok" });
+      } catch (err) {
+        logger.error({ err }, "删除关键词失败");
+        return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
       }
-
-      return reply.send({ code: "ok" });
     }
   );
 
@@ -244,14 +270,19 @@ export async function keywordRoutes(app: FastifyInstance) {
    * GET /keywords/platforms — 获取已注册爬虫平台
    */
   app.get("/platforms", async (_request, reply) => {
-    return reply.send({
-      code: "ok",
-      data: {
-        all: getRegisteredPlatforms(),
-        domestic: getPlatformsByTrack("domestic"),
-        sci: getPlatformsByTrack("sci"),
-      },
-    });
+    try {
+      return reply.send({
+        code: "ok",
+        data: {
+          all: getRegisteredPlatforms(),
+          domestic: getPlatformsByTrack("domestic"),
+          sci: getPlatformsByTrack("sci"),
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "获取平台列表失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   /**

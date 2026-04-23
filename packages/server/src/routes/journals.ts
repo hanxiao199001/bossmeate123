@@ -17,172 +17,193 @@ import { logger } from "../config/logger.js";
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
   app.get("/journals", async (request, reply) => {
-    const {
-      discipline,     // 学科: medicine | education | engineering ...
-      partition,       // 分区: Q1 | Q2 | Q3 | Q4
-      ifMin,          // 影响因子最小值
-      ifMax,          // 影响因子最大值
-      warningOnly,    // 只看预警期刊
-      safeOnly,       // 只看非预警期刊
-      keyword,        // 搜索关键词（期刊名/ISSN）
-      sortBy,         // 排序字段: views | if | acceptance
-      page = 1,
-      pageSize = 20,
-    } = request.query as Record<string, string>;
+    try {
+      const {
+        discipline,     // 学科: medicine | education | engineering ...
+        partition,       // 分区: Q1 | Q2 | Q3 | Q4
+        ifMin,          // 影响因子最小值
+        ifMax,          // 影响因子最大值
+        warningOnly,    // 只看预警期刊
+        safeOnly,       // 只看非预警期刊
+        keyword,        // 搜索关键词（期刊名/ISSN）
+        sortBy,         // 排序字段: views | if | acceptance
+        page = 1,
+        pageSize = 20,
+      } = request.query as Record<string, string>;
 
-    const tenantId = request.tenantId;
-    const conditions: any[] = [eq(journals.tenantId, tenantId)];
+      const tenantId = request.tenantId;
+      const conditions: any[] = [eq(journals.tenantId, tenantId)];
 
-    if (discipline) conditions.push(eq(journals.discipline, discipline));
-    if (partition) conditions.push(eq(journals.partition, partition));
-    if (ifMin) conditions.push(gte(journals.impactFactor, parseFloat(ifMin)));
-    if (ifMax) conditions.push(lte(journals.impactFactor, parseFloat(ifMax)));
-    if (warningOnly === "true") conditions.push(eq(journals.isWarningList, true));
-    if (safeOnly === "true") conditions.push(eq(journals.isWarningList, false));
-    if (keyword) {
-      conditions.push(
-        sql`(${ilike(journals.name, `%${keyword}%`)} OR ${ilike(journals.nameEn, `%${keyword}%`)} OR ${journals.issn} = ${keyword})`
-      );
+      if (discipline) conditions.push(eq(journals.discipline, discipline));
+      if (partition) conditions.push(eq(journals.partition, partition));
+      if (ifMin) conditions.push(gte(journals.impactFactor, parseFloat(ifMin)));
+      if (ifMax) conditions.push(lte(journals.impactFactor, parseFloat(ifMax)));
+      if (warningOnly === "true") conditions.push(eq(journals.isWarningList, true));
+      if (safeOnly === "true") conditions.push(eq(journals.isWarningList, false));
+      if (keyword) {
+        conditions.push(
+          sql`(${ilike(journals.name, `%${keyword}%`)} OR ${ilike(journals.nameEn, `%${keyword}%`)} OR ${journals.issn} = ${keyword})`
+        );
+      }
+
+      // 排序
+      let orderClause;
+      switch (sortBy) {
+        case "views": orderClause = desc(journals.letpubViews); break;
+        case "if": orderClause = desc(journals.impactFactor); break;
+        case "acceptance": orderClause = desc(journals.acceptanceRate); break;
+        case "peer": orderClause = desc(journals.peerWriteCount); break;
+        default: orderClause = desc(journals.letpubViews);
+      }
+
+      const pageNum = parseInt(String(page), 10) || 1;
+      const size = parseInt(String(pageSize), 10) || 20;
+
+      const results = await db
+        .select()
+        .from(journals)
+        .where(and(...conditions))
+        .orderBy(orderClause)
+        .limit(size)
+        .offset((pageNum - 1) * size);
+
+      const countResult = await db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(journals)
+        .where(and(...conditions));
+
+      return reply.send({
+        code: "ok",
+        data: {
+          items: results,
+          total: Number(countResult[0]?.count || 0),
+          page: pageNum,
+          pageSize: size,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "获取期刊列表失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    // 排序
-    let orderClause;
-    switch (sortBy) {
-      case "views": orderClause = desc(journals.letpubViews); break;
-      case "if": orderClause = desc(journals.impactFactor); break;
-      case "acceptance": orderClause = desc(journals.acceptanceRate); break;
-      case "peer": orderClause = desc(journals.peerWriteCount); break;
-      default: orderClause = desc(journals.letpubViews);
-    }
-
-    const pageNum = parseInt(String(page), 10) || 1;
-    const size = parseInt(String(pageSize), 10) || 20;
-
-    const results = await db
-      .select()
-      .from(journals)
-      .where(and(...conditions))
-      .orderBy(orderClause)
-      .limit(size)
-      .offset((pageNum - 1) * size);
-
-    const countResult = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(journals)
-      .where(and(...conditions));
-
-    return reply.send({
-      code: "ok",
-      data: {
-        items: results,
-        total: Number(countResult[0]?.count || 0),
-        page: pageNum,
-        pageSize: size,
-      },
-    });
   });
 
   // ============ 获取单个期刊详情 ============
   app.get("/journals/:id", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const tenantId = request.tenantId;
+    try {
+      const { id } = request.params as { id: string };
+      const tenantId = request.tenantId;
 
-    const result = await db
-      .select()
-      .from(journals)
-      .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
-      .limit(1);
+      const result = await db
+        .select()
+        .from(journals)
+        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        .limit(1);
 
-    if (result.length === 0) {
-      return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在" });
+      if (result.length === 0) {
+        return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在" });
+      }
+
+      return reply.send({ code: "ok", data: result[0] });
+    } catch (err) {
+      logger.error({ err }, "获取期刊详情失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    return reply.send({ code: "ok", data: result[0] });
   });
 
   // ============ 检查期刊预警状态 ============
   app.get("/journals/:id/warning-check", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const tenantId = request.tenantId;
+    try {
+      const { id } = request.params as { id: string };
+      const tenantId = request.tenantId;
 
-    const result = await db
-      .select({
-        name: journals.name,
-        nameEn: journals.nameEn,
-        isWarningList: journals.isWarningList,
-        warningYear: journals.warningYear,
-        impactFactor: journals.impactFactor,
-        partition: journals.partition,
-      })
-      .from(journals)
-      .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
-      .limit(1);
+      const result = await db
+        .select({
+          name: journals.name,
+          nameEn: journals.nameEn,
+          isWarningList: journals.isWarningList,
+          warningYear: journals.warningYear,
+          impactFactor: journals.impactFactor,
+          partition: journals.partition,
+        })
+        .from(journals)
+        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        .limit(1);
 
-    if (result.length === 0) {
-      return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在" });
+      if (result.length === 0) {
+        return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在" });
+      }
+
+      const journal = result[0];
+      const warnings: string[] = [];
+      let safeLevel: "safe" | "caution" | "danger" = "safe";
+
+      if (journal.isWarningList) {
+        warnings.push(`该期刊在中科院${journal.warningYear || ""}预警名单中，建议避开`);
+        safeLevel = "danger";
+      }
+      if (journal.impactFactor && journal.impactFactor > 10) {
+        warnings.push(`影响因子 ${journal.impactFactor} 偏高（建议选10以下），目标客户可能发不了`);
+        safeLevel = safeLevel === "danger" ? "danger" : "caution";
+      }
+      if (journal.impactFactor && journal.impactFactor < 0.5) {
+        warnings.push(`影响因子过低 (${journal.impactFactor})，可能影响内容吸引力`);
+        safeLevel = safeLevel === "danger" ? "danger" : "caution";
+      }
+
+      return reply.send({
+        code: "ok",
+        data: {
+          ...journal,
+          safeLevel,
+          warnings,
+          recommendation: safeLevel === "safe"
+            ? "该期刊安全，适合作为选题方向"
+            : safeLevel === "caution"
+              ? "该期刊需要注意上述问题"
+              : "建议避开该期刊",
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "获取期刊预警信息失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    const journal = result[0];
-    const warnings: string[] = [];
-    let safeLevel: "safe" | "caution" | "danger" = "safe";
-
-    if (journal.isWarningList) {
-      warnings.push(`该期刊在中科院${journal.warningYear || ""}预警名单中，建议避开`);
-      safeLevel = "danger";
-    }
-    if (journal.impactFactor && journal.impactFactor > 10) {
-      warnings.push(`影响因子 ${journal.impactFactor} 偏高（建议选10以下），目标客户可能发不了`);
-      safeLevel = safeLevel === "danger" ? "danger" : "caution";
-    }
-    if (journal.impactFactor && journal.impactFactor < 0.5) {
-      warnings.push(`影响因子过低 (${journal.impactFactor})，可能影响内容吸引力`);
-      safeLevel = safeLevel === "danger" ? "danger" : "caution";
-    }
-
-    return reply.send({
-      code: "ok",
-      data: {
-        ...journal,
-        safeLevel,
-        warnings,
-        recommendation: safeLevel === "safe"
-          ? "✅ 该期刊安全，适合作为选题方向"
-          : safeLevel === "caution"
-            ? "⚠️ 该期刊需要注意上述问题"
-            : "❌ 建议避开该期刊",
-      },
-    });
   });
 
   // ============ 获取学科列表（用于筛选器）============
   app.get("/journals/meta/disciplines", async (request, reply) => {
-    const tenantId = request.tenantId;
+    try {
+      const tenantId = request.tenantId;
 
-    const result = await db
-      .select({
-        discipline: journals.discipline,
-        count: sql<number>`COUNT(*)`,
-      })
-      .from(journals)
-      .where(eq(journals.tenantId, tenantId))
-      .groupBy(journals.discipline)
-      .orderBy(sql`COUNT(*) DESC`);
+      const result = await db
+        .select({
+          discipline: journals.discipline,
+          count: sql<number>`COUNT(*)`,
+        })
+        .from(journals)
+        .where(eq(journals.tenantId, tenantId))
+        .groupBy(journals.discipline)
+        .orderBy(sql`COUNT(*) DESC`);
 
-    return reply.send({ code: "ok", data: result });
+      return reply.send({ code: "ok", data: result });
+    } catch (err) {
+      logger.error({ err }, "获取学科列表失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   // ============ 根据关键词智能匹配期刊 ============
   app.post("/journals/match", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const { keywords, track, discipline } = request.body as {
-      keywords: string[];
-      track?: "domestic" | "sci" | "all";
-      discipline?: string;
-    };
+    try {
+      const tenantId = request.tenantId;
+      const { keywords, track, discipline } = request.body as {
+        keywords: string[];
+        track?: "domestic" | "sci" | "all";
+        discipline?: string;
+      };
 
-    if (!keywords || keywords.length === 0) {
-      return reply.status(400).send({ code: "BAD_REQUEST", message: "keywords 不能为空" });
-    }
+      if (!keywords || keywords.length === 0) {
+        return reply.status(400).send({ code: "BAD_REQUEST", message: "keywords 不能为空" });
+      }
 
     // 学科中文 → 英文映射
     const disciplineMap: Record<string, string> = {
@@ -258,69 +279,78 @@ export async function journalRoutes(app: FastifyInstance) {
     // 按综合分排序
     scored.sort((a, b) => b.matchScore - a.matchScore);
 
-    // 返回前20条
-    const top = scored.slice(0, 20);
+      // 返回前20条
+      const top = scored.slice(0, 20);
 
-    return reply.send({
-      code: "ok",
-      data: {
-        items: top,
-        total: top.length,
-        keywords,
-        discipline: discipline || "全部",
-        track: track || "all",
-      },
-    });
+      return reply.send({
+        code: "ok",
+        data: {
+          items: top,
+          total: top.length,
+          keywords,
+          discipline: discipline || "全部",
+          track: track || "all",
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "期刊匹配失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   // ============ 导入种子期刊数据 ============
   app.post("/journals/seed", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const { force } = (request.body || {}) as { force?: boolean };
+    try {
+      const tenantId = request.tenantId;
+      const { force } = (request.body || {}) as { force?: boolean };
 
-    // 检查是否已经有数据
-    const existing = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(journals)
-      .where(eq(journals.tenantId, tenantId));
+      // 检查是否已经有数据
+      const existing = await db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(journals)
+        .where(eq(journals.tenantId, tenantId));
 
-    if (Number(existing[0]?.count) > 0 && !force) {
+      if (Number(existing[0]?.count) > 0 && !force) {
+        return reply.send({
+          code: "ok",
+          message: `已有 ${existing[0].count} 条期刊数据，跳过导入`,
+        });
+      }
+
+      // 种子数据：覆盖常用的学科领域
+      const seedJournals = getSeedJournals(tenantId);
+
+      // 获取当前已有期刊名，避免重复插入
+      const existingJournals = await db
+        .select({ name: journals.name })
+        .from(journals)
+        .where(eq(journals.tenantId, tenantId));
+      const existingNames = new Set(existingJournals.map((j) => j.name));
+
+      let insertedCount = 0;
+      for (const j of seedJournals) {
+        if (existingNames.has(j.name)) continue; // 跳过已存在的
+        try {
+          await db.insert(journals).values(j);
+          insertedCount++;
+        } catch {
+          // 忽略个别插入失败
+        }
+      }
+
+      logger.info({ total: seedJournals.length, inserted: insertedCount }, "期刊种子数据导入完成");
+
       return reply.send({
         code: "ok",
-        message: `已有 ${existing[0].count} 条期刊数据，跳过导入`,
+        message: insertedCount > 0
+          ? `新增 ${insertedCount} 条期刊数据（共 ${seedJournals.length} 条种子）`
+          : `所有种子数据已存在，无需导入`,
+        data: { count: insertedCount },
       });
+    } catch (err) {
+      logger.error({ err }, "导入期刊数据失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    // 种子数据：覆盖常用的学科领域
-    const seedJournals = getSeedJournals(tenantId);
-
-    // 获取当前已有期刊名，避免重复插入
-    const existingJournals = await db
-      .select({ name: journals.name })
-      .from(journals)
-      .where(eq(journals.tenantId, tenantId));
-    const existingNames = new Set(existingJournals.map((j) => j.name));
-
-    let insertedCount = 0;
-    for (const j of seedJournals) {
-      if (existingNames.has(j.name)) continue; // 跳过已存在的
-      try {
-        await db.insert(journals).values(j);
-        insertedCount++;
-      } catch {
-        // 忽略个别插入失败
-      }
-    }
-
-    logger.info({ total: seedJournals.length, inserted: insertedCount }, "期刊种子数据导入完成");
-
-    return reply.send({
-      code: "ok",
-      message: insertedCount > 0
-        ? `新增 ${insertedCount} 条期刊数据（共 ${seedJournals.length} 条种子）`
-        : `所有种子数据已存在，无需导入`,
-      data: { count: insertedCount },
-    });
   });
 }
 

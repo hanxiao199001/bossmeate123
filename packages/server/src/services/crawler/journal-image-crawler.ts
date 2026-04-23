@@ -2,208 +2,169 @@
  * 期刊图片抓取服务
  *
  * 功能：
- * 1. 从 LetPub 期刊详情页抓取封面图
- * 2. 生成期刊数据信息卡片（SVG）
+ * 1. 从 LetPub 抓取期刊封面图（阿里云 OSS CDN）
+ * 2. 生成期刊数据信息卡片（SVG 备用图）
  *
- * LetPub 期刊详情页 URL 格式：
- * https://www.letpub.com.cn/index.php?page=journalapp&view=detail&journalid=ISSN
+ * LetPub 封面图获取流程：
+ * 1. GET 搜索 → 提取 journalid
+ * 2. 拼接 CDN URL: https://media-cdn.oss-cn-hangzhou.aliyuncs.com/statics/images/comment_center/cover/journal/{journalid}.jpg
+ * 3. HEAD 验证图片可用且非占位图
  *
- * 页面中 <img> 通常包含封面图：
- * <img src="journalcover/xxx.jpg" ...>
+ * 注意：Springer CDN (media.springernature.com) 从中国大陆 IP 访问全部返回占位图，不可用
  */
 
 import { logger } from "../../config/logger.js";
 
 const LETPUB_BASE = "https://www.letpub.com.cn";
+const LETPUB_CDN = "https://media-cdn.oss-cn-hangzhou.aliyuncs.com/statics/images/comment_center/cover/journal";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 /**
- * 从 LetPub 抓取期刊封面图 URL
+ * 从 LetPub 搜索结果中提取 journalid，然后拼接阿里云 CDN 封面图 URL
  */
 export async function fetchJournalCoverFromLetPub(
   journalName: string,
   issn?: string
 ): Promise<string | null> {
   try {
-    // 方式1: 通过 ISSN 搜索
-    const searchUrl = `${LETPUB_BASE}/index.php?page=journalapp&view=search`;
+    // 预处理期刊名：LetPub 搜索不支持 & 符号，需替换为 and
+    const cleanName = journalName
+      .replace(/\s*&\s*/g, " and ")   // & → and
+      .replace(/[^\w\s\-().,:]/g, "") // 去除其他特殊字符
+      .trim();
 
-    const formData = new URLSearchParams({
-      searchname: journalName,
+    // 使用 GET 搜索（POST 搜索结果不包含详情链接）
+    const params = new URLSearchParams({
+      page: "journalapp",
+      view: "search",
+      searchname: cleanName,
       searchissn: issn || "",
-      searchfield: "",
-      searchopen: "",
-      searchsub: "",
-      searchletter: "",
       searchsort: "relevance",
-      searchimpactlow: "",
-      searchimpacthigh: "",
-      currentpage: "1",
+      currentsearchpage: "1",
     });
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const searchUrl = `${LETPUB_BASE}/index.php?${params.toString()}`;
 
     const response = await fetch(searchUrl, {
-      method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": USER_AGENT,
-        Referer: `${LETPUB_BASE}/index.php?page=journalapp`,
         Accept: "text/html",
       },
-      body: formData.toString(),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(15000),
     });
-
-    clearTimeout(timeout);
 
     if (!response.ok) return null;
 
     const html = await response.text();
 
-    // 提取期刊详情页链接
-    const detailLinkMatch = html.match(
-      /href="(index\.php\?page=journalapp&view=detail&journalid=[^"]+)"/
-    );
-
-    if (!detailLinkMatch) {
-      // 尝试直接从搜索结果页提取封面图
-      return extractCoverFromHtml(html);
+    // 从搜索结果中提取 journalid（详情页链接格式：journalid=数字）
+    const journalIdMatch = html.match(/journalid=(\d+).*?view=detail/);
+    if (!journalIdMatch) {
+      // 尝试反向匹配（view=detail在前）
+      const altMatch = html.match(/view=detail.*?journalid=(\d+)/);
+      if (!altMatch) {
+        logger.debug({ journalName, issn }, "LetPub 搜索结果中未找到 journalid");
+        return null;
+      }
+      return await verifyLetPubCover(altMatch[1], journalName);
     }
 
-    // 访问详情页
-    const detailUrl = `${LETPUB_BASE}/${detailLinkMatch[1]}`;
-    const detailController = new AbortController();
-    const detailTimeout = setTimeout(() => detailController.abort(), 10000);
-
-    const detailRes = await fetch(detailUrl, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Referer: searchUrl,
-        Accept: "text/html",
-      },
-      signal: detailController.signal,
-    });
-
-    clearTimeout(detailTimeout);
-
-    if (!detailRes.ok) return null;
-
-    const detailHtml = await detailRes.text();
-    return extractCoverFromHtml(detailHtml);
+    return await verifyLetPubCover(journalIdMatch[1], journalName);
   } catch (err) {
-    logger.warn({ journalName, error: String(err) }, "LetPub封面图抓取失败");
+    logger.warn({ journalName, error: String(err) }, "LetPub 封面图抓取失败");
     return null;
   }
 }
 
 /**
- * 从 HTML 中提取期刊封面图 URL
+ * 验证 LetPub CDN 封面图是否真实存在（非 404、非空图）
  */
-function extractCoverFromHtml(html: string): string | null {
-  // LetPub 封面图通常在 <img src="journalcover/xxx.jpg">
-  const coverPatterns = [
-    /src="((?:https?:\/\/[^"]*)?journalcover\/[^"]+)"/i,
-    /src="((?:https?:\/\/[^"]*)?journal_cover\/[^"]+)"/i,
-    /src="((?:https?:\/\/[^"]*)?(?:\/[^"]*)?cover[^"]*\.(?:jpg|png|gif|webp))"/i,
-    /src="(\/uploads\/[^"]*\.(?:jpg|png|gif|webp))"/i,
-  ];
+async function verifyLetPubCover(journalId: string, journalName: string): Promise<string | null> {
+  const coverUrl = `${LETPUB_CDN}/${journalId}.jpg`;
 
-  for (const pattern of coverPatterns) {
-    const match = html.match(pattern);
-    if (match) {
-      let url = match[1];
-      // 补全相对路径
-      if (!url.startsWith("http")) {
-        url = `${LETPUB_BASE}/${url.replace(/^\//, "")}`;
-      }
-      return url;
+  try {
+    // 先用 HEAD 快速检查
+    const headResp = await fetch(coverUrl, {
+      method: "HEAD",
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!headResp.ok) {
+      logger.debug({ coverUrl, status: headResp.status }, "LetPub CDN 封面图不存在");
+      return null;
     }
-  }
 
-  return null;
+    const contentType = headResp.headers.get("content-type") || "";
+    if (!contentType.startsWith("image")) {
+      logger.debug({ coverUrl, contentType }, "LetPub CDN 返回非图片内容");
+      return null;
+    }
+
+    // 检查文件大小，过滤占位图（真实封面通常 > 5KB）
+    const contentLength = parseInt(headResp.headers.get("content-length") || "0", 10);
+    if (contentLength > 0 && contentLength < 3000) {
+      logger.debug({ coverUrl, contentLength }, "LetPub CDN 封面图太小，可能是占位图");
+      return null;
+    }
+
+    logger.info({ coverUrl, journalName, journalId, contentLength }, "LetPub 封面图验证通过");
+    return coverUrl;
+  } catch (err) {
+    logger.debug({ coverUrl, error: String(err) }, "LetPub CDN 封面图验证失败");
+    return null;
+  }
 }
 
 /**
- * 从 CrossRef API 获取期刊封面图（备用方案）
- * CrossRef 提供部分期刊的封面信息，ISSN 匹配效果更好
+ * 直接从 LetPub 详情页 HTML 提取封面图（备用方案）
+ * 当 CDN URL 不可用时，从详情页 HTML 中提取 media-cdn 图片链接
  */
-export async function fetchJournalCoverFromCrossRef(
-  journalName: string,
-  issn?: string
-): Promise<string | null> {
+async function fetchCoverFromDetailPage(journalId: string, journalName: string): Promise<string | null> {
   try {
-    // 用期刊名搜索 CrossRef
-    const query = issn || encodeURIComponent(journalName);
-    const url = issn
-      ? `https://api.crossref.org/journals/${issn}`
-      : `https://api.crossref.org/journals?query=${query}&rows=1`;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const resp = await fetch(url, {
-      headers: { "User-Agent": "BossMate/1.0 (mailto:support@bossmate.com)" },
-      signal: controller.signal,
+    const detailUrl = `${LETPUB_BASE}/index.php?journalid=${journalId}&page=journalapp&view=detail`;
+    const resp = await fetch(detailUrl, {
+      headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
+      signal: AbortSignal.timeout(15000),
     });
-    clearTimeout(timeout);
 
     if (!resp.ok) return null;
 
-    const data = await resp.json() as any;
+    const html = await resp.text();
 
-    // 从 CrossRef 结果中提取 ISSN 信息用于封面图
-    let resolvedIssn: string | null = null;
-    if (issn) {
-      resolvedIssn = issn;
-    } else if (data.message?.items?.[0]?.ISSN?.[0]) {
-      resolvedIssn = data.message.items[0].ISSN[0];
-    }
-
-    // 用 ISSN 构造常见的期刊封面图 URL 模式
-    if (resolvedIssn) {
-      const cleanIssn = resolvedIssn.replace("-", "").toLowerCase();
-      // Springer/Nature 封面图模式
-      const springerUrl = `https://media.springernature.com/w92/springer-static/cover-hires/journal/${cleanIssn}`;
-      // 尝试验证图片是否可访问
-      try {
-        const imgResp = await fetch(springerUrl, { method: "HEAD", signal: AbortSignal.timeout(5000) });
-        if (imgResp.ok && imgResp.headers.get("content-type")?.startsWith("image")) {
-          return springerUrl;
-        }
-      } catch { /* 继续 */ }
+    // 匹配阿里云 CDN 上的封面图 URL
+    const cdnCoverMatch = html.match(
+      /src="(https:\/\/media-cdn[^"]*\/cover\/journal\/\d+\.jpg[^"]*)"/i
+    );
+    if (cdnCoverMatch) {
+      // 去掉版本号参数
+      const url = cdnCoverMatch[1].split("?")[0];
+      logger.info({ url, journalName }, "从详情页 HTML 提取到封面图");
+      return url;
     }
 
     return null;
   } catch (err) {
-    logger.debug({ journalName, error: String(err) }, "CrossRef封面图查询失败");
+    logger.debug({ journalId, error: String(err) }, "详情页封面图提取失败");
     return null;
   }
 }
 
 /**
- * 多源抓取期刊封面图（LetPub → CrossRef → 数据卡片保底）
+ * 多源抓取期刊封面图
+ * 策略：LetPub CDN (journalid) → LetPub 详情页 HTML → 放弃（使用数据卡片）
  */
 export async function fetchJournalCoverMultiSource(
   journalName: string,
   issn?: string
 ): Promise<string | null> {
-  // 源1: LetPub
-  let cover = await fetchJournalCoverFromLetPub(journalName, issn);
+  // 源1: LetPub GET 搜索 → CDN 封面图
+  const cover = await fetchJournalCoverFromLetPub(journalName, issn);
   if (cover) {
-    logger.info({ journalName, source: "letpub" }, "期刊封面图抓取成功");
+    logger.info({ journalName, source: "letpub-cdn" }, "期刊封面图抓取成功");
     return cover;
   }
 
-  // 源2: CrossRef / Springer
-  cover = await fetchJournalCoverFromCrossRef(journalName, issn);
-  if (cover) {
-    logger.info({ journalName, source: "crossref" }, "期刊封面图抓取成功");
-    return cover;
-  }
-
-  logger.warn({ journalName }, "所有源均未找到封面图，将使用数据卡片");
+  logger.warn({ journalName }, "未找到封面图，将使用数据卡片");
   return null;
 }
 
@@ -213,12 +174,12 @@ export async function fetchJournalCoverMultiSource(
  */
 export function generateJournalDataCard(journal: {
   name: string;
-  nameEn?: string;
-  impactFactor?: number;
-  partition?: string;
-  acceptanceRate?: number;
-  reviewCycle?: string;
-  isWarningList?: boolean;
+  nameEn?: string | null;
+  impactFactor?: number | null;
+  partition?: string | null;
+  acceptanceRate?: number | null;
+  reviewCycle?: string | null;
+  isWarningList?: boolean | null;
 }): string {
   const ifText = journal.impactFactor ? journal.impactFactor.toFixed(1) : "N/A";
   const partition = journal.partition || "N/A";
@@ -309,7 +270,7 @@ export async function fetchJournalImages(
     // 1. 抓取封面图（限速，每个期刊间隔 500ms）
     let coverUrl: string | null = null;
     try {
-      coverUrl = await fetchJournalCoverFromLetPub(j.name, j.issn);
+      coverUrl = await fetchJournalCoverMultiSource(j.name, j.issn);
     } catch {
       // 封面抓取失败不阻塞
     }

@@ -76,7 +76,12 @@ const PLATFORM_PUBLISH_HOURS: Record<string, string> = {
   toutiao: "10:00",
   zhihu: "11:00",
   xiaohongshu: "12:00",
+  douyin: "18:00",
+  wechat_video: "19:00",
 };
+
+/** 视频平台列表 */
+const VIDEO_PLATFORMS = new Set(["douyin", "wechat_video"]);
 
 export class ContentDirector implements IAgent {
   readonly name = "content-director";
@@ -136,7 +141,7 @@ export class ContentDirector implements IAgent {
     });
 
     try {
-      const plan = await this.generatePlan(context.tenantId, context.date);
+      const plan = await this.generatePlan(context.tenantId, context.date, context.triggeredBy === "manual");
       const durationMs = Date.now() - start;
 
       await updateAgentLog(logId, {
@@ -170,7 +175,7 @@ export class ContentDirector implements IAgent {
     }
   }
 
-  private async generatePlan(tenantId: string, date: string): Promise<DailyContentPlan> {
+  private async generatePlan(tenantId: string, date: string, forceRegenerate = false): Promise<DailyContentPlan> {
     // Check existing plan for today
     const existing = await db
       .select()
@@ -183,7 +188,7 @@ export class ContentDirector implements IAgent {
       )
       .limit(1);
 
-    if (existing.length > 0) {
+    if (existing.length > 0 && !forceRegenerate) {
       logger.info({ tenantId, date }, "Daily plan already exists, returning it");
       return {
         id: existing[0].id,
@@ -195,6 +200,13 @@ export class ContentDirector implements IAgent {
         status: (existing[0].status || "draft") as DailyContentPlan["status"],
         generatedAt: existing[0].createdAt.toISOString(),
       };
+    }
+
+    if (existing.length > 0 && forceRegenerate) {
+      logger.info({ tenantId, date }, "手动触发，删除旧计划，重新生成");
+      await db.delete(dailyContentPlans).where(
+        and(eq(dailyContentPlans.tenantId, tenantId), eq(dailyContentPlans.date, date))
+      );
     }
 
     // 1. Get recommendations
@@ -226,7 +238,7 @@ export class ContentDirector implements IAgent {
 
     const tenantConfig = (tenant?.config || {}) as Record<string, any>;
     const automationConfig = tenantConfig.automationConfig || {};
-    const maxDailyArticles = automationConfig.maxDailyArticles || 5;
+    const maxDailyArticles = automationConfig.dailyArticleLimit || automationConfig.maxDailyArticles || 5;
 
     // 4. Generate ContentTask for each topic x platform
     const contentTasks: ContentTask[] = [];
@@ -262,13 +274,41 @@ export class ContentDirector implements IAgent {
       }
     }
 
+    // 5. 视频任务：取前 N 个推荐主题生成 video task
+    // 即使没有视频平台账号也生成（视频先合成保存，后续绑定账号再发布）
+    const maxDailyVideos = automationConfig.dailyVideoLimit ?? 2;
+    if (maxDailyVideos > 0) {
+      const videoPlatforms = activePlatforms.filter((p) => VIDEO_PLATFORMS.has(p));
+      const targetPlatform = videoPlatforms[0] || "douyin"; // 默认目标平台
+      for (const rec of recommendations.slice(0, maxDailyVideos)) {
+        const publishHour = PLATFORM_PUBLISH_HOURS[targetPlatform] || "18:00";
+        contentTasks.push({
+          id: nanoid(16),
+          type: "video",
+          topic: rec.createParams.topic || rec.keyword,
+          style: "short_video",
+          platform: targetPlatform,
+          accountId: videoPlatforms.length > 0
+            ? (accounts.find((a) => a.platform === targetPlatform)?.id || "default")
+            : "default",
+          wordCount: 0,
+          audience: rec.createParams.suggestedAudience || "学术研究者",
+          referenceJournals: rec.relatedJournals?.map((j) => j.name) || [],
+          scheduledPublishAt: `${date}T${publishHour}:00+08:00`,
+          priority: "normal",
+          recommendationId: rec.id,
+          status: "pending",
+        });
+      }
+    }
+
     const totalArticles = contentTasks.filter((t) => t.type === "article").length;
     const totalVideos = contentTasks.filter((t) => t.type === "video").length;
 
     const planId = nanoid(16);
     const now = new Date();
 
-    // 5. Save to daily_content_plans
+    // 5. Save to daily_content_plans（upsert 防止重复）
     await db.insert(dailyContentPlans).values({
       id: planId,
       tenantId,
@@ -279,6 +319,15 @@ export class ContentDirector implements IAgent {
       status: "draft",
       createdAt: now,
       updatedAt: now,
+    }).onConflictDoUpdate({
+      target: [dailyContentPlans.tenantId, dailyContentPlans.date],
+      set: {
+        tasks: contentTasks as any,
+        totalArticles,
+        totalVideos,
+        status: "draft",
+        updatedAt: now,
+      },
     });
 
     logger.info(

@@ -118,7 +118,16 @@ export class PolicyCrawler implements CrawlerAdapter {
 
     try {
       const suggestions: string[] = JSON.parse(`[${match[1]}]`);
-      return suggestions.filter((s) => s.length >= 4 && s.length <= 50).slice(0, 5);
+      return suggestions
+        .filter((s) => typeof s === "string")
+        .map((s) => s.replace(/\x00/g, "").trim())
+        .filter((s) => {
+          if (s.length < 4 || s.length > 50) return false;
+          // 过滤乱码：包含空字节或大量不可识别字符则丢弃
+          const nullCount = (s.match(/[\x00-\x08\x0e-\x1f]/g) || []).length;
+          return nullCount === 0;
+        })
+        .slice(0, 5);
     } catch {
       return [];
     }

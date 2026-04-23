@@ -1,83 +1,141 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="_base.css"/>
+<meta charset="utf-8">
 <style>
-  body { background: linear-gradient(145deg, #0d3a2e 0%, #137a5c 45%, #34d399 100%); }
-  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
-  .sub-title {
-    font-size: 32px; opacity: 0.75; text-align: center; letter-spacing: 3px;
-    margin-top: 8px; margin-bottom: 24px;
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1920px; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, #0a1628 0%, #0f3460 40%, #16213e 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", sans-serif;
+    color: white;
   }
-  .review-list { display: flex; flex-direction: column; gap: 28px; width: 100%; }
-  .review-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 40px 48px;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 28px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+  .deco-1 { position: absolute; top: 200px; right: -160px;
+    width: 540px; height: 540px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(67,160,71,0.18), transparent 70%); }
+  .deco-2 { position: absolute; bottom: 500px; left: -140px;
+    width: 460px; height: 460px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(33,150,243,0.18), transparent 70%); }
+  .top-bar { position: absolute; top: 0; left: 0; right: 0;
+    height: 8px; background: linear-gradient(90deg, #43a047, #2196f3, #43a047); }
+  .header {
+    padding: 96px 0 42px;
+    background: linear-gradient(180deg, rgba(13,33,55,0.7), transparent);
+    text-align: center;
   }
-  .review-row .label-cn {
-    font-size: 38px; font-weight: 700;
+  .title {
+    font-size: 62px; font-weight: 900;
+    letter-spacing: 12px;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.5);
   }
-  .review-row .label-en {
-    font-family: var(--font-en);
-    font-size: 22px; opacity: 0.55; letter-spacing: 2px;
-    margin-top: 4px; text-transform: uppercase;
+  .subtitle {
+    font-size: 32px; color: #81c784;
+    margin-top: 20px; letter-spacing: 6px;
+    opacity: 0.85;
   }
-  .review-row .value {
-    font-family: var(--font-en);
-    font-size: 72px; font-weight: 900; color: #fde68a;
-    line-height: 1;
-    letter-spacing: -1px;
+  .item {
+    margin: 28px 50px 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+    border-radius: 22px; padding: 36px 40px;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+    display: flex; align-items: center; gap: 36px;
+    position: relative; overflow: hidden;
   }
-  .review-row .value .unit {
-    font-size: 34px; font-weight: 600; opacity: 0.8; margin-left: 6px;
+  .item::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; }
+  .item-1::before { background: #43a047; }
+  .item-2::before { background: #2196f3; }
+  .item-3::before { background: #ff9800; }
+  .item-4::before { background: #9c27b0; }
+  .icon {
+    flex: 0 0 100px; height: 100px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 50px; font-weight: 900;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.3);
   }
+  .item-1 .icon { background: linear-gradient(135deg, #43a047, #2e7d32); }
+  .item-2 .icon { background: linear-gradient(135deg, #2196f3, #1565c0); }
+  .item-3 .icon { background: linear-gradient(135deg, #ff9800, #ef6c00); }
+  .item-4 .icon { background: linear-gradient(135deg, #9c27b0, #6a1b9a); }
+  .content { flex: 1; }
+  .label { font-size: 28px; letter-spacing: 3px; margin-bottom: 8px; }
+  .item-1 .label { color: #a5d6a7; }
+  .item-2 .label { color: #90caf9; }
+  .item-3 .label { color: #ffcc80; }
+  .item-4 .label { color: #ce93d8; }
+  .value { font-size: 58px; font-weight: 900; line-height: 1; }
+  .item-2 .value { font-size: 68px; }
+  .progress-wrap {
+    margin-top: 16px; width: 100%;
+    height: 14px; background: rgba(255,255,255,0.1); border-radius: 8px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; border-radius: 8px;
+    background: linear-gradient(90deg, #43a047, #a5d6a7);
+    width: {{acceptRateBar}};
+    box-shadow: 0 0 20px rgba(76,175,80,0.5);
+  }
+  .note {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 24px; color: #546e7a;
+    letter-spacing: 2px;
+  }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: 470px;
+    text-align: center;
+  }
+  .footer-line {
+    width: 600px; height: 2px; margin: 0 auto 22px;
+    background: linear-gradient(90deg, transparent, #43a047, transparent);
+  }
+  .footer-text { font-size: 26px; color: #607d8b; letter-spacing: 3px; }
 </style>
 </head>
 <body>
-<div class="stage">
-  <div>
-    <div class="title">审稿信息</div>
-    <div class="sub-title">PEER REVIEW PROFILE</div>
+  <div class="deco-1"></div>
+  <div class="deco-2"></div>
+  <div class="top-bar"></div>
+  <div class="header">
+    <div class="title">审 稿 信 息</div>
+    <div class="subtitle">Review Efficiency</div>
   </div>
-  <div class="review-list">
-    <div class="review-row">
-      <div>
-        <div class="label-cn">审稿周期</div>
-        <div class="label-en">Review Cycle</div>
-      </div>
+  <div class="item item-1">
+    <div class="icon">⏱</div>
+    <div class="content">
+      <div class="label">审 稿 周 期</div>
       <div class="value">{{reviewCycle}}</div>
     </div>
-    <div class="review-row">
-      <div>
-        <div class="label-cn">首次决定</div>
-        <div class="label-en">Time to First Decision</div>
+  </div>
+  <div class="item item-2">
+    <div class="icon">✓</div>
+    <div class="content">
+      <div class="label">录 用 率</div>
+      <div class="value">{{acceptRate}}</div>
+      <div class="progress-wrap">
+        <div class="progress-bar"></div>
       </div>
-      <div class="value">{{timeToFirstDecision}}<span class="unit">天</span></div>
-    </div>
-    <div class="review-row">
-      <div>
-        <div class="label-cn">录用率</div>
-        <div class="label-en">Acceptance Rate</div>
-      </div>
-      <div class="value">{{acceptanceRate}}<span class="unit">%</span></div>
-    </div>
-    <div class="review-row">
-      <div>
-        <div class="label-cn">年发文量</div>
-        <div class="label-en">Annual Volume</div>
-      </div>
-      <div class="value">{{annualVolume}}<span class="unit">篇</span></div>
     </div>
   </div>
-  <div class="footer-brand">{{journalName}}</div>
-</div>
+  <div class="item item-3">
+    <div class="icon">↻</div>
+    <div class="content">
+      <div class="label">自 引 率</div>
+      <div class="value">{{selfCitationRate}}</div>
+    </div>
+  </div>
+  <div class="item item-4">
+    <div class="icon">◆</div>
+    <div class="content">
+      <div class="label">出 版 商</div>
+      <div class="value" style="font-size:42px">{{publisher}}</div>
+    </div>
+  </div>
+  <div class="note">* 以上数据基于历史平均值，仅供参考</div>
+  <div class="footer">
+    <div class="footer-line"></div>
+    <div class="footer-text">审 稿 效 率 综 合 评 估</div>
+  </div>
 </body>
 </html>

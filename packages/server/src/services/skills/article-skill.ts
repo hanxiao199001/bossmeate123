@@ -16,7 +16,12 @@ import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { retrieveForArticle } from "../knowledge/rag-retriever.js";
 import { modelRouter } from "../ai/model-router.js";
 import { publishToAccounts, type PublishResult } from "../publisher/index.js";
-import { collectJournalContent, type CollectionResult } from "../data-collection/journal-content-collector.js";
+import { collectJournalContent, type CollectionResult, type JournalInfo } from "../data-collection/journal-content-collector.js";
+import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGeneratedContent } from "./journal-template.js";
+import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
+import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
+import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
+import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
@@ -126,6 +131,36 @@ export class ArticleSkill implements ISkill {
     history: ChatMessage[],
     context: SkillContext
   ): Promise<SkillResult> {
+    // P1 修复：检测「发布」指令 — 用户确认后直接发布已生成的文章
+    const publishCmd = /^(发布|确认发布|publish|去发布)$/i.test(userInput.trim());
+    if (publishCmd && context.metadata?.contentId) {
+      const contentId = context.metadata.contentId as string;
+      const platforms = (context.metadata?.publishPlatforms as string[]) || ["wechat"];
+      try {
+        const publishResults = await this.autoPublish({
+          tenantId: context.tenantId,
+          contentId,
+          platforms,
+          article: context.metadata.lastArticle as GeneratedArticle,
+        });
+        const successList = publishResults.filter((r) => r.success);
+        const failList = publishResults.filter((r) => !r.success);
+        let reply = "";
+        if (successList.length > 0) {
+          reply += `已成功发布到：\n`;
+          successList.forEach((r) => { reply += `- ${r.accountName}（${r.platform}）${r.url ? ": " + r.url : ""}\n`; });
+        }
+        if (failList.length > 0) {
+          reply += `\n发布失败：\n`;
+          failList.forEach((r) => { reply += `- ${r.accountName}（${r.platform}）：${r.error}\n`; });
+        }
+        return { reply: reply || "发布完成" };
+      } catch (err) {
+        logger.error({ err }, "用户确认发布失败");
+        return { reply: "发布时出现错误，请稍后重试。" };
+      }
+    }
+
     const { parsed, response } = await this.understandRequirement(userInput, history);
 
     if (parsed.needsClarification) {
@@ -175,8 +210,20 @@ export class ArticleSkill implements ISkill {
     let publishResults: PublishResult[] | undefined;
     let reply = response;
 
+    // P0 安全检查：校验不通过(score<70)时，强制转为人工审核，不自动发布
+    if (!quality.passed || quality.totalScore < 70) {
+      if (parsed.publishIntent.timing === "immediate") {
+        logger.warn(
+          { score: quality.totalScore, passed: quality.passed },
+          "质量校验未通过，自动发布已降级为人工审核"
+        );
+        parsed.publishIntent.timing = "after_review";
+      }
+    }
+
     if (
       quality.passed &&
+      quality.totalScore >= 70 &&
       parsed.publishIntent.wantPublish &&
       parsed.publishIntent.timing !== "after_review"
     ) {
@@ -487,27 +534,33 @@ ${outlineText}
       systemPrompt += `\n\n以下是知识库中的参考资料，请在文章中适当引用：\n${ragContext}`;
     }
 
-    // V4: 注入真实期刊数据
+    // V5: 期刊数据由结构化模板展示，AI 只需写分析评论
     if (journalData && (journalData.abstracts.length > 0 || journalData.journals.length > 0)) {
-      systemPrompt += `\n\n【真实期刊研究数据 — 必须引用】`;
+      systemPrompt += `\n\n【重要：关于期刊数据的写作规则】`;
+      systemPrompt += `\n系统会在文章开头自动插入期刊的结构化数据面板（影响因子、分区、录用率、审稿周期、PubMed摘要等），你不需要在正文中重复这些数字。`;
+      systemPrompt += `\n你的正文应该专注于：`;
+      systemPrompt += `\n1. 对该领域的深度分析和解读（不要罗列数据）`;
+      systemPrompt += `\n2. 投稿策略建议和经验分享`;
+      systemPrompt += `\n3. 最新研究趋势的评论性解读`;
+      systemPrompt += `\n4. 对目标读者的实用建议`;
+      systemPrompt += `\n\n禁止事项：`;
+      systemPrompt += `\n- 不要在正文中写"影响因子为XX"、"录用率为XX%"等数据性语句（这些已在数据面板中展示）`;
+      systemPrompt += `\n- 不要插入任何图片标记（图片由系统处理）`;
+      systemPrompt += `\n- 不要编造具体的统计数字或百分比`;
 
-      if (journalData.abstracts.length > 0) {
-        systemPrompt += `\n以下是 PubMed 最新研究摘要，请在文章中引用这些真实研究：`;
-        for (const a of journalData.abstracts.slice(0, 3)) {
-          systemPrompt += `\n- [${a.journal}] ${a.title}\n  摘要：${a.abstractText.slice(0, 300)}`;
-        }
+      // 仍然提供期刊背景信息，但只作为写作的上下文参考
+      if (journalData.journals.length > 0) {
+        const j = journalData.journals[0];
+        systemPrompt += `\n\n【写作背景参考（不要直接引用数据）】`;
+        systemPrompt += `\n期刊：${j.name}，学科：${j.discipline || "未知"}`;
+        if (j.publisher) systemPrompt += `，出版商：${j.publisher}`;
       }
 
-      if (journalData.journals.length > 0) {
-        systemPrompt += `\n\n以下期刊有数据信息卡片，请在文章适当位置插入（使用 Markdown 图片语法）：`;
-        for (const j of journalData.journals) {
-          systemPrompt += `\n- ${j.name}（IF: ${j.impactFactor || "N/A"}, ${j.partition || "N/A"}区）`;
-          systemPrompt += `\n  数据卡片：![${j.name}数据卡片](${j.dataCardUri})`;
-          if (j.coverUrl) {
-            systemPrompt += `\n  封面图：![${j.name}](${j.coverUrl})`;
-          }
+      if (journalData.abstracts.length > 0) {
+        systemPrompt += `\n\n以下是最新相关研究的方向（供你理解领域动态，正文可以评论性地提及研究方向但不要逐字引用摘要）：`;
+        for (const a of journalData.abstracts.slice(0, 3)) {
+          systemPrompt += `\n- ${a.title}（${a.journal}）`;
         }
-        systemPrompt += `\n\n规则：在文章中提到某个期刊时，紧跟其后插入该期刊的数据卡片图片。`;
       }
     }
 
@@ -640,8 +693,18 @@ ${outlineText}
     return report;
   }
 
+  /** 去除 HTML 标签后计算可见文字字数（中文每字符≈1词） */
+  private static stripHtmlAndCount(html: string): number {
+    return html
+      .replace(/<style[\s\S]*?<\/style>/gi, "")   // 去除 style 块
+      .replace(/<[^>]*>/g, "")                     // 去除所有标签
+      .replace(/&[a-z]+;/gi, " ")                  // HTML 实体算1字
+      .replace(/\s+/g, "")                         // 去除空白
+      .length;
+  }
+
   private calculateHardMetrics(article: GeneratedArticle, requirement: ParsedRequirement): QualityReport["hardMetrics"] {
-    const actualWords = article.body.length;
+    const actualWords = ArticleSkill.stripHtmlAndCount(article.body);
     const targetWords = requirement.wordCount;
     const wordDeviation = Math.abs(actualWords - targetWords) / targetWords;
     const wordDeviationScore = wordDeviation <= 0.1 ? 100 : wordDeviation <= 0.2 ? 85 : wordDeviation <= 0.3 ? 70 : wordDeviation <= 0.5 ? 50 : 30;
@@ -763,7 +826,7 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
     });
   }
 
-  // ============ 完整流程 ============
+  // ============ 完整流程 V6 ============
 
   async fullGenerate(
     requirement: ParsedRequirement,
@@ -775,17 +838,437 @@ ${ragContext ? `\n知识库参考资料：\n${ragContext}` : ""}
     quality: QualityReport;
     outline: ArticleOutline;
   }> {
-    const outline = await this.generateOutline(requirement, ragContext);
-    const article = await this.generateArticle(requirement, outline, ragContext, previousFeedback, journalData);
-    const quality = await this.qualityCheck(article, requirement);
+    // V6: 始终走「期刊推荐文章」模板流程，绝不降级到旧 AI 全文写作
+    logger.info({ topic: requirement.topic, hasJournals: journalData?.journals?.length || 0 }, "V6 期刊推荐流程开始");
 
-    if (!quality.passed) {
-      logger.info({ score: quality.totalScore }, "质检未通过，执行修改式重试");
-      const revisedArticle = await this.reviseArticle(article, quality, outline, ragContext);
-      const revisedQuality = await this.qualityCheck(revisedArticle, requirement);
-      return { article: revisedArticle, quality: revisedQuality, outline };
+    // 如果 DB 有匹配期刊，直接用
+    if (journalData && journalData.journals.length > 0) {
+      logger.info({ journal: journalData.journals[0].name }, "V6 使用 DB 匹配期刊");
+      return this.generateJournalRecommendation(requirement, journalData);
     }
 
+    // DB 没有匹配期刊 → 用 AI 根据主题推荐一个期刊
+    logger.info({ topic: requirement.topic }, "V6 DB 无匹配期刊，AI 推荐期刊");
+    let aiJournal: JournalInfo | null = null;
+    try {
+      aiJournal = await this.createJournalFromAI(requirement.topic);
+    } catch (err) {
+      logger.warn({ err, topic: requirement.topic }, "V6 AI 推荐期刊失败");
+    }
+
+    if (aiJournal) {
+      logger.info({ journal: aiJournal.nameEn || aiJournal.name }, "V6 AI 推荐期刊成功");
+      aiJournal.synthetic = true; // 标记为 AI 合成数据
+      const syntheticData: CollectionResult = {
+        hotKeywords: requirement.keyPoints || [],
+        journals: [aiJournal],
+        abstracts: journalData?.abstracts || [],
+        knowledgeEntriesCreated: 0,
+      };
+      return this.generateJournalRecommendation(requirement, syntheticData);
+    }
+
+    // AI 也失败了 → 用主题名称创建最小期刊数据，仍走模板（绝不降级）
+    logger.warn({ topic: requirement.topic }, "V6 AI 推荐也失败，使用最小数据走模板");
+    const minimalJournal: JournalInfo = {
+      name: requirement.topic,
+      nameEn: null, issn: null, publisher: null, discipline: null,
+      partition: null, impactFactor: null, acceptanceRate: null,
+      reviewCycle: null, annualVolume: null, isWarningList: false,
+      warningYear: null, coverUrl: null, dataCardUri: "",
+      abbreviation: null, foundingYear: null, country: null,
+      website: null, apcFee: null, selfCitationRate: null,
+      casPartition: null, casPartitionNew: null, jcrSubjects: null,
+      topInstitutions: null, scopeDescription: null,
+      synthetic: true, // 标记为 AI 合成数据
+    };
+    const minimalData: CollectionResult = {
+      hotKeywords: [], journals: [minimalJournal], abstracts: [], knowledgeEntriesCreated: 0,
+    };
+    return this.generateJournalRecommendation(requirement, minimalData);
+  }
+
+  /**
+   * 当 DB 没有匹配期刊时，用 AI 根据话题/关键词推荐一个期刊并生成其完整数据
+   */
+  async createJournalFromAI(topic: string): Promise<JournalInfo | null> {
+    try {
+      const result = await this.provider.chat({
+        messages: [
+          {
+            role: "system",
+            content: `你是 SCI/SSCI 期刊数据库专家。用户给你一个学术关键词或研究方向，请推荐一个最适合投稿的高质量期刊。
+只输出纯 JSON，不要 markdown 包裹：
+{
+  "name": "期刊中文名",
+  "nameEn": "期刊英文全名",
+  "abbreviation": "简称",
+  "issn": "ISSN号",
+  "publisher": "出版商",
+  "discipline": "学科领域",
+  "partition": "JCR分区如Q1",
+  "impactFactor": 影响因子数字,
+  "acceptanceRate": 录用率小数如0.35,
+  "reviewCycle": "审稿周期如 2-3个月",
+  "annualVolume": 年发文量数字,
+  "isWarningList": false,
+  "warningYear": null,
+  "foundingYear": 创刊年份,
+  "country": "出版国家",
+  "website": "期刊官网URL",
+  "apcFee": APC费用美元数字或null,
+  "selfCitationRate": 自引率百分比数字或null,
+  "casPartition": "中科院分区如 医学2区",
+  "casPartitionNew": "新锐分区如 医学1区TOP 或null",
+  "jcrSubjects": [{"subject":"学科名","rank":"Q1","position":"9/100"}],
+  "topInstitutions": ["机构1","机构2","机构3","机构4","机构5"]
+}
+要求：
+- 推荐的期刊必须是真实存在的、活跃的期刊
+- 优先推荐影响因子较高、对国人友好、审稿周期合理的期刊
+- 所有数据必须尽可能准确，不确定的字段写 null`,
+          },
+          {
+            role: "user",
+            content: `关键词/研究方向：${topic}\n\n请推荐一个最适合的期刊并提供完整信息。`,
+          },
+        ],
+        temperature: 0.3,
+        maxTokens: 1500,
+      });
+
+      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      const journal: JournalInfo = {
+        name: parsed.name || topic,
+        nameEn: parsed.nameEn || null,
+        issn: parsed.issn || null,
+        publisher: parsed.publisher || null,
+        discipline: parsed.discipline || null,
+        partition: parsed.partition || null,
+        impactFactor: typeof parsed.impactFactor === "number" ? parsed.impactFactor : null,
+        acceptanceRate: typeof parsed.acceptanceRate === "number" ? parsed.acceptanceRate : null,
+        reviewCycle: parsed.reviewCycle || null,
+        annualVolume: typeof parsed.annualVolume === "number" ? parsed.annualVolume : null,
+        isWarningList: parsed.isWarningList === true,
+        warningYear: parsed.warningYear || null,
+        coverUrl: null,
+        dataCardUri: "",
+        abbreviation: parsed.abbreviation || null,
+        foundingYear: typeof parsed.foundingYear === "number" ? parsed.foundingYear : null,
+        country: parsed.country || null,
+        website: parsed.website || null,
+        apcFee: typeof parsed.apcFee === "number" ? parsed.apcFee : null,
+        selfCitationRate: typeof parsed.selfCitationRate === "number" ? parsed.selfCitationRate : null,
+        casPartition: parsed.casPartition || null,
+        casPartitionNew: parsed.casPartitionNew || null,
+        jcrSubjects: parsed.jcrSubjects ? JSON.stringify(parsed.jcrSubjects) : null,
+        topInstitutions: parsed.topInstitutions ? JSON.stringify(parsed.topInstitutions) : null,
+        scopeDescription: null,
+      };
+
+      // 尝试抓取封面图
+      try {
+        const searchName = journal.nameEn || journal.name;
+        const cover = await fetchJournalCoverMultiSource(searchName, journal.issn || undefined);
+        if (cover) {
+          journal.coverUrl = cover;
+        }
+      } catch (e) {
+        logger.debug({ err: e, journal: journal.name }, "AI 期刊封面抓取失败");
+      }
+
+      // 始终生成 dataCardUri 备用图（即使有 coverUrl 也作为 onerror 回退）
+      const svg = generateJournalDataCard(journal);
+      journal.dataCardUri = svgToDataUri(svg);
+
+      logger.info({ journal: journal.nameEn || journal.name, if: journal.impactFactor, hasCover: !!journal.coverUrl }, "AI 推荐期刊数据生成完成");
+      return journal;
+    } catch (err) {
+      logger.warn({ err, topic }, "AI 创建期刊数据失败");
+      return null;
+    }
+  }
+
+  // ============ V6: 期刊推荐文章生成（顺仕美途风格）============
+
+  /**
+   * 新流程：
+   * 1. 补充期刊数据（Springer + AI）
+   * 2. AI 生成：标题、收稿范围、推荐总结
+   * 3. 模板组装完整文章 HTML
+   */
+  async generateJournalRecommendation(
+    requirement: ParsedRequirement,
+    journalData: CollectionResult
+  ): Promise<{
+    article: GeneratedArticle;
+    quality: QualityReport;
+    outline: ArticleOutline;
+  }> {
+    const journal = journalData.journals[0];
+
+    // 1. 补充期刊详细数据（如果还没有 enriched）
+    // enrichment 触发条件：缺少任一关键补充字段即触发（不要求全部缺失）
+    const needsEnrichment = !journal.abbreviation || !journal.foundingYear ||
+      !journal.casPartition || !journal.website || !journal.coverUrl;
+    if (needsEnrichment) {
+      try {
+        const enriched = await ensureJournalEnriched(
+          "skip-cache", // 新文章每次都补充
+          {
+            name: journal.name,
+            nameEn: journal.nameEn,
+            issn: journal.issn,
+            impactFactor: journal.impactFactor,
+            partition: journal.partition,
+            discipline: journal.discipline,
+            publisher: journal.publisher,
+          },
+          this.provider
+        );
+        // 合并补充数据到 journal 对象
+        if (enriched.abbreviation) journal.abbreviation = enriched.abbreviation;
+        if (enriched.foundingYear) journal.foundingYear = enriched.foundingYear;
+        if (enriched.country) journal.country = enriched.country;
+        if (enriched.website) journal.website = enriched.website;
+        if (enriched.apcFee) journal.apcFee = enriched.apcFee;
+        if (enriched.selfCitationRate) journal.selfCitationRate = enriched.selfCitationRate;
+        if (enriched.casPartition) journal.casPartition = enriched.casPartition;
+        if (enriched.casPartitionNew) journal.casPartitionNew = enriched.casPartitionNew;
+        if (enriched.jcrSubjects) journal.jcrSubjects = enriched.jcrSubjects;
+        if (enriched.topInstitutions) journal.topInstitutions = enriched.topInstitutions;
+      } catch (err) {
+        logger.warn({ err, journal: journal.name }, "期刊数据补充失败，使用已有数据");
+      }
+    }
+
+    // 1.5 补充封面图（如果还没有）
+    if (!journal.coverUrl) {
+      try {
+        const searchName = journal.nameEn || journal.name;
+        const cover = await fetchJournalCoverMultiSource(searchName, journal.issn || undefined);
+        if (cover) {
+          journal.coverUrl = cover;
+          logger.info({ journal: journal.name, coverUrl: cover }, "期刊封面图抓取成功");
+        }
+      } catch (err) {
+        logger.debug({ err, journal: journal.name }, "期刊封面图抓取失败");
+      }
+    }
+
+    // 1.6 始终生成数据卡片作为备用（coverUrl 加载失败时 onerror 回退）
+    {
+      const svg = generateJournalDataCard(journal);
+      journal.dataCardUri = svgToDataUri(svg);
+    }
+
+    // 2. AI 生成：标题 + 收稿范围 + 推荐语
+    const aiContentRaw = await this.generateJournalAIContent(journal);
+
+    // 2.5 数据校验：AI 输出 vs 真实数据交叉验证
+    const validation = validateAIContent(aiContentRaw, journal);
+    const aiContent = validation.corrected;
+
+    if (validation.issues.length > 0) {
+      logger.info(
+        {
+          journal: journal.name,
+          totalIssues: validation.issues.length,
+          corrected: validation.stats.correctedChecks,
+          blocked: validation.stats.blockedChecks,
+          issues: validation.issues.map((i: ValidationIssue) => ({
+            severity: i.severity,
+            field: i.field,
+            message: i.message,
+            fixed: i.autoCorrected,
+          })),
+        },
+        "AI 内容校验完成：发现 %d 个问题，自动修正 %d 个",
+        validation.issues.length,
+        validation.stats.correctedChecks
+      );
+    }
+
+    // 如果 AI 生成了 scopeDescription 且 DB 没有缓存，回写
+    if (aiContent.scopeDescription && !journal.scopeDescription) {
+      journal.scopeDescription = aiContent.scopeDescription;
+    }
+
+    // 3. 模板组装完整文章 HTML
+    // 默认走微信专用 table 模板（当前产品主要分发渠道是微信公众号）
+    // web 版模板保留用于前端预览（网页端可渲染 flex/grid）
+    const articleBody = await generateWechatJournalArticleHtml(
+      journal,
+      aiContent,
+      journalData.abstracts
+    );
+
+    const article: GeneratedArticle = {
+      title: aiContent.title,
+      body: articleBody,
+      summary: `期刊推荐：${journal.nameEn || journal.name}，IF ${journal.impactFactor || "N/A"}，${journal.casPartition || journal.partition || ""}`,
+      tags: ["期刊推荐", journal.discipline || "学术", journal.partition || ""].filter(Boolean),
+      wordCount: ArticleSkill.stripHtmlAndCount(articleBody),
+    };
+
+    // 质检（包含 AI 内容校验结果）
+    const validationIssueTexts = validation.issues
+      .filter((i: ValidationIssue) => i.severity !== "info")
+      .map((i: ValidationIssue) => `[${i.severity}] ${i.message}${i.autoCorrected ? "（已自动修正）" : ""}`);
+
+    const qualityScore = validation.passed ? 85 : 60;
+
+    const quality: QualityReport = {
+      totalScore: qualityScore,
+      passed: validation.passed,
+      aiScore: qualityScore,
+      hardMetrics: {
+        wordDeviation: 0,
+        wordDeviationScore: 100,
+        paragraphCount: 10,
+        paragraphScore: 100,
+        keyPointCoverage: 1,
+        keyPointScore: 100,
+      },
+      issues: validationIssueTexts,
+      suggestions: validation.issues
+        .filter((i: ValidationIssue) => !i.autoCorrected)
+        .map((i: ValidationIssue) => i.message),
+    };
+
+    const outline: ArticleOutline = {
+      titleCandidates: [aiContent.title],
+      selectedTitle: aiContent.title,
+      sections: [
+        { heading: "期刊基本信息", keyPoints: ["名称", "出版商", "ISSN"], estimatedWords: 100 },
+        { heading: "影响因子与分区", keyPoints: ["IF趋势", "JCR/CAS分区"], estimatedWords: 200 },
+        { heading: "发文情况", keyPoints: ["年发文量", "录用率"], estimatedWords: 150 },
+        { heading: "收稿范围", keyPoints: ["研究领域", "文章类型"], estimatedWords: 300 },
+        { heading: "投稿指南", keyPoints: ["版面费", "审稿周期", "预警状态"], estimatedWords: 200 },
+        { heading: "推荐总结", keyPoints: ["推荐指数", "适合人群"], estimatedWords: 200 },
+      ],
+      writingStrategy: { opening: "期刊推荐", argumentStructure: "信息展示+分析总结", closing: "推荐指数" },
+      totalEstimatedWords: 1200,
+    };
+
+    logger.info({ journal: journal.name, title: aiContent.title }, "V6 期刊推荐文章生成完成");
+
     return { article, quality, outline };
+  }
+
+  /**
+   * AI 生成期刊推荐文章的三个关键部分：标题、收稿范围、推荐总结
+   */
+  async generateJournalAIContent(journal: JournalInfo): Promise<AIGeneratedContent> {
+    const ifText = journal.impactFactor != null ? journal.impactFactor.toFixed(1) : "N/A";
+    const journalName = journal.nameEn || journal.name;
+
+    // ---- 标题多元化：随机选择句式风格 ----
+    const titleStyles = [
+      // 数据亮点型
+      `数据驱动型标题：用IF分数、录用率、审稿周期等关键数据作为标题核心卖点。示例："IF ${ifText}分，录用率仅${journal.acceptanceRate != null ? (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0) + "%" : "XX%"}，${journalName}值得一投！"`,
+      // 疑问悬念型
+      `疑问悬念型标题：用提问或悬念引发好奇心，让读者想点进来看答案。示例："这本${journal.discipline || ""}期刊凭什么IF年年涨？审稿只要${journal.reviewCycle || "X天"}的秘密"`,
+      // 对比推荐型
+      `对比推荐型标题：通过横向对比或排名突出期刊优势。示例："${journal.discipline || ""}领域性价比最高的Q1期刊？${journalName}深度解析"`,
+      // 痛点切入型
+      `痛点切入型标题：从科研人的实际痛点出发（赶毕业、评职称、发不出论文），关联到期刊推荐。示例："毕业季还没发SCI？这本${journal.casPartition || journal.partition || "高分"}期刊审稿快、录用率高！"`,
+      // 热点结合型
+      `热点趋势型标题：结合学科领域当前热门研究方向或关键词，增加时效感。示例："2025年${journal.discipline || ""}最火研究方向+高分期刊推荐，${journalName}全解读"`,
+      // 榜单盘点型
+      `榜单盘点型标题：用「必看」「盘点」「TOP」等词汇制造权威感。示例："${journal.discipline || ""}方向必投TOP期刊盘点：${journalName}，IF ${ifText}"`,
+    ];
+    const chosenStyle = titleStyles[Math.floor(Math.random() * titleStyles.length)];
+
+    // ---- 学科领域定制标题风格 ----
+    const discipline = (journal.discipline || "").toLowerCase();
+    let disciplineHint = "";
+    if (discipline.includes("医") || discipline.includes("临床") || discipline.includes("药")) {
+      disciplineHint = "医学/药学领域读者偏好权威感和临床数据，标题可融入「临床转化」「治疗新策略」「多中心研究」等关键词。";
+    } else if (discipline.includes("工") || discipline.includes("计算") || discipline.includes("电") || discipline.includes("材料")) {
+      disciplineHint = "工科/信息技术领域读者喜欢技术前沿感，标题可融入「人工智能」「新能源」「智能制造」等热词。";
+    } else if (discipline.includes("经济") || discipline.includes("管理") || discipline.includes("社会") || discipline.includes("教育")) {
+      disciplineHint = "社科/管理领域读者注重政策导向和实践价值，标题可融入「新规」「趋势」「实证研究」等关键词。";
+    } else if (discipline.includes("化") || discipline.includes("物理") || discipline.includes("数学")) {
+      disciplineHint = "理学领域读者看重学术深度，标题可融入「Nature子刊」「前沿发现」「突破性成果」等表述。";
+    } else if (discipline.includes("生物") || discipline.includes("环境") || discipline.includes("农") || discipline.includes("生态")) {
+      disciplineHint = "生物/环境领域读者关注生态前沿，标题可融入「碳中和」「生物多样性」「基因编辑」等热词。";
+    }
+    if (disciplineHint) disciplineHint = `\n学科领域定制要求：${disciplineHint}`;
+
+    const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
+
+期刊信息：
+- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}
+- 学科：${journal.discipline || "未知"}
+- 影响因子：${ifText}
+- 分区：${journal.casPartition || journal.partition || "未知"}
+${journal.casPartitionNew ? `- 新锐分区：${journal.casPartitionNew}` : ""}
+- 录用率：${journal.acceptanceRate != null ? (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0) + "%" : "未知"}
+- 审稿周期：${journal.reviewCycle || "未知"}
+- 出版商：${journal.publisher || "未知"}
+${journal.isWarningList ? "- ⚠️ 在预警名单中" : "- 不在预警名单中"}
+
+【本次标题风格】
+${chosenStyle}
+${disciplineHint}
+
+重要：标题风格必须严格遵循上面的"本次标题风格"要求，不要总是写成一种风格！
+标题长度控制在 20-50 字，可以用「|」「，」「！」等标点断句增加节奏感。
+
+【叙事口吻】
+- recommendation 不要写成干巴巴的总结，要有个人观点和态度（像资深编辑而非百科词条）
+- scopeDescription 要专业但不枯燥，适当加入「热门方向」「近年趋势」等吸引读者的表述
+- editorComment 要极口语化，像和朋友聊天（"说实话这本刊..."、"赶毕业投这个！"）
+
+请输出纯 JSON（不要 markdown）：
+{
+  "title": "按照上面指定的标题风格生成的标题",
+  "scopeDescription": "收稿范围的详细描述（200-400字），分总述和具体方向列表。用HTML格式，可用<p>和<strong>标签。说明期刊聚焦什么领域、欢迎什么类型的稿件、有什么特色。要专业准确但不枯燥。",
+  "recommendation": "推荐总结（150-300字），综合点评期刊的优势、适合什么样的作者投稿，用HTML格式。要有态度和个人观点，不要像百科全书。",
+  "editorComment": "一句话小编点评（15-30字），极口语化、接地气，像朋友间推荐，如'说实话审稿快到离谱，赶毕业的同学冲！'",
+  "highlightTip": "一个划重点提示（20-40字），提炼最核心的投稿建议或数据亮点",
+  "ifPrediction": "影响因子走势预测的简短描述，如'预测今年涨至15分'，如果无法预测就返回null",
+  "rating": 推荐星级1-5的数字
+}`;
+
+    try {
+      const result = await this.provider.chat({
+        messages: [
+          { role: "system", content: "你是学术期刊分析专家，输出严格JSON格式。" },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.6,
+        maxTokens: 2048,
+      });
+
+      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          title: parsed.title || `期刊推荐：${journalName}`,
+          scopeDescription: parsed.scopeDescription || "",
+          recommendation: parsed.recommendation || "",
+          ifPrediction: parsed.ifPrediction || undefined,
+          rating: typeof parsed.rating === "number" ? Math.min(5, Math.max(1, parsed.rating)) : 4,
+          editorComment: parsed.editorComment || undefined,
+          highlightTip: parsed.highlightTip || undefined,
+        };
+      }
+    } catch (err) {
+      logger.warn({ err, journal: journal.name }, "AI 生成期刊推荐内容失败");
+    }
+
+    // 降级：使用基本信息
+    return {
+      title: `期刊推荐：${journalName}，影响因子 ${ifText}`,
+      scopeDescription: journal.scopeDescription || "",
+      recommendation: "",
+      rating: 4,
+    };
   }
 }

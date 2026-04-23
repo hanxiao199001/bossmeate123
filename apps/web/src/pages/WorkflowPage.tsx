@@ -147,6 +147,20 @@ export default function WorkflowPage() {
   const [styleAnalysesData, setStyleAnalysesData] = useState<any[]>([]);
   const [showLearnPanel, setShowLearnPanel] = useState(false);
 
+  // ===== Step 5 Video Script =====
+  const [generatingScript, setGeneratingScript] = useState(false);
+  const [videoScript, setVideoScript] = useState<Array<{ scene: number; visual: string; voiceover: string; duration: number }>>([]);
+  const [videoScriptError, setVideoScriptError] = useState("");
+  const [editingScene, setEditingScene] = useState<number | null>(null);
+
+  // ===== Step 6 Video Compose =====
+  const [composingVideo, setComposingVideo] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(0);
+  const [videoJobId, setVideoJobId] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoCoverUrl, setVideoCoverUrl] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState("");
+
   // ===== Step 6 =====
   const [generating, setGenerating] = useState(false);
   const [generatedArticle, setGeneratedArticle] = useState("");
@@ -985,13 +999,133 @@ export default function WorkflowPage() {
                 </div>
               </div>
             ) : (
-              <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
-                <div className="text-3xl mb-3">{"\uD83C\uDFAC"}</div>
-                <h3 className="text-base font-medium text-gray-600 mb-2">视频脚本生成（开发中）</h3>
-                <button onClick={() => { setCompletedSteps((prev) => new Set([...prev, 4])); setCurrentStep(5); }}
-                  className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-                  跳过，进入下一步
-                </button>
+              <div>
+                {/* 视频脚本生成 */}
+                {videoScript.length === 0 && !generatingScript && (
+                  <div className="text-center py-6">
+                    <button
+                      onClick={async () => {
+                        if (!selectedCluster || !selectedTitle) return;
+                        setGeneratingScript(true);
+                        setVideoScriptError("");
+                        try {
+                          const res = await api.post<{ content: string }>("/content-engine/generate", {
+                            keywords: selectedCluster.keywords,
+                            title: selectedTitle,
+                            format: "video_script",
+                            discipline: selectedCluster.discipline,
+                          });
+                          if (res.data?.content) {
+                            // 解析脚本：尝试 JSON 或按段落分割
+                            try {
+                              const parsed = JSON.parse(res.data.content);
+                              const scenes = (parsed.scenes || parsed).map((s: any, i: number) => ({
+                                scene: i + 1,
+                                visual: s.visual || s.画面描述 || s.image || "",
+                                voiceover: s.voiceover || s.口播文案 || s.narration || s.text || "",
+                                duration: s.duration || s.时长 || 5,
+                              }));
+                              setVideoScript(scenes);
+                            } catch {
+                              // 非 JSON，按双换行分段
+                              const paragraphs = res.data.content.split(/\n\n+/).filter(Boolean);
+                              setVideoScript(paragraphs.map((p, i) => ({
+                                scene: i + 1,
+                                visual: `场景${i + 1}`,
+                                voiceover: p.trim(),
+                                duration: 5,
+                              })));
+                            }
+                          }
+                        } catch (err: any) {
+                          setVideoScriptError(err?.message || "脚本生成失败");
+                        } finally {
+                          setGeneratingScript(false);
+                        }
+                      }}
+                      disabled={generatingScript}
+                      className="px-6 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 active:scale-95"
+                    >
+                      🎬 生成视频脚本
+                    </button>
+                    <p className="text-xs text-gray-400 mt-2">AI 将根据关键词和标题生成分场景脚本</p>
+                  </div>
+                )}
+
+                {generatingScript && (
+                  <div className="flex items-center justify-center gap-2 py-8 text-sm text-purple-600">
+                    <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                    AI 正在生成视频脚本，预计 10-20 秒...
+                  </div>
+                )}
+
+                {videoScriptError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 mb-4">
+                    ❌ {videoScriptError}
+                  </div>
+                )}
+
+                {/* 脚本编辑区 */}
+                {videoScript.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium text-gray-700">📝 视频脚本（{videoScript.length} 个场景，约 {videoScript.reduce((s, sc) => s + sc.duration, 0)} 秒）</h3>
+                      <button
+                        onClick={() => { setCompletedSteps((prev) => new Set([...prev, 4])); setCurrentStep(5); }}
+                        className="px-4 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700"
+                      >
+                        ✓ 确认脚本，进入视频生成
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {videoScript.map((scene, i) => (
+                        <div key={i} className="bg-white rounded-lg border border-gray-200 p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-700 text-xs font-bold flex items-center justify-center">{scene.scene}</span>
+                            <span className="text-sm font-medium text-gray-700">场景 {scene.scene}</span>
+                            <span className="text-xs text-gray-400 ml-auto">{scene.duration}s</span>
+                            <button onClick={() => setEditingScene(editingScene === i ? null : i)} className="text-xs text-blue-600 hover:underline">
+                              {editingScene === i ? "收起" : "编辑"}
+                            </button>
+                          </div>
+                          {editingScene === i ? (
+                            <div className="space-y-2">
+                              <div>
+                                <label className="text-xs text-gray-500">画面描述</label>
+                                <input value={scene.visual} onChange={e => {
+                                  const updated = [...videoScript];
+                                  updated[i] = { ...updated[i], visual: e.target.value };
+                                  setVideoScript(updated);
+                                }} className="w-full px-3 py-1.5 border rounded text-sm" />
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500">口播文案</label>
+                                <textarea value={scene.voiceover} onChange={e => {
+                                  const updated = [...videoScript];
+                                  updated[i] = { ...updated[i], voiceover: e.target.value };
+                                  setVideoScript(updated);
+                                }} rows={3} className="w-full px-3 py-1.5 border rounded text-sm" />
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500">时长（秒）</label>
+                                <input type="number" min={2} max={15} value={scene.duration} onChange={e => {
+                                  const updated = [...videoScript];
+                                  updated[i] = { ...updated[i], duration: parseInt(e.target.value) || 5 };
+                                  setVideoScript(updated);
+                                }} className="w-20 px-3 py-1.5 border rounded text-sm" />
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-xs text-gray-500 mb-1">🎥 {scene.visual}</p>
+                              <p className="text-sm text-gray-700">{scene.voiceover}</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1091,11 +1225,114 @@ export default function WorkflowPage() {
             )}
 
             {workflowType === "video" && (
-              <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
-                <div className="text-3xl mb-3">{"\uD83C\uDFA5"}</div>
-                <h3 className="text-base font-medium text-gray-600 mb-2">AI视频生成（开发中）</h3>
-                <button onClick={() => { setCompletedSteps((prev) => new Set([...prev, 5])); setCurrentStep(6); }}
-                  className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">跳过 →</button>
+              <div>
+                {/* 视频合成 */}
+                {!videoUrl && !composingVideo && (
+                  <div className="text-center py-6">
+                    <p className="text-sm text-gray-500 mb-3">
+                      {videoScript.length > 0 ? `已有 ${videoScript.length} 个场景脚本` : "请先在上一步生成脚本"}
+                    </p>
+                    <button
+                      onClick={async () => {
+                        if (videoScript.length === 0) return;
+                        setComposingVideo(true);
+                        setVideoProgress(0);
+                        setVideoError("");
+                        try {
+                          // 用脚本场景的画面描述作为图片关键词，从 Pexels 获取素材
+                          // 如果没有上传图片，传场景信息让后端处理
+                          const images = videoScript.map(sc => ({
+                            remotePath: "", // 无预上传图片时后端需处理
+                            durationMs: sc.duration * 1000,
+                            title: sc.visual.slice(0, 30),
+                          }));
+
+                          const res = await api.post<{ jobId: string }>("/video/compose", {
+                            title: selectedTitle || "视频",
+                            images,
+                            transition: "fade",
+                          });
+
+                          const jid = res.data?.jobId;
+                          if (!jid) throw new Error("未返回 jobId");
+                          setVideoJobId(jid);
+
+                          // 轮询进度
+                          for (let tick = 0; tick < 100; tick++) {
+                            await new Promise(r => setTimeout(r, 3000));
+                            try {
+                              const st = await api.get<any>(`/video/status/${jid}`);
+                              const d = st.data;
+                              setVideoProgress(d?.progress || 0);
+                              if (d?.status === "completed") {
+                                const result = d.result || {};
+                                setVideoUrl(result.url || result.videoUrl || "");
+                                setVideoCoverUrl(result.coverUrl || null);
+                                // 保存到 contents（已由 worker 自动保存）
+                                setComposingVideo(false);
+                                return;
+                              }
+                              if (d?.status === "failed") {
+                                setVideoError(d.error || "视频合成失败");
+                                setComposingVideo(false);
+                                return;
+                              }
+                            } catch { /* continue */ }
+                          }
+                          setVideoError("合成超时，请在视频列表查看");
+                          setComposingVideo(false);
+                        } catch (err: any) {
+                          setVideoError(err?.message || "创建合成任务失败");
+                          setComposingVideo(false);
+                        }
+                      }}
+                      disabled={videoScript.length === 0}
+                      className="px-6 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 disabled:bg-gray-300"
+                    >
+                      🎬 开始合成视频
+                    </button>
+                  </div>
+                )}
+
+                {composingVideo && (
+                  <div className="text-center py-8">
+                    <div className="w-12 h-12 mx-auto mb-4 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                    <p className="text-lg font-medium text-gray-700 mb-2">视频合成中...</p>
+                    <div className="max-w-md mx-auto bg-gray-100 rounded-full h-3 mb-2">
+                      <div className="bg-blue-600 h-3 rounded-full transition-all" style={{ width: `${videoProgress}%` }} />
+                    </div>
+                    <p className="text-sm text-gray-500">{videoProgress}% · 请勿关闭页面</p>
+                  </div>
+                )}
+
+                {videoError && !composingVideo && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
+                    <p className="text-red-600 mb-3">❌ {videoError}</p>
+                    <button onClick={() => setVideoError("")} className="px-4 py-1.5 text-sm border border-gray-300 rounded-lg">重试</button>
+                  </div>
+                )}
+
+                {videoUrl && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium text-gray-700">🎬 视频预览</h3>
+                      <div className="flex gap-2">
+                        <a href={videoUrl} download className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                          ⬇ 下载视频
+                        </a>
+                        <button
+                          onClick={() => { setCompletedSteps((prev) => new Set([...prev, 5])); setCurrentStep(6); }}
+                          className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700"
+                        >
+                          ✓ 确认，下一步
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-black rounded-lg overflow-hidden max-w-lg mx-auto">
+                      <video src={videoUrl} controls poster={videoCoverUrl || undefined} className="w-full" />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1545,7 +1782,7 @@ export default function WorkflowPage() {
               ) : platformAccounts.filter((a) => a.platform !== "wechat").length === 0 ? (
                 <div className="p-4 rounded-lg border border-dashed border-gray-300 text-center">
                   <p className="text-sm text-gray-500 mb-2">暂无其他平台账号</p>
-                  <Link to="/accounts" className="text-sm text-blue-600 hover:underline">前往添加百家号/头条号/知乎/小红书账号</Link>
+                  <Link to="/accounts" className="text-sm text-blue-600 hover:underline">前往添加抖音/视频号/百家号/头条号等账号</Link>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1555,6 +1792,8 @@ export default function WorkflowPage() {
                       toutiao: { name: "头条号", icon: "\uD83D\uDCF0" },
                       zhihu: { name: "知乎", icon: "\uD83D\uDCA1" },
                       xiaohongshu: { name: "小红书", icon: "\uD83D\uDCD5" },
+                      douyin: { name: "抖音", icon: "\uD83C\uDFB5" },
+                      wechat_video: { name: "视频号", icon: "\uD83D\uDCF9" },
                     };
                     const grouped = new Map<string, typeof platformAccounts>();
                     for (const acc of platformAccounts) {

@@ -6,10 +6,13 @@
  * - 便宜模型（DeepSeek/千问）：日常问答、格式化、常规客服
  *
  * 包含熔断机制：贵模型连续失败N次后，自动切到备选模型
+ * 包含智能回退机制：可配置为竞速模式（同时请求主备模型）或串行模式（等待失败后重试）
  */
 
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+
+export type FallbackStrategy = "serial" | "race";
 
 // 任务类型定义
 export type TaskType =
@@ -53,9 +56,11 @@ const TASK_MODEL_MAP: Record<TaskType, "expensive" | "cheap"> = {
 class ModelRouter {
   private circuitBreakers: Map<string, CircuitBreaker> = new Map();
   private threshold: number;
+  private fallbackStrategy: FallbackStrategy;
 
   constructor() {
     this.threshold = env.MODEL_CIRCUIT_BREAKER_THRESHOLD;
+    this.fallbackStrategy = env.AI_FALLBACK_STRATEGY;
   }
 
   /**
@@ -196,6 +201,52 @@ class ModelRouter {
       status[name] = { ...breaker };
     }
     return status;
+  }
+
+  /**
+   * 获取回退策略
+   */
+  getFallbackStrategy(): FallbackStrategy {
+    return this.fallbackStrategy;
+  }
+
+  /**
+   * 为指定任务类型获取主和备选模型
+   * 用于支持竞速模式（race）或串行模式（serial）
+   */
+  getModelPair(
+    taskType: TaskType
+  ): { primary: ModelProvider | null; secondary: ModelProvider | null } {
+    const tier = TASK_MODEL_MAP[taskType];
+    const providers = this.getProviders();
+    const candidates = tier === "expensive" ? providers.expensive : providers.cheap;
+
+    // 获取所有健康的候选模型（包括开路的，用于备选）
+    const healthyCandidates = candidates.filter((provider) => {
+      const breaker = this.circuitBreakers.get(provider.name);
+      return !breaker || !breaker.isOpen;
+    });
+
+    // 如果目标层级没有可用模型，使用降级方案
+    if (healthyCandidates.length === 0) {
+      const fallback = tier === "expensive" ? providers.cheap : providers.expensive;
+      if (fallback.length === 0) {
+        logger.error("没有任何可用的AI模型配置");
+        return { primary: null, secondary: null };
+      }
+
+      const primary = this.pickHealthy(fallback);
+      const remaining = fallback.filter((p) => p.name !== primary?.name);
+      const secondary = remaining.length > 0 ? remaining[0] : null;
+
+      return { primary, secondary };
+    }
+
+    // 返回第一个作为主，第二个作为备选
+    const primary = healthyCandidates[0];
+    const secondary = healthyCandidates.length > 1 ? healthyCandidates[1] : null;
+
+    return { primary, secondary };
   }
 }
 

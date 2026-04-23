@@ -161,7 +161,7 @@ export async function getTrendReport(
   const day30Str = day30Ago.toISOString().split("T")[0];
 
   // 获取最近30天有记录的关键词（按最新综合分排序取top N）
-  const topKeywords = await db
+  let topKeywords = await db
     .select()
     .from(keywords)
     .where(
@@ -173,22 +173,54 @@ export async function getTrendReport(
     .orderBy(desc(keywords.compositeScore))
     .limit(limit);
 
-  // 批量获取这些关键词的30天历史
-  const keywordNames = topKeywords.map((k) => k.keyword);
+  // ── Fallback: 新租户无关键词时，使用全局热门关键词 ──
+  let usingGlobalFallback = false;
+  if (topKeywords.length === 0) {
+    logger.info({ tenantId }, "租户无关键词数据，使用全局热门关键词作为 fallback");
+    topKeywords = await db
+      .select()
+      .from(keywords)
+      .where(eq(keywords.status, "active"))
+      .orderBy(desc(keywords.compositeScore))
+      .limit(limit);
+    usingGlobalFallback = true;
+  }
 
-  const allHistory = keywordNames.length > 0
-    ? await db
+  // 批量获取这些关键词的30天历史
+  const keywordNames = topKeywords
+    .map((k) => k.keyword)
+    .filter((k): k is string => typeof k === "string" && k.length > 0);
+
+  let allHistory: (typeof keywordHistory.$inferSelect)[] = [];
+  if (keywordNames.length > 0) {
+    // 全局 fallback 时不限制 tenantId
+    const tenantFilter = usingGlobalFallback ? undefined : eq(keywordHistory.tenantId, tenantId);
+    const historyConditions = [
+      gte(keywordHistory.snapshotDate, day30Str),
+      inArray(keywordHistory.keyword, keywordNames),
+    ];
+    if (tenantFilter) historyConditions.unshift(tenantFilter);
+
+    try {
+      allHistory = await db
         .select()
         .from(keywordHistory)
-        .where(
-          and(
-            eq(keywordHistory.tenantId, tenantId),
-            gte(keywordHistory.snapshotDate, day30Str),
-            inArray(keywordHistory.keyword, keywordNames)
-          )
-        )
-        .orderBy(keywordHistory.snapshotDate)
-    : [];
+        .where(and(...historyConditions))
+        .orderBy(keywordHistory.snapshotDate);
+    } catch (err: any) {
+      // Fallback: query without inArray if ANY/ALL fails (Drizzle/pg edge case)
+      logger.warn({ err: err.message, keywordCount: keywordNames.length }, "inArray query failed, using fallback");
+      const keywordSet = new Set(keywordNames.map((k) => k.toLowerCase()));
+      const fallbackConditions = [gte(keywordHistory.snapshotDate, day30Str)];
+      if (!usingGlobalFallback) fallbackConditions.unshift(eq(keywordHistory.tenantId, tenantId));
+      const allRows = await db
+        .select()
+        .from(keywordHistory)
+        .where(and(...fallbackConditions))
+        .orderBy(keywordHistory.snapshotDate);
+      allHistory = allRows.filter((r) => keywordSet.has(r.keyword.toLowerCase()));
+    }
+  }
 
   // 按关键词分组
   const historyMap = new Map<string, typeof allHistory>();
@@ -231,8 +263,11 @@ export async function getTrendReport(
       exploding: report.exploding.length,
       rising: report.rising.length,
       new: report.newKeywords.length,
+      globalFallback: usingGlobalFallback,
     },
-    "📈 关键词趋势报告生成完成"
+    usingGlobalFallback
+      ? "📈 关键词趋势报告生成完成（使用全局 fallback）"
+      : "📈 关键词趋势报告生成完成"
   );
 
   return report;
@@ -240,7 +275,14 @@ export async function getTrendReport(
 
 // ========== 内部工具函数 ==========
 
-function computeTrendLabel(
+/**
+ * 计算关键词趋势标签
+ * @param keyword 关键词
+ * @param history 历史数据
+ * @param kwRecord 可选的关键词记录
+ * @returns 趋势标签
+ */
+export function computeTrendLabel(
   keyword: string,
   history: { date: string; heatScore: number; compositeScore: number; platforms: string[] }[],
   kwRecord?: any

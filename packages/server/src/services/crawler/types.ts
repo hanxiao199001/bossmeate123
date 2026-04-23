@@ -18,6 +18,7 @@ export type PlatformName =
   | "openalex"          // OpenAlex学术数据
   | "pubmed"            // PubMed医学论文
   | "arxiv"             // arXiv预印本
+  | "springer-link"     // Springer Link 期刊数据（基础库+动态监控）
   // 社交媒体热搜线：泛流量热点来源
   | "baidu"             // 百度热搜
   | "toutiao"           // 今日头条热榜

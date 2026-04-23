@@ -35,6 +35,7 @@ const INDUSTRY_FILTER_WORDS = [
 
 export class WeiboCrawler implements CrawlerAdapter {
   platform = "weibo" as const;
+  track = "social" as const;
 
   async crawl(): Promise<CrawlerResult> {
     const now = new Date().toISOString();

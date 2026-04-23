@@ -575,6 +575,77 @@ CREATE TABLE IF NOT EXISTS scheduled_publishes (
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sp_pending ON scheduled_publishes(status, scheduled_at);
+
+-- ============ V3 AI 销售模块 ============
+
+-- 销售线索
+CREATE TABLE IF NOT EXISTS leads (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  channel VARCHAR(50) NOT NULL,
+  external_id VARCHAR(200),
+  name VARCHAR(200),
+  contact_id VARCHAR(200),
+  phone VARCHAR(50),
+  email VARCHAR(200),
+  source_content_id UUID REFERENCES contents(id),
+  profile JSONB DEFAULT '{}',
+  stage VARCHAR(30) NOT NULL DEFAULT 'new',
+  intent_score INTEGER DEFAULT 0,
+  assigned_user_id UUID REFERENCES users(id),
+  last_message_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_channel_external
+  ON leads(tenant_id, channel, external_id);
+
+-- 补丁：给已存在的 leads 表补上销售 CRM 接管相关列
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'leads' AND column_name = 'handover_mode'
+  ) THEN
+    ALTER TABLE leads ADD COLUMN handover_mode VARCHAR(10) NOT NULL DEFAULT 'ai';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'leads' AND column_name = 'taken_over_by'
+  ) THEN
+    ALTER TABLE leads ADD COLUMN taken_over_by UUID REFERENCES users(id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'leads' AND column_name = 'taken_over_at'
+  ) THEN
+    ALTER TABLE leads ADD COLUMN taken_over_at TIMESTAMP;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'leads' AND column_name = 'last_read_at'
+  ) THEN
+    ALTER TABLE leads ADD COLUMN last_read_at TIMESTAMP;
+  END IF;
+END $$;
+
+-- 销售对话消息
+CREATE TABLE IF NOT EXISTS sales_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  lead_id UUID NOT NULL REFERENCES leads(id),
+  direction VARCHAR(10) NOT NULL,
+  kind VARCHAR(20) NOT NULL DEFAULT 'text',
+  content TEXT NOT NULL,
+  is_ai_generated BOOLEAN DEFAULT false,
+  sent_at TIMESTAMP,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sm_lead ON sales_messages(lead_id);
+CREATE INDEX IF NOT EXISTS idx_sm_tenant ON sales_messages(tenant_id);
 `;
 
 async function migrate() {

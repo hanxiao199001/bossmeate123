@@ -40,12 +40,14 @@ const STATUS_COLORS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   article: "图文",
   video_script: "视频脚本",
+  video: "视频",
   reply: "客服回复",
 };
 
 const TYPE_ICONS: Record<string, string> = {
   article: "📝",
   video_script: "🎬",
+  video: "🎥",
   reply: "💬",
 };
 
@@ -225,6 +227,7 @@ export default function ContentPage() {
             >
               <option value="">全部类型</option>
               <option value="article">图文</option>
+              <option value="video">视频</option>
               <option value="video_script">视频脚本</option>
               <option value="reply">客服回复</option>
             </select>

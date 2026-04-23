@@ -11,7 +11,7 @@
 
 import { db } from "../../models/db.js";
 import { dailyContentPlans, tenants, contents, users, journals } from "../../models/schema.js";
-import { eq, and, gte, sql } from "drizzle-orm";
+import { eq, and, gte, sql, ilike } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { contentQueue } from "../task/queue.js";
 import { logAgentAction, updateAgentLog } from "./base/agent-logger.js";
@@ -23,7 +23,6 @@ import { getTrendReport } from "./keyword-trend.js";
 import { sinkTrendData, sinkRecommendations } from "../data-collection/crawl-data-sink.js";
 import { prefetchJournalCovers } from "../crawler/journal-cover-prefetch.js";
 import type { ContentTask } from "./content-director.js";
-import type { ProduceVideoInput } from "../video/index.js";
 import type {
   IAgent,
   AgentConfig,
@@ -345,7 +344,7 @@ export class Orchestrator implements IAgent {
       for (const task of videoTasks) {
         const topicCapture = task.topic;
         const platformCapture = task.platform;
-        const refJournalName = task.referenceJournals?.[0];
+        const referenceJournalName = task.referenceJournals?.[0];
 
         setImmediate(async () => {
           try {
@@ -353,26 +352,36 @@ export class Orchestrator implements IAgent {
             const [tenantUser] = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, tenantIdCapture)).limit(1);
             const userId = tenantUser?.id || tenantIdCapture;
 
-            // 查询推荐主题关联的期刊真实数据，用于 Puppeteer 卡片
-            let journalRow: typeof journals.$inferSelect | undefined;
-            if (refJournalName) {
-              [journalRow] = await db
-                .select()
-                .from(journals)
-                .where(and(
-                  eq(journals.tenantId, tenantIdCapture),
-                  eq(journals.name, refJournalName),
-                ))
-                .limit(1);
+            // 尝试定位关联期刊：优先 referenceJournals 名称匹配，其次 topic 模糊匹配
+            let journalId: string | undefined;
+            const searchName = referenceJournalName || topicCapture;
+            if (searchName) {
+              try {
+                const [row] = await db
+                  .select({ id: journals.id })
+                  .from(journals)
+                  .where(and(eq(journals.tenantId, tenantIdCapture), ilike(journals.name, `%${searchName}%`)))
+                  .limit(1);
+                if (row) journalId = row.id;
+              } catch (err) {
+                logger.warn({ err: err instanceof Error ? err.message : err, searchName }, "期刊匹配失败，走关键词兜底");
+              }
             }
 
             const { produceVideo } = await import("../video/index.js");
-            const videoInput = journalRow
-              ? buildJournalVideoInput(tenantIdCapture, topicCapture, journalRow)
-              : buildFallbackVideoInput(tenantIdCapture, topicCapture);
-
-            logger.info({ topic: topicCapture, journal: journalRow?.name, mode: journalRow ? "journal-card" : "keyword-fallback" }, "视频合成开始");
-            const videoResult = await produceVideo(videoInput);
+            logger.info({ topic: topicCapture, journalId }, "视频合成开始");
+            const videoResult = await produceVideo({
+              tenantId: tenantIdCapture,
+              title: topicCapture,
+              journalId,
+              scenes: [
+                { voiceoverText: `今天给大家介绍：${topicCapture}`, visualKeywords: [topicCapture, "journal"], durationMs: 4000, subtitle: `${topicCapture} · 期刊速览` },
+                { voiceoverText: `${topicCapture}的核心优势`, visualKeywords: [topicCapture, "research"], durationMs: 5000, subtitle: "期刊定位 · 影响因子 · 分区" },
+                { voiceoverText: `审稿效率与录用率参考`, visualKeywords: ["review", "academic"], durationMs: 5000, subtitle: "审稿周期 · 录用率" },
+                { voiceoverText: `投稿建议：选题贴合刊物定位，格式严格遵守作者须知`, visualKeywords: ["writing", "manuscript"], durationMs: 5000, subtitle: "投稿建议" },
+                { voiceoverText: `想了解更多期刊，关注主页`, visualKeywords: ["subscribe", "follow"], durationMs: 3000, subtitle: "关注 · 获取更多期刊分析" },
+              ],
+            });
             logger.info({ topic: topicCapture, url: videoResult.url }, "视频合成完成，开始写入 DB");
             try {
               await db.insert(contents).values({
@@ -389,8 +398,6 @@ export class Orchestrator implements IAgent {
                   scenesCount: videoResult.scenesCount,
                   planId: planIdCapture,
                   platform: platformCapture,
-                  journalId: journalRow?.id,
-                  journalName: journalRow?.name,
                 },
               });
               logger.info({ topic: topicCapture }, "视频记录写入 contents 成功");
@@ -471,144 +478,6 @@ function calculateDelay(scheduledTime: string): number {
   const now = Date.now();
   // 提前30分钟开始生成，给写作留出时间
   return Math.max(scheduled - now - 30 * 60 * 1000, 0);
-}
-
-// ============ 视频脚本构建 ============
-
-type JournalRow = typeof journals.$inferSelect;
-
-/** 从 jcr_subjects JSON 字段解析出 subject 字符串数组 */
-function parseJcrSubjects(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw) as Array<{ subject?: string }>;
-    return arr.map((x) => x.subject).filter((s): s is string => !!s && s.trim().length > 0);
-  } catch {
-    return [];
-  }
-}
-
-function buildTopics(journal: JournalRow): string[] {
-  const jcr = parseJcrSubjects(journal.jcrSubjects);
-  const fromDiscipline = journal.discipline ? [journal.discipline] : [];
-  const merged = [...fromDiscipline, ...jcr];
-  // 去重保序
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const t of merged) {
-    const k = t.trim();
-    if (k && !seen.has(k)) { seen.add(k); out.push(k); }
-  }
-  return out.slice(0, 6);
-}
-
-function buildTips(journal: JournalRow): string[] {
-  const tips: string[] = [];
-  if (journal.reviewCycle || journal.timeToFirstDecisionDays) {
-    const cycle = journal.reviewCycle || `${journal.timeToFirstDecisionDays} 天`;
-    tips.push(`该刊审稿周期约 ${cycle}，投稿后请耐心等待返修意见。`);
-  }
-  if (journal.acceptanceRate != null) {
-    const rate = journal.acceptanceRate > 1 ? journal.acceptanceRate : journal.acceptanceRate * 100;
-    const level = rate < 20 ? "竞争激烈，稿件质量要过硬" : rate < 40 ? "竞争中等" : "接受率较高";
-    tips.push(`录用率约 ${rate.toFixed(1)}%，${level}。`);
-  }
-  if (journal.scopeDescription) {
-    tips.push(`Cover Letter 需紧扣期刊 Scope：${journal.scopeDescription.slice(0, 40)}…`);
-  }
-  tips.push("参考文献优先引用该刊近 3 年高被引论文，提升编辑好感度。");
-  return tips.slice(0, 4);
-}
-
-function buildJournalVideoInput(
-  tenantId: string,
-  topic: string,
-  journal: JournalRow,
-): ProduceVideoInput {
-  const topics = buildTopics(journal);
-  const tips = buildTips(journal);
-
-  const journalData = {
-    name: journal.name,
-    nameEn: journal.nameEn,
-    impactFactor: journal.impactFactor,
-    citeScore: journal.citeScore,
-    partition: journal.partition,
-    casPartition: journal.casPartitionNew || journal.casPartition,
-    reviewCycle: journal.reviewCycle,
-    acceptanceRate: journal.acceptanceRate,
-    annualVolume: journal.annualVolume,
-    timeToFirstDecisionDays: journal.timeToFirstDecisionDays,
-    publisher: journal.publisher,
-    discipline: journal.discipline,
-    scopeDescription: journal.scopeDescription,
-    topics,
-    tips,
-    contactHandle: "BossMate 学术",
-    ctaSubtitle: `关注我们，获取 ${journal.name} 最新投稿指南`,
-  };
-
-  const ifText = journal.impactFactor != null ? `影响因子 ${journal.impactFactor}` : "";
-  const partText = journal.partition ? `${journal.partition} 分区` : (journal.casPartitionNew || journal.casPartition || "");
-  const cycleText = journal.reviewCycle ? `审稿周期约 ${journal.reviewCycle}` : "";
-  const rateText = journal.acceptanceRate != null
-    ? `录用率约 ${((journal.acceptanceRate > 1 ? journal.acceptanceRate : journal.acceptanceRate * 100)).toFixed(1)}%`
-    : "";
-  const volumeText = journal.annualVolume ? `年发文 ${journal.annualVolume} 篇` : "";
-
-  const scenes: ProduceVideoInput["scenes"] = [
-    {
-      sceneType: "opening",
-      voiceoverText: `今天给大家介绍一本值得关注的期刊：${journal.name}。${[ifText, partText].filter(Boolean).join("，")}。`,
-      visualKeywords: [journal.discipline || topic, "journal"],
-      durationMs: 5000,
-    },
-    {
-      sceneType: "data",
-      voiceoverText: `先看核心指标：${ifText || "影响因子稳定"}，CiteScore ${journal.citeScore ?? "数据持续更新"}，${partText || "学术表现良好"}，适合严肃学术投稿。`,
-      visualKeywords: ["data", "analytics"],
-      durationMs: 6000,
-    },
-    {
-      sceneType: "review",
-      voiceoverText: `审稿方面，${[cycleText, rateText, volumeText].filter(Boolean).join("，") || "信息请以期刊官网为准"}。投稿前请做好格式规范。`,
-      visualKeywords: ["review", "editor"],
-      durationMs: 6000,
-    },
-    {
-      sceneType: "topic",
-      voiceoverText: `期刊主要收录 ${journal.discipline || "相关学科"} 方向，重点关注：${topics.slice(0, 3).join("、") || "相关研究主题"}。选题契合度高时投稿成功率更高。`,
-      visualKeywords: ["research", "topic"],
-      durationMs: 6000,
-    },
-    {
-      sceneType: "tips",
-      voiceoverText: `给大家三条投稿建议：${tips.slice(0, 3).join("；")}。`,
-      visualKeywords: ["tips", "writing"],
-      durationMs: 7000,
-    },
-    {
-      sceneType: "cta",
-      voiceoverText: "觉得有帮助，点赞关注，更多 SCI 期刊解读持续更新。",
-      visualKeywords: ["subscribe", "follow"],
-      durationMs: 4000,
-    },
-  ];
-
-  return { tenantId, title: topic, scenes, journalData };
-}
-
-function buildFallbackVideoInput(tenantId: string, topic: string): ProduceVideoInput {
-  return {
-    tenantId,
-    title: topic,
-    scenes: [
-      { voiceoverText: `${topic}介绍`, visualKeywords: [topic], durationMs: 5000 },
-      { voiceoverText: `${topic}核心优势`, visualKeywords: [topic, "research"], durationMs: 5000 },
-      { voiceoverText: `${topic}投稿建议`, visualKeywords: ["academic", "writing"], durationMs: 5000 },
-      { voiceoverText: `了解更多，请关注我们`, visualKeywords: ["subscribe", "follow"], durationMs: 5000 },
-    ],
-  };
 }
 
 /**

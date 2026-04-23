@@ -5,6 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and, desc, sql, count, sum, gte } from "drizzle-orm";
 import { db } from "../models/db.js";
+import { logger } from "../config/logger.js";
 import {
   contents,
   tokenLogs,
@@ -21,22 +22,23 @@ export async function dashboardRoutes(app: FastifyInstance) {
   /**
    * GET /dashboard/overview — 全局概览数据
    */
-  app.get("/overview", async (request) => {
-    const tenantId = request.tenantId;
-    const now = new Date();
-    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  app.get("/overview", async (request, reply) => {
+    try {
+      const tenantId = request.tenantId;
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    // 并行查询所有指标
-    const [
-      contentStats,
-      tokenStats,
-      knowledgeStats,
-      keywordCount,
-      competitorCount,
-      recentContents,
-      tokenTrend,
-    ] = await Promise.all([
+      // 并行查询所有指标
+      const [
+        contentStats,
+        tokenStats,
+        knowledgeStats,
+        keywordCount,
+        competitorCount,
+        recentContents,
+        tokenTrend,
+      ] = await Promise.all([
       // 内容统计
       db
         .select({
@@ -156,5 +158,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
         })),
       },
     };
+    } catch (err) {
+      logger.error({ err }, "获取看板数据失败");
+      return reply.code(500).send({ success: false, error: "操作失败，请稍后重试" });
+    }
   });
 }

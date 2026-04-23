@@ -1,5 +1,6 @@
 import { SkillRegistry } from "./skill-registry.js";
 import { ArticleSkill } from "./article-skill.js";
+import { VideoSkill } from "./video-skill.js";
 import { getProvider } from "../ai/provider-factory.js";
 
 /**
@@ -11,10 +12,8 @@ export function initializeSkills(): void {
 
   if (defaultProvider) {
     SkillRegistry.register(new ArticleSkill(defaultProvider));
+    SkillRegistry.register(new VideoSkill(defaultProvider));
   }
-
-  // TODO: 后续新增技能在这里注册
-  // SkillRegistry.register(new VideoSkill(defaultProvider));
 
   console.log(`${SkillRegistry.list().length} skills initialized`);
 }

@@ -1,54 +1,122 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="_base.css"/>
+<meta charset="utf-8">
 <style>
-  body { background: linear-gradient(145deg, #3a1d7a 0%, #5b2ca8 45%, #7b3ff2 100%); }
-  .hero { text-align: center; width: 100%; }
-  .journal-cn {
-    font-size: 92px;
-    font-weight: 900;
-    line-height: 1.15;
-    letter-spacing: 2px;
-    margin-top: 24px;
-    margin-bottom: 28px;
-    text-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1920px; position: relative; overflow: hidden;
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: white;
+    display: flex; flex-direction: column; align-items: center;
   }
-  .journal-en {
-    font-family: var(--font-en);
-    font-size: 40px;
-    font-weight: 500;
-    opacity: 0.85;
-    margin-bottom: 56px;
-    font-style: italic;
+  .deco-1 { position: absolute; top: 120px; right: -120px;
+    width: 500px; height: 500px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(108,99,255,0.25), transparent 70%); }
+  .deco-2 { position: absolute; bottom: 600px; left: -120px;
+    width: 420px; height: 420px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(124,77,255,0.2), transparent 70%); }
+  .deco-3 { position: absolute; top: 900px; right: 100px;
+    width: 220px; height: 220px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,215,0,0.1), transparent 70%); }
+  .top-bar { position: absolute; top: 0; left: 0; right: 0;
+    height: 8px; background: linear-gradient(90deg, #6c63ff, #a855f7, #6c63ff); }
+  .tag {
+    margin-top: 260px;
+    background: linear-gradient(135deg, #6c63ff, #8b5cf6);
+    padding: 16px 56px; border-radius: 40px;
+    font-size: 36px; font-weight: bold;
+    letter-spacing: 8px;
+    box-shadow: 0 12px 40px rgba(108,99,255,0.45), 0 0 0 1px rgba(255,255,255,0.1) inset;
   }
   .divider {
-    width: 120px;
-    height: 4px;
-    margin: 0 auto 48px;
-    background: linear-gradient(90deg, transparent, #fff, transparent);
-    opacity: 0.6;
+    width: 520px; height: 2px; margin: 60px 0 0;
+    background: linear-gradient(90deg, transparent, #6c63ff, transparent);
+    position: relative;
   }
-  .badges { gap: 20px; }
-  .badge-if { background: rgba(255, 215, 0, 0.26); border-color: rgba(255, 215, 0, 0.55); }
-  .badge-q1 { background: rgba(74, 222, 128, 0.26); border-color: rgba(74, 222, 128, 0.55); }
+  .divider::before {
+    content: ""; position: absolute;
+    left: 50%; top: -8px; transform: translateX(-50%);
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #6c63ff;
+    box-shadow: 0 0 24px #6c63ff, 0 0 40px rgba(108,99,255,0.5);
+  }
+  .journal-name {
+    margin-top: 80px;
+    font-size: 84px; font-weight: 900;
+    text-shadow: 0 0 40px rgba(108,99,255,0.6), 0 4px 20px rgba(0,0,0,0.5);
+    text-align: center; padding: 0 60px;
+    line-height: 1.15; max-width: 1000px;
+  }
+  .journal-name-en {
+    font-size: 38px; color: #b8b5ff;
+    margin-top: 24px; text-align: center;
+    padding: 0 60px; letter-spacing: 1px; font-style: italic;
+    max-width: 1000px;
+  }
+  .data-card {
+    margin-top: 80px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.14), rgba(255,255,255,0.04));
+    border-radius: 32px; padding: 56px 60px 48px;
+    width: 920px; text-align: center;
+    border: 1px solid rgba(255,255,255,0.15);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+    position: relative; overflow: hidden;
+  }
+  .data-card::before {
+    content: ""; position: absolute;
+    top: 0; left: 0; right: 0; height: 5px;
+    background: linear-gradient(90deg, #ffd700, #ff9500, #ffd700);
+  }
+  .data-label { font-size: 32px; color: #a5a1ff; letter-spacing: 6px; font-weight: 500; }
+  .data-value {
+    font-size: 136px; font-weight: 900;
+    color: #ffd700; margin: 12px 0 20px;
+    text-shadow: 0 0 40px rgba(255,215,0,0.55), 0 0 80px rgba(255,215,0,0.3);
+    line-height: 1;
+  }
+  .badges { display: flex; gap: 24px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+  .badge {
+    padding: 14px 44px; border-radius: 32px;
+    font-size: 30px; font-weight: bold;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.3);
+    letter-spacing: 2px;
+  }
+  .badge:empty { display: none; }
+  .badge-green { background: linear-gradient(135deg, #4caf50, #2e7d32); }
+  .badge-blue { background: linear-gradient(135deg, #2196f3, #1565c0); }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: 470px;
+    text-align: center;
+  }
+  .footer-line {
+    width: 600px; height: 2px; margin: 0 auto 22px;
+    background: linear-gradient(90deg, transparent, #6c63ff 50%, transparent);
+  }
+  .footer-text { font-size: 26px; color: #8a87a8; letter-spacing: 3px; }
 </style>
 </head>
 <body>
-<div class="stage">
-  <div class="hero">
-    <div class="label">JOURNAL RECOMMENDATION · 期刊推荐</div>
-    <h1 class="journal-cn">{{journalName}}</h1>
-    <div class="journal-en">{{journalNameEn}}</div>
-    <div class="divider"></div>
-    <div class="row badges">
-      <span class="badge badge-if">IF {{impactFactor}}</span>
-      <span class="badge badge-q1">{{partition}}</span>
-      <span class="badge">{{publisher}}</span>
+  <div class="deco-1"></div>
+  <div class="deco-2"></div>
+  <div class="deco-3"></div>
+  <div class="top-bar"></div>
+  <div class="tag">📚 期 刊 推 荐</div>
+  <div class="divider"></div>
+  <div class="journal-name">{{name}}</div>
+  <div class="journal-name-en">{{nameEn}}</div>
+  <div class="data-card">
+    <div class="data-label">影 响 因 子</div>
+    <div class="data-value">{{impactFactor}}</div>
+    <div class="badges">
+      <span class="badge badge-green">{{partition}}</span>
+      <span class="badge badge-blue">{{category}}</span>
     </div>
   </div>
-  <div class="footer-brand">学术投稿 · 期刊洞察</div>
-</div>
+  <div class="footer">
+    <div class="footer-line"></div>
+    <div class="footer-text">学术期刊一站式推荐平台</div>
+  </div>
 </body>
 </html>

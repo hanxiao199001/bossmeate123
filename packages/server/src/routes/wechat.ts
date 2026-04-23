@@ -24,35 +24,40 @@ export async function wechatRoutes(app: FastifyInstance) {
    * GET /wechat/config - 获取公众号配置（脱敏返回）
    */
   app.get("/wechat/config", async (request, reply) => {
-    const tenantId = request.tenantId;
+    try {
+      const tenantId = request.tenantId;
 
-    const configs = await db
-      .select()
-      .from(wechatConfigs)
-      .where(eq(wechatConfigs.tenantId, tenantId))
-      .limit(1);
+      const configs = await db
+        .select()
+        .from(wechatConfigs)
+        .where(eq(wechatConfigs.tenantId, tenantId))
+        .limit(1);
 
-    if (configs.length === 0) {
+      if (configs.length === 0) {
+        return reply.send({
+          code: "ok",
+          data: null,
+          message: "未配置微信公众号",
+        });
+      }
+
+      const c = configs[0];
       return reply.send({
         code: "ok",
-        data: null,
-        message: "未配置微信公众号",
+        data: {
+          appId: c.appId,
+          appSecretMask: c.appSecret ? `${c.appSecret.slice(0, 4)}****${c.appSecret.slice(-4)}` : "",
+          accountName: c.accountName,
+          isVerified: c.isVerified,
+          hasToken: !!c.accessToken,
+          tokenExpiresAt: c.tokenExpiresAt,
+          updatedAt: c.updatedAt,
+        },
       });
+    } catch (err) {
+      logger.error({ err }, "获取微信配置失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    const c = configs[0];
-    return reply.send({
-      code: "ok",
-      data: {
-        appId: c.appId,
-        appSecretMask: c.appSecret ? `${c.appSecret.slice(0, 4)}****${c.appSecret.slice(-4)}` : "",
-        accountName: c.accountName,
-        isVerified: c.isVerified,
-        hasToken: !!c.accessToken,
-        tokenExpiresAt: c.tokenExpiresAt,
-        updatedAt: c.updatedAt,
-      },
-    });
   });
 
   /**
@@ -156,110 +161,125 @@ export async function wechatRoutes(app: FastifyInstance) {
    * POST /wechat/config/verify - 验证配置是否有效（不保存）
    */
   app.post("/wechat/config/verify", async (request, reply) => {
-    const { appId, appSecret } = request.body as { appId: string; appSecret: string };
+    try {
+      const { appId, appSecret } = request.body as { appId: string; appSecret: string };
 
-    if (!appId || !appSecret) {
-      return reply.status(400).send({
-        code: "BAD_REQUEST",
-        message: "appId 和 appSecret 不能为空",
+      if (!appId || !appSecret) {
+        return reply.status(400).send({
+          code: "BAD_REQUEST",
+          message: "appId 和 appSecret 不能为空",
+        });
+      }
+
+      const result = await verifyConfig(appId, appSecret);
+
+      return reply.send({
+        code: "ok",
+        data: result,
       });
+    } catch (err) {
+      logger.error({ err }, "验证微信配置失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    const result = await verifyConfig(appId, appSecret);
-
-    return reply.send({
-      code: "ok",
-      data: result,
-    });
   });
 
   /**
    * POST /wechat/draft - 创建草稿（文章进入公众号草稿箱）
    */
   app.post("/wechat/draft", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const userId = request.user.userId;
-    const { title, content, author, digest, heroImageUrl } = request.body as {
-      title: string;
-      content: string;
-      author?: string;
-      digest?: string;
-      heroImageUrl?: string;
-    };
+    try {
+      const tenantId = request.tenantId;
+      const userId = request.user.userId;
+      const { title, content, author, digest, heroImageUrl } = request.body as {
+        title: string;
+        content: string;
+        author?: string;
+        digest?: string;
+        heroImageUrl?: string;
+      };
 
-    if (!title || !content) {
-      return reply.status(400).send({
-        code: "BAD_REQUEST",
-        message: "title 和 content 不能为空",
-      });
-    }
-
-    // 检查是否已配置公众号
-    const configs = await db
-      .select()
-      .from(wechatConfigs)
-      .where(eq(wechatConfigs.tenantId, tenantId))
-      .limit(1);
-
-    if (configs.length === 0) {
-      return reply.status(400).send({
-        code: "NOT_CONFIGURED",
-        message: "请先在设置中配置微信公众号AppID和AppSecret",
-      });
-    }
-
-    // 创建草稿（传入期刊封面图作为公众号首图）
-    const result = await addDraft(tenantId, title, content, author, digest, heroImageUrl);
-
-    if (result.success) {
-      // 保存到内容表
-      try {
-        await db.insert(contents).values({
-          tenantId,
-          userId,
-          type: "article",
-          title,
-          body: content,
-          status: "draft",
-          platforms: [{ platform: "wechat", mediaId: result.mediaId, status: "draft", createdAt: new Date().toISOString() }],
-          metadata: { wechatMediaId: result.mediaId },
+      if (!title || !content) {
+        return reply.status(400).send({
+          code: "BAD_REQUEST",
+          message: "title 和 content 不能为空",
         });
-      } catch (err) {
-        logger.warn({ err }, "保存内容记录失败，但草稿已创建");
       }
-    }
 
-    return reply.send({
-      code: result.success ? "ok" : "FAILED",
-      data: result,
-      message: result.success
-        ? "文章已成功添加到公众号草稿箱！请在微信公众平台确认后发布。"
-        : `草稿创建失败: ${result.error}`,
-    });
+      // 检查是否已配置公众号
+      const configs = await db
+        .select()
+        .from(wechatConfigs)
+        .where(eq(wechatConfigs.tenantId, tenantId))
+        .limit(1);
+
+      if (configs.length === 0) {
+        return reply.status(400).send({
+          code: "NOT_CONFIGURED",
+          message: "请先在设置中配置微信公众号AppID和AppSecret",
+        });
+      }
+
+      // 创建草稿（传入期刊封面图作为公众号首图）
+      const result = await addDraft(tenantId, title, content, author, digest, heroImageUrl);
+
+      if (result.success) {
+        // 保存到内容表
+        try {
+          await db.insert(contents).values({
+            tenantId,
+            userId,
+            type: "article",
+            title,
+            body: content,
+            status: "draft",
+            platforms: [{ platform: "wechat", mediaId: result.mediaId, status: "draft", createdAt: new Date().toISOString() }],
+            metadata: { wechatMediaId: result.mediaId },
+          });
+        } catch (err) {
+          logger.warn({ err }, "保存内容记录失败，但草稿已创建");
+        }
+      }
+
+      return reply.send({
+        code: result.success ? "ok" : "FAILED",
+        data: result,
+        message: result.success
+          ? "文章已成功添加到公众号草稿箱！请在微信公众平台确认后发布。"
+          : `草稿创建失败: ${result.error}`,
+      });
+    } catch (err) {
+      logger.error({ err }, "创建微信草稿失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
   });
 
   /**
    * POST /wechat/publish - 发布草稿（从草稿箱正式发布）
    */
   app.post("/wechat/publish", async (request, reply) => {
-    const tenantId = request.tenantId;
-    const { mediaId } = request.body as { mediaId: string };
+    try {
+      const tenantId = request.tenantId;
+      const { mediaId } = request.body as { mediaId: string };
 
-    if (!mediaId) {
-      return reply.status(400).send({
-        code: "BAD_REQUEST",
-        message: "mediaId 不能为空",
+      if (!mediaId) {
+        return reply.status(400).send({
+          code: "BAD_REQUEST",
+          message: "mediaId 不能为空",
+        });
+      }
+
+      const result = await publishDraft(tenantId, mediaId);
+
+      return reply.send({
+        code: result.success ? "ok" : "FAILED",
+        data: result,
+        message: result.success
+          ? "文章发布请求已提交！微信审核通过后将自动发布到公众号。"
+          : `发布失败: ${result.error}`,
       });
+    } catch (err) {
+      logger.error({ err }, "发布微信内容失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
-
-    const result = await publishDraft(tenantId, mediaId);
-
-    return reply.send({
-      code: result.success ? "ok" : "FAILED",
-      data: result,
-      message: result.success
-        ? "文章发布请求已提交！微信审核通过后将自动发布到公众号。"
-        : `发布失败: ${result.error}`,
-    });
   });
 }

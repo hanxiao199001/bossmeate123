@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -13,6 +14,7 @@ interface ContentItem {
   platforms: Array<{ platform: string; status?: string; mediaId?: string; publishedAt?: string }>;
   tokensTotal: number;
   conversationId: string | null;
+  metadata?: Record<string, any>;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,7 +34,12 @@ interface PublishResult {
   accountName: string;
   platform: string;
   success: boolean;
+  /** full = 自动群发已发出；draft_only = 仅在草稿箱，需手动发送 */
+  mode?: "full" | "draft_only";
   message?: string;
+  draftUrl?: string;
+  mediaId?: string;
+  error?: string;
 }
 
 // ===== 常量 =====
@@ -239,10 +246,18 @@ export default function ContentDetailPage() {
         const results = res.data.results || [];
         setPublishResults(results);
         const s = res.data.summary;
-        setPublishMsg(`发布完成：${s.success}/${s.total} 个账号成功`);
+        // 精细文案：失败优先暴露，draft_only 用独立词避免"成功"歧义
+        const fullOk = results.filter((r) => r.success && r.mode === "full").length;
+        const draftOnly = results.filter((r) => r.success && r.mode === "draft_only").length;
+        const failed = s.failed;
+        const parts: string[] = [];
+        if (fullOk > 0) parts.push(`${fullOk} 个已群发`);
+        if (draftOnly > 0) parts.push(`${draftOnly} 个进草稿箱待人工发送`);
+        if (failed > 0) parts.push(`${failed} 个失败`);
+        setPublishMsg(parts.length > 0 ? parts.join("，") : "无发布结果");
 
-        // 更新内容状态为已发布
-        if (s.success > 0) {
+        // 仅当有账号"真正群发"(mode=full)才把内容标 published；draft_only 保留原状态
+        if (fullOk > 0) {
           await api.patch(`/content/${id}`, { status: "published" });
           fetchContent();
         }
@@ -254,9 +269,22 @@ export default function ContentDetailPage() {
     }
   };
 
-  // 简易 Markdown 转 HTML
+  // Markdown → HTML（先转义再匹配语法，避免 XSS；HTML 分支走 DOMParser 白名单清洗）
   const renderMarkdown = (md: string) => {
-    let html = md
+    const trimmed = md.trim();
+
+    // 后端期刊推荐模板等场景返回的是 HTML；用白名单 sanitizer 清洗后渲染，
+    // script/iframe/on*/javascript: 等危险内容会被剥离。
+    if (trimmed.startsWith("<div") || trimmed.startsWith("<section") || trimmed.startsWith("<!")) {
+      return sanitizeHtml(trimmed);
+    }
+
+    // 第一步：把用户正文里任何原始 HTML 都先转义，防止注入。
+    const safe = escapeHtml(md);
+
+    // 第二步：对转义后的安全字符串做 Markdown 语法替换。
+    // 链接单独处理，校验 URL 协议，拒绝 javascript:/data: 等。
+    let html = safe
       // 标题
       .replace(/^### (.+)$/gm, '<h3 class="text-base font-bold text-gray-800 mt-4 mb-2">$1</h3>')
       .replace(/^## (.+)$/gm, '<h2 class="text-lg font-bold text-gray-900 mt-5 mb-2">$1</h2>')
@@ -266,16 +294,20 @@ export default function ContentDetailPage() {
       .replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
       // 行内代码
       .replace(/`([^`]+)`/g, '<code class="bg-gray-100 text-red-600 px-1.5 py-0.5 rounded text-sm">$1</code>')
-      // 引用
-      .replace(/^> (.+)$/gm, '<blockquote class="border-l-4 border-blue-300 pl-4 py-1 my-2 text-gray-600 italic">$1</blockquote>')
+      // 引用（注意：escapeHtml 已把 > 转成 &gt;）
+      .replace(/^&gt; (.+)$/gm, '<blockquote class="border-l-4 border-blue-300 pl-4 py-1 my-2 text-gray-600 italic">$1</blockquote>')
       // 无序列表
       .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-gray-700">$1</li>')
       // 有序列表
       .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 list-decimal text-gray-700">$1</li>')
       // 分割线
       .replace(/^---$/gm, '<hr class="my-4 border-gray-200" />')
-      // 链接
-      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank" rel="noopener">$1</a>')
+      // 链接：校验协议，不安全则以纯文本形式保留
+      .replace(/\[(.+?)\]\((.+?)\)/g, (_m, text, url) => {
+        if (!isSafeUrl(url)) return `[${text}](${url})`;
+        // text / url 已经经过 escapeHtml 处理，可以安全拼入属性
+        return `<a href="${url}" class="text-blue-600 underline" target="_blank" rel="noopener noreferrer">${text}</a>`;
+      })
       // 段落（空行分隔）
       .replace(/\n\n/g, '</p><p class="text-gray-700 leading-relaxed mb-3">')
       // 单换行
@@ -516,35 +548,88 @@ export default function ContentDetailPage() {
                   </button>
                 </div>
 
-                {/* 发布结果 */}
+                {/* 发布结果 — 4 态：full 绿 / draft_only 蓝 / failed-with-draft 橙 / failed 红 */}
                 {publishResults.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <p className="text-sm font-medium text-gray-700 mb-2">
                       发布结果：
                     </p>
-                    {publishResults.map(result => (
-                      <div
-                        key={result.accountId}
-                        className={`text-sm p-2 rounded ${
-                          result.success
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {result.success ? "✓" : "✗"} {result.accountName}:{" "}
-                        {result.message || "成功"}
-                      </div>
-                    ))}
+                    {publishResults.map(result => {
+                      const isFull = result.success && result.mode === "full";
+                      const isDraftOnly = result.success && result.mode === "draft_only";
+                      const isFailedWithDraft = !result.success && !!result.mediaId;
+                      const isFailedHard = !result.success && !result.mediaId;
+
+                      let toneClass: string;
+                      let icon: string;
+                      let fallbackText: string;
+                      let btnClass: string;
+                      let btnLabel: string;
+
+                      if (isFull) {
+                        toneClass = "bg-green-100 text-green-700";
+                        icon = "✓";
+                        fallbackText = "已群发";
+                        btnClass = "";
+                        btnLabel = "";
+                      } else if (isDraftOnly) {
+                        toneClass = "bg-blue-50 text-blue-700 border border-blue-200";
+                        icon = "📝";
+                        fallbackText = "草稿已创建";
+                        btnClass = "bg-blue-600 hover:bg-blue-700";
+                        btnLabel = "前往公众号后台发送 →";
+                      } else if (isFailedWithDraft) {
+                        toneClass = "bg-orange-50 text-orange-700 border border-orange-200";
+                        icon = "⚠";
+                        fallbackText = "发布失败但草稿已保存";
+                        btnClass = "bg-orange-600 hover:bg-orange-700";
+                        btnLabel = "前往公众号后台查看草稿 →";
+                      } else {
+                        toneClass = "bg-red-100 text-red-700";
+                        icon = "✗";
+                        fallbackText = "失败";
+                        btnClass = "";
+                        btnLabel = "";
+                      }
+
+                      const text = isFailedHard
+                        ? (result.error || fallbackText)
+                        : (result.message || result.error || fallbackText);
+                      const showBtn = (isDraftOnly || isFailedWithDraft) && !!result.draftUrl;
+
+                      return (
+                        <div
+                          key={result.accountId}
+                          className={`text-sm p-2 rounded flex items-center justify-between gap-3 ${toneClass}`}
+                        >
+                          <span className="flex-1">
+                            {icon} <span className="font-medium">{result.accountName}</span>：{text}
+                          </span>
+                          {showBtn && (
+                            <a
+                              href={result.draftUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`shrink-0 px-3 py-1 rounded text-white text-xs font-medium ${btnClass}`}
+                            >
+                              {btnLabel}
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
                 {publishMsg && (
                   <p
                     className={`mt-3 text-sm ${
-                      publishMsg.includes("成功") ||
-                      publishMsg.includes("完成")
-                        ? "text-green-700"
-                        : "text-red-600"
+                      // 按 results 实际状态判色，不做字符串匹配
+                      publishResults.some((r) => !r.success)
+                        ? "text-red-600"
+                        : publishResults.some((r) => r.success && r.mode === "draft_only")
+                          ? "text-blue-700"
+                          : "text-green-700"
                     }`}
                   >
                     {publishMsg}
@@ -630,12 +715,36 @@ export default function ContentDetailPage() {
               <div className="text-xs text-gray-400 mb-2">
                 {canEdit ? "预览" : "内容"}
               </div>
-              <div
-                className="flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto prose-sm"
-                dangerouslySetInnerHTML={{
-                  __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
-                }}
-              />
+              {content.type === "video" ? (
+                <div className="flex-1 min-h-[300px] p-6 bg-black rounded-xl flex items-center justify-center">
+                  <div className="w-full max-w-lg">
+                    <video
+                      src={content.body || ""}
+                      controls
+                      poster={(content.metadata as any)?.coverUrl}
+                      className="w-full rounded-lg"
+                    />
+                    <div className="mt-3 flex justify-center gap-3">
+                      <a href={content.body || ""} download className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        ⬇ 下载视频
+                      </a>
+                    </div>
+                    {(content.metadata as any)?.durationMs && (
+                      <p className="text-center text-xs text-gray-400 mt-2">
+                        时长 {Math.round(((content.metadata as any).durationMs || 0) / 1000)}s ·
+                        大小 {((content.metadata as any).sizeBytes ? ((content.metadata as any).sizeBytes / 1024 / 1024).toFixed(1) + "MB" : "未知")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto prose-sm"
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
+                  }}
+                />
+              )}
             </div>
           )}
         </div>

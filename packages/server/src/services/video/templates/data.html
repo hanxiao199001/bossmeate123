@@ -1,75 +1,150 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="_base.css"/>
+<meta charset="utf-8">
 <style>
-  body { background: linear-gradient(145deg, #0b1a3a 0%, #0f3a5e 45%, #14b8a6 100%); }
-  .title { font-size: 72px; font-weight: 800; letter-spacing: 4px; text-align: center; }
-  .sub-title {
-    font-size: 32px; opacity: 0.75; text-align: center; letter-spacing: 3px;
-    margin-top: 8px; margin-bottom: 24px;
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1920px; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, #0a1628 0%, #141e30 40%, #243b55 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", sans-serif;
+    color: white;
   }
-  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; width: 100%; }
-  .metric {
+  .deco-1 { position: absolute; top: 320px; right: -160px;
+    width: 540px; height: 540px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(52,152,219,0.22), transparent 70%); }
+  .deco-2 { position: absolute; bottom: 420px; left: -140px;
+    width: 460px; height: 460px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(41,128,185,0.2), transparent 70%); }
+  .top-bar { position: absolute; top: 0; left: 0; right: 0;
+    height: 8px; background: linear-gradient(90deg, #ffd700, #ff9500, #ffd700); }
+  .header {
+    padding: 96px 0 42px;
+    background: linear-gradient(180deg, rgba(26,35,126,0.55), transparent);
     text-align: center;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 36px;
-    padding: 56px 24px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
   }
-  .metric .value {
-    font-family: var(--font-en);
-    font-size: 132px;
-    font-weight: 900;
-    line-height: 1;
-    background: linear-gradient(180deg, #fff 0%, #a7f3d0 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    letter-spacing: -2px;
+  .title {
+    font-size: 62px; font-weight: 900;
+    letter-spacing: 12px;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.5);
   }
-  .metric .label-sm {
-    font-size: 32px; font-weight: 600; margin-top: 18px; letter-spacing: 2px;
-    opacity: 0.9;
+  .subtitle {
+    font-size: 32px; color: #90caf9;
+    margin-top: 20px; letter-spacing: 6px;
+    opacity: 0.8;
   }
-  .metric .label-en {
-    font-family: var(--font-en); font-size: 22px; font-weight: 400;
-    opacity: 0.55; margin-top: 6px; text-transform: uppercase; letter-spacing: 3px;
+  .cols { display: flex; gap: 28px; padding: 60px 40px 0; }
+  .col {
+    flex: 1; position: relative; overflow: hidden;
+    background: linear-gradient(160deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 24px; padding: 48px 24px 40px;
+    text-align: center;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.3);
   }
-  .note {
-    margin-top: 16px; text-align: center; font-size: 28px; opacity: 0.7;
-    letter-spacing: 2px;
+  .col::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px; }
+  .col-1::before { background: linear-gradient(90deg, #1976d2, #64b5f6); }
+  .col-2::before { background: linear-gradient(90deg, #6a1b9a, #ce93d8); }
+  .col-3::before { background: linear-gradient(90deg, #2e7d32, #81c784); }
+  .col-label { font-size: 28px; margin-bottom: 32px; letter-spacing: 4px; font-weight: 500; }
+  .col-1 .col-label { color: #90caf9; }
+  .col-2 .col-label { color: #ce93d8; }
+  .col-3 .col-label { color: #a5d6a7; }
+  .col-value {
+    font-size: 100px; font-weight: 900; line-height: 1; margin-bottom: 18px;
   }
+  .col-1 .col-value { color: #ffd700; text-shadow: 0 0 32px rgba(255,215,0,0.5); }
+  .col-2 .col-value { color: #80cbc4; text-shadow: 0 0 32px rgba(128,203,196,0.5); }
+  .col-3 .col-value { color: #69f0ae; text-shadow: 0 0 32px rgba(105,240,174,0.5); font-size: 78px; }
+  .col-sub { font-size: 22px; color: #607d8b; letter-spacing: 2px; margin-bottom: 30px; }
+  .col-pill {
+    display: inline-block; padding: 10px 30px;
+    border-radius: 22px; font-size: 22px; font-weight: 500;
+  }
+  .col-1 .col-pill { background: linear-gradient(135deg, rgba(52,152,219,0.55), rgba(26,118,210,0.5)); }
+  .col-2 .col-pill { background: linear-gradient(135deg, rgba(156,39,176,0.55), rgba(106,27,154,0.5)); }
+  .col-3 .col-pill { background: linear-gradient(135deg, rgba(76,175,80,0.55), rgba(46,125,50,0.5)); }
+  .row2 { display: flex; gap: 28px; padding: 38px 40px 0; }
+  .row2-box {
+    flex: 1; background: linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+    border-radius: 20px; padding: 36px 40px;
+    border-left: 6px solid #e91e63;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  }
+  .row2-box.cyan { border-left-color: #00bcd4; }
+  .row2-label {
+    font-size: 26px; color: #90caf9; margin-bottom: 14px;
+    letter-spacing: 3px;
+  }
+  .row2-box.cyan .row2-label { color: #80deea; }
+  .row2-value { font-size: 52px; font-weight: 900; color: #f8bbd0; letter-spacing: 1px; }
+  .row2-box.cyan .row2-value { color: #ffffff; font-size: 40px; font-weight: 700; }
+  .journal-strip {
+    margin: 48px 40px 0;
+    padding: 32px 40px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+    border-radius: 20px; text-align: center;
+    border: 1px solid rgba(255,255,255,0.12);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  }
+  .journal-strip-name { font-size: 46px; font-weight: 900; }
+  .journal-strip-en { font-size: 26px; color: #90caf9; margin-top: 10px; font-style: italic; }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: 470px;
+    text-align: center;
+  }
+  .footer-line {
+    width: 600px; height: 2px; margin: 0 auto 22px;
+    background: linear-gradient(90deg, transparent, #3498db, transparent);
+  }
+  .footer-text { font-size: 26px; color: #607d8b; letter-spacing: 3px; }
 </style>
 </head>
 <body>
-<div class="stage">
-  <div>
-    <div class="title">核心指标</div>
-    <div class="sub-title">KEY METRICS</div>
+  <div class="deco-1"></div>
+  <div class="deco-2"></div>
+  <div class="top-bar"></div>
+  <div class="header">
+    <div class="title">核 心 数 据</div>
+    <div class="subtitle">Core Metrics</div>
   </div>
-  <div class="metrics">
-    <div class="metric">
-      <div class="value">{{impactFactor}}</div>
-      <div class="label-sm">影响因子</div>
-      <div class="label-en">Impact Factor</div>
+  <div class="cols">
+    <div class="col col-1">
+      <div class="col-label">影响因子</div>
+      <div class="col-value">{{impactFactor}}</div>
+      <div class="col-sub">Impact Factor</div>
+      <div class="col-pill">IF {{impactFactor}}</div>
     </div>
-    <div class="metric">
-      <div class="value">{{citeScore}}</div>
-      <div class="label-sm">CiteScore</div>
-      <div class="label-en">近 4 年引用</div>
+    <div class="col col-2">
+      <div class="col-label">CiteScore</div>
+      <div class="col-value">{{citeScore}}</div>
+      <div class="col-sub">引用分数</div>
+      <div class="col-pill">CiteScore</div>
     </div>
-    <div class="metric">
-      <div class="value">{{partition}}</div>
-      <div class="label-sm">中科院分区</div>
-      <div class="label-en">{{casPartition}}</div>
+    <div class="col col-3">
+      <div class="col-label">中科院分区</div>
+      <div class="col-value">{{partition}}</div>
+      <div class="col-sub">CAS Partition</div>
+      <div class="col-pill">{{partition}}</div>
     </div>
   </div>
-  <div class="note">{{journalName}} · {{discipline}}</div>
-  <div class="footer-brand">学术投稿 · 期刊洞察</div>
-</div>
+  <div class="row2">
+    <div class="row2-box">
+      <div class="row2-label">自 引 率</div>
+      <div class="row2-value">{{selfCitationRate}}</div>
+    </div>
+    <div class="row2-box cyan">
+      <div class="row2-label">出 版 商</div>
+      <div class="row2-value">{{publisher}}</div>
+    </div>
+  </div>
+  <div class="journal-strip">
+    <div class="journal-strip-name">{{name}}</div>
+    <div class="journal-strip-en">{{nameEn}}</div>
+  </div>
+  <div class="footer">
+    <div class="footer-line"></div>
+    <div class="footer-text">期 刊 核 心 数 据 一 览</div>
+  </div>
 </body>
 </html>

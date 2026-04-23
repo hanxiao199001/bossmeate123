@@ -2,29 +2,31 @@
  * Video Production Chain 统一入口
  *
  * 高层 API：
- *   produceVideo(tenantId, script)
- *     = fetchAssets → synthesize TTS per scene → compose mp4
+ *   produceVideo(tenantId, script, journalId?)
+ *     = 期刊封面（或 Pexels 兜底） → 逐场景 TTS → FFmpeg 合成（含期刊信息卡字幕）
  *
- * 调用方：VideoProducer Agent / manual route
+ * 调用方：VideoProducer Agent / chat 路由
  */
 
+import { eq, and } from "drizzle-orm";
 import { assetManager } from "./asset-manager.js";
+import type { SceneAsset, JournalAssetInput } from "./asset-manager.js";
 import { ttsService } from "./tts-service.js";
 import { videoComposer } from "./composer.js";
-import type { ComposeResult } from "./composer.js";
-import { generateCard, type SceneType, type JournalCardData } from "./html-renderer.js";
-import { unlink } from "node:fs/promises";
+import type { ComposeResult, ComposerScene, JournalInfoCard } from "./composer.js";
+import { generateCard } from "./html-renderer.js";
+import type { SceneType, JournalCardData } from "./html-renderer.js";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
-
-export type { SceneType, JournalCardData } from "./html-renderer.js";
+import { db } from "../../models/db.js";
+import { journals } from "../../models/schema.js";
 
 export interface ProduceSceneInput {
   voiceoverText: string;
-  visualKeywords: string[];   // 用第一个命中作为素材（sceneType 缺席或渲染失败时的兜底）
-  durationMs?: number;        // 不传则按 voiceover 长度估算
+  visualKeywords: string[];   // Pexels 兜底关键词
+  durationMs?: number;
   subtitle?: string;
-  /** 指定后优先用 Puppeteer 卡片作为画面（需要 journalData） */
+  /** V2: 场景类型，存在时生成对应信息卡底图，跳过封面/Pexels逻辑 */
   sceneType?: SceneType;
 }
 
@@ -32,8 +34,10 @@ export interface ProduceVideoInput {
   tenantId: string;
   title: string;
   scenes: ProduceSceneInput[];
-  /** 6 场景期刊卡片模式所需的期刊真实数据 */
-  journalData?: JournalCardData;
+  /** 关联期刊 ID：用于拉封面和信息卡 */
+  journalId?: string;
+  /** 直接传入期刊数据（优先级高于 journalId，避免重复查库） */
+  journal?: JournalAssetInput & JournalInfoCard & JournalCardData;
 }
 
 export interface ProduceVideoResult extends ComposeResult {
@@ -44,103 +48,188 @@ export interface ProduceVideoResult extends ComposeResult {
 export async function produceVideo(
   input: ProduceVideoInput
 ): Promise<ProduceVideoResult> {
-  const { tenantId, scenes, journalData } = input;
+  const { tenantId, scenes } = input;
 
-  // 只对"未指定 sceneType 或无 journalData"的场景抓素材，避免浪费 API 配额
-  const needStockScenes = scenes.filter(
-    (s) => !(s.sceneType && journalData),
-  );
+  // 1. 载入期刊数据（如果有）
+  let journal: (JournalAssetInput & JournalInfoCard & JournalCardData) | undefined = input.journal;
+  if (!journal && input.journalId) {
+    try {
+      const [row] = await db
+        .select({
+          id: journals.id,
+          name: journals.name,
+          nameEn: journals.nameEn,
+          coverImageUrl: journals.coverImageUrl,
+          coverUrlHd: journals.coverUrlHd,
+          website: journals.website,
+          impactFactor: journals.impactFactor,
+          partition: journals.partition,
+          casPartition: journals.casPartition,
+          casPartitionNew: journals.casPartitionNew,
+          reviewCycle: journals.reviewCycle,
+          acceptanceRate: journals.acceptanceRate,
+          selfCitationRate: journals.selfCitationRate,
+          citeScore: journals.citeScore,
+          jcrSubjects: journals.jcrSubjects,
+          scopeDescription: journals.scopeDescription,
+          discipline: journals.discipline,
+          publisher: journals.publisher,
+        })
+        .from(journals)
+        .where(and(eq(journals.id, input.journalId), eq(journals.tenantId, tenantId)))
+        .limit(1);
+      if (row) {
+        journal = {
+          id: row.id,
+          name: row.name,
+          nameCn: row.name,
+          nameEn: row.nameEn,
+          coverImageUrl: row.coverImageUrl,
+          coverUrlHd: row.coverUrlHd,
+          website: row.website,
+          impactFactor: row.impactFactor,
+          partition: row.partition,
+          casPartition: row.casPartition,
+          casPartitionNew: row.casPartitionNew,
+          reviewCycle: row.reviewCycle,
+          acceptanceRate: row.acceptanceRate,
+          selfCitationRate: row.selfCitationRate,
+          citeScore: row.citeScore,
+          jcrSubjects: row.jcrSubjects,
+          scopeDescription: row.scopeDescription,
+          discipline: row.discipline,
+          publisher: row.publisher,
+        };
+      } else {
+        logger.warn({ journalId: input.journalId, tenantId }, "未找到期刊，将使用关键词兜底素材");
+      }
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : err, journalId: input.journalId },
+        "期刊加载失败，将使用关键词兜底素材"
+      );
+    }
+  }
+
+  // 期刊信息卡（所有场景共用）
+  const journalInfoCard: JournalInfoCard | undefined = journal ? {
+    nameCn: journal.nameCn ?? journal.name ?? null,
+    nameEn: journal.nameEn ?? null,
+    impactFactor: journal.impactFactor ?? null,
+    partition: journal.partition ?? null,
+    casPartition: journal.casPartition ?? null,
+    reviewCycle: journal.reviewCycle ?? null,
+    acceptanceRate: journal.acceptanceRate ?? null,
+  } : undefined;
+
+  // 2. 期刊封面（优先级 1） — 下载一次所有场景复用
+  let journalCover: SceneAsset | null = null;
+  if (journal) {
+    journalCover = await assetManager.fetchJournalCover(tenantId, journal);
+    if (!journalCover) {
+      // 预留：期刊官网截图（TODO）
+      journalCover = await assetManager.fetchJournalScreenshot(tenantId, journal);
+    }
+  }
+
+  // 3. Pexels 兜底（优先级 3） — 仅当期刊封面缺失时才抓关键词素材
   const allKeywords = Array.from(
-    new Set(needStockScenes.flatMap((s) => s.visualKeywords).filter(Boolean)),
+    new Set(scenes.flatMap((s) => s.visualKeywords).filter(Boolean))
   );
-  const assets = allKeywords.length > 0
-    ? await assetManager.fetchAssets(tenantId, allKeywords)
-    : [];
-  const assetMap = new Map(assets.map((a) => [a.keyword, a]));
+  const pexelsAssets = journalCover
+    ? []
+    : await assetManager.fetchAssets(tenantId, allKeywords);
+  const assetMap = new Map(pexelsAssets.map((a) => [a.keyword, a]));
 
-  const composerScenes: Array<{
-    imageSource: string;
-    voiceoverSource: string;
-    durationMs: number;
-    subtitle?: string;
-  }> = [];
-  const tempCardPaths: string[] = [];  // 清理用
+  // 构建卡片数据（供 V2 卡片生成器使用）
+  const cardData: JournalCardData | null = journal ? {
+    name: journal.name ?? null,
+    nameEn: journal.nameEn ?? null,
+    impactFactor: journal.impactFactor ?? null,
+    casPartition: journal.casPartition ?? null,
+    casPartitionNew: (journal as any).casPartitionNew ?? null,
+    partition: journal.partition ?? null,
+    reviewCycle: journal.reviewCycle ?? null,
+    acceptanceRate: journal.acceptanceRate ?? null,
+    selfCitationRate: (journal as any).selfCitationRate ?? null,
+    citeScore: (journal as any).citeScore ?? null,
+    jcrSubjects: (journal as any).jcrSubjects ?? null,
+    scopeDescription: (journal as any).scopeDescription ?? null,
+    discipline: (journal as any).discipline ?? null,
+    publisher: (journal as any).publisher ?? null,
+  } : null;
+
+  // 4. 逐场景生成 TTS + 组装 composer scene
+  const composerScenes: ComposerScene[] = [];
   let missing = 0;
-
   for (const s of scenes) {
     const tts = await ttsService.synthesize(tenantId, s.voiceoverText);
 
-    // 1) 优先 Puppeteer 卡片
-    let imageSource: string | undefined;
-    if (s.sceneType && journalData) {
+    // V2: sceneType 存在时生成信息卡底图
+    let imageUrl: string | null = null;
+    if (s.sceneType && cardData) {
       try {
-        imageSource = await generateCard(s.sceneType, journalData);
-        tempCardPaths.push(imageSource);
+        const cardBuf = await generateCard(s.sceneType, cardData);
+        const cardPath = `assets/${tenantId}/cards/${s.sceneType}-${Date.now()}.png`;
+        imageUrl = await storage.upload(cardBuf, cardPath, "image/png");
+        logger.info({ sceneType: s.sceneType, cardPath }, "V2 信息卡生成完成");
       } catch (err) {
-        logger.warn(
-          { err: err instanceof Error ? err.message : err, sceneType: s.sceneType },
-          "卡片渲染失败，回退到素材库流程",
-        );
+        logger.warn({ err: err instanceof Error ? err.message : err, sceneType: s.sceneType }, "信息卡生成失败，回退到封面/Pexels");
       }
     }
 
-    // 2) 回退到 visualKeywords → Pexels/占位图
-    if (!imageSource) {
-      const hitKw = s.visualKeywords.find((k) => assetMap.has(k));
-      let asset = hitKw ? assetMap.get(hitKw) : undefined;
+    // 非 V2 或卡片生成失败：使用封面/Pexels/占位
+    if (!imageUrl) {
+      let asset: SceneAsset | null | undefined = journalCover;
       if (!asset) {
-        missing++;
-        logger.warn(
-          { scene: s.voiceoverText.slice(0, 20), keywords: s.visualKeywords },
-          "场景无可用素材，尝试生成兜底占位图",
-        );
+        const hitKw = s.visualKeywords.find((k) => assetMap.has(k));
+        asset = hitKw ? assetMap.get(hitKw) : undefined;
+      }
+      if (!asset) {
+        // 兜底2：用旁白前 15 字再搜一次 Pexels
         const fallbackKw = s.voiceoverText.slice(0, 15) || `scene-${composerScenes.length}`;
         const [fallbackAsset] = await assetManager.fetchAssets(tenantId, [fallbackKw]);
-        if (fallbackAsset) {
-          asset = fallbackAsset;
-        } else {
-          logger.error(
-            { scene: s.voiceoverText.slice(0, 20) },
-            "兜底占位图也生成失败，跳过该场景",
-          );
-          continue;
-        }
+        asset = fallbackAsset;
       }
-      imageSource = asset.url;
+      if (!asset) {
+        // 兜底3：纯色背景
+        asset = await assetManager.generateColorPlaceholder(tenantId);
+      }
+      if (!asset) {
+        missing++;
+        logger.error(
+          { scene: s.voiceoverText.slice(0, 20), keywords: s.visualKeywords },
+          "场景素材获取失败，跳过该场景"
+        );
+        continue;
+      }
+      imageUrl = asset.url;
     }
 
     composerScenes.push({
-      imageSource,
+      imageSource: imageUrl,
       voiceoverSource: tts.url,
       durationMs: s.durationMs ?? tts.durationMs,
       subtitle: s.subtitle,
+      journalInfo: s.sceneType ? undefined : journalInfoCard,
+      sceneType: s.sceneType,
     });
   }
 
   if (composerScenes.length === 0) {
-    await cleanupCardFiles(tempCardPaths);
     throw new Error("没有可合成的场景（全部缺素材）");
   }
 
-  try {
-    const result = await videoComposer.compose({
-      tenantId,
-      scenes: composerScenes,
-    });
-    return {
-      ...result,
-      scenesCount: composerScenes.length,
-      missingAssetsCount: missing,
-    };
-  } finally {
-    await cleanupCardFiles(tempCardPaths);
-  }
-}
+  const result = await videoComposer.compose({
+    tenantId,
+    scenes: composerScenes,
+  });
 
-async function cleanupCardFiles(paths: string[]): Promise<void> {
-  for (const p of paths) {
-    try { await unlink(p); } catch { /* 文件已清理或从未创建 */ }
-  }
+  return {
+    ...result,
+    scenesCount: composerScenes.length,
+    missingAssetsCount: missing,
+  };
 }
 
 // ============ 图片转视频 ============
@@ -192,6 +281,14 @@ export async function produceFromImages(
   const { tenantId, images } = input;
 
   // 校验
+  const emptyPaths = images.filter((img) => !img.remotePath);
+  if (emptyPaths.length > 0) {
+    logger.warn(
+      { count: emptyPaths.length, total: images.length },
+      "部分图片 remotePath 为空，将生成占位图替代",
+    );
+  }
+
   const maxImages = parseInt(process.env.VIDEO_MAX_IMAGES || "15");
   const maxDuration = parseInt(process.env.VIDEO_MAX_DURATION_SEC || "120");
   if (images.length > maxImages) throw new Error(`最多 ${maxImages} 张图片`);

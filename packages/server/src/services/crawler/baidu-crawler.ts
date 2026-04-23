@@ -37,6 +37,7 @@ const INDUSTRY_FILTER_WORDS = [
 
 export class BaiduCrawler implements CrawlerAdapter {
   platform = "baidu" as const;
+  track = "social" as const;
 
   async crawl(): Promise<CrawlerResult> {
     const now = new Date().toISOString();
