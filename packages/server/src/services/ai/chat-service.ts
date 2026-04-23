@@ -64,18 +64,44 @@ interface AnthropicResponse {
 }
 
 /**
+ * skillType → TaskType 映射表
+ *
+ * 清单来自 `grep -rn "skillType:" packages/server/src --include="*.ts"`，
+ * 覆盖所有当前代码实际传入的字符串值。未命中时走兜底（长文本→content_generation，否则→daily_chat）。
+ */
+const SKILL_TO_TASK_TYPE: Record<string, TaskType> = {
+  // 内容生成类
+  article: "content_generation",
+  video: "content_generation",
+  content_generation: "content_generation",
+  // 知识检索类
+  knowledge_extract: "knowledge_search",
+  knowledge_search: "knowledge_search",
+  // 质检类
+  style_analysis: "quality_check",
+  quality_check: "quality_check",
+  // 其他
+  customer_service: "customer_service",
+  formatting: "formatting",
+  requirement_analysis: "requirement_analysis",
+  daily_chat: "daily_chat",
+  translation: "translation",
+};
+
+/**
  * 根据 skillType 推断任务类型
  */
-function inferTaskType(skillType?: string, message?: string): TaskType {
-  if (skillType === "article") return "content_generation";
-  if (skillType === "video") return "content_generation";
-  if (skillType === "customer_service") return "customer_service";
-  if (skillType === "quality_check") return "quality_check";
-
-  // 根据消息内容简单判断
-  if (message && message.length > 200) return "content_generation";
-
-  return "daily_chat";
+export function inferTaskType(skillType?: string, message?: string): TaskType {
+  let inferredType: TaskType;
+  if (skillType && SKILL_TO_TASK_TYPE[skillType]) {
+    inferredType = SKILL_TO_TASK_TYPE[skillType];
+  } else if (message && message.length > 200) {
+    inferredType = "content_generation";
+  } else {
+    inferredType = "daily_chat";
+  }
+  logger.debug({ skillType, inferredType }, "TaskType 推断");
+  return inferredType;
 }
 
 /**
