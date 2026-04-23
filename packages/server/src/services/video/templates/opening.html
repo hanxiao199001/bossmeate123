@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_base.css"/>
+<style>
+  body { background: linear-gradient(145deg, #3a1d7a 0%, #5b2ca8 45%, #7b3ff2 100%); }
+  .hero { text-align: center; width: 100%; }
+  .journal-cn {
+    font-size: 92px;
+    font-weight: 900;
+    line-height: 1.15;
+    letter-spacing: 2px;
+    margin-top: 24px;
+    margin-bottom: 28px;
+    text-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  }
+  .journal-en {
+    font-family: var(--font-en);
+    font-size: 40px;
+    font-weight: 500;
+    opacity: 0.85;
+    margin-bottom: 56px;
+    font-style: italic;
+  }
+  .divider {
+    width: 120px;
+    height: 4px;
+    margin: 0 auto 48px;
+    background: linear-gradient(90deg, transparent, #fff, transparent);
+    opacity: 0.6;
+  }
+  .badges { gap: 20px; }
+  .badge-if { background: rgba(255, 215, 0, 0.26); border-color: rgba(255, 215, 0, 0.55); }
+  .badge-q1 { background: rgba(74, 222, 128, 0.26); border-color: rgba(74, 222, 128, 0.55); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="hero">
+    <div class="label">JOURNAL RECOMMENDATION · 期刊推荐</div>
+    <h1 class="journal-cn">{{journalName}}</h1>
+    <div class="journal-en">{{journalNameEn}}</div>
+    <div class="divider"></div>
+    <div class="row badges">
+      <span class="badge badge-if">IF {{impactFactor}}</span>
+      <span class="badge badge-q1">{{partition}}</span>
+      <span class="badge">{{publisher}}</span>
+    </div>
+  </div>
+  <div class="footer-brand">学术投稿 · 期刊洞察</div>
+</div>
+</body>
+</html>

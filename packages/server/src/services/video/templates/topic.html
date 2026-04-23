@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="_base.css"/>
+<style>
+  body { background: linear-gradient(145deg, #d63384 0%, #ff6b35 55%, #ffb86b 100%); }
+  .title { font-size: 72px; font-weight: 800; text-align: center; letter-spacing: 4px; }
+  .sub-title {
+    font-size: 32px; opacity: 0.82; text-align: center; letter-spacing: 3px;
+    margin-top: 8px; margin-bottom: 16px;
+  }
+  .discipline-tag {
+    display: inline-block;
+    padding: 12px 32px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.25);
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    margin: 0 auto 36px;
+  }
+  .topics {
+    display: flex; flex-wrap: wrap; gap: 20px;
+    justify-content: center; align-items: center;
+    width: 100%;
+  }
+  .topic-pill {
+    padding: 22px 42px;
+    background: rgba(255, 255, 255, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 999px;
+    font-size: 38px;
+    font-weight: 600;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  }
+  .topic-pill.accent {
+    background: rgba(255, 255, 255, 0.9);
+    color: #b3390a;
+    border-color: #fff;
+    font-weight: 800;
+    transform: scale(1.05);
+  }
+  .scope-note {
+    text-align: center;
+    font-size: 30px;
+    opacity: 0.85;
+    line-height: 1.5;
+    padding: 0 32px;
+    max-width: 880px;
+    margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div style="text-align:center;">
+    <div class="title">收稿方向</div>
+    <div class="sub-title">SCOPE &amp; TOPICS</div>
+    <div class="discipline-tag">{{discipline}}</div>
+  </div>
+  <div class="topics">
+    {{{topicsHtml}}}
+  </div>
+  <div class="scope-note">{{scopeDescription}}</div>
+  <div class="footer-brand">{{journalName}}</div>
+</div>
+</body>
+</html>

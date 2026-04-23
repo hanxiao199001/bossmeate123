@@ -10,8 +10,8 @@
  */
 
 import { db } from "../../models/db.js";
-import { dailyContentPlans, tenants, contents } from "../../models/schema.js";
-import { eq, and, gte, sql } from "drizzle-orm";
+import { dailyContentPlans, tenants, contents, users, journals } from "../../models/schema.js";
+import { eq, and, gte, sql, ilike } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { contentQueue } from "../task/queue.js";
 import { logAgentAction, updateAgentLog } from "./base/agent-logger.js";
@@ -332,6 +332,84 @@ export class Orchestrator implements IAgent {
         }
       );
       queued++;
+    }
+
+    // ── Step 5b: 视频任务异步入队（setImmediate 完全隔离，不阻塞图文） ──
+    const videoTasks = planTasks.filter((t) => t.type === "video");
+    if (videoTasks.length > 0) {
+      logger.info({ count: videoTasks.length }, "开始处理视频任务");
+      const tenantIdCapture = context.tenantId;
+      const planIdCapture = plan.id;
+
+      for (const task of videoTasks) {
+        const topicCapture = task.topic;
+        const platformCapture = task.platform;
+        const referenceJournalName = task.referenceJournals?.[0];
+
+        setImmediate(async () => {
+          try {
+            // 获取 tenant 下的真实 userId（contents.user_id 是 UUID 外键）
+            const [tenantUser] = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, tenantIdCapture)).limit(1);
+            const userId = tenantUser?.id || tenantIdCapture;
+
+            // 尝试定位关联期刊：优先 referenceJournals 名称匹配，其次 topic 模糊匹配
+            let journalId: string | undefined;
+            const searchName = referenceJournalName || topicCapture;
+            if (searchName) {
+              try {
+                const [row] = await db
+                  .select({ id: journals.id })
+                  .from(journals)
+                  .where(and(eq(journals.tenantId, tenantIdCapture), ilike(journals.name, `%${searchName}%`)))
+                  .limit(1);
+                if (row) journalId = row.id;
+              } catch (err) {
+                logger.warn({ err: err instanceof Error ? err.message : err, searchName }, "期刊匹配失败，走关键词兜底");
+              }
+            }
+
+            const { produceVideo } = await import("../video/index.js");
+            logger.info({ topic: topicCapture, journalId }, "视频合成开始");
+            const videoResult = await produceVideo({
+              tenantId: tenantIdCapture,
+              title: topicCapture,
+              journalId,
+              scenes: [
+                { voiceoverText: `今天给大家介绍：${topicCapture}`, visualKeywords: [topicCapture, "journal"], durationMs: 4000, subtitle: `${topicCapture} · 期刊速览` },
+                { voiceoverText: `${topicCapture}的核心优势`, visualKeywords: [topicCapture, "research"], durationMs: 5000, subtitle: "期刊定位 · 影响因子 · 分区" },
+                { voiceoverText: `审稿效率与录用率参考`, visualKeywords: ["review", "academic"], durationMs: 5000, subtitle: "审稿周期 · 录用率" },
+                { voiceoverText: `投稿建议：选题贴合刊物定位，格式严格遵守作者须知`, visualKeywords: ["writing", "manuscript"], durationMs: 5000, subtitle: "投稿建议" },
+                { voiceoverText: `想了解更多期刊，关注主页`, visualKeywords: ["subscribe", "follow"], durationMs: 3000, subtitle: "关注 · 获取更多期刊分析" },
+              ],
+            });
+            logger.info({ topic: topicCapture, url: videoResult.url }, "视频合成完成，开始写入 DB");
+            try {
+              await db.insert(contents).values({
+                tenantId: tenantIdCapture,
+                userId,
+                type: "video",
+                title: topicCapture,
+                body: videoResult.url,
+                status: "draft",
+                metadata: {
+                  videoUrl: videoResult.url,
+                  durationMs: videoResult.durationMs,
+                  sizeBytes: videoResult.sizeBytes,
+                  scenesCount: videoResult.scenesCount,
+                  planId: planIdCapture,
+                  platform: platformCapture,
+                },
+              });
+              logger.info({ topic: topicCapture }, "视频记录写入 contents 成功");
+            } catch (dbErr) {
+              logger.error({ err: dbErr instanceof Error ? dbErr.message : dbErr, topic: topicCapture }, "视频记录写入 contents 失败");
+            }
+          } catch (err) {
+            logger.error({ err: err instanceof Error ? err.message : err, topic: topicCapture }, "视频合成失败");
+          }
+        });
+        queued++;
+      }
     }
 
     // ── Step 6: Update plan status ──
