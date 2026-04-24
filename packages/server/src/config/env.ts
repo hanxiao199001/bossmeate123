@@ -55,6 +55,12 @@ const envSchema = z.object({
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
   AI_ARTICLE_TIMEOUT_MS: z.coerce.number().default(120000),
 
+  // 模型直映射（T2）— TaskType → 具体模型名
+  DEEPSEEK_MODEL_CHAT: z.string().default("deepseek-chat"),
+  DEEPSEEK_MODEL_REASONER: z.string().default("deepseek-reasoner"),
+  QWEN_MODEL_PLUS: z.string().default("qwen-plus"),
+  QWEN_MODEL_MAX: z.string().default("qwen-max"),
+
   // 知识库
   LANCEDB_PATH: z.string().default("./data/lancedb"),
 
@@ -179,6 +185,18 @@ function loadEnv(): Env {
         "⚠️ 未配置 Embedding API Key，知识库功能将使用本地 hash 向量（仅开发环境）"
       );
     }
+  }
+
+  // T2：Anthropic / OpenAI 路径已下线；若仍有 Key 配置打 warn 提醒清理
+  if (data.ANTHROPIC_API_KEY) {
+    console.warn(
+      "⚠️ 检测到 ANTHROPIC_API_KEY，但 Claude 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除"
+    );
+  }
+  if (data.OPENAI_API_KEY) {
+    console.warn(
+      "⚠️ 检测到 OPENAI_API_KEY，但 OpenAI 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除"
+    );
   }
 
   // 检查关键凭证变量的有效性

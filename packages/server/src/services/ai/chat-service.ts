@@ -225,33 +225,24 @@ async function callAnthropic(
 
 /**
  * 执行 AI 调用（内部辅助函数）
+ *
+ * T2：DeepSeek / Qwen 均使用 OpenAI 兼容接口，anthropic 分支已下线
+ * systemPrompt 参数保留以维持签名稳定；OpenAI 兼容接口通过 messages 里的 system role 消息传递
  */
 async function executeAICall(
   provider: { name: string; model: string; apiKey: string; baseUrl: string; maxTokens: number },
   messages: Array<{ role: string; content: string }>,
-  systemPrompt: string | undefined,
+  _systemPrompt: string | undefined,
   timeoutMs: number
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  if (provider.name === "anthropic") {
-    return await callAnthropic(
-      provider.apiKey,
-      provider.model,
-      messages,
-      provider.maxTokens,
-      systemPrompt,
-      timeoutMs
-    );
-  } else {
-    // DeepSeek / OpenAI / Qwen 均使用 OpenAI 兼容接口
-    return await callOpenAICompatible(
-      provider.baseUrl,
-      provider.apiKey,
-      provider.model,
-      messages,
-      provider.maxTokens,
-      timeoutMs
-    );
-  }
+  return await callOpenAICompatible(
+    provider.baseUrl,
+    provider.apiKey,
+    provider.model,
+    messages,
+    provider.maxTokens,
+    timeoutMs
+  );
 }
 
 /**
@@ -329,11 +320,12 @@ async function chatWithSerialMode(
 
   try {
     const result = await executeAICall(provider, messages, request.systemPrompt, timeoutMs);
-    modelRouter.recordSuccess(provider.name);
+    modelRouter.recordSuccess(provider.name, provider.model);
 
     logger.info(
       {
         provider: provider.name,
+        model: provider.model,
         taskType,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
@@ -349,20 +341,20 @@ async function chatWithSerialMode(
       outputTokens: result.outputTokens,
     };
   } catch (err) {
-    modelRouter.recordFailure(provider.name);
+    modelRouter.recordFailure(provider.name, provider.model);
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(
-      { err: errorMsg, provider: provider.name },
+      { err: errorMsg, provider: provider.name, model: provider.model },
       "AI 调用失败"
     );
 
     // 尝试备选模型
     const fallback = modelRouter.selectModel(taskType);
-    if (fallback && fallback.name !== provider.name) {
-      logger.info({ fallback: fallback.name }, "尝试备选模型");
+    if (fallback && (fallback.name !== provider.name || fallback.model !== provider.model)) {
+      logger.info({ fallback: fallback.name, model: fallback.model }, "尝试备选模型");
       try {
         const result = await executeAICall(fallback, messages, request.systemPrompt, timeoutMs);
-        modelRouter.recordSuccess(fallback.name);
+        modelRouter.recordSuccess(fallback.name, fallback.model);
         return {
           content: result.content,
           model: fallback.model,
@@ -371,7 +363,7 @@ async function chatWithSerialMode(
           outputTokens: result.outputTokens,
         };
       } catch (fallbackErr) {
-        modelRouter.recordFailure(fallback.name);
+        modelRouter.recordFailure(fallback.name, fallback.model);
         logger.error(
           { err: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
           "备选模型也失败了"
@@ -460,10 +452,11 @@ async function chatWithRaceMode(
     const winner = await Promise.race([primaryPromise, secondaryPromise]);
 
     if (winner.success) {
-      modelRouter.recordSuccess(winner.provider.name);
+      modelRouter.recordSuccess(winner.provider.name, winner.provider.model);
       logger.info(
         {
           provider: winner.provider.name,
+          model: winner.provider.model,
           taskType,
           inputTokens: winner.result.inputTokens,
           outputTokens: winner.result.outputTokens,
@@ -480,10 +473,11 @@ async function chatWithRaceMode(
       };
     } else {
       // 竞速失败，等待另一个请求的结果
-      modelRouter.recordFailure(winner.provider.name);
+      modelRouter.recordFailure(winner.provider.name, winner.provider.model);
       logger.warn(
         {
           failed: winner.provider.name,
+          model: winner.provider.model,
           error: winner.error instanceof Error ? winner.error.message : String(winner.error),
         },
         "竞速模式中一个提供商失败，等待备选"
@@ -491,10 +485,11 @@ async function chatWithRaceMode(
 
       const loser = await Promise.race([primaryPromise, secondaryPromise]);
       if (loser.success) {
-        modelRouter.recordSuccess(loser.provider.name);
+        modelRouter.recordSuccess(loser.provider.name, loser.provider.model);
         logger.info(
           {
             provider: loser.provider.name,
+            model: loser.provider.model,
             taskType,
             inputTokens: loser.result.inputTokens,
             outputTokens: loser.result.outputTokens,
@@ -510,7 +505,7 @@ async function chatWithRaceMode(
           outputTokens: loser.result.outputTokens,
         };
       } else {
-        modelRouter.recordFailure(loser.provider.name);
+        modelRouter.recordFailure(loser.provider.name, loser.provider.model);
         logger.error(
           {
             failed: loser.provider.name,

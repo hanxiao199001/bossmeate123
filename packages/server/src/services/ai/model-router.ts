@@ -1,12 +1,16 @@
 /**
- * AI 模型路由器
+ * AI 模型路由器（T2 重构）
  *
- * 核心逻辑：根据任务类型和重要性，分配到不同模型
- * - 贵模型（Claude/GPT）：内容生成、复杂分析、质检、需求拆解
- * - 便宜模型（DeepSeek/千问）：日常问答、格式化、常规客服
+ * 核心逻辑：TaskType → 具体模型（providerName + modelName）直映射
+ *   - DeepSeek-Reasoner：requirement_analysis / quality_check / knowledge_search
+ *   - DeepSeek-Chat：content_generation
+ *   - Qwen-Plus：daily_chat / formatting / customer_service / translation
+ * 熔断 key = `${providerName}:${modelName}`，避免同厂商不同模型互相干扰。
  *
- * 包含熔断机制：贵模型连续失败N次后，自动切到备选模型
- * 包含智能回退机制：可配置为竞速模式（同时请求主备模型）或串行模式（等待失败后重试）
+ * 熔断机制：失败 N 次自动跳过，5 分钟后半开重试
+ * 回退策略：可配置为 serial（失败重试备选）或 race（同时请求主备）
+ * 兼容：`getProviders().expensive / cheap` 保留给 14 处 `getProvider("expensive")` / `getProvider("cheap")`
+ * 以及 agent-status 路由，内部 expensive = content_generation.primary，cheap = daily_chat.primary。
  */
 
 import { env } from "../../config/env.js";
@@ -16,17 +20,17 @@ export type FallbackStrategy = "serial" | "race";
 
 // 任务类型定义
 export type TaskType =
-  | "content_generation"   // 内容生成（图文、脚本）→ 贵模型
-  | "requirement_analysis" // 需求理解和拆解 → 贵模型
-  | "quality_check"        // 质检校准 → 贵模型
-  | "knowledge_search"     // 知识库检索增强 → 贵模型
-  | "daily_chat"           // 日常问答 → 便宜模型
-  | "formatting"           // 格式化处理 → 便宜模型
-  | "customer_service"     // 常规客服 → 便宜模型
-  | "translation";         // 翻译 → 便宜模型
+  | "content_generation"   // 内容生成（图文、脚本）
+  | "requirement_analysis" // 需求理解和拆解
+  | "quality_check"        // 质检校准
+  | "knowledge_search"     // 知识库检索增强
+  | "daily_chat"           // 日常问答
+  | "formatting"           // 格式化处理
+  | "customer_service"     // 常规客服
+  | "translation";         // 翻译
 
 // 模型提供商配置
-interface ModelProvider {
+export interface ModelProvider {
   name: string;
   model: string;
   apiKey: string;
@@ -41,17 +45,54 @@ interface CircuitBreaker {
   isOpen: boolean;
 }
 
-// 任务到模型的映射
-const TASK_MODEL_MAP: Record<TaskType, "expensive" | "cheap"> = {
-  content_generation: "expensive",
-  requirement_analysis: "expensive",
-  quality_check: "expensive",
-  knowledge_search: "expensive",
-  daily_chat: "cheap",
-  formatting: "cheap",
-  customer_service: "cheap",
-  translation: "cheap",
-};
+// 模型选择：某一 TaskType 对应的具体模型
+interface ModelChoice {
+  providerName: "deepseek" | "qwen";
+  modelName: string;
+}
+
+/** TaskType → 具体模型直映射（primary + fallback） */
+function buildTaskRoute(): Record<TaskType, { primary: ModelChoice; fallback: ModelChoice }> {
+  return {
+    content_generation:   { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT },     fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
+    requirement_analysis: { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    quality_check:        { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    knowledge_search:     { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
+    daily_chat:           { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    formatting:           { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    customer_service:     { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    translation:          { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+  };
+}
+
+/** Provider 基础信息（API Key / baseUrl）按 providerName 查 */
+function getProviderMeta(name: "deepseek" | "qwen"): { apiKey: string; baseUrl: string } | null {
+  if (name === "deepseek" && env.DEEPSEEK_API_KEY) {
+    return { apiKey: env.DEEPSEEK_API_KEY, baseUrl: "https://api.deepseek.com/v1" };
+  }
+  if (name === "qwen" && env.QWEN_API_KEY) {
+    return { apiKey: env.QWEN_API_KEY, baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" };
+  }
+  return null;
+}
+
+/** 把 ModelChoice 物化为 ModelProvider（含 apiKey/baseUrl）；缺 Key 时返回 null */
+function materializeChoice(choice: ModelChoice): ModelProvider | null {
+  const meta = getProviderMeta(choice.providerName);
+  if (!meta) return null;
+  return {
+    name: choice.providerName,
+    model: choice.modelName,
+    apiKey: meta.apiKey,
+    baseUrl: meta.baseUrl,
+    maxTokens: 4096,
+  };
+}
+
+/** 熔断器 key：避免同厂商不同模型互相干扰 */
+function breakerKey(providerName: string, modelName: string): string {
+  return `${providerName}:${modelName}`;
+}
 
 class ModelRouter {
   private circuitBreakers: Map<string, CircuitBreaker> = new Map();
@@ -64,72 +105,57 @@ class ModelRouter {
   }
 
   /**
-   * 获取可用的模型提供商列表
+   * 兼容别名：返回按 "tier" 分组的 provider 列表
+   *
+   *   expensive = content_generation 的 primary（DeepSeek-Chat）
+   *   cheap     = daily_chat 的 primary（Qwen-Plus）
+   *
+   * provider-factory.ts 和 agent-status.ts 依赖此签名。
    */
   getProviders(): { expensive: ModelProvider[]; cheap: ModelProvider[] } {
+    const route = buildTaskRoute();
     const expensive: ModelProvider[] = [];
     const cheap: ModelProvider[] = [];
 
-    // 贵模型
-    if (env.ANTHROPIC_API_KEY) {
-      expensive.push({
-        name: "anthropic",
-        model: env.DEFAULT_EXPENSIVE_MODEL,
-        apiKey: env.ANTHROPIC_API_KEY,
-        baseUrl: "https://api.anthropic.com",
-        maxTokens: 4096,
-      });
-    }
-    if (env.OPENAI_API_KEY) {
-      expensive.push({
-        name: "openai",
-        model: "gpt-4o",
-        apiKey: env.OPENAI_API_KEY,
-        baseUrl: "https://api.openai.com/v1",
-        maxTokens: 4096,
-      });
-    }
+    const contentPrimary = materializeChoice(route.content_generation.primary);
+    if (contentPrimary) expensive.push(contentPrimary);
 
-    // 便宜模型
-    if (env.DEEPSEEK_API_KEY) {
-      cheap.push({
-        name: "deepseek",
-        model: env.DEFAULT_CHEAP_MODEL,
-        apiKey: env.DEEPSEEK_API_KEY,
-        baseUrl: "https://api.deepseek.com/v1",
-        maxTokens: 4096,
-      });
+    const dailyPrimary = materializeChoice(route.daily_chat.primary);
+    if (dailyPrimary) cheap.push(dailyPrimary);
+
+    // 如果任一层级空：降级（用另一层代替），保留原有兜底语义
+    if (expensive.length === 0 && cheap.length > 0) {
+      expensive.push(...cheap);
     }
-    if (env.QWEN_API_KEY) {
-      cheap.push({
-        name: "qwen",
-        model: "qwen-plus",
-        apiKey: env.QWEN_API_KEY,
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        maxTokens: 4096,
-      });
+    if (cheap.length === 0 && expensive.length > 0) {
+      cheap.push(...expensive);
     }
 
     return { expensive, cheap };
   }
 
   /**
-   * 根据任务类型选择模型
+   * 根据任务类型选择模型（按 TASK_ROUTE primary → fallback 顺序，跳过已熔断）
    */
   selectModel(taskType: TaskType): ModelProvider | null {
-    const tier = TASK_MODEL_MAP[taskType];
-    const providers = this.getProviders();
-    const candidates = tier === "expensive" ? providers.expensive : providers.cheap;
+    const route = buildTaskRoute()[taskType];
+    const candidates: ModelProvider[] = [];
 
-    // 如果目标层级没有可用模型，降级到另一层
+    const primary = materializeChoice(route.primary);
+    if (primary) candidates.push(primary);
+
+    // fallback 不重复 primary（同 provider+同 model 即视为一样）
+    if (
+      route.fallback.providerName !== route.primary.providerName ||
+      route.fallback.modelName !== route.primary.modelName
+    ) {
+      const fb = materializeChoice(route.fallback);
+      if (fb) candidates.push(fb);
+    }
+
     if (candidates.length === 0) {
-      const fallback = tier === "expensive" ? providers.cheap : providers.expensive;
-      if (fallback.length === 0) {
-        logger.error("没有任何可用的AI模型配置");
-        return null;
-      }
-      logger.warn({ taskType, tier }, "目标层级无可用模型，降级处理");
-      return this.pickHealthy(fallback);
+      logger.error({ taskType }, "没有任何可用的AI模型配置");
+      return null;
     }
 
     return this.pickHealthy(candidates);
@@ -140,7 +166,7 @@ class ModelRouter {
    */
   private pickHealthy(candidates: ModelProvider[]): ModelProvider | null {
     for (const provider of candidates) {
-      const breaker = this.circuitBreakers.get(provider.name);
+      const breaker = this.circuitBreakers.get(breakerKey(provider.name, provider.model));
       if (!breaker || !breaker.isOpen) {
         return provider;
       }
@@ -149,7 +175,7 @@ class ModelRouter {
       if (Date.now() - breaker.lastFailure > 5 * 60 * 1000) {
         breaker.isOpen = false;
         breaker.failures = 0;
-        logger.info({ provider: provider.name }, "熔断器恢复，重新启用");
+        logger.info({ provider: provider.name, model: provider.model }, "熔断器恢复，重新启用");
         return provider;
       }
     }
@@ -160,10 +186,10 @@ class ModelRouter {
   }
 
   /**
-   * 记录调用成功
+   * 记录调用成功（熔断器 key = providerName:modelName）
    */
-  recordSuccess(providerName: string) {
-    const breaker = this.circuitBreakers.get(providerName);
+  recordSuccess(providerName: string, modelName: string) {
+    const breaker = this.circuitBreakers.get(breakerKey(providerName, modelName));
     if (breaker) {
       breaker.failures = 0;
       breaker.isOpen = false;
@@ -171,13 +197,14 @@ class ModelRouter {
   }
 
   /**
-   * 记录调用失败
+   * 记录调用失败（熔断器 key = providerName:modelName）
    */
-  recordFailure(providerName: string) {
-    let breaker = this.circuitBreakers.get(providerName);
+  recordFailure(providerName: string, modelName: string) {
+    const key = breakerKey(providerName, modelName);
+    let breaker = this.circuitBreakers.get(key);
     if (!breaker) {
       breaker = { failures: 0, lastFailure: 0, isOpen: false };
-      this.circuitBreakers.set(providerName, breaker);
+      this.circuitBreakers.set(key, breaker);
     }
 
     breaker.failures++;
@@ -186,19 +213,19 @@ class ModelRouter {
     if (breaker.failures >= this.threshold) {
       breaker.isOpen = true;
       logger.warn(
-        { provider: providerName, failures: breaker.failures },
+        { provider: providerName, model: modelName, failures: breaker.failures },
         "模型熔断器触发，暂停使用该模型"
       );
     }
   }
 
   /**
-   * 获取熔断器状态（用于监控）
+   * 获取熔断器状态（用于监控）—— key 格式 "providerName:modelName"
    */
   getCircuitBreakerStatus() {
     const status: Record<string, CircuitBreaker> = {};
-    for (const [name, breaker] of this.circuitBreakers) {
-      status[name] = { ...breaker };
+    for (const [key, breaker] of this.circuitBreakers) {
+      status[key] = { ...breaker };
     }
     return status;
   }
@@ -217,36 +244,37 @@ class ModelRouter {
   getModelPair(
     taskType: TaskType
   ): { primary: ModelProvider | null; secondary: ModelProvider | null } {
-    const tier = TASK_MODEL_MAP[taskType];
-    const providers = this.getProviders();
-    const candidates = tier === "expensive" ? providers.expensive : providers.cheap;
+    const route = buildTaskRoute()[taskType];
+    const primary = materializeChoice(route.primary);
+    const fallback = materializeChoice(route.fallback);
 
-    // 获取所有健康的候选模型（包括开路的，用于备选）
-    const healthyCandidates = candidates.filter((provider) => {
-      const breaker = this.circuitBreakers.get(provider.name);
-      return !breaker || !breaker.isOpen;
-    });
+    // 排除已熔断的作为 primary
+    const primaryHealthy =
+      primary && !this.isBreakerOpen(primary) ? primary : null;
+    const fallbackHealthy =
+      fallback && !this.isBreakerOpen(fallback) ? fallback : null;
 
-    // 如果目标层级没有可用模型，使用降级方案
-    if (healthyCandidates.length === 0) {
-      const fallback = tier === "expensive" ? providers.cheap : providers.expensive;
-      if (fallback.length === 0) {
-        logger.error("没有任何可用的AI模型配置");
-        return { primary: null, secondary: null };
-      }
-
-      const primary = this.pickHealthy(fallback);
-      const remaining = fallback.filter((p) => p.name !== primary?.name);
-      const secondary = remaining.length > 0 ? remaining[0] : null;
-
-      return { primary, secondary };
+    // 如果 primary 健康：primary + fallback（无论 fallback 是否熔断，至少给个备选）
+    if (primaryHealthy) {
+      return { primary: primaryHealthy, secondary: fallback && fallback.model !== primary!.model ? fallback : null };
     }
 
-    // 返回第一个作为主，第二个作为备选
-    const primary = healthyCandidates[0];
-    const secondary = healthyCandidates.length > 1 ? healthyCandidates[1] : null;
+    // primary 熔断或缺失：fallback 上位
+    if (fallbackHealthy) {
+      return { primary: fallbackHealthy, secondary: null };
+    }
 
-    return { primary, secondary };
+    // 都熔断：返回任意可用（即使熔断）
+    if (primary) return { primary, secondary: fallback };
+    if (fallback) return { primary: fallback, secondary: null };
+
+    logger.error({ taskType }, "没有任何可用的AI模型配置");
+    return { primary: null, secondary: null };
+  }
+
+  private isBreakerOpen(provider: ModelProvider): boolean {
+    const breaker = this.circuitBreakers.get(breakerKey(provider.name, provider.model));
+    return !!breaker && breaker.isOpen;
   }
 }
 
