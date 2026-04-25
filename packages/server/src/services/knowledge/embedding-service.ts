@@ -57,17 +57,6 @@ function getBackend(): EmbeddingBackend | null {
       dimension: MODEL_DIMENSIONS[model] || 1024,
     };
   }
-  // OpenAI
-  if (env.OPENAI_API_KEY) {
-    const model = "text-embedding-3-small";
-    return {
-      name: "openai",
-      url: "https://api.openai.com/v1/embeddings",
-      model,
-      apiKey: env.OPENAI_API_KEY,
-      dimension: MODEL_DIMENSIONS[model] || 1536,
-    };
-  }
   return null;
 }
 
@@ -103,7 +92,7 @@ export async function getEmbeddings(
         tokensUsed: Math.ceil(t.length / 4),
       }));
     }
-    throw new Error("无可用 Embedding API Key，请配置 QWEN_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY");
+    throw new Error("无可用 Embedding API Key，请配置 QWEN_API_KEY / DEEPSEEK_API_KEY");
   }
 
   const allResults: EmbeddingResult[] = [];

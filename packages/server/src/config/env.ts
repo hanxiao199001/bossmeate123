@@ -39,16 +39,12 @@ const envSchema = z.object({
   // 凭证加密密钥
   CREDENTIALS_KEY: z.string().optional(),
 
-  // AI - 贵模型
-  ANTHROPIC_API_KEY: z.string().optional(),
-  OPENAI_API_KEY: z.string().optional(),
-
   // AI - 便宜模型
   DEEPSEEK_API_KEY: z.string().optional(),
   QWEN_API_KEY: z.string().optional(),
 
   // 模型路由
-  DEFAULT_EXPENSIVE_MODEL: z.string().default("claude-sonnet-4-20250514"),
+  DEFAULT_EXPENSIVE_MODEL: z.string().default("deepseek-chat"),
   DEFAULT_CHEAP_MODEL: z.string().default("deepseek-chat"),
   MODEL_CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().default(5),
   AI_FALLBACK_STRATEGY: z.enum(["serial", "race"]).default("serial"),
@@ -171,13 +167,12 @@ function loadEnv(): Env {
   // 检查是否至少有一个可用的 Embedding API Key
   const hasEmbeddingKey =
     (data.QWEN_API_KEY && data.QWEN_API_KEY !== "your-qwen-api-key") ||
-    (data.DEEPSEEK_API_KEY && data.DEEPSEEK_API_KEY !== "your-deepseek-api-key") ||
-    data.OPENAI_API_KEY;
+    (data.DEEPSEEK_API_KEY && data.DEEPSEEK_API_KEY !== "your-deepseek-api-key");
 
   if (!hasEmbeddingKey) {
     if (data.NODE_ENV === "production") {
       console.error(
-        "❌ 生产环境必须配置至少一个 Embedding API Key (QWEN_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY)"
+        "❌ 生产环境必须配置至少一个 Embedding API Key (QWEN_API_KEY / DEEPSEEK_API_KEY)"
       );
       process.exit(1);
     } else {
@@ -185,18 +180,6 @@ function loadEnv(): Env {
         "⚠️ 未配置 Embedding API Key，知识库功能将使用本地 hash 向量（仅开发环境）"
       );
     }
-  }
-
-  // T2：Anthropic / OpenAI 路径已下线；若仍有 Key 配置打 warn 提醒清理
-  if (data.ANTHROPIC_API_KEY) {
-    console.warn(
-      "⚠️ 检测到 ANTHROPIC_API_KEY，但 Claude 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除"
-    );
-  }
-  if (data.OPENAI_API_KEY) {
-    console.warn(
-      "⚠️ 检测到 OPENAI_API_KEY，但 OpenAI 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除"
-    );
   }
 
   // 检查关键凭证变量的有效性

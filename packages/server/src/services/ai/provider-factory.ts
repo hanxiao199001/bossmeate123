@@ -4,8 +4,6 @@
  * 按手册约定：
  *   expensive = DeepSeek（默认 deepseek-chat，对应 content_generation 的 primary）
  *   cheap     = Qwen（默认 qwen-plus，对应 daily_chat 的 primary）
- *
- * Anthropic / OpenAI 分支已下线；`ANTHROPIC_API_KEY` 配置会在启动时打 warn（由 index.ts 负责）。
  */
 
 import { env } from "../../config/env.js";

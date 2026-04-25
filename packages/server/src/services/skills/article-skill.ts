@@ -637,7 +637,7 @@ ${outlineText}
 
     try {
       let result;
-      if (checkProvider && checkProvider.name !== "anthropic") {
+      if (checkProvider) {
         const response = await fetch(`${checkProvider.baseUrl}/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${checkProvider.apiKey}` },
