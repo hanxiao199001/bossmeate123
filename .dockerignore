@@ -1,0 +1,65 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Package manager
+node_modules
+pnpm-workspace.yaml
+pnpm-lock.yaml
+npm-debug.log
+yarn-error.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE and editor
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+.prettierignore
+
+# Build outputs
+dist
+build
+coverage
+*.tsbuildinfo
+
+# Documentation and logs
+README.md
+CHANGELOG.md
+docs/
+logs/
+*.log
+
+# Testing
+.nyc_output
+jest.config.js
+vitest.config.ts
+
+# Development tools
+.claude
+.gstack
+AGENT-SYSTEM-PLAN.md
+CLAUDE-CODE-AGENT-DEV-PLAN.md
+CRAWL-DATA-SINK-PLAN.md
+*.xlsx
+*.docx
+*.pptx
+.~*
+.~lock*
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Temporary files
+*.tmp
+.turbo
+dist-old
