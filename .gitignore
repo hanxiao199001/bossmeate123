@@ -38,3 +38,19 @@ docker-compose.override.yml
 *.~*
 .~lock.*
 .gstack/
+
+# === drift rescue PR #2 补充（2026-04-25）===
+# 运行时产物
+data/
+# TS 增量构建
+*.tsbuildinfo
+# 备份文件
+*.bak
+*.bak.*
+# macOS AppleDouble
+._*
+# 根目录调试脚本
+/test-*.mjs
+/test-*.cjs
+/fix-*.js
+/fix-*.cjs
