@@ -154,14 +154,6 @@ async function bootstrap() {
   const providers = getProviders();
   logger.info(`🤖 AI模型: 贵模型 ${providers.expensive.length}个, 便宜模型 ${providers.cheap.length}个`);
 
-  // T2：Anthropic/OpenAI 已下线；若环境仍配置 Key 打 warn 提醒清理
-  if (env.ANTHROPIC_API_KEY) {
-    logger.warn("⚠️ 检测到 ANTHROPIC_API_KEY，但 Claude 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除");
-  }
-  if (env.OPENAI_API_KEY) {
-    logger.warn("⚠️ 检测到 OPENAI_API_KEY，但 OpenAI 路径已下线（T2），该 Key 不会被使用，建议从 .env 移除");
-  }
-
   // 初始化技能注册
   initializeSkills();
 

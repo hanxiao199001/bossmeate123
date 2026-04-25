@@ -50,19 +50,6 @@ interface OpenAICompatResponse {
   };
 }
 
-// Anthropic Claude 响应格式
-interface AnthropicResponse {
-  id: string;
-  content: Array<{
-    type: string;
-    text: string;
-  }>;
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-  };
-}
-
 /**
  * skillType → TaskType 映射表
  *
@@ -162,71 +149,8 @@ async function callOpenAICompatible(
 }
 
 /**
- * 调用 Anthropic Claude API
- *
- * 支持：
- * - 可配置的请求超时（通过 AbortController）
- * - 指数退避重试（仅对速率限制和 5xx 错误）
- */
-async function callAnthropic(
-  apiKey: string,
-  model: string,
-  messages: Array<{ role: string; content: string }>,
-  maxTokens: number,
-  systemPrompt?: string,
-  timeoutMs: number = env.AI_REQUEST_TIMEOUT_MS
-): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
-  // 分离 system 消息
-  const systemMsg = systemPrompt || messages.find((m) => m.role === "system")?.content;
-  const nonSystemMessages = messages.filter((m) => m.role !== "system");
-
-  return withRetry(async () => {
-    const { controller, cleanup } = createTimeoutController({
-      timeoutMs,
-      description: `Anthropic API call to ${model}`,
-    });
-
-    try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          system: systemMsg,
-          messages: nonSystemMessages,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(
-          `Anthropic API ${response.status}: ${errorBody.slice(0, 200)}`
-        );
-      }
-
-      const data = (await response.json()) as AnthropicResponse;
-
-      const content = data.content?.[0]?.text || "";
-      const inputTokens = data.usage?.input_tokens || 0;
-      const outputTokens = data.usage?.output_tokens || 0;
-
-      return { content, inputTokens, outputTokens };
-    } finally {
-      cleanup();
-    }
-  });
-}
-
-/**
  * 执行 AI 调用（内部辅助函数）
  *
- * T2：DeepSeek / Qwen 均使用 OpenAI 兼容接口，anthropic 分支已下线
  * systemPrompt 参数保留以维持签名稳定；OpenAI 兼容接口通过 messages 里的 system role 消息传递
  */
 async function executeAICall(
