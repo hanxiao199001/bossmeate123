@@ -20,6 +20,8 @@ const createConversationSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, "消息不能为空"),
+  // T4-1c-1: 多版本生成参数（默认 1，向后兼容）
+  variants: z.number().int().min(1).max(3).optional(),
 });
 
 // 发布指令关键词
@@ -207,7 +209,10 @@ export async function chatRoutes(app: FastifyInstance) {
               userId: request.user.userId,
               conversationId: id,
               provider,
-              metadata: {},
+              metadata: {
+                // T4-1c-1: 把 body.variants 透传给 ArticleSkill（默认 1）
+                variants: body.variants ?? 1,
+              },
             });
 
             // 只有产出制品时才写入 contents 表
