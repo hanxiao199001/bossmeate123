@@ -3,7 +3,7 @@ import { getRedisConnection } from "./queue.js";
 import { SkillRegistry } from "../skills/index.js";
 import { getProvider } from "../ai/provider-factory.js";
 import { db } from "../../models/db.js";
-import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans, users } from "../../models/schema.js";
+import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans, users, productionRecords } from "../../models/schema.js";
 import { and } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -197,6 +197,88 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
       },
     }).returning({ id: contents.id });
     contentId = inserted?.id || null;
+
+    // T4-1b: 主版本写 productionRecords（parentId=null 标识为原稿）
+    // 之前 handleArticleWrite 没写 productionRecords，借多版本一并补齐
+    const totalVariants = (result.extraArtifacts?.length ?? 0) + 1;
+    if (contentId) {
+      try {
+        await db.insert(productionRecords).values({
+          tenantId,
+          contentId,
+          parentId: null,
+          format: "long_article",
+          platform: agentMeta?.platform || null,
+          title: result.artifact.title,
+          body: result.artifact.body,
+          wordCount: (result.artifact.metadata?.wordCount as number) || result.artifact.body.length,
+          status: "draft",
+          producedBy: "ai",
+          metadata: {
+            variantIndex: 0,
+            totalVariants,
+            planId: agentMeta?.planId,
+          },
+        });
+      } catch (err) {
+        logger.warn({ err, contentId }, "T4-1b: 主版本 productionRecord 写入失败（非阻塞）");
+      }
+    }
+
+    // T4-1b: 副版本逐个写 contents + productionRecords（parentId 串联到主版本）
+    if (contentId && result.extraArtifacts && result.extraArtifacts.length > 0) {
+      for (let i = 0; i < result.extraArtifacts.length; i++) {
+        const extra = result.extraArtifacts[i];
+        try {
+          const [insertedExtra] = await db.insert(contents).values({
+            tenantId,
+            userId: ownerUserId,
+            type: extra.type,
+            title: extra.title,
+            body: extra.body,
+            status: "draft",
+            metadata: {
+              ...(extra.metadata || {}),
+              agentGenerated: true,
+              platform: agentMeta?.platform,
+              style: agentMeta?.style,
+              wordCount: agentMeta?.wordCount,
+              planId: agentMeta?.planId,
+              variantOf: contentId,
+            },
+          }).returning({ id: contents.id });
+
+          if (insertedExtra) {
+            await db.insert(productionRecords).values({
+              tenantId,
+              contentId: insertedExtra.id,
+              parentId: contentId,
+              format: "long_article",
+              platform: agentMeta?.platform || null,
+              title: extra.title,
+              body: extra.body,
+              wordCount: (extra.metadata?.wordCount as number) || extra.body.length,
+              status: "draft",
+              producedBy: "ai",
+              metadata: {
+                variantIndex: (extra.metadata?.variantIndex as number) || (i + 1),
+                totalVariants,
+                planId: agentMeta?.planId,
+              },
+            });
+          }
+        } catch (err) {
+          logger.warn(
+            { err, primaryContentId: contentId, variantIndex: i + 1 },
+            "T4-1b: 副版本写入失败（非阻塞）"
+          );
+        }
+      }
+      logger.info(
+        { tenantId, primaryContentId: contentId, secondaryCount: result.extraArtifacts.length },
+        "T4-1b: secondary variants saved"
+      );
+    }
   }
 
   await job.updateProgress(90);
