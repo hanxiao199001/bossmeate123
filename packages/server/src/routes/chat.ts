@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, desc, inArray, lt } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { conversations, messages, contents, tokenLogs, platformAccounts } from "../models/schema.js";
+import { conversations, messages, contents, tokenLogs, platformAccounts, productionRecords } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
 import { SkillRegistry } from "../services/skills/index.js";
@@ -20,6 +20,8 @@ const createConversationSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, "消息不能为空"),
+  // T4-1c-1: 多版本生成参数（默认 1，向后兼容）
+  variants: z.number().int().min(1).max(3).optional(),
 });
 
 // 发布指令关键词
@@ -207,7 +209,10 @@ export async function chatRoutes(app: FastifyInstance) {
               userId: request.user.userId,
               conversationId: id,
               provider,
-              metadata: {},
+              metadata: {
+                // T4-1c-1: 把 body.variants 透传给 ArticleSkill（默认 1）
+                variants: body.variants ?? 1,
+              },
             });
 
             // 只有产出制品时才写入 contents 表
@@ -222,6 +227,102 @@ export async function chatRoutes(app: FastifyInstance) {
                 status: "draft",
                 metadata: result.artifact.metadata || {},
               }).returning();
+
+              // T4-1c-1 commit 4: 多版本 chat 路径持久化（仅对 article 类型；
+              // 与 content-worker.handleArticleWrite 行为一致，让 GET /:id siblings 能从 chat 触发的多版本里查到）
+              if (contentRow && result.artifact.type === "article") {
+                const primaryContentId = contentRow.id;
+                const totalVariants = (result.extraArtifacts?.length ?? 0) + 1;
+
+                // 1. 主版本 productionRecord (parentId=null) — parentId 链的起点
+                try {
+                  await db.insert(productionRecords).values({
+                    tenantId: request.tenantId,
+                    contentId: primaryContentId,
+                    parentId: null,
+                    format: "long_article",
+                    platform: null,
+                    title: result.artifact.title,
+                    body: result.artifact.body,
+                    wordCount:
+                      (result.artifact.metadata?.wordCount as number) ||
+                      result.artifact.body.length,
+                    status: "draft",
+                    producedBy: "ai",
+                    metadata: {
+                      variantIndex: 0,
+                      totalVariants,
+                      conversationId: id,
+                    },
+                  });
+                } catch (err) {
+                  logger.warn(
+                    { err, contentId: primaryContentId },
+                    "T4-1c-1: 主版本 productionRecord 写入失败（非阻塞）"
+                  );
+                }
+
+                // 2. 副版本逐个写 contents + productionRecords（parentId 串联到主版本）
+                if (result.extraArtifacts && result.extraArtifacts.length > 0) {
+                  for (let i = 0; i < result.extraArtifacts.length; i++) {
+                    const extra = result.extraArtifacts[i];
+                    try {
+                      const [insertedExtra] = await db
+                        .insert(contents)
+                        .values({
+                          tenantId: request.tenantId,
+                          userId: request.user.userId,
+                          conversationId: id,
+                          type: extra.type,
+                          title: extra.title,
+                          body: extra.body,
+                          status: "draft",
+                          metadata: {
+                            ...(extra.metadata || {}),
+                            variantOf: primaryContentId,
+                          },
+                        })
+                        .returning({ id: contents.id });
+
+                      if (insertedExtra) {
+                        await db.insert(productionRecords).values({
+                          tenantId: request.tenantId,
+                          contentId: insertedExtra.id,
+                          parentId: primaryContentId,
+                          format: "long_article",
+                          platform: null,
+                          title: extra.title,
+                          body: extra.body,
+                          wordCount:
+                            (extra.metadata?.wordCount as number) ||
+                            extra.body.length,
+                          status: "draft",
+                          producedBy: "ai",
+                          metadata: {
+                            variantIndex:
+                              (extra.metadata?.variantIndex as number) || i + 1,
+                            totalVariants,
+                            conversationId: id,
+                          },
+                        });
+                      }
+                    } catch (err) {
+                      logger.warn(
+                        { err, primaryContentId, variantIndex: i + 1 },
+                        "T4-1c-1: 副版本写入失败（非阻塞）"
+                      );
+                    }
+                  }
+                  logger.info(
+                    {
+                      tenantId: request.tenantId,
+                      primaryContentId,
+                      secondaryCount: result.extraArtifacts.length,
+                    },
+                    "T4-1c-1: chat 路径副版本已落库"
+                  );
+                }
+              }
 
               // 视频脚本 → 完全异步触发合成（setImmediate 隔离，任何失败不影响脚本回复）
               if (result.artifact.type === "video_script" && contentRow) {

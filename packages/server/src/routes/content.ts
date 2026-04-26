@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, and, desc, sql, count } from "drizzle-orm";
+import { eq, and, desc, sql, count, or, isNull, inArray } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
-import { contents } from "../models/schema.js";
+import { contents, productionRecords, bossEdits } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 
 const createContentSchema = z.object({
@@ -160,7 +161,12 @@ export async function contentRoutes(app: FastifyInstance) {
   });
 
   /**
-   * GET /content/:id - 获取单个内容
+   * GET /content/:id - 获取单个内容（含 T4-1c 多版本 siblings）
+   *
+   * 同组定义（productionRecords.parentId 链）：
+   * - 主版本：productionRecord.parentId = null，contentId = groupRoot
+   * - 副版本：productionRecord.parentId = groupRoot
+   * 单版本内容（无 productionRecord 或链上无其他版本）→ siblings: []
    */
   app.get("/:id", async (request, reply) => {
     try {
@@ -181,9 +187,259 @@ export async function contentRoutes(app: FastifyInstance) {
         });
       }
 
-      return { code: "OK", data: content };
+      // T4-1c-1: 查同组 siblings（通过 productionRecords.parentId 链）
+      let siblings: Array<{
+        id: string;
+        title: string | null;
+        status: string;
+        variantIndex: number | undefined;
+        userSelected: boolean | undefined;
+        userRejected: boolean | undefined;
+        createdAt: Date;
+      }> = [];
+
+      const [pr] = await db
+        .select()
+        .from(productionRecords)
+        .where(eq(productionRecords.contentId, content.id))
+        .limit(1);
+
+      if (pr) {
+        // 主版本 parentId=null，groupRoot 就是自己 contentId；副版本则 groupRoot = parentId
+        const groupRoot = pr.parentId ?? pr.contentId;
+        if (groupRoot) {
+          const groupPRs = await db
+            .select()
+            .from(productionRecords)
+            .where(
+              or(
+                eq(productionRecords.parentId, groupRoot),
+                and(
+                  isNull(productionRecords.parentId),
+                  eq(productionRecords.contentId, groupRoot)
+                )
+              )
+            );
+          const siblingContentIds = groupPRs
+            .map((p) => p.contentId)
+            .filter((cid): cid is string => !!cid && cid !== content.id);
+
+          if (siblingContentIds.length > 0) {
+            const siblingRows = await db
+              .select({
+                id: contents.id,
+                title: contents.title,
+                status: contents.status,
+                metadata: contents.metadata,
+                createdAt: contents.createdAt,
+              })
+              .from(contents)
+              .where(
+                and(
+                  inArray(contents.id, siblingContentIds),
+                  eq(contents.tenantId, request.tenantId)
+                )
+              );
+
+          siblings = siblingRows
+            .map((s) => {
+              const meta = (s.metadata as Record<string, unknown> | null) || {};
+              return {
+                id: s.id,
+                title: s.title,
+                status: s.status,
+                variantIndex: meta.variantIndex as number | undefined,
+                userSelected: meta.userSelected as boolean | undefined,
+                userRejected: meta.userRejected as boolean | undefined,
+                createdAt: s.createdAt,
+              };
+            })
+            .sort(
+              (a, b) =>
+                ((a.variantIndex ?? 99) as number) -
+                ((b.variantIndex ?? 99) as number)
+            );
+          }
+        }
+      }
+
+      return { code: "OK", data: { ...content, siblings } };
     } catch (err) {
       logger.error({ err }, "获取内容详情失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * POST /content/:id/select-variant - 标记某版本为用户选中
+   *
+   * 行为：
+   * - 选中（:id）：status=reviewing, metadata.userSelected=true, selectedAt
+   * - 同组其他：metadata.userRejected=true, rejectedAt（status 不强改）
+   * - 写一条 bossEdits (action=select_variant) 用于 AI 偏好学习
+   * - 返回 { selected, siblings }
+   *
+   * 单版本 / 无 productionRecord 的内容返回 400 NO_VARIANT_GROUP。
+   */
+  app.post("/:id/select-variant", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      // 1. 找当前 content（带租户校验）
+      const [content] = await db
+        .select()
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
+      if (!content) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      // 2. 找当前 content 的 productionRecord
+      const [pr] = await db
+        .select()
+        .from(productionRecords)
+        .where(eq(productionRecords.contentId, id))
+        .limit(1);
+      if (!pr) {
+        return reply.code(400).send({
+          code: "NO_VARIANT_GROUP",
+          message: "内容无版本组，无需选择",
+        });
+      }
+
+      const groupRoot = pr.parentId ?? pr.contentId;
+      if (!groupRoot) {
+        return reply.code(400).send({
+          code: "NO_VARIANT_GROUP",
+          message: "版本组根节点缺失",
+        });
+      }
+
+      // 3. 找同组所有 PR
+      const groupPRs = await db
+        .select()
+        .from(productionRecords)
+        .where(
+          or(
+            eq(productionRecords.parentId, groupRoot),
+            and(
+              isNull(productionRecords.parentId),
+              eq(productionRecords.contentId, groupRoot)
+            )
+          )
+        );
+      const allContentIds = groupPRs
+        .map((p) => p.contentId)
+        .filter((cid): cid is string => !!cid);
+
+      if (allContentIds.length <= 1) {
+        return reply.code(400).send({
+          code: "NO_VARIANT_GROUP",
+          message: "内容无副版本，无需选择",
+        });
+      }
+
+      // 4. 加载组内全部 contents
+      const allContents = await db
+        .select()
+        .from(contents)
+        .where(
+          and(
+            inArray(contents.id, allContentIds),
+            eq(contents.tenantId, request.tenantId)
+          )
+        );
+
+      const selected = allContents.find((c) => c.id === id);
+      const others = allContents.filter((c) => c.id !== id);
+      if (!selected) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      const now = new Date();
+
+      // 5. 选中版：status=reviewing + metadata.userSelected=true
+      const selectedMeta = {
+        ...((selected.metadata as Record<string, unknown>) || {}),
+        userSelected: true,
+        selectedAt: now.toISOString(),
+      };
+      await db
+        .update(contents)
+        .set({ status: "reviewing", metadata: selectedMeta, updatedAt: now })
+        .where(eq(contents.id, id));
+
+      // 6. 未选版：metadata.userRejected=true（status 不强改）
+      const updatedOthers = [];
+      for (const other of others) {
+        const otherMeta = {
+          ...((other.metadata as Record<string, unknown>) || {}),
+          userRejected: true,
+          rejectedAt: now.toISOString(),
+        };
+        await db
+          .update(contents)
+          .set({ metadata: otherMeta, updatedAt: now })
+          .where(eq(contents.id, other.id));
+        updatedOthers.push({ ...other, metadata: otherMeta });
+      }
+
+      // 7. 写 bossEdits（用于 AI 偏好学习；失败非阻塞）
+      const firstReject = others[0];
+      if (firstReject) {
+        try {
+          await db.insert(bossEdits).values({
+            id: nanoid(),
+            tenantId: request.tenantId,
+            contentId: id,
+            action: "select_variant",
+            originalTitle: others.map((o) => o.title || "").join("; "),
+            editedTitle: selected.title || "",
+            originalBody: (firstReject.body || "").slice(0, 2000),
+            editedBody: (selected.body || "").slice(0, 2000),
+            patternsExtracted: {
+              variantGroup: groupRoot,
+              totalVariants: allContents.length,
+              rejectedVariantIds: others.map((o) => o.id),
+            },
+          });
+        } catch (err) {
+          logger.warn({ err, contentId: id }, "T4-1c-1: bossEdits 写入失败（非阻塞）");
+        }
+      }
+
+      logger.info(
+        {
+          tenantId: request.tenantId,
+          selectedId: id,
+          groupRoot,
+          totalVariants: allContents.length,
+        },
+        "T4-1c-1: 用户选定变体"
+      );
+
+      // 8. 返回最新状态
+      return {
+        code: "OK",
+        data: {
+          selected: { ...selected, status: "reviewing", metadata: selectedMeta },
+          siblings: updatedOthers.map((o) => {
+            const meta = (o.metadata as Record<string, unknown>) || {};
+            return {
+              id: o.id,
+              title: o.title,
+              status: o.status,
+              variantIndex: meta.variantIndex as number | undefined,
+              userSelected: false,
+              userRejected: true,
+              createdAt: o.createdAt,
+            };
+          }),
+        },
+      };
+    } catch (err) {
+      logger.error({ err }, "选定变体失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
   });
