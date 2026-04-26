@@ -43,8 +43,20 @@ export interface ArticleOutline {
   seoKeywords: string[];
 }
 
+export interface VariantResult {
+  contentId: string;
+  outline: ArticleOutline;
+  article: { title: string; body: string; wordCount: number };
+  quality: Awaited<ReturnType<typeof qualityCheckV2>>;
+  variantIndex: number;       // 0 = 主版本，1+ = 副版本
+}
+
 export interface PipelineResult {
   topic: TopicInput;
+  // === T4-1a 新字段：多版本支持 ===
+  variants: VariantResult[];
+  primaryContentId: string;
+  // === 旧字段（兼容 variants=1 callers，等同于 variants[0] 拆解）===
   outline: ArticleOutline;
   article: { title: string; body: string; wordCount: number };
   quality: Awaited<ReturnType<typeof qualityCheckV2>>;
@@ -54,15 +66,18 @@ export interface PipelineResult {
 // ============ Pipeline 执行 ============
 
 /**
- * 完整 Pipeline: 选题 → 大纲 → 全文 → 质检 → 入库
+ * 单个变体的 Pipeline (Step 1~6)
+ *
+ * - 主版本（variantIndex=0）的 productionRecords.parentId = null
+ * - 副版本（variantIndex>0）的 productionRecords.parentId = 主版本的 contentId
  */
-export async function runArticlePipeline(
+async function runSingleArticleVariant(
   tenantId: string,
   userId: string,
-  input: TopicInput
-): Promise<PipelineResult> {
-  logger.info({ tenantId, topic: input.topic }, "📝 文章 Pipeline 启动");
-
+  input: TopicInput,
+  parentContentId: string | null,
+  variantIndex: number
+): Promise<VariantResult> {
   // Step 1: RAG 检索上下文
   const ragContext = await retrieveForArticleV2({
     tenantId,
@@ -92,7 +107,7 @@ export async function runArticlePipeline(
   let finalQuality = quality;
 
   if (!quality.overallPassed) {
-    logger.info("质检未通过，重试生成");
+    logger.info({ variantIndex }, "质检未通过，重试生成");
     const feedback = buildQualityFeedback(quality);
     finalArticle = await generateFullArticle(tenantId, outline, input, ragContext.text, feedback);
     finalQuality = await qualityCheckV2({
@@ -118,13 +133,16 @@ export async function runArticlePipeline(
       ragSources: ragContext.sources,
       seoKeywords: outline.seoKeywords,
       pipeline: "article-pipeline-v2",
+      variantIndex,
+      ...(parentContentId ? { variantOf: parentContentId } : {}),
     },
   }).returning();
 
-  // 生产记录
+  // 生产记录（parentId 串联多版本）
   await db.insert(productionRecords).values({
     tenantId,
     contentId: content.id,
+    parentId: parentContentId,
     format: "long_article",
     platform: input.platform || null,
     title: finalArticle.title,
@@ -136,26 +154,78 @@ export async function runArticlePipeline(
       pipelineVersion: "v2",
       ragHits: ragContext.totalHits,
       qualityScore: finalQuality.totalScore,
+      variantIndex,
     },
   });
 
   logger.info(
     {
       contentId: content.id,
+      variantIndex,
+      parentContentId,
       title: finalArticle.title,
       wordCount: finalArticle.wordCount,
       qualityScore: finalQuality.totalScore,
       passed: finalQuality.overallPassed,
     },
-    "📝 文章 Pipeline 完成"
+    `📝 变体 #${variantIndex} 完成`
   );
 
   return {
-    topic: input,
+    contentId: content.id,
     outline,
     article: finalArticle,
     quality: finalQuality,
-    contentId: content.id,
+    variantIndex,
+  };
+}
+
+/**
+ * 完整 Pipeline: 选题 → 大纲 → 全文 → 质检 → 入库
+ *
+ * 多版本支持（T4-1a）：variants 参数控制版本数（1-3，超过 3 截断到 3）。
+ * - variants=1（默认）：单文章，行为与之前一致
+ * - variants>1：先跑主版本拿 contentId，然后并行跑 N-1 个副版本
+ *   （副版本的 productionRecords.parentId 链接到主版本 contentId）
+ *   差异来源于 LLM 温度采样的随机性（同 prompt 多次跑）。
+ */
+export async function runArticlePipeline(
+  tenantId: string,
+  userId: string,
+  input: TopicInput & { variants?: number }
+): Promise<PipelineResult> {
+  const requestedVariants = Math.min(Math.max(input.variants ?? 1, 1), 3);
+
+  logger.info(
+    { tenantId, topic: input.topic, variants: requestedVariants },
+    "📝 文章 Pipeline 启动"
+  );
+
+  // 主版本必须先跑完拿到 contentId（副版本的 parentId 依赖它）
+  const primary = await runSingleArticleVariant(tenantId, userId, input, null, 0);
+
+  // 副版本并行跑
+  let allVariants: VariantResult[] = [primary];
+  if (requestedVariants > 1) {
+    const subVariantPromises: Promise<VariantResult>[] = [];
+    for (let i = 1; i < requestedVariants; i++) {
+      subVariantPromises.push(
+        runSingleArticleVariant(tenantId, userId, input, primary.contentId, i)
+      );
+    }
+    const subVariants = await Promise.all(subVariantPromises);
+    allVariants = [primary, ...subVariants];
+  }
+
+  return {
+    topic: input,
+    variants: allVariants,
+    primaryContentId: primary.contentId,
+    // 兼容旧 callers（等同于 variants[0] 拆解）
+    outline: primary.outline,
+    article: primary.article,
+    quality: primary.quality,
+    contentId: primary.contentId,
   };
 }
 

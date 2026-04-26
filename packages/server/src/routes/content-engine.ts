@@ -61,6 +61,7 @@ export async function contentEngineRoutes(app: FastifyInstance) {
       platform: z.string().optional(),
       wordCount: z.number().optional(),
       articleType: z.string().optional(),
+      variants: z.number().int().min(1).max(3).optional().default(1),
     });
     const body = schema.parse(request.body);
     const { runArticlePipeline } = await import("../services/content-engine/article-pipeline.js");
