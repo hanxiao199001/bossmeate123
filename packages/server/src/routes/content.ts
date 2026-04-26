@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, and, desc, sql, count } from "drizzle-orm";
+import { eq, and, desc, sql, count, or, isNull, inArray } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { contents } from "../models/schema.js";
+import { contents, productionRecords } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 
 const createContentSchema = z.object({
@@ -160,7 +160,12 @@ export async function contentRoutes(app: FastifyInstance) {
   });
 
   /**
-   * GET /content/:id - 获取单个内容
+   * GET /content/:id - 获取单个内容（含 T4-1c 多版本 siblings）
+   *
+   * 同组定义（productionRecords.parentId 链）：
+   * - 主版本：productionRecord.parentId = null，contentId = groupRoot
+   * - 副版本：productionRecord.parentId = groupRoot
+   * 单版本内容（无 productionRecord 或链上无其他版本）→ siblings: []
    */
   app.get("/:id", async (request, reply) => {
     try {
@@ -181,7 +186,83 @@ export async function contentRoutes(app: FastifyInstance) {
         });
       }
 
-      return { code: "OK", data: content };
+      // T4-1c-1: 查同组 siblings（通过 productionRecords.parentId 链）
+      let siblings: Array<{
+        id: string;
+        title: string | null;
+        status: string;
+        variantIndex: number | undefined;
+        userSelected: boolean | undefined;
+        userRejected: boolean | undefined;
+        createdAt: Date;
+      }> = [];
+
+      const [pr] = await db
+        .select()
+        .from(productionRecords)
+        .where(eq(productionRecords.contentId, content.id))
+        .limit(1);
+
+      if (pr) {
+        // 主版本 parentId=null，groupRoot 就是自己 contentId；副版本则 groupRoot = parentId
+        const groupRoot = pr.parentId ?? pr.contentId;
+        if (groupRoot) {
+          const groupPRs = await db
+            .select()
+            .from(productionRecords)
+            .where(
+              or(
+                eq(productionRecords.parentId, groupRoot),
+                and(
+                  isNull(productionRecords.parentId),
+                  eq(productionRecords.contentId, groupRoot)
+                )
+              )
+            );
+          const siblingContentIds = groupPRs
+            .map((p) => p.contentId)
+            .filter((cid): cid is string => !!cid && cid !== content.id);
+
+          if (siblingContentIds.length > 0) {
+            const siblingRows = await db
+              .select({
+                id: contents.id,
+                title: contents.title,
+                status: contents.status,
+                metadata: contents.metadata,
+                createdAt: contents.createdAt,
+              })
+              .from(contents)
+              .where(
+                and(
+                  inArray(contents.id, siblingContentIds),
+                  eq(contents.tenantId, request.tenantId)
+                )
+              );
+
+          siblings = siblingRows
+            .map((s) => {
+              const meta = (s.metadata as Record<string, unknown> | null) || {};
+              return {
+                id: s.id,
+                title: s.title,
+                status: s.status,
+                variantIndex: meta.variantIndex as number | undefined,
+                userSelected: meta.userSelected as boolean | undefined,
+                userRejected: meta.userRejected as boolean | undefined,
+                createdAt: s.createdAt,
+              };
+            })
+            .sort(
+              (a, b) =>
+                ((a.variantIndex ?? 99) as number) -
+                ((b.variantIndex ?? 99) as number)
+            );
+          }
+        }
+      }
+
+      return { code: "OK", data: { ...content, siblings } };
     } catch (err) {
       logger.error({ err }, "获取内容详情失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
