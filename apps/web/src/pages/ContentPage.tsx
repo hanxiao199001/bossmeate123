@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
@@ -12,6 +12,7 @@ interface ContentItem {
   status: string;
   platforms: Array<{ platform: string; status?: string; publishedAt?: string }>;
   tokensTotal: number;
+  metadata?: Record<string, any>;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,12 +69,27 @@ export default function ContentPage() {
   // 筛选
   const [filterType, setFilterType] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  // 多版本：默认隐藏被弃用版本
+  const [showRejected, setShowRejected] = useState(false);
 
   // 删除确认
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
+
+  // 多版本：默认过滤被弃用版本（仍想看可手动开 toggle）
+  const filteredItems = useMemo(
+    () =>
+      showRejected
+        ? items
+        : items.filter((c) => !((c.metadata as any)?.userRejected === true)),
+    [items, showRejected]
+  );
+  const hiddenRejected = useMemo(
+    () => items.filter((c) => (c.metadata as any)?.userRejected === true).length,
+    [items]
+  );
 
   // 获取内容列表
   const fetchContents = useCallback(async () => {
@@ -234,6 +250,15 @@ export default function ContentPage() {
             <span className="text-sm text-gray-500">
               共 {total} 条内容
             </span>
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showRejected}
+                onChange={(e) => setShowRejected(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+              />
+              显示已弃用版本{hiddenRejected > 0 ? `（${hiddenRejected} 条已隐藏）` : ""}
+            </label>
           </div>
 
           <div className="flex gap-2">
@@ -259,12 +284,16 @@ export default function ContentPage() {
               <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
               加载中...
             </div>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <div className="text-center py-16">
               <p className="text-4xl mb-4">📄</p>
-              <p className="text-gray-500 mb-1">还没有内容</p>
+              <p className="text-gray-500 mb-1">
+                {items.length > 0 ? "本页内容均为已弃用版本（默认隐藏）" : "还没有内容"}
+              </p>
               <p className="text-sm text-gray-400">
-                通过选题工坊或 AI 对话创作你的第一篇内容
+                {items.length > 0
+                  ? "勾选上方「显示已弃用版本」可查看"
+                  : "通过选题工坊或 AI 对话创作你的第一篇内容"}
               </p>
             </div>
           ) : (
@@ -279,18 +308,33 @@ export default function ContentPage() {
               </div>
 
               {/* 列表项 */}
-              {items.map((item) => (
+              {filteredItems.map((item) => {
+                const isRejected = (item.metadata as any)?.userRejected === true;
+                const isSelected = (item.metadata as any)?.userSelected === true;
+                return (
                 <div
                   key={item.id}
-                  className="grid grid-cols-1 md:grid-cols-12 gap-2 md:gap-4 px-5 py-4 border-b border-gray-100 hover:bg-blue-50/50 transition-colors items-center"
+                  className={`grid grid-cols-1 md:grid-cols-12 gap-2 md:gap-4 px-5 py-4 border-b border-gray-100 transition-colors items-center ${
+                    isRejected ? "bg-gray-50/50 opacity-60" : "hover:bg-blue-50/50"
+                  }`}
                 >
                   {/* 标题和摘要 */}
                   <div className="col-span-5">
                     <div
-                      className="font-medium text-gray-900 text-sm cursor-pointer hover:text-blue-600 transition-colors"
+                      className="font-medium text-gray-900 text-sm cursor-pointer hover:text-blue-600 transition-colors flex items-center gap-2"
                       onClick={() => navigate(`/content/${item.id}`)}
                     >
-                      {item.title || "无标题"}
+                      <span className="truncate">{item.title || "无标题"}</span>
+                      {isSelected && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">
+                          ✓ 已选定
+                        </span>
+                      )}
+                      {isRejected && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 font-medium">
+                          已弃用
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-gray-400 mt-1 line-clamp-1">
                       {getExcerpt(item.body)}
@@ -382,7 +426,8 @@ export default function ContentPage() {
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               {/* 分页 */}
               {totalPages > 1 && (
