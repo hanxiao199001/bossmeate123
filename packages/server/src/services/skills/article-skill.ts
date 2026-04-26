@@ -25,6 +25,7 @@ import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } f
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 // ============ 类型定义 ============
 
@@ -203,8 +204,12 @@ export class ArticleSkill implements ISkill {
 
     const previousFeedback = (context.metadata?.previousFeedback as string) || "";
 
+    // T4-1b: 从 metadata 读 variants 参数（默认 1，向后兼容）
+    const variants = (context.metadata?.variants as number | undefined) ?? 1;
+
     // 生成流程（传入期刊数据用于图片插入）
-    const { article, quality } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult);
+    const { article, quality, extraVariants } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult, variants);
+    const totalVariants = (extraVariants?.length ?? 0) + 1;
 
     // V3: 生成后自动发布
     let publishResults: PublishResult[] | undefined;
@@ -287,8 +292,31 @@ export class ArticleSkill implements ISkill {
             url: r.url,
             error: r.error,
           })),
+          // T4-1b: 多版本标识（主版本 = 0）
+          variantIndex: 0,
+          totalVariants,
         },
       },
+      // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
+      extraArtifacts: extraVariants?.map((v, i) => ({
+        type: "article",
+        title: v.article.title,
+        body: v.article.body,
+        summary: v.article.summary,
+        tags: v.article.tags,
+        metadata: {
+          wordCount: v.article.wordCount,
+          qualityScore: v.quality.totalScore,
+          qualityPassed: v.quality.passed,
+          aiScore: v.quality.aiScore,
+          hardMetrics: v.quality.hardMetrics,
+          issues: v.quality.issues,
+          suggestions: v.quality.suggestions,
+          variantIndex: i + 1,
+          totalVariants,
+          // variantOf 由 content-worker 写 contents 行时填入主版本 contentId
+        },
+      })),
     };
   }
 
@@ -455,60 +483,93 @@ export class ArticleSkill implements ISkill {
     requirement: ParsedRequirement,
     ragContext?: string,
     previousFeedback?: string,
-    journalData?: CollectionResult
+    journalData?: CollectionResult,
+    variants: number = 1
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
+    extraVariants?: Array<{
+      article: GeneratedArticle;
+      quality: QualityReport;
+      outline: ArticleOutline;
+    }>;
   }> {
-    // V6: 始终走「期刊推荐文章」模板流程，绝不降级到旧 AI 全文写作
-    logger.info({ topic: requirement.topic, hasJournals: journalData?.journals?.length || 0 }, "V6 期刊推荐流程开始");
+    // T4-1b: variants 参数控制版本数（1-3，clamp）
+    const requestedVariants = Math.min(Math.max(variants, 1), 3);
 
-    // 如果 DB 有匹配期刊，直接用
+    // V6: 始终走「期刊推荐文章」模板流程，绝不降级到旧 AI 全文写作
+    logger.info(
+      { topic: requirement.topic, hasJournals: journalData?.journals?.length || 0, variants: requestedVariants },
+      "V6 期刊推荐流程开始"
+    );
+
+    // 1. 解析最终用的 journalData（DB / AI 推荐 / 最小数据 三选一）
+    let finalJournalData: CollectionResult;
     if (journalData && journalData.journals.length > 0) {
       logger.info({ journal: journalData.journals[0].name }, "V6 使用 DB 匹配期刊");
-      return this.generateJournalRecommendation(requirement, journalData);
+      finalJournalData = journalData;
+    } else {
+      logger.info({ topic: requirement.topic }, "V6 DB 无匹配期刊，AI 推荐期刊");
+      let aiJournal: JournalInfo | null = null;
+      try {
+        aiJournal = await this.createJournalFromAI(requirement.topic);
+      } catch (err) {
+        logger.warn({ err, topic: requirement.topic }, "V6 AI 推荐期刊失败");
+      }
+
+      if (aiJournal) {
+        logger.info({ journal: aiJournal.nameEn || aiJournal.name }, "V6 AI 推荐期刊成功");
+        aiJournal.synthetic = true; // 标记为 AI 合成数据
+        finalJournalData = {
+          hotKeywords: requirement.keyPoints || [],
+          journals: [aiJournal],
+          abstracts: journalData?.abstracts || [],
+          knowledgeEntriesCreated: 0,
+        };
+      } else {
+        // AI 也失败了 → 用主题名称创建最小期刊数据，仍走模板（绝不降级）
+        logger.warn({ topic: requirement.topic }, "V6 AI 推荐也失败，使用最小数据走模板");
+        const minimalJournal: JournalInfo = {
+          name: requirement.topic,
+          nameEn: null, issn: null, publisher: null, discipline: null,
+          partition: null, impactFactor: null, acceptanceRate: null,
+          reviewCycle: null, annualVolume: null, isWarningList: false,
+          warningYear: null, coverUrl: null, dataCardUri: "",
+          abbreviation: null, foundingYear: null, country: null,
+          website: null, apcFee: null, selfCitationRate: null,
+          casPartition: null, casPartitionNew: null, jcrSubjects: null,
+          topInstitutions: null, scopeDescription: null,
+          synthetic: true, // 标记为 AI 合成数据
+        };
+        finalJournalData = {
+          hotKeywords: [], journals: [minimalJournal], abstracts: [], knowledgeEntriesCreated: 0,
+        };
+      }
     }
 
-    // DB 没有匹配期刊 → 用 AI 根据主题推荐一个期刊
-    logger.info({ topic: requirement.topic }, "V6 DB 无匹配期刊，AI 推荐期刊");
-    let aiJournal: JournalInfo | null = null;
-    try {
-      aiJournal = await this.createJournalFromAI(requirement.topic);
-    } catch (err) {
-      logger.warn({ err, topic: requirement.topic }, "V6 AI 推荐期刊失败");
+    // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData);
+
+    // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性）
+    if (requestedVariants > 1) {
+      const subPromises: Array<Promise<{
+        article: GeneratedArticle;
+        quality: QualityReport;
+        outline: ArticleOutline;
+      }>> = [];
+      for (let i = 1; i < requestedVariants; i++) {
+        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData));
+      }
+      const extraVariants = await Promise.all(subPromises);
+      logger.info(
+        { variants: requestedVariants, extraCount: extraVariants.length },
+        "T4-1b: 多版本生成完成"
+      );
+      return { ...primary, extraVariants };
     }
 
-    if (aiJournal) {
-      logger.info({ journal: aiJournal.nameEn || aiJournal.name }, "V6 AI 推荐期刊成功");
-      aiJournal.synthetic = true; // 标记为 AI 合成数据
-      const syntheticData: CollectionResult = {
-        hotKeywords: requirement.keyPoints || [],
-        journals: [aiJournal],
-        abstracts: journalData?.abstracts || [],
-        knowledgeEntriesCreated: 0,
-      };
-      return this.generateJournalRecommendation(requirement, syntheticData);
-    }
-
-    // AI 也失败了 → 用主题名称创建最小期刊数据，仍走模板（绝不降级）
-    logger.warn({ topic: requirement.topic }, "V6 AI 推荐也失败，使用最小数据走模板");
-    const minimalJournal: JournalInfo = {
-      name: requirement.topic,
-      nameEn: null, issn: null, publisher: null, discipline: null,
-      partition: null, impactFactor: null, acceptanceRate: null,
-      reviewCycle: null, annualVolume: null, isWarningList: false,
-      warningYear: null, coverUrl: null, dataCardUri: "",
-      abbreviation: null, foundingYear: null, country: null,
-      website: null, apcFee: null, selfCitationRate: null,
-      casPartition: null, casPartitionNew: null, jcrSubjects: null,
-      topInstitutions: null, scopeDescription: null,
-      synthetic: true, // 标记为 AI 合成数据
-    };
-    const minimalData: CollectionResult = {
-      hotKeywords: [], journals: [minimalJournal], abstracts: [], knowledgeEntriesCreated: 0,
-    };
-    return this.generateJournalRecommendation(requirement, minimalData);
+    return primary;
   }
 
   /**
@@ -632,6 +693,13 @@ export class ArticleSkill implements ISkill {
     quality: QualityReport;
     outline: ArticleOutline;
   }> {
+    // T4-1b: variantId 用于多版本并行生成时的日志区分
+    const variantId = nanoid(6);
+    logger.info(
+      { variantId, topic: requirement.topic, journal: journalData.journals[0]?.name },
+      "📝 generateJournalRecommendation 启动"
+    );
+
     const journal = journalData.journals[0];
 
     // 1. 补充期刊详细数据（如果还没有 enriched）
