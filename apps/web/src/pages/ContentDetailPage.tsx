@@ -2,9 +2,20 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { toast } from "../components/Toast";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 
 // ===== 类型定义 =====
+interface VariantSibling {
+  id: string;
+  title: string | null;
+  status: string;
+  variantIndex: number;
+  userSelected: boolean;
+  userRejected: boolean;
+  createdAt: string;
+}
+
 interface ContentItem {
   id: string;
   type: string;
@@ -15,6 +26,7 @@ interface ContentItem {
   tokensTotal: number;
   conversationId: string | null;
   metadata?: Record<string, any>;
+  siblings?: VariantSibling[];
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +98,8 @@ export default function ContentDetailPage() {
 
   // 内容数据
   const [content, setContent] = useState<ContentItem | null>(null);
+  // 多版本对比：副版本完整内容（并行 GET 拿 body）
+  const [secondaries, setSecondaries] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -120,6 +134,25 @@ export default function ContentDetailPage() {
         setContent(res.data);
         setEditTitle(res.data.title || "");
         setEditBody(res.data.body || "");
+
+        // 多版本：并行 GET 每个 sibling 拿 body 用于双栏对比
+        if (res.data.siblings && res.data.siblings.length > 0) {
+          try {
+            const siblingResults = await Promise.all(
+              res.data.siblings.map((s) => api.get<ContentItem>(`/content/${s.id}`))
+            );
+            setSecondaries(
+              siblingResults
+                .map((r) => r.data)
+                .filter((d): d is ContentItem => !!d)
+            );
+          } catch (sibErr) {
+            console.error("获取副版本失败", sibErr);
+            setSecondaries([]);
+          }
+        } else {
+          setSecondaries([]);
+        }
       }
     } catch (err) {
       console.error("获取内容失败", err);
@@ -347,8 +380,50 @@ export default function ContentDetailPage() {
     );
   }
 
-  const canEdit = content.status === "draft" || content.status === "reviewing";
-  const canPublish = content.status === "approved" || content.status === "draft";
+  // ===== 多版本推导 =====
+  const getVariantInfo = (c: ContentItem) => ({
+    variantIndex: typeof c.metadata?.variantIndex === "number" ? c.metadata.variantIndex : 0,
+    userSelected: c.metadata?.userSelected === true,
+    userRejected: c.metadata?.userRejected === true,
+  });
+
+  const isMultiVariant = (content.siblings?.length ?? 0) > 0;
+  const allVariants = isMultiVariant
+    ? [content, ...secondaries].sort(
+        (a, b) => getVariantInfo(a).variantIndex - getVariantInfo(b).variantIndex
+      )
+    : [content];
+  const someoneSelected = allVariants.some((v) => getVariantInfo(v).userSelected);
+  // 双栏对比期：多版本但还没人选定
+  const showVariantCompare = isMultiVariant && !someoneSelected;
+  const currentInfo = getVariantInfo(content);
+  const currentIsRejected = isMultiVariant && currentInfo.userRejected;
+
+  // 选定一版（其他自动标记 rejected）
+  const handleSelectVariant = async (selectedId: string) => {
+    if (!window.confirm("选定这版后，另一版会被标记为已弃用（数据保留可恢复）。继续？")) return;
+    try {
+      await api.post(`/content/${selectedId}/select-variant`, {});
+      toast.success("已选定，进入审核");
+      if (selectedId !== id) {
+        navigate(`/content/${selectedId}`);
+      } else {
+        await fetchContent();
+      }
+    } catch (err) {
+      toast.error("选定失败：" + (err instanceof Error ? err.message : "未知错误"));
+    }
+  };
+
+  // 双栏对比期 + 当前版本已被弃用 时，禁用编辑/发布
+  const canEdit =
+    !showVariantCompare &&
+    !currentIsRejected &&
+    (content.status === "draft" || content.status === "reviewing");
+  const canPublish =
+    !showVariantCompare &&
+    !currentIsRejected &&
+    (content.status === "approved" || content.status === "draft");
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -392,8 +467,8 @@ export default function ContentDetailPage() {
             </button>
           )}
 
-          {/* 状态流转按钮 */}
-          {(STATUS_FLOW[content.status] || []).map((action) => (
+          {/* 状态流转按钮（双栏对比期 / 已弃用版本上禁用，强制走 select-variant） */}
+          {!showVariantCompare && !currentIsRejected && (STATUS_FLOW[content.status] || []).map((action) => (
             <button
               key={action.next}
               onClick={() => handleStatusChange(action.next)}
@@ -675,79 +750,164 @@ export default function ContentDetailPage() {
           )}
         </div>
 
-        {/* 视图模式切换 */}
-        {canEdit && (
-          <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
-            {(["edit", "split", "preview"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setViewMode(mode)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  viewMode === mode
-                    ? "bg-white text-blue-600 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                {{ edit: "编辑", split: "分屏", preview: "预览" }[mode]}
-              </button>
-            ))}
+        {/* 多版本横幅 */}
+        {isMultiVariant && (
+          <div
+            className={`mb-4 px-4 py-3 rounded-lg border text-sm ${
+              showVariantCompare
+                ? "bg-blue-50 border-blue-200 text-blue-800"
+                : currentIsRejected
+                  ? "bg-gray-50 border-gray-200 text-gray-600"
+                  : "bg-green-50 border-green-200 text-green-800"
+            }`}
+          >
+            {showVariantCompare && (
+              <span>📑 共 {allVariants.length} 个版本，请对比后选定一版（另一版会标记为已弃用，数据保留可恢复）</span>
+            )}
+            {!showVariantCompare && currentInfo.userSelected && (
+              <span>✓ 当前为已选定版本（共 {allVariants.length} 个版本）</span>
+            )}
+            {!showVariantCompare && currentIsRejected && (
+              <span>⚠ 当前版本已被弃用，请前往选定版本查看</span>
+            )}
           </div>
         )}
 
-        {/* 编辑器区域 */}
-        <div className="flex-1 flex gap-4 min-h-0">
-          {/* 编辑面板 */}
-          {canEdit && (viewMode === "edit" || viewMode === "split") && (
-            <div className={`${viewMode === "split" ? "w-1/2" : "w-full"} flex flex-col`}>
-              <div className="text-xs text-gray-400 mb-2">Markdown 编辑</div>
-              <textarea
-                value={editBody}
-                onChange={(e) => setEditBody(e.target.value)}
-                placeholder="在这里编写内容，支持 Markdown 格式..."
-                className="flex-1 min-h-[500px] p-4 bg-white border border-gray-200 rounded-xl text-sm text-gray-800 leading-relaxed font-mono resize-none outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 transition-all"
-              />
-            </div>
-          )}
-
-          {/* 预览面板 */}
-          {(viewMode === "preview" || viewMode === "split" || !canEdit) && (
-            <div className={`${viewMode === "split" ? "w-1/2" : "w-full"} flex flex-col`}>
-              <div className="text-xs text-gray-400 mb-2">
-                {canEdit ? "预览" : "内容"}
-              </div>
-              {content.type === "video" ? (
-                <div className="flex-1 min-h-[300px] p-6 bg-black rounded-xl flex items-center justify-center">
-                  <div className="w-full max-w-lg">
-                    <video
-                      src={content.body || ""}
-                      controls
-                      poster={(content.metadata as any)?.coverUrl}
-                      className="w-full rounded-lg"
-                    />
-                    <div className="mt-3 flex justify-center gap-3">
-                      <a href={content.body || ""} download className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                        ⬇ 下载视频
-                      </a>
-                    </div>
-                    {(content.metadata as any)?.durationMs && (
-                      <p className="text-center text-xs text-gray-400 mt-2">
-                        时长 {Math.round(((content.metadata as any).durationMs || 0) / 1000)}s ·
-                        大小 {((content.metadata as any).sizeBytes ? ((content.metadata as any).sizeBytes / 1024 / 1024).toFixed(1) + "MB" : "未知")}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ) : (
+        {showVariantCompare ? (
+          // ============ 双栏对比视图 ============
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {allVariants.map((v, idx) => {
+              const info = getVariantInfo(v);
+              const isSelected = info.userSelected;
+              const isRejected = info.userRejected;
+              return (
                 <div
-                  className="flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto prose-sm"
-                  dangerouslySetInnerHTML={{
-                    __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
-                  }}
-                />
+                  key={v.id}
+                  className={`flex flex-col bg-white border rounded-xl p-4 ${
+                    isSelected
+                      ? "border-green-400 ring-2 ring-green-100"
+                      : isRejected
+                        ? "border-gray-200 opacity-60"
+                        : "border-gray-200"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-gray-500">
+                      版本 {idx + 1}（variantIndex={info.variantIndex}）
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full ${
+                        STATUS_COLORS[v.status] || "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {STATUS_LABELS[v.status] || v.status}
+                    </span>
+                  </div>
+                  <h3 className="text-base font-bold text-gray-900 mb-2 line-clamp-2">
+                    {v.title || "无标题"}
+                  </h3>
+                  <div
+                    className="flex-1 min-h-[400px] max-h-[600px] overflow-y-auto p-3 bg-gray-50 border border-gray-100 rounded-lg text-sm prose-sm"
+                    dangerouslySetInnerHTML={{
+                      __html: renderMarkdown(v.body || "暂无内容"),
+                    }}
+                  />
+                  <button
+                    onClick={() => handleSelectVariant(v.id)}
+                    disabled={isSelected || isRejected}
+                    className={`mt-3 w-full py-2.5 rounded-lg text-sm font-medium transition-all ${
+                      isSelected
+                        ? "bg-green-100 text-green-700 cursor-not-allowed"
+                        : isRejected
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
+                    }`}
+                  >
+                    {isSelected ? "✓ 已选定" : isRejected ? "已弃用" : "选这版"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {/* ============ 单版本 / 已选定 视图（保持原编辑器逻辑） ============ */}
+
+            {/* 视图模式切换 */}
+            {canEdit && (
+              <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+                {(["edit", "split", "preview"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      viewMode === mode
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {{ edit: "编辑", split: "分屏", preview: "预览" }[mode]}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* 编辑器区域 */}
+            <div className="flex-1 flex gap-4 min-h-0">
+              {/* 编辑面板 */}
+              {canEdit && (viewMode === "edit" || viewMode === "split") && (
+                <div className={`${viewMode === "split" ? "w-1/2" : "w-full"} flex flex-col`}>
+                  <div className="text-xs text-gray-400 mb-2">Markdown 编辑</div>
+                  <textarea
+                    value={editBody}
+                    onChange={(e) => setEditBody(e.target.value)}
+                    placeholder="在这里编写内容，支持 Markdown 格式..."
+                    className="flex-1 min-h-[500px] p-4 bg-white border border-gray-200 rounded-xl text-sm text-gray-800 leading-relaxed font-mono resize-none outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100 transition-all"
+                  />
+                </div>
+              )}
+
+              {/* 预览面板 */}
+              {(viewMode === "preview" || viewMode === "split" || !canEdit) && (
+                <div className={`${viewMode === "split" ? "w-1/2" : "w-full"} flex flex-col`}>
+                  <div className="text-xs text-gray-400 mb-2">
+                    {canEdit ? "预览" : "内容"}
+                  </div>
+                  {content.type === "video" ? (
+                    <div className="flex-1 min-h-[300px] p-6 bg-black rounded-xl flex items-center justify-center">
+                      <div className="w-full max-w-lg">
+                        <video
+                          src={content.body || ""}
+                          controls
+                          poster={(content.metadata as any)?.coverUrl}
+                          className="w-full rounded-lg"
+                        />
+                        <div className="mt-3 flex justify-center gap-3">
+                          <a href={content.body || ""} download className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                            ⬇ 下载视频
+                          </a>
+                        </div>
+                        {(content.metadata as any)?.durationMs && (
+                          <p className="text-center text-xs text-gray-400 mt-2">
+                            时长 {Math.round(((content.metadata as any).durationMs || 0) / 1000)}s ·
+                            大小 {((content.metadata as any).sizeBytes ? ((content.metadata as any).sizeBytes / 1024 / 1024).toFixed(1) + "MB" : "未知")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto prose-sm"
+                      dangerouslySetInnerHTML={{
+                        __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
+                      }}
+                    />
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
         {/* 平台发布记录 */}
         {content.platforms && Array.isArray(content.platforms) && content.platforms.length > 0 && (
