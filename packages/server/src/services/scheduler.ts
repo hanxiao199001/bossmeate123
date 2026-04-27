@@ -51,6 +51,55 @@ export interface SchedulerJobData {
 
 let schedulerWorker: Worker | null = null;
 
+/**
+ * 多租户扇出 helper（T6-B 修复）
+ *
+ * 用途：定时 cron job（competitor-analysis、style-learning 等）注册时不带 tenantId，
+ * 之前 5 个 case 直接 throw "缺少 tenantId" → BullMQ retry 3 次进 failed 队列 → enrich 任务彻底丢失。
+ *
+ * 行为：
+ * - 显式 tenantId：只跑该 tenant，失败仍然抛出（保留原 ad-hoc 调用方的错误传播）
+ * - 无 tenantId：查 active tenants 循环跑，每 tenant 独立 try/catch，单失败不阻塞其他
+ * - 返回 { tenantsProcessed, failures } 便于 BullMQ completed 队列里观察
+ */
+async function executeForTenants(
+  jobName: string,
+  fn: (tenantId: string) => Promise<unknown>,
+  explicitTenantId?: string
+): Promise<{ tenantsProcessed: number; failures: Array<{ tenantId: string; error: string }> }> {
+  const failures: Array<{ tenantId: string; error: string }> = [];
+
+  if (explicitTenantId) {
+    try {
+      await fn(explicitTenantId);
+      return { tenantsProcessed: 1, failures };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      failures.push({ tenantId: explicitTenantId, error: errMsg });
+      throw err;
+    }
+  }
+
+  const activeTenants = await db
+    .select({ id: tenants.id })
+    .from(tenants)
+    .where(eq(tenants.status, "active"));
+
+  let processed = 0;
+  for (const t of activeTenants) {
+    try {
+      await fn(t.id);
+      processed++;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error({ jobName, tenantId: t.id, err: errMsg }, "enrich job failed for tenant");
+      failures.push({ tenantId: t.id, error: errMsg });
+    }
+  }
+
+  return { tenantsProcessed: processed, failures };
+}
+
 async function processJob(job: { name: string; data: SchedulerJobData }) {
   const { type, tenantId, platform, track } = job.data;
   logger.info({ type, tenantId, platform }, `⏰ 调度任务开始: ${type}`);
@@ -100,10 +149,13 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
     }
 
     case "keyword-analysis": {
-      if (!tenantId) throw new Error("缺少 tenantId");
+      // 共用一次 crawlAll 结果给所有 tenant（避免 fan-out 时重复全量爬虫）
       const crawlerResults = await crawlAll();
-      await analyzeKeywords(crawlerResults, tenantId);
-      return { tenantId, keywords: crawlerResults.reduce((s, r) => s + r.keywords.length, 0) };
+      return executeForTenants(
+        "keyword-analysis",
+        (tid) => analyzeKeywords(crawlerResults, tid),
+        tenantId
+      );
     }
 
     case "hot-event-monitor": {
@@ -123,30 +175,38 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
 
     case "domain-knowledge": {
       const { collectDomainKnowledge } = await import("./data-collection/domain-knowledge-collector.js");
-      if (!tenantId) throw new Error("缺少 tenantId");
-      const result = await collectDomainKnowledge(tenantId);
-      return result;
+      return executeForTenants(
+        "domain-knowledge",
+        (tid) => collectDomainKnowledge(tid),
+        tenantId
+      );
     }
 
     case "competitor-analysis": {
       const { analyzeCompetitorContent } = await import("./data-collection/competitor-analyzer.js");
-      if (!tenantId) throw new Error("缺少 tenantId");
-      const result = await analyzeCompetitorContent(tenantId);
-      return result;
+      return executeForTenants(
+        "competitor-analysis",
+        (tid) => analyzeCompetitorContent(tid),
+        tenantId
+      );
     }
 
     case "style-learning": {
       const { autoLearnStyle } = await import("./data-collection/style-learning-enhanced.js");
-      if (!tenantId) throw new Error("缺少 tenantId");
-      const result = await autoLearnStyle(tenantId);
-      return result;
+      return executeForTenants(
+        "style-learning",
+        (tid) => autoLearnStyle(tid),
+        tenantId
+      );
     }
 
     case "quality-check": {
       const { batchQualityCheck } = await import("./data-collection/quality-check-engine.js");
-      if (!tenantId) throw new Error("缺少 tenantId");
-      const result = await batchQualityCheck(tenantId);
-      return result;
+      return executeForTenants(
+        "quality-check",
+        (tid) => batchQualityCheck(tid),
+        tenantId
+      );
     }
 
     case "knowledge-engine":
