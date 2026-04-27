@@ -18,6 +18,7 @@ import type { JournalInfo, CollectionResult } from "../data-collection/journal-c
 import type { AIGeneratedContent } from "./journal-template.js";
 import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
 import { generateStorytellingHtml } from "../publisher/adapters/storytelling-template.js";
+import { generateListicleHtml } from "../publisher/adapters/listicle-template.js";
 import { logger } from "../../config/logger.js";
 
 export interface TemplateDefinition {
@@ -81,4 +82,13 @@ registerTemplate({
   aiPromptHints: "标题可加痛点钩子（'博士不愁了！'/'投稿避雷指南：'），recommendation 偏向 actionable 建议清单",
 });
 
-logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "T4-3-2: template registry initialized");
+registerTemplate({
+  id: "listicle",
+  name: "清单点评型",
+  description: "5 大优势 + 3 个避雷 + 适合人群清单。扫读友好，决策导向。",
+  icon: "📋",
+  htmlGenerator: generateListicleHtml,
+  aiPromptHints: "标题用'X 期刊：5 大优势 + 3 个避雷'结构。recommendation 偏向条目化、对比化、决策导向。",
+});
+
+logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "T4-3-3: template registry initialized");
