@@ -389,6 +389,27 @@ export async function contentRoutes(app: FastifyInstance) {
       const firstReject = others[0];
       if (firstReject) {
         try {
+          // T4-3-4: 提取选中 / 被拒的 templateId（老数据无 templateId 时字段为 undefined）
+          const selectedMetaForEdit = (selected.metadata as Record<string, unknown>) || {};
+          const selectedTemplateId =
+            typeof selectedMetaForEdit.templateId === "string"
+              ? (selectedMetaForEdit.templateId as string)
+              : undefined;
+          const rejectedTemplateIds = others
+            .map((o) => {
+              const m = (o.metadata as Record<string, unknown>) || {};
+              return typeof m.templateId === "string" ? (m.templateId as string) : null;
+            })
+            .filter((tid): tid is string => !!tid);
+
+          const patterns: Record<string, unknown> = {
+            variantGroup: groupRoot,
+            totalVariants: allContents.length,
+            rejectedVariantIds: others.map((o) => o.id),
+          };
+          if (selectedTemplateId) patterns.selectedTemplateId = selectedTemplateId;
+          if (rejectedTemplateIds.length > 0) patterns.rejectedTemplateIds = rejectedTemplateIds;
+
           await db.insert(bossEdits).values({
             id: nanoid(),
             tenantId: request.tenantId,
@@ -398,11 +419,7 @@ export async function contentRoutes(app: FastifyInstance) {
             editedTitle: selected.title || "",
             originalBody: (firstReject.body || "").slice(0, 2000),
             editedBody: (selected.body || "").slice(0, 2000),
-            patternsExtracted: {
-              variantGroup: groupRoot,
-              totalVariants: allContents.length,
-              rejectedVariantIds: others.map((o) => o.id),
-            },
+            patternsExtracted: patterns,
           });
         } catch (err) {
           logger.warn({ err, contentId: id }, "T4-1c-1: bossEdits 写入失败（非阻塞）");
