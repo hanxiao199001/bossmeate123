@@ -13,7 +13,16 @@ interface VariantSibling {
   variantIndex: number;
   userSelected: boolean;
   userRejected: boolean;
+  templateId?: string; // T4-3-5: 该变体所用模板（无 metadata.templateId 时为 undefined）
   createdAt: string;
+}
+
+// T4-3-5: 模板元信息（启动时一次拉取并缓存）
+interface TemplateInfo {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
 }
 
 interface ContentItem {
@@ -89,6 +98,24 @@ const TYPE_LABELS: Record<string, string> = {
   reply: "客服回复",
 };
 
+// T4-3-5: 模板 badge —— 优雅降级（无 templateId 隐藏；模板未加载时仍显示 templateId 文本）
+function TemplateBadge({
+  templateId,
+  templates,
+}: {
+  templateId?: string;
+  templates: Map<string, TemplateInfo>;
+}) {
+  if (!templateId) return null;
+  const t = templates.get(templateId);
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">
+      <span>{t?.icon ?? "📄"}</span>
+      <span>{t?.name ?? templateId}</span>
+    </span>
+  );
+}
+
 export default function ContentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -123,6 +150,21 @@ export default function ContentDetailPage() {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
+
+  // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
+  const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
+  useEffect(() => {
+    api
+      .get<{ templates: TemplateInfo[] }>("/content-engine/templates")
+      .then((res) => {
+        if (res.data?.templates) {
+          setTemplates(new Map(res.data.templates.map((t) => [t.id, t])));
+        }
+      })
+      .catch(() => {
+        /* badge 优雅降级到 templateId 文本 */
+      });
+  }, []);
 
   // 获取内容
   const fetchContent = useCallback(async () => {
@@ -444,6 +486,11 @@ export default function ContentDetailPage() {
           >
             {STATUS_LABELS[content.status] || content.status}
           </span>
+          {/* T4-3-5: 当前内容所用模板 badge（无 templateId 时优雅隐藏） */}
+          <TemplateBadge
+            templateId={content.metadata?.templateId as string | undefined}
+            templates={templates}
+          />
         </div>
 
         <div className="flex items-center gap-3">
@@ -792,9 +839,16 @@ export default function ContentDetailPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-gray-500">
-                      版本 {idx + 1}（variantIndex={info.variantIndex}）
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-gray-500">
+                        版本 {idx + 1}（variantIndex={info.variantIndex}）
+                      </span>
+                      {/* T4-3-5: 该版本所用模板 badge */}
+                      <TemplateBadge
+                        templateId={v.metadata?.templateId as string | undefined}
+                        templates={templates}
+                      />
+                    </div>
                     <span
                       className={`text-xs px-2 py-0.5 rounded-full ${
                         STATUS_COLORS[v.status] || "bg-gray-100 text-gray-600"

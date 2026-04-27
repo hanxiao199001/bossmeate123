@@ -146,4 +146,44 @@ export async function contentEngineRoutes(app: FastifyInstance) {
     const { getDerivationChain } = await import("../services/content-engine/content-repurpose.js");
     return getDerivationChain(tenantId, contentId);
   });
+
+  // ===== T4-3-5: 模板列表 + per-tenant 偏好分布（前端 ContentDetailPage / Settings 用） =====
+
+  app.get("/templates", async (_request: FastifyRequest, _reply: FastifyReply) => {
+    const { listTemplates } = await import("../services/skills/template-registry.js");
+    const templates = listTemplates().map((t) => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      icon: t.icon,
+    }));
+    return { code: "OK", data: { templates } };
+  });
+
+  app.get("/template-preferences", async (request: FastifyRequest, _reply: FastifyReply) => {
+    const tenantId = request.tenantId;
+    const [{ getTemplatePreferences }, { listTemplates }] = await Promise.all([
+      import("../services/skills/template-preference.js"),
+      import("../services/skills/template-registry.js"),
+    ]);
+
+    const prefs = await getTemplatePreferences(tenantId);
+    const allTemplates = listTemplates();
+
+    const enriched = allTemplates.map((t) => {
+      const p = prefs.find((x) => x.templateId === t.id);
+      return {
+        templateId: t.id,
+        name: t.name,
+        icon: t.icon,
+        description: t.description,
+        selectedCount: p?.selectedCount ?? 0,
+        rejectedCount: p?.rejectedCount ?? 0,
+        weight: p?.weight ?? 0,
+      };
+    });
+
+    const totalSelections = enriched.reduce((s, e) => s + e.selectedCount, 0);
+    return { code: "OK", data: { preferences: enriched, totalSelections } };
+  });
 }
