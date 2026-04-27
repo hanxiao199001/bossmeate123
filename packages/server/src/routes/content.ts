@@ -188,6 +188,7 @@ export async function contentRoutes(app: FastifyInstance) {
       }
 
       // T4-1c-1: 查同组 siblings（通过 productionRecords.parentId 链）
+      // T4-3-4: 增补 templateId 字段（前端 ContentDetailPage 用它渲染模板 badge）
       let siblings: Array<{
         id: string;
         title: string | null;
@@ -195,6 +196,7 @@ export async function contentRoutes(app: FastifyInstance) {
         variantIndex: number | undefined;
         userSelected: boolean | undefined;
         userRejected: boolean | undefined;
+        templateId: string | undefined;
         createdAt: Date;
       }> = [];
 
@@ -251,6 +253,7 @@ export async function contentRoutes(app: FastifyInstance) {
                 variantIndex: meta.variantIndex as number | undefined,
                 userSelected: meta.userSelected as boolean | undefined,
                 userRejected: meta.userRejected as boolean | undefined,
+                templateId: meta.templateId as string | undefined,
                 createdAt: s.createdAt,
               };
             })
@@ -450,6 +453,7 @@ export async function contentRoutes(app: FastifyInstance) {
               variantIndex: meta.variantIndex as number | undefined,
               userSelected: false,
               userRejected: true,
+              templateId: meta.templateId as string | undefined,
               createdAt: o.createdAt,
             };
           }),
