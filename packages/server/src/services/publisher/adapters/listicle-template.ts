@@ -33,12 +33,29 @@ type Abstracts = CollectionResult["abstracts"];
 
 /**
  * 从 AI recommendation 切句（句号/分号/换行/、）返回 8-80 字、非空、不重复的短句。
+ *
+ * 进切句前先 strip HTML/Markdown：AI 偶尔会在 recommendation 里夹 <strong>/<em>/<p> 或 ** **，
+ * 切句会把开始标签和结束标签切散到不同条目（例：item1 留 `<strong>...`，item2 留 `...</strong>`）。
+ * 后续 esc() 会把残留标签转义成可见字面量（`&lt;strong&gt;`）泄漏到读者眼前 —— T4-3-3 实测发现的 bug。
  */
+function stripInlineFormatting(text: string): string {
+  return text
+    // HTML tag (open or close, any tag name)
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+    // Markdown 加粗 **xxx**
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    // Markdown 斜体 *xxx*（两侧紧贴非空白）
+    .replace(/\*([^*\s][^*]*[^*\s]|\S)\*/g, "$1")
+    // Markdown 链接 [text](url) 留 text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+}
+
 function splitToShortItems(text: string): string[] {
   if (!text) return [];
+  const stripped = stripInlineFormatting(text);
   return Array.from(
     new Set(
-      text
+      stripped
         .split(/[。；;\n、]+/)
         .map((s) => s.trim())
         .filter((s) => s.length >= 8 && s.length <= 80)

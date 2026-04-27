@@ -132,4 +132,54 @@ describe("generateListicleHtml", () => {
     expect(html).not.toMatch(/<script>alert/);
     expect(html).toContain("&lt;script&gt;");
   });
+
+  // ============ 修 listicle 字面 HTML/Markdown 泄漏 bug（T4-3-3 实测发现） ============
+
+  it("strips inline <strong>/<em> from AI recommendation before splitting", async () => {
+    const ai = {
+      ...baseAi,
+      // 句子 ≥ 8 字 才能通过 splitToShortItems 长度过滤
+      recommendation:
+        "本刊审稿<strong>效率非常快</strong>。整体质量<em>持续稳定可靠</em>。被引数据十分活跃。国际可见度普遍较高。学界认可度普遍较好。",
+    };
+    const html = await generateListicleHtml(baseJournal, ai, undefined);
+    // 不应有字面 escaped tag（&lt;strong&gt; / &lt;/strong&gt;）
+    expect(html).not.toMatch(/&lt;\/?strong&gt;/i);
+    expect(html).not.toMatch(/&lt;\/?em&gt;/i);
+    // 文字内容应被保留（去除标签后的连贯文本）
+    expect(html).toContain("本刊审稿效率非常快");
+    expect(html).toContain("整体质量持续稳定可靠");
+  });
+
+  it("strips Markdown ** bold ** and * italic * before splitting", async () => {
+    const ai = {
+      ...baseAi,
+      recommendation:
+        "**本刊审稿效率非常快**。**整体质量持续稳定可靠**。*被引数据十分活跃*。国际可见度普遍较高。学界认可度普遍较好。",
+    };
+    const html = await generateListicleHtml(baseJournal, ai, undefined);
+    // 不应有字面 ** / 单独 *
+    expect(html).not.toMatch(/\*\*/);
+    // 文字保留（被 ** 和 * 包裹的内容应去掉标记后保留）
+    expect(html).toContain("本刊审稿效率非常快");
+    expect(html).toContain("整体质量持续稳定可靠");
+    expect(html).toContain("被引数据十分活跃");
+  });
+
+  it("handles mixed HTML + Markdown without leaking literal tags (T4-3-3 bug repro)", async () => {
+    const ai = {
+      ...baseAi,
+      // 复刻 T4-3-3 实测发现的破损模式：开始/结束标签可能横跨切句边界
+      recommendation:
+        "<p>本刊审稿<strong>效率非常快</strong>且质量稳定可靠</p>。**被引数据十分活跃**且认可度高。临床转化潜力*持续较高*。学界友好度普遍较好。国际可见度普遍较广。",
+    };
+    const html = await generateListicleHtml(baseJournal, ai, undefined);
+    // 全部 escaped tag 字面量都不应出现
+    expect(html).not.toMatch(/&lt;\/?strong&gt;/i);
+    expect(html).not.toMatch(/&lt;\/?em&gt;/i);
+    expect(html).not.toMatch(/&lt;\/?p&gt;/i);
+    expect(html).not.toMatch(/\*\*/);
+    // 没有孤儿闭合标签字面量（即不应出现像 "...的数据&lt;/strong&gt;" 的泄漏）
+    expect(html).not.toMatch(/&lt;\//);
+  });
 });
