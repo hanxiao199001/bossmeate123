@@ -61,7 +61,12 @@ export class AssetManager {
 
   /**
    * 期刊封面抓取（优先级 1）
-   * 将远程封面下载到 storage，保证 FFmpeg 合成时本地可访问
+   * 将远程封面下载到 storage，保证 FFmpeg 合成时本地可访问。
+   *
+   * 重试策略（T28-2）：阿里云 OSS / LetPub CDN 偶发跨区抖动，单次 fetch 失败常见。
+   * - 3 次尝试，指数退避 200ms / 600ms / 1800ms
+   * - 每次单独 10s timeout（避免单次卡死）
+   * - 全部失败 → 返回 null，由上游回退到下一级素材
    */
   async fetchJournalCover(
     tenantId: string,
@@ -74,31 +79,65 @@ export class AssetManager {
       return null;
     }
 
-    try {
-      const resp = await fetch(coverUrl);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const buf = Buffer.from(await resp.arrayBuffer());
-      const ext = this.inferExt(coverUrl, resp.headers.get("content-type"));
-      const remotePath = `assets/${tenantId}/journal-cover/${journal.id || "unknown"}-${Date.now()}.${ext}`;
-      const accessUrl = await storage.upload(buf, remotePath, `image/${ext === "jpg" ? "jpeg" : ext}`);
-      logger.info({ journalId: journal.id, coverUrl }, "期刊封面下载完成");
-      return {
-        keyword: "__journal_cover__",
-        url: accessUrl,
-        remotePath,
-        type: "image",
-        width: 0,
-        height: 0,
-        sourceUrl: coverUrl,
-        source: "journal_cover",
-      };
-    } catch (err) {
-      logger.warn(
-        { journalId: journal.id, coverUrl, err: err instanceof Error ? err.message : err },
-        "期刊封面下载失败，回退到下一级素材"
-      );
-      return null;
+    const TIMEOUT_MS = 10_000;
+    const BACKOFF_MS = [200, 600, 1800];
+    const MAX_ATTEMPTS = BACKOFF_MS.length;
+
+    let lastErr: unknown = null;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+      try {
+        const resp = await fetch(coverUrl, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const ext = this.inferExt(coverUrl, resp.headers.get("content-type"));
+        const remotePath = `assets/${tenantId}/journal-cover/${journal.id || "unknown"}-${Date.now()}.${ext}`;
+        const accessUrl = await storage.upload(
+          buf,
+          remotePath,
+          `image/${ext === "jpg" ? "jpeg" : ext}`
+        );
+        logger.info(
+          { journalId: journal.id, coverUrl, attempts: attempt + 1 },
+          "期刊封面下载完成"
+        );
+        return {
+          keyword: "__journal_cover__",
+          url: accessUrl,
+          remotePath,
+          type: "image",
+          width: 0,
+          height: 0,
+          sourceUrl: coverUrl,
+          source: "journal_cover",
+        };
+      } catch (err) {
+        clearTimeout(timer);
+        lastErr = err;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (attempt < MAX_ATTEMPTS - 1) {
+          logger.warn(
+            { journalId: journal.id, coverUrl, attempt: attempt + 1, errMsg, nextBackoffMs: BACKOFF_MS[attempt] },
+            "期刊封面下载失败，重试中"
+          );
+          await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+        }
+      }
     }
+
+    logger.warn(
+      {
+        journalId: journal.id,
+        coverUrl,
+        attempts: MAX_ATTEMPTS,
+        err: lastErr instanceof Error ? lastErr.message : lastErr,
+      },
+      "期刊封面下载彻底失败（已重试 3 次），回退到下一级素材"
+    );
+    return null;
   }
 
   /**
