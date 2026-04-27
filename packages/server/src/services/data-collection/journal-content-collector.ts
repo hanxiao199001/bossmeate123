@@ -19,6 +19,7 @@ import {
   generateJournalDataCard,
   svgToDataUri,
 } from "../crawler/journal-image-crawler.js";
+import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { scrapeLetPubDetail } from "../crawler/letpub-detail-scraper.js";
 import { scrapeCnkiJournal, scrapeWanfangJournal } from "../crawler/cnki-journal-scraper.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
@@ -225,15 +226,10 @@ export async function collectJournalContent(params: {
           coverUrl = await fetchJournalCoverMultiSource(journal.name, journal.issn || undefined);
         }
 
-        // 回写缓存
+        // 回写缓存（T6-C: 走 idempotent helper，统一 source 命名）
         if (coverUrl) {
           logger.info({ coverUrl, journal: journal.name }, "期刊封面图抓取成功，回写 DB 缓存");
-          await db.update(journals).set({
-            coverImageUrl: coverUrl,
-            coverImageSource: "realtime",
-            coverFetchedAt: new Date(),
-            updatedAt: new Date(),
-          }).where(eq(journals.id, journal.id));
+          await persistJournalCover(journal.id, coverUrl, "inline-collector");
         } else {
           logger.warn({ journal: journal.name, searchName }, "期刊封面图未找到");
         }

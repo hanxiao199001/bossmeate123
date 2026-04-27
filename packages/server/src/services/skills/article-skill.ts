@@ -22,6 +22,7 @@ import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-a
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
+import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
@@ -745,6 +746,10 @@ export class ArticleSkill implements ISkill {
         if (cover) {
           journal.coverUrl = cover;
           logger.info({ journal: journal.name, coverUrl: cover }, "期刊封面图抓取成功");
+          // T6-C: 回写 journals 表（idempotent，只在 cover_image_url 为空时写）
+          if (journal.id) {
+            await persistJournalCover(journal.id, cover, "inline-skill");
+          }
         }
       } catch (err) {
         logger.debug({ err, journal: journal.name }, "期刊封面图抓取失败");
