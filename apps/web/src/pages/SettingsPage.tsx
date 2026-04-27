@@ -13,6 +13,17 @@ interface WechatConfig {
   updatedAt: string;
 }
 
+// T4-3-5: 模板偏好统计（来自 /content-engine/template-preferences）
+interface TemplatePreferenceItem {
+  templateId: string;
+  name: string;
+  icon?: string;
+  description: string;
+  selectedCount: number;
+  rejectedCount: number;
+  weight: number;
+}
+
 // 所有可选学科
 const ALL_DISCIPLINES = [
   { code: "medicine", label: "医学" },
@@ -50,10 +61,16 @@ export default function SettingsPage() {
   const [prefSaving, setPrefSaving] = useState(false);
   const [prefResult, setPrefResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // T4-3-5: 模板偏好统计
+  const [templatePrefs, setTemplatePrefs] = useState<TemplatePreferenceItem[]>([]);
+  const [templateTotalSelections, setTemplateTotalSelections] = useState(0);
+  const [loadingTemplatePrefs, setLoadingTemplatePrefs] = useState(true);
+
   // 加载现有配置
   useEffect(() => {
     loadConfig();
     loadPreferences();
+    loadTemplatePreferences();
   }, []);
 
   const loadConfig = async () => {
@@ -83,6 +100,25 @@ export default function SettingsPage() {
       console.error("加载内容偏好失败", err);
     } finally {
       setPrefLoading(false);
+    }
+  };
+
+  // T4-3-5: 拉取「我的模板偏好」(对应 boss_edits select_variant 累计统计)
+  const loadTemplatePreferences = async () => {
+    setLoadingTemplatePrefs(true);
+    try {
+      const res = await api.get<{
+        preferences: TemplatePreferenceItem[];
+        totalSelections: number;
+      }>("/content-engine/template-preferences");
+      if (res.data) {
+        setTemplatePrefs(res.data.preferences || []);
+        setTemplateTotalSelections(res.data.totalSelections || 0);
+      }
+    } catch (err) {
+      console.error("加载模板偏好失败", err);
+    } finally {
+      setLoadingTemplatePrefs(false);
     }
   };
 
@@ -265,6 +301,58 @@ export default function SettingsPage() {
                     清空选择
                   </button>
                 )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* T4-3-5: 我的模板偏好（boss_edits 累计 → 加权选副版本模板） */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-xl">{"📋"}</div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">我的模板偏好</h2>
+              <p className="text-sm text-gray-500">
+                每次选「这版」都会累积偏好，AI 越来越懂你 — 副版本模板会按你的历史选择加权
+              </p>
+            </div>
+          </div>
+
+          {loadingTemplatePrefs ? (
+            <div className="text-sm text-gray-500">加载中…</div>
+          ) : templateTotalSelections === 0 ? (
+            <div className="text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded-lg p-4">
+              你还没有选择过模板。生成多版本文章后选择「这版」会自动累积偏好。
+            </div>
+          ) : (
+            <div>
+              <div className="text-sm text-gray-600 mb-4">
+                累计选择 <strong className="text-blue-600">{templateTotalSelections}</strong> 次
+              </div>
+              <div className="space-y-4">
+                {templatePrefs.map((p) => {
+                  const pct = templateTotalSelections > 0
+                    ? (p.selectedCount / templateTotalSelections) * 100
+                    : 0;
+                  return (
+                    <div key={p.templateId}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span>{p.icon ?? "📄"}</span>
+                        <span className="font-medium text-gray-900">{p.name}</span>
+                        <span className="text-xs text-gray-500 ml-auto">
+                          {p.selectedCount} 次（{pct.toFixed(0)}%）
+                        </span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded overflow-hidden">
+                        <div
+                          className="h-full bg-blue-500 rounded transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">{p.description}</div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
