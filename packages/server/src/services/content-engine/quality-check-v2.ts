@@ -41,6 +41,13 @@ export interface QualityCheckV2Result {
     issues: string[];
   };
 
+  // v3 新增：HTML 字面量泄漏检测（同步本地正则，零 token 成本）
+  htmlIntegrity: {
+    passed: boolean;
+    /** 命中的字面量片段示例（最多 5 条），用于排查 */
+    leakedPatterns: string[];
+  };
+
   overallPassed: boolean;     // 综合判定
   feedback: string;
 }
@@ -68,11 +75,15 @@ export async function qualityCheckV2(params: {
     scoreContent(tenantId, title, body),
   ]);
 
+  // v3: 同步 HTML 字面量检测（无需 LLM，毫秒级）
+  const htmlIntegrity = checkHtmlIntegrity(body);
+
   const overallPassed =
     scoreResult.totalScore >= 70 &&
     redlineResult.passed &&
     (styleResult.consistency >= 50) &&
-    (!platformResult || platformResult.passed);
+    (!platformResult || platformResult.passed) &&
+    htmlIntegrity.passed;
 
   const result: QualityCheckV2Result = {
     scores: scoreResult.scores,
@@ -81,8 +92,9 @@ export async function qualityCheckV2(params: {
     redlineCheck: redlineResult,
     styleCheck: styleResult,
     platformCheck: platformResult || { platform: "none", passed: true, issues: [] },
+    htmlIntegrity,
     overallPassed,
-    feedback: generateFeedback(scoreResult.totalScore, redlineResult, styleResult, platformResult),
+    feedback: generateFeedback(scoreResult.totalScore, redlineResult, styleResult, platformResult, htmlIntegrity),
   };
 
   logger.info(
@@ -249,6 +261,44 @@ ${body.slice(0, 1500)}
   }
 }
 
+// ============ v3: HTML 字面量泄漏检测 ============
+
+/**
+ * 检测 body 是否含 HTML 标签字面量泄漏（escaped tags 显示为 readable text）。
+ *
+ * 触发场景（T4-3-3 实测发现）：AI 在生成文本里混入 <strong>/<em>/<p> 等标签，
+ * 后续按句切分时标签被切散到不同条目，esc() 把残留转义成 `&lt;strong&gt;` 等
+ * 字面量泄漏到读者眼前，但 quality_score 评分模型看不出来。
+ *
+ * 同步正则，零 token 成本，毫秒级。
+ */
+export function checkHtmlIntegrity(body: string): QualityCheckV2Result["htmlIntegrity"] {
+  if (!body) return { passed: true, leakedPatterns: [] };
+
+  // 单层 escape：&lt;tag&gt; / &lt;/tag&gt;
+  const escapedTagPattern = /&lt;\/?(?:strong|em|p|br|h[1-6]|span|a|div|li|ul|ol|table|tr|td|th)(?:\s[^&]*?)?&gt;/gi;
+  // 双层 escape：&amp;lt; （转义被再次 esc 了）
+  const doubleEscapedPattern = /&amp;lt;/gi;
+
+  const matches = new Set<string>();
+  let m;
+  while ((m = escapedTagPattern.exec(body)) !== null) {
+    matches.add(m[0]);
+    if (matches.size >= 5) break;
+  }
+  if (matches.size < 5) {
+    while ((m = doubleEscapedPattern.exec(body)) !== null) {
+      matches.add(m[0]);
+      if (matches.size >= 5) break;
+    }
+  }
+
+  return {
+    passed: matches.size === 0,
+    leakedPatterns: Array.from(matches),
+  };
+}
+
 // ============ v1 评分（复用逻辑）============
 
 async function scoreContent(
@@ -304,7 +354,8 @@ function generateFeedback(
   totalScore: number,
   redline: QualityCheckV2Result["redlineCheck"],
   style: QualityCheckV2Result["styleCheck"],
-  platform: QualityCheckV2Result["platformCheck"] | null
+  platform: QualityCheckV2Result["platformCheck"] | null,
+  htmlIntegrity?: QualityCheckV2Result["htmlIntegrity"]
 ): string {
   const parts: string[] = [];
 
@@ -320,6 +371,11 @@ function generateFeedback(
   }
   if (platform && !platform.passed) {
     parts.push(`${platform.platform} 平台规则问题: ${platform.issues.join("、")}`);
+  }
+  if (htmlIntegrity && !htmlIntegrity.passed) {
+    parts.push(
+      `存在 HTML 标签字面量泄漏（${htmlIntegrity.leakedPatterns.length} 处），读者会看到原始标签文本`
+    );
   }
 
   return parts.join("。") + "。";
