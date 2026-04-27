@@ -18,11 +18,38 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
 
-/** resolve BGM path to absolute + check exists, return null if missing */
-async function resolveBgmPath(p: string | undefined | null): Promise<string | null> {
+/** 单路径解析 + 存在检查；存在返回绝对路径，否则 null */
+async function tryResolve(p: string | undefined | null): Promise<string | null> {
   if (!p) return null;
   const abs = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
   try { await access(abs); return abs; } catch { return null; }
+}
+
+/**
+ * BGM 路径解析（fallback 链）：
+ *   1. 显式入参（req.bgmPath）
+ *   2. env.BGM_DEFAULT_PATH
+ *   3. /home/projects/bossmate/data/bgm/default.mp3（生产部署绝对路径）
+ *   4. data/bgm/default.mp3（cwd 相对，packages/server / 项目根都试）
+ *   5. ../../data/bgm/default.mp3（cwd=packages/server 时 → 项目根）
+ * 全部找不到 → 返回 null（无 BGM，不阻塞合成）
+ */
+async function resolveBgmPath(explicitPath: string | undefined | null): Promise<string | null> {
+  const candidates = [
+    explicitPath,
+    env.BGM_DEFAULT_PATH,
+    "/home/projects/bossmate/data/bgm/default.mp3",
+    "data/bgm/default.mp3",
+    "../../data/bgm/default.mp3",
+  ];
+  for (const c of candidates) {
+    const resolved = await tryResolve(c);
+    if (resolved) {
+      logger.info({ bgmPath: resolved, sourceCandidate: c }, "BGM 路径已解析");
+      return resolved;
+    }
+  }
+  return null;
 }
 
 /** 解析中文可渲染字体路径，顺序：env → Linux Noto/WQY → macOS 本机 */
@@ -178,7 +205,7 @@ export class VideoComposer {
 
       // 4. 叠加 BGM（可选）
       const finalPath = path.join(workDir, "final.mp4");
-      const bgm = await resolveBgmPath(req.bgmPath) ?? await resolveBgmPath(env.BGM_DEFAULT_PATH);
+      const bgm = await resolveBgmPath(req.bgmPath);
       if (bgm) {
         await this.runFfmpeg([
           "-y",
@@ -383,7 +410,7 @@ export class VideoComposer {
 
       // ── Step 4: 混合 BGM ──
       const finalPath = path.join(workDir, "final.mp4");
-      const bgm = await resolveBgmPath(req.bgmPath) ?? await resolveBgmPath(env.BGM_DEFAULT_PATH);
+      const bgm = await resolveBgmPath(req.bgmPath);
       if (!bgm) logger.warn({ bgmPath: req.bgmPath }, "BGM 文件不存在或未配置，跳过背景音乐");
       if (bgm) {
         await this.runFfmpeg([
