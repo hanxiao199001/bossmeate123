@@ -549,4 +549,187 @@ export async function contentRoutes(app: FastifyInstance) {
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
   });
+
+  /**
+   * T4-2-1: POST /content/:id/rewrite-section —— 章节重写预览
+   *
+   * 不写库；调用 AI 在前后章节上下文里重写指定章节，返回 diff 用预览。
+   * 老板预览满意后，前端再调 /apply-rewrite 落库。
+   */
+  app.post("/:id/rewrite-section", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const schema = z.object({
+        sectionHeading: z.string().min(1),
+        instruction: z.string().min(1).max(500),
+      });
+      const body = schema.parse(request.body);
+
+      const { rewriteSection } = await import(
+        "../services/content-engine/section-rewrite.js"
+      );
+      const result = await rewriteSection({
+        tenantId: request.tenantId,
+        contentId: id,
+        sectionHeading: body.sectionHeading,
+        instruction: body.instruction,
+      });
+
+      return { code: "OK", data: result };
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg === "content_not_found") {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+      if (msg === "no_h2_sections") {
+        return reply.code(400).send({
+          code: "NO_H2_SECTIONS",
+          message: "内容没有 ## 章节，无法做章节重写",
+        });
+      }
+      if (msg === "section_not_found") {
+        return reply.code(400).send({
+          code: "SECTION_NOT_FOUND",
+          message: "未找到匹配的章节",
+        });
+      }
+      if (msg === "no_ai_provider") {
+        return reply.code(503).send({
+          code: "NO_AI_PROVIDER",
+          message: "AI 模型未配置",
+        });
+      }
+      logger.error({ err }, "T4-2-1: 章节重写预览失败");
+      return reply.code(500).send({
+        code: "INTERNAL_ERROR",
+        message: "重写失败，请稍后重试",
+      });
+    }
+  });
+
+  /**
+   * T4-2-1: POST /content/:id/apply-rewrite —— 老板确认后落库 + bossEdits 学习信号
+   *
+   * - 用 splitByH2 找到目标章节，按 startLine..endLine 替换
+   * - 写 bossEdits action="rewrite_section"，patternsExtracted 含 instruction + templateId
+   *   后续与 select_variant 共同喂给 AI 偏好学习
+   */
+  app.post("/:id/apply-rewrite", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const schema = z.object({
+        sectionHeading: z.string().min(1),
+        newSectionBody: z.string().min(1),
+        instruction: z.string().min(1).max(500),
+      });
+      const body = schema.parse(request.body);
+
+      // 1. 读 content（带租户隔离）
+      const [content] = await db
+        .select()
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
+      if (!content) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      // 2. 切章节并匹配（与 service 层用同一函数，模糊匹配规则一致）
+      const { splitByH2 } = await import(
+        "../services/content-engine/section-rewrite.js"
+      );
+      const sections = splitByH2(content.body || "");
+      if (sections.length === 0) {
+        return reply.code(400).send({
+          code: "NO_H2_SECTIONS",
+          message: "内容没有 ## 章节，无法应用重写",
+        });
+      }
+      const targetHeadingNorm = body.sectionHeading.replace(/^#+\s*/, "").trim().toLowerCase();
+      const targetIdx = sections.findIndex((s) => {
+        if (s.heading === body.sectionHeading) return true;
+        if (s.headingText === body.sectionHeading) return true;
+        const h = s.headingText.trim().toLowerCase();
+        return h === targetHeadingNorm;
+      });
+      if (targetIdx === -1) {
+        return reply.code(400).send({
+          code: "SECTION_NOT_FOUND",
+          message: "未找到匹配的章节",
+        });
+      }
+      const target = sections[targetIdx];
+
+      // 3. 替换 startLine..endLine 这一段，组装新 body
+      const lines = (content.body || "").split("\n");
+      const before = lines.slice(0, target.startLine);
+      const after = lines.slice(target.endLine + 1);
+      const newBody = [...before, body.newSectionBody, ...after].join("\n");
+
+      // 4. 落库
+      const now = new Date();
+      await db
+        .update(contents)
+        .set({ body: newBody, updatedAt: now })
+        .where(eq(contents.id, id));
+
+      // 5. 写 bossEdits 学习信号（失败非阻塞）
+      let bossEditId: string | null = null;
+      try {
+        const meta = (content.metadata as Record<string, unknown>) || {};
+        const templateId = typeof meta.templateId === "string" ? meta.templateId : undefined;
+
+        const [edit] = await db
+          .insert(bossEdits)
+          .values({
+            id: nanoid(16),
+            tenantId: request.tenantId,
+            contentId: id,
+            action: "rewrite_section",
+            originalTitle: target.heading,
+            editedTitle: target.heading,
+            originalBody: target.content.slice(0, 2000),
+            editedBody: body.newSectionBody.slice(0, 2000),
+            patternsExtracted: {
+              kind: "rewrite_section",
+              instruction: body.instruction,
+              sectionHeading: target.heading,
+              ...(templateId ? { templateId } : {}),
+            },
+          })
+          .returning({ id: bossEdits.id });
+        bossEditId = edit?.id ?? null;
+      } catch (err) {
+        logger.warn(
+          { err, contentId: id },
+          "T4-2-1: bossEdits 写入失败（非阻塞）"
+        );
+      }
+
+      logger.info(
+        {
+          tenantId: request.tenantId,
+          contentId: id,
+          sectionHeading: target.heading,
+          bossEditId,
+        },
+        "T4-2-1: 章节重写已应用"
+      );
+
+      return {
+        code: "OK",
+        data: {
+          contentId: id,
+          updatedBody: newBody,
+          bossEditId,
+        },
+      };
+    } catch (err: any) {
+      logger.error({ err }, "T4-2-1: apply-rewrite 失败");
+      return reply.code(500).send({
+        code: "INTERNAL_ERROR",
+        message: "应用重写失败，请稍后重试",
+      });
+    }
+  });
 }
