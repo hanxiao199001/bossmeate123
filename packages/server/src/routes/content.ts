@@ -549,4 +549,61 @@ export async function contentRoutes(app: FastifyInstance) {
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
   });
+
+  /**
+   * T4-2-1: POST /content/:id/rewrite-section —— 章节重写预览
+   *
+   * 不写库；调用 AI 在前后章节上下文里重写指定章节，返回 diff 用预览。
+   * 老板预览满意后，前端再调 /apply-rewrite 落库。
+   */
+  app.post("/:id/rewrite-section", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const schema = z.object({
+        sectionHeading: z.string().min(1),
+        instruction: z.string().min(1).max(500),
+      });
+      const body = schema.parse(request.body);
+
+      const { rewriteSection } = await import(
+        "../services/content-engine/section-rewrite.js"
+      );
+      const result = await rewriteSection({
+        tenantId: request.tenantId,
+        contentId: id,
+        sectionHeading: body.sectionHeading,
+        instruction: body.instruction,
+      });
+
+      return { code: "OK", data: result };
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg === "content_not_found") {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+      if (msg === "no_h2_sections") {
+        return reply.code(400).send({
+          code: "NO_H2_SECTIONS",
+          message: "内容没有 ## 章节，无法做章节重写",
+        });
+      }
+      if (msg === "section_not_found") {
+        return reply.code(400).send({
+          code: "SECTION_NOT_FOUND",
+          message: "未找到匹配的章节",
+        });
+      }
+      if (msg === "no_ai_provider") {
+        return reply.code(503).send({
+          code: "NO_AI_PROVIDER",
+          message: "AI 模型未配置",
+        });
+      }
+      logger.error({ err }, "T4-2-1: 章节重写预览失败");
+      return reply.code(500).send({
+        code: "INTERNAL_ERROR",
+        message: "重写失败，请稍后重试",
+      });
+    }
+  });
 }
