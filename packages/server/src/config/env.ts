@@ -92,7 +92,12 @@ const envSchema = z.object({
   // TTS 配音
   TTS_PROVIDER: z.enum(["aliyun", "azure"]).default("aliyun"),
   TTS_API_KEY: z.string().optional(),
-  TTS_VOICE_ID: z.string().default("xiaoyun"),
+  /**
+   * 阿里云 NLS 音色 ID。default 'siqi'（亲和女声，自然不机械）。
+   * 历史 default 是 'xiaoyun'（早期童音，机械感重）。
+   * 推荐: siqi（商业默认）/ ruoxi（清脆）/ zhibei_emo（情感男声）/ aiyue（教学男声）。
+   */
+  TTS_VOICE_ID: z.string().default("siqi"),
   // 阿里云 NLS 凭证（AccessKey 动态换 Token）
   ALIYUN_AK_ID: z.string().optional(),
   ALIYUN_AK_SECRET: z.string().optional(),
@@ -100,6 +105,12 @@ const envSchema = z.object({
 
   // 视频
   VIDEO_RESOLUTION: z.string().default("1080x1920"),
+  /**
+   * BGM 默认路径。生产部署推荐写绝对路径
+   *   `/home/projects/bossmate/data/bgm/default.mp3`
+   * 因为 pm2 cwd = packages/server，相对路径基于 cwd 解析会找错位置。
+   * composer.ts:resolveBgmPath 已加 fallback 链，即使本字段失败也会兜底。
+   */
   BGM_DEFAULT_PATH: z.string().default("data/bgm/default.mp3"),
 
   // 素材图库
