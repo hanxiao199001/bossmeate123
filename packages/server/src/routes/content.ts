@@ -188,6 +188,7 @@ export async function contentRoutes(app: FastifyInstance) {
       }
 
       // T4-1c-1: 查同组 siblings（通过 productionRecords.parentId 链）
+      // T4-3-4: 增补 templateId 字段（前端 ContentDetailPage 用它渲染模板 badge）
       let siblings: Array<{
         id: string;
         title: string | null;
@@ -195,6 +196,7 @@ export async function contentRoutes(app: FastifyInstance) {
         variantIndex: number | undefined;
         userSelected: boolean | undefined;
         userRejected: boolean | undefined;
+        templateId: string | undefined;
         createdAt: Date;
       }> = [];
 
@@ -251,6 +253,7 @@ export async function contentRoutes(app: FastifyInstance) {
                 variantIndex: meta.variantIndex as number | undefined,
                 userSelected: meta.userSelected as boolean | undefined,
                 userRejected: meta.userRejected as boolean | undefined,
+                templateId: meta.templateId as string | undefined,
                 createdAt: s.createdAt,
               };
             })
@@ -389,6 +392,27 @@ export async function contentRoutes(app: FastifyInstance) {
       const firstReject = others[0];
       if (firstReject) {
         try {
+          // T4-3-4: 提取选中 / 被拒的 templateId（老数据无 templateId 时字段为 undefined）
+          const selectedMetaForEdit = (selected.metadata as Record<string, unknown>) || {};
+          const selectedTemplateId =
+            typeof selectedMetaForEdit.templateId === "string"
+              ? (selectedMetaForEdit.templateId as string)
+              : undefined;
+          const rejectedTemplateIds = others
+            .map((o) => {
+              const m = (o.metadata as Record<string, unknown>) || {};
+              return typeof m.templateId === "string" ? (m.templateId as string) : null;
+            })
+            .filter((tid): tid is string => !!tid);
+
+          const patterns: Record<string, unknown> = {
+            variantGroup: groupRoot,
+            totalVariants: allContents.length,
+            rejectedVariantIds: others.map((o) => o.id),
+          };
+          if (selectedTemplateId) patterns.selectedTemplateId = selectedTemplateId;
+          if (rejectedTemplateIds.length > 0) patterns.rejectedTemplateIds = rejectedTemplateIds;
+
           await db.insert(bossEdits).values({
             id: nanoid(),
             tenantId: request.tenantId,
@@ -398,11 +422,7 @@ export async function contentRoutes(app: FastifyInstance) {
             editedTitle: selected.title || "",
             originalBody: (firstReject.body || "").slice(0, 2000),
             editedBody: (selected.body || "").slice(0, 2000),
-            patternsExtracted: {
-              variantGroup: groupRoot,
-              totalVariants: allContents.length,
-              rejectedVariantIds: others.map((o) => o.id),
-            },
+            patternsExtracted: patterns,
           });
         } catch (err) {
           logger.warn({ err, contentId: id }, "T4-1c-1: bossEdits 写入失败（非阻塞）");
@@ -433,6 +453,7 @@ export async function contentRoutes(app: FastifyInstance) {
               variantIndex: meta.variantIndex as number | undefined,
               userSelected: false,
               userRejected: true,
+              templateId: meta.templateId as string | undefined,
               createdAt: o.createdAt,
             };
           }),

@@ -19,6 +19,7 @@ import { publishToAccounts, type PublishResult } from "../publisher/index.js";
 import { collectJournalContent, type CollectionResult, type JournalInfo } from "../data-collection/journal-content-collector.js";
 import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGeneratedContent } from "./journal-template.js";
 import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
+import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
@@ -208,10 +209,26 @@ export class ArticleSkill implements ISkill {
     // T4-1b: 从 metadata 读 variants 参数（默认 1，向后兼容）
     const variants = (context.metadata?.variants as number | undefined) ?? 1;
     // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='data-card'，向后兼容）
-    const templateId = (context.metadata?.templateId as string | undefined) ?? getDefaultTemplateId();
+    const explicitTemplateId =
+      (context.metadata?.templateId as string | undefined) ?? getDefaultTemplateId();
+
+    // T4-3-4: variants > 1 时，副版本按租户偏好分配不同模板；variants=1 行为不变
+    const templateIds: string[] =
+      variants > 1
+        ? await selectVariantTemplates(context.tenantId, variants, {
+            defaultId: explicitTemplateId,
+          })
+        : [explicitTemplateId];
 
     // 生成流程（传入期刊数据用于图片插入）
-    const { article, quality, extraVariants } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult, variants, templateId);
+    const { article, quality, extraVariants } = await this.fullGenerate(
+      parsed,
+      ragText,
+      previousFeedback,
+      collectionResult,
+      variants,
+      templateIds
+    );
     const totalVariants = (extraVariants?.length ?? 0) + 1;
 
     // V3: 生成后自动发布
@@ -298,6 +315,8 @@ export class ArticleSkill implements ISkill {
           // T4-1b: 多版本标识（主版本 = 0）
           variantIndex: 0,
           totalVariants,
+          // T4-3-4: 主版本所用模板（content-worker 写 contents.metadata 时透传）
+          templateId: templateIds[0],
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -317,6 +336,8 @@ export class ArticleSkill implements ISkill {
           suggestions: v.quality.suggestions,
           variantIndex: i + 1,
           totalVariants,
+          // T4-3-4: 此副版本所用模板
+          templateId: templateIds[i + 1] ?? templateIds[0],
           // variantOf 由 content-worker 写 contents 行时填入主版本 contentId
         },
       })),
@@ -488,7 +509,7 @@ export class ArticleSkill implements ISkill {
     previousFeedback?: string,
     journalData?: CollectionResult,
     variants: number = 1,
-    templateId: string = getDefaultTemplateId()
+    templateIds: string[] = [getDefaultTemplateId()]
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -553,9 +574,11 @@ export class ArticleSkill implements ISkill {
     }
 
     // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
-    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, templateId);
+    // T4-3-4: 每个 variant 用 templateIds[i]，缺位时退回 templateIds[0] / default
+    const primaryTemplateId = templateIds[0] ?? getDefaultTemplateId();
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId);
 
-    // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性）
+    // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性 + 不同 templateId）
     if (requestedVariants > 1) {
       const subPromises: Array<Promise<{
         article: GeneratedArticle;
@@ -563,12 +586,17 @@ export class ArticleSkill implements ISkill {
         outline: ArticleOutline;
       }>> = [];
       for (let i = 1; i < requestedVariants; i++) {
-        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, templateId));
+        const tid = templateIds[i] ?? primaryTemplateId;
+        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, tid));
       }
       const extraVariants = await Promise.all(subPromises);
       logger.info(
-        { variants: requestedVariants, extraCount: extraVariants.length },
-        "T4-1b: 多版本生成完成"
+        {
+          variants: requestedVariants,
+          extraCount: extraVariants.length,
+          templateIds: templateIds.slice(0, requestedVariants),
+        },
+        "T4-1b/T4-3-4: 多版本生成完成（每版独立 templateId）"
       );
       return { ...primary, extraVariants };
     }
