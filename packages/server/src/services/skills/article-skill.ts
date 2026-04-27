@@ -18,7 +18,7 @@ import { modelRouter } from "../ai/model-router.js";
 import { publishToAccounts, type PublishResult } from "../publisher/index.js";
 import { collectJournalContent, type CollectionResult, type JournalInfo } from "../data-collection/journal-content-collector.js";
 import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGeneratedContent } from "./journal-template.js";
-import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
+import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
@@ -207,9 +207,11 @@ export class ArticleSkill implements ISkill {
 
     // T4-1b: 从 metadata 读 variants 参数（默认 1，向后兼容）
     const variants = (context.metadata?.variants as number | undefined) ?? 1;
+    // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='data-card'，向后兼容）
+    const templateId = (context.metadata?.templateId as string | undefined) ?? getDefaultTemplateId();
 
     // 生成流程（传入期刊数据用于图片插入）
-    const { article, quality, extraVariants } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult, variants);
+    const { article, quality, extraVariants } = await this.fullGenerate(parsed, ragText, previousFeedback, collectionResult, variants, templateId);
     const totalVariants = (extraVariants?.length ?? 0) + 1;
 
     // V3: 生成后自动发布
@@ -485,7 +487,8 @@ export class ArticleSkill implements ISkill {
     ragContext?: string,
     previousFeedback?: string,
     journalData?: CollectionResult,
-    variants: number = 1
+    variants: number = 1,
+    templateId: string = getDefaultTemplateId()
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -550,7 +553,7 @@ export class ArticleSkill implements ISkill {
     }
 
     // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
-    const primary = await this.generateJournalRecommendation(requirement, finalJournalData);
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, templateId);
 
     // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性）
     if (requestedVariants > 1) {
@@ -560,7 +563,7 @@ export class ArticleSkill implements ISkill {
         outline: ArticleOutline;
       }>> = [];
       for (let i = 1; i < requestedVariants; i++) {
-        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData));
+        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, templateId));
       }
       const extraVariants = await Promise.all(subPromises);
       logger.info(
@@ -688,7 +691,8 @@ export class ArticleSkill implements ISkill {
    */
   async generateJournalRecommendation(
     requirement: ParsedRequirement,
-    journalData: CollectionResult
+    journalData: CollectionResult,
+    templateId: string = getDefaultTemplateId()
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -794,10 +798,13 @@ export class ArticleSkill implements ISkill {
       journal.scopeDescription = aiContent.scopeDescription;
     }
 
-    // 3. 模板组装完整文章 HTML
-    // 默认走微信专用 table 模板（当前产品主要分发渠道是微信公众号）
-    // web 版模板保留用于前端预览（网页端可渲染 flex/grid）
-    const articleBody = await generateWechatJournalArticleHtml(
+    // 3. 模板组装完整文章 HTML（T4-3-1: 走 registry，未注册 ID 降级到 default）
+    let template = getTemplate(templateId);
+    if (!template) {
+      logger.warn({ templateId, fallback: getDefaultTemplateId() }, "template not registered, falling back to default");
+      template = getTemplate(getDefaultTemplateId());
+    }
+    const articleBody = await template!.htmlGenerator(
       journal,
       aiContent,
       journalData.abstracts
@@ -851,7 +858,7 @@ export class ArticleSkill implements ISkill {
       totalEstimatedWords: 1200,
     };
 
-    logger.info({ journal: journal.name, title: aiContent.title }, "V6 期刊推荐文章生成完成");
+    logger.info({ journal: journal.name, title: aiContent.title, templateId: template!.id }, "V6 期刊推荐文章生成完成");
 
     return { article, quality, outline };
   }
