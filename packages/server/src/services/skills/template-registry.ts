@@ -17,6 +17,7 @@
 import type { JournalInfo, CollectionResult } from "../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "./journal-template.js";
 import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
+import { generateStorytellingHtml } from "../publisher/adapters/storytelling-template.js";
 import { logger } from "../../config/logger.js";
 
 export interface TemplateDefinition {
@@ -71,4 +72,13 @@ registerTemplate({
   htmlGenerator: generateWechatJournalArticleHtml,
 });
 
-logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "T4-3-1: template registry initialized");
+registerTemplate({
+  id: "storytelling",
+  name: "故事叙述型",
+  description: "痛点开场 → 案例分析 → 投稿建议 → 行动号召。叙事驱动，适合新手投稿者。",
+  icon: "📖",
+  htmlGenerator: generateStorytellingHtml,
+  aiPromptHints: "标题可加痛点钩子（'博士不愁了！'/'投稿避雷指南：'），recommendation 偏向 actionable 建议清单",
+});
+
+logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "T4-3-2: template registry initialized");
