@@ -71,6 +71,35 @@ export interface LetPubJournalDetail {
 /**
  * 从 LetPub 搜索并抓取期刊详情数据
  */
+/**
+ * Orchestrator-level sanity check：丢弃可疑的"单行低值"ifHistory 假阳性。
+ *
+ * FIXME(b2.1.a.2): parseIFHistory Strategy 3 regex `(20[12]\d)\D+([\d.]+)` falsely matches
+ * citation dates like "2020-04" inside the detail page's "中国学者近期发文" article list,
+ * yielding a stub `[{year:2020, value:4}]`. Until PR #27 (parser ECharts rewrite) replaces
+ * Strategy 3, this orchestrator-level guard keeps callers from poisoning downstream consumers
+ * (e.g. journal-enricher's recommendation_score) with this single artifact.
+ *
+ * Invariant rationale:
+ *  - LetPub provides 5–10 years of IF history + a predicted next-year value, so a real
+ *    journal's parsed `ifHistory` will always have length ≥ 3 (often 10).
+ *    length === 1 is a strong "parser FP" signal regardless of the IF value.
+ *  - Secondary `value < 10` filter avoids the (very narrow) edge case where a real
+ *    low-IF journal could in theory expose a single year due to upstream cropping.
+ *
+ * After PR #27 fixes Strategy 3, this function becomes dead code → schedule removal review.
+ *
+ * Exported for unit testing.
+ */
+export function applySingleRowLowValueIfHistoryGuard(
+  ifHistory: Array<{ year: number; value: number }>
+): Array<{ year: number; value: number }> {
+  if (ifHistory.length === 1 && ifHistory[0].value < 10) {
+    return [];
+  }
+  return ifHistory;
+}
+
 export async function scrapeLetPubDetail(
   journalName: string,
   issn?: string
@@ -84,8 +113,16 @@ export async function scrapeLetPubDetail(
     }
 
     // 第二步：解析各项数据
+    const rawIfHistory = parseIFHistory(detailHtml);
+    const guardedIfHistory = applySingleRowLowValueIfHistoryGuard(rawIfHistory);
+    if (rawIfHistory.length !== guardedIfHistory.length) {
+      logger.debug(
+        { journalName, dropped: rawIfHistory },
+        "discarding single-row low-value ifHistory (likely parser FP)"
+      );
+    }
     const result: LetPubJournalDetail = {
-      ifHistory: parseIFHistory(detailHtml),
+      ifHistory: guardedIfHistory,
       pubVolumeHistory: parsePubVolumeHistory(detailHtml),
       casPartitions: parseCASPartitions(detailHtml),
       jcrPartitions: parseJCRPartitions(detailHtml),
@@ -136,23 +173,45 @@ async function fetchWithRetryLetPub(
   return null;
 }
 
+/**
+ * 检测搜索结果页是否为"0 结果"。
+ * 用于防御性早返回，避免 fallback 把 0-results 错误页伪装成详情页。
+ * Exported for unit testing.
+ */
+export function isZeroResultsSearchPage(html: string): boolean {
+  return /搜索条件匹配[：:]\s*0条记录|暂无匹配结果/.test(html);
+}
+
+/**
+ * 从搜索结果 HTML 提取第一个非 0 的 journalid。
+ * 容忍 URL 参数顺序变化（不再依赖 href 严格匹配 page=journalapp&view=detail&journalid=X）。
+ * Exported for unit testing.
+ */
+export function extractJournalIdFromSearchHtml(html: string): string | null {
+  const matches = html.matchAll(/journalid=([1-9]\d*)/g);
+  for (const m of matches) {
+    return m[1];
+  }
+  return null;
+}
+
 async function fetchLetPubDetailPage(
   journalName: string,
   issn?: string
 ): Promise<string | null> {
   // 搜索期刊
   const searchUrl = `${LETPUB_BASE}/index.php?page=journalapp&view=search`;
+  // 参数名按 LetPub 当前查询字符串规范。旧版用的 searchopen/searchsub/searchletter/currentpage
+  // 在新版被忽略 → 服务端返回 0 results。
   const formData = new URLSearchParams({
     searchname: journalName,
     searchissn: issn || "",
     searchfield: "",
-    searchopen: "",
-    searchsub: "",
-    searchletter: "",
-    searchsort: "relevance",
+    searchsort: "",
+    searchsortorder: "desc",
     searchimpactlow: "",
     searchimpacthigh: "",
-    currentpage: "1",
+    currentsearchpage: "1",
   });
 
   try {
@@ -170,21 +229,21 @@ async function fetchLetPubDetailPage(
 
     const searchHtml = await searchResp.text();
 
-    // 提取详情页链接
-    const detailMatch = searchHtml.match(
-      /href="(index\.php\?page=journalapp&view=detail&journalid=[^"]+)"/
-    );
-
-    if (!detailMatch) {
-      // 搜索结果页可能就是详情页（如果只有一个结果）
-      if (searchHtml.includes("影响因子") || searchHtml.includes("Impact Factor")) {
-        return searchHtml;
-      }
+    // 0-results 早返回（防御 fallback 误把错误页当详情页）
+    if (isZeroResultsSearchPage(searchHtml)) {
+      logger.debug({ journalName, issn }, "LetPub: 0 search results");
       return null;
     }
 
-    // 访问详情页（带重试）
-    const detailUrl = `${LETPUB_BASE}/${detailMatch[1]}`;
+    // 提取 journalid（容忍参数顺序 + 不依赖 href 包装）
+    const journalId = extractJournalIdFromSearchHtml(searchHtml);
+    if (!journalId) {
+      logger.debug({ journalName, issn }, "LetPub: journalid 提取失败");
+      return null;
+    }
+
+    // 自己拼详情 URL（不再"返回搜索页伪装详情页"的危险 fallback）
+    const detailUrl = `${LETPUB_BASE}/index.php?journalid=${journalId}&page=journalapp&view=detail`;
     const detailResp = await fetchWithRetryLetPub(detailUrl, {
       headers: {
         "User-Agent": USER_AGENT,
