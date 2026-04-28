@@ -40,6 +40,13 @@ interface EnrichLogEntry {
 
 const MAX_LOG_ENTRIES = 3;
 
+/** Bug B 修：LetPub 不识别中文名（柳叶刀 → 0 results），英文优先回落中文。Exported for tests. */
+export function selectQueryName(journal: { name: string; nameEn: string | null }): string {
+  return journal.nameEn || journal.name;
+}
+
+type JournalUpdate = Partial<typeof journals.$inferInsert>;
+
 export async function enrichJournal(
   journalId: string,
   options?: EnrichOptions
@@ -62,7 +69,7 @@ export async function enrichJournal(
   const [letpubResult, doajResult] = await Promise.allSettled([
     options?.skipLetpub
       ? Promise.resolve(null)
-      : fetchLetpubDetail({ journalName: journal.name, issn: journal.issn }),
+      : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
     options?.skipDoaj
       ? Promise.resolve(null)
       : fetchDoajByIssn(journal.issn),
@@ -81,30 +88,35 @@ export async function enrichJournal(
   }
 
   // Step 3: extract each field（独立 try-catch，partial OK）
-  const updates: Record<string, unknown> = {};
+  // Bug A 修：updates 用 drizzle camelCase key（snake_case 会被 drizzle 静默丢弃）
+  const updates: JournalUpdate = {};
 
-  const tryExtract = (fieldName: string, fn: () => unknown) => {
+  const tryExtract = <K extends keyof JournalUpdate>(
+    logName: string,
+    drizzleKey: K,
+    fn: () => JournalUpdate[K] | null | undefined,
+  ) => {
     try {
       const value = fn();
       if (value !== null && value !== undefined) {
-        updates[fieldName] = value;
-        successFields.push(fieldName);
+        updates[drizzleKey] = value;
+        successFields.push(logName);
       }
       // value == null 不算失败（数据源没数据，正常）
     } catch (err) {
-      failedFields.push(fieldName);
-      errors[fieldName] = err instanceof Error ? err.message : String(err);
-      logger.warn({ journalId, fieldName, err: errors[fieldName] }, "extractor failed");
+      failedFields.push(logName);
+      errors[logName] = err instanceof Error ? err.message : String(err);
+      logger.warn({ journalId, fieldName: logName, err: errors[logName] }, "extractor failed");
     }
   };
 
-  tryExtract("if_history", () => extractIfHistory(letpub));
-  tryExtract("jcr_full", () => extractJcrFull(letpub));
-  tryExtract("publication_stats", () => extractPublicationStats({
+  tryExtract("if_history", "ifHistory", () => extractIfHistory(letpub));
+  tryExtract("jcr_full", "jcrFull", () => extractJcrFull(letpub));
+  tryExtract("publication_stats", "publicationStats", () => extractPublicationStats({
     letpub,
     journalFrequency: journal.frequency,
   }));
-  tryExtract("publication_costs", () => extractPublicationCosts({
+  tryExtract("publication_costs", "publicationCosts", () => extractPublicationCosts({
     doaj,
     journalApcFee: journal.apcFee,
   }));
@@ -115,10 +127,10 @@ export async function enrichJournal(
       impactFactor: journal.impactFactor,
       jcrQuartile: journal.partition,
       carRiskLevel: null, // B.2.2 才有
-      jcrFull: (updates["jcr_full"] as any) || null,
-      publicationCosts: (updates["publication_costs"] as any) || null,
+      jcrFull: (updates.jcrFull as any) || null,
+      publicationCosts: (updates.publicationCosts as any) || null,
     });
-    updates["recommendation_score"] = score;
+    updates.recommendationScore = score;
     successFields.push("recommendation_score");
   } catch (err) {
     failedFields.push("recommendation_score");
@@ -157,7 +169,7 @@ export async function enrichJournal(
         successFields,
         failedFields,
         durationMs,
-        score: updates["recommendation_score"],
+        score: updates.recommendationScore,
       },
       "journal enriched"
     );
@@ -174,11 +186,11 @@ export async function enrichJournal(
     failedFields,
     errors,
     fieldsSummary: {
-      if_history: !!updates["if_history"],
-      jcr_full: !!updates["jcr_full"],
-      publication_stats: !!updates["publication_stats"],
-      publication_costs: !!updates["publication_costs"],
-      recommendation_score: typeof updates["recommendation_score"] === "number",
+      if_history: !!updates.ifHistory,
+      jcr_full: !!updates.jcrFull,
+      publication_stats: !!updates.publicationStats,
+      publication_costs: !!updates.publicationCosts,
+      recommendation_score: typeof updates.recommendationScore === "number",
     },
   };
 
