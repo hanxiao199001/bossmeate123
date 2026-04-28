@@ -416,30 +416,71 @@ export async function journalRoutes(app: FastifyInstance) {
     }
   });
 
-  /** 批量 enrich 全部租户期刊（B.2.3 完整版后续做；本 PR 给最简版） */
+  /**
+   * B.3 批量 enrich：节流 + skipExisting 跳过已 enrich + 防反爬 5-fail abort（worker 层）。
+   * body: { skipExisting?=true, concurrency?=1, delayMs?=10000, jitterMs?=3000 }
+   */
   app.post("/journals/enrich-all", async (request, reply) => {
     try {
+      const body = (request.body as {
+        skipExisting?: boolean;
+        concurrency?: number;
+        delayMs?: number;
+        jitterMs?: number;
+      }) || {};
+      const skipExisting = body.skipExisting !== false; // default true
+      const concurrency = body.concurrency ?? 1;
+      const delayMs = body.delayMs ?? 10000;
+      const jitterMs = body.jitterMs ?? 3000;
+      // 强制串行（防反爬）+ 最小间隔（避免有人传 0 烧 LetPub）
+      if (concurrency !== 1) {
+        return reply.status(400).send({
+          code: "error",
+          message: "concurrency 必须 = 1（B.3 阶段强制串行防 LetPub 反爬）",
+        });
+      }
+      if (delayMs < 1000 || jitterMs < 0) {
+        return reply.status(400).send({
+          code: "error",
+          message: "delayMs ≥ 1000 且 jitterMs ≥ 0",
+        });
+      }
+
       const tenantId = request.tenantId;
+      const conditions = [eq(journals.tenantId, tenantId)];
+      if (skipExisting) conditions.push(sql`${journals.ifHistory} IS NULL`);
+
       const all = await db
-        .select({ id: journals.id })
+        .select({ id: journals.id, nameEn: journals.nameEn })
         .from(journals)
-        .where(eq(journals.tenantId, tenantId));
+        .where(and(...conditions));
 
       const jobIds: string[] = [];
       for (const j of all) {
         const job = await journalEnrichQueue.add(
           "enrich-single",
-          { journalId: j.id },
-          { jobId: `enrich-${j.id}-${Date.now()}` }
+          { journalId: j.id, delayMs, jitterMs },
+          { jobId: `enrich-${j.id}-${Date.now()}` },
         );
         if (job.id) jobIds.push(job.id);
       }
 
-      logger.info({ tenantId, count: jobIds.length }, "批量 enrich 任务已推送");
+      const totalSec = (all.length * (delayMs + 5000)) / 1000;
+      const estimatedDuration = `~${Math.ceil(totalSec / 60)} 分钟（每条 ≈ ${(delayMs / 1000).toFixed(0)}s + enrich 处理时间）`;
+
+      logger.info(
+        { tenantId, total: all.length, skipExisting, delayMs, jitterMs },
+        "[B.3] 批量 enrich 任务已推送",
+      );
       return reply.send({
         code: "ok",
-        data: { count: jobIds.length, jobIds },
-        message: `已推送 ${jobIds.length} 个 enrich 任务（concurrency=1，按 LetPub 反爬节奏顺序处理）`,
+        data: {
+          jobIds,
+          total: all.length,
+          estimatedDuration,
+          throttle: { concurrency, delayMs, jitterMs, skipExisting },
+        },
+        message: `已推送 ${all.length} 个 enrich 任务（串行节流：${delayMs / 1000}s ± ${jitterMs / 1000}s）`,
       });
     } catch (err) {
       logger.error({ err }, "批量 enrich 失败");
