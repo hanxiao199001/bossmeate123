@@ -646,6 +646,37 @@ CREATE TABLE IF NOT EXISTS sales_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_sm_lead ON sales_messages(lead_id);
 CREATE INDEX IF NOT EXISTS idx_sm_tenant ON sales_messages(tenant_id);
+
+-- ============ B 阶段：journals 4 个扩展字段（顺仕美途风格模板需要）============
+-- 全部 nullable JSONB，旧 46 条数据无需回填即可启动；B.2 数据采集器逐步填上。
+-- 幂等模式（ADD COLUMN IF NOT EXISTS via DO 块），可重复运行不报错。
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'if_history'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN if_history JSONB;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'car_index_history'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN car_index_history JSONB;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'publication_stats'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN publication_stats JSONB;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'jcr_full'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN jcr_full JSONB;
+  END IF;
+END $$;
 `;
 
 async function migrate() {

@@ -238,6 +238,25 @@ export const journals = pgTable(
     isHybrid: boolean("is_hybrid").default(false), // 是否混合 OA
     isOA: boolean("is_oa").default(false), // 是否完全 OA
 
+    // === B 阶段扩展字段（顺仕美途风格模板需要）===
+    // 全部 nullable jsonb，旧 46 条数据不动；B.2 数据采集器 + B.3 回填脚本会逐步填上。
+
+    // 近 10 年 IF 历史 + 预测值
+    // { data: [{year: 2024, if: 4.7}, ...], predicted: {year: 2025, if: 5.5, source: "letpub|model"}, lastUpdatedAt }
+    ifHistory: jsonb("if_history"),
+
+    // CAR 指数 3 年历史 + 风险等级
+    // { data: [{year: 2024, carIndex: 0.85}, ...], riskLevel: "low"|"mid"|"high", lastUpdatedAt }
+    carIndexHistory: jsonb("car_index_history"),
+
+    // 发文统计：刊期 + 年发文量历史 + 国内活跃机构
+    // { frequency, annualVolumeHistory: [{year, count}, ...], topInstitutions: [{name, paperCount, percentile}, ...], lastUpdatedAt }
+    publicationStats: jsonb("publication_stats"),
+
+    // 完整 JCR 分区：WOS 等级 + JIF/JCI 多维度 + isTopJournal/isReviewJournal
+    // { wosLevel, jifSubjects: [{subject, zone, rank, percentile}, ...], jciSubjects: [...], isTopJournal, isReviewJournal, lastUpdatedAt }
+    jcrFull: jsonb("jcr_full"),
+
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
