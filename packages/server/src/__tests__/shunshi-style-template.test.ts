@@ -42,14 +42,21 @@ const baseJournal = {
   website: "https://www.frontiersin.org/journals/oncology",
   apcFee: 2950,
   selfCitationRate: null,
-  jcrSubjects: JSON.stringify([
-    { subject: "Oncology", rank: "Q2", position: "92/241" },
-  ]),
+  jcrSubjects: null,
   topInstitutions: null,
   scopeDescription: null,
   frequency: "周刊",
   coverUrl: "https://media-cdn.example.com/cover.jpg",
   dataCardUri: "",
+  // B 阶段 8 字段全 NULL（默认）
+  ifHistory: null,
+  carIndexHistory: null,
+  publicationStats: null,
+  jcrFull: null,
+  citingJournalsTop10: null,
+  recommendationScore: null,
+  scopeDetails: null,
+  publicationCosts: null,
 } as any;
 
 const baseAi = {
@@ -59,84 +66,93 @@ const baseAi = {
   editorComment: "肿瘤博士口碑首选！",
 } as any;
 
-describe("generateShunshiStyleHtml", () => {
-  it("renders all body blocks (2-13) in default flow", async () => {
+const SECTION_OPEN = /<section\b/g;
+const SECTION_CLOSE = /<\/section>/g;
+
+describe("generateShunshiStyleHtml — 23 sections", () => {
+  it("renders all required content with default (NULL B-fields) input", async () => {
     const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
 
     expect(typeof html).toBe("string");
-    expect(html.length).toBeGreaterThan(800);
+    expect(html.length).toBeGreaterThan(5000);
 
-    // block 2: 今日期刊推荐
-    expect(html).toContain("今日期刊推荐");
-
-    // block 3: 期刊英文全名（红色）
+    // Hero (block 1)
     expect(html).toContain("Frontiers in Oncology");
-    expect(html).toMatch(/color:#DC143C/);
+    expect(html).toContain("IF 4.7");
 
-    // block 4: 期刊简称
-    expect(html).toContain("Front Oncol");
-
-    // block 5: 期刊基本信息
-    expect(html).toContain("创刊时间");
-    expect(html).toContain("2011");
-    expect(html).toContain("出版国家");
-    expect(html).toContain("瑞士");
-    expect(html).toContain("出版商");
-    expect(html).toContain("Frontiers Media");
+    // basic info (block 2)
     expect(html).toContain("ISSN");
     expect(html).toContain("2234-943X");
-    expect(html).toContain("期刊官方网站");
-    expect(html).toContain("frontiersin.org");
+    expect(html).toContain("Publisher");
+    expect(html).toContain("Frontiers Media");
+    expect(html).toContain("瑞士");
 
-    // block 6: 期刊封面图
-    expect(html).toContain("media-cdn.example.com/cover.jpg");
-    // 不做虚化（不应有 filter:blur 或 background-image）
-    expect(html).not.toMatch(/filter\s*:\s*blur/i);
-    expect(html).not.toMatch(/background-image/i);
+    // JCR Quartile (block 3)
+    expect(html).toContain("Q2");
 
-    // block 7: 近10年的影响因子 + 占位
-    expect(html).toContain("近10年的影响因子");
-    expect(html).toContain("数据采集中");
-    expect(html).toContain("📊");
+    // IF latest (block 5)
+    expect(html).toContain("最新影响因子");
 
-    // block 8: CAR 指数占位
-    expect(html).toContain("CAR 指数");
-    expect(html).toContain("2026");
-    expect(html).toContain("N/A");
+    // JCR detailed panel (block 7) — P3 隐藏（jcr_full NULL）→ 不出现
+    expect(html).not.toContain("WoS Level");
 
-    // block 9: JCR分区
-    expect(html).toContain("JCR分区");
-    expect(html).toContain("大类学科");
-    expect(html).toContain("小类学科");
-    expect(html).toContain("Top期刊");
-    expect(html).toContain("综述期刊");
-    expect(html).toContain("WOS 分区");
-    expect(html).toContain("Oncology");
-
-    // block 10/11: 发文情况 + 文字段
-    expect(html).toContain("发文情况");
+    // Frequency (block 10)
+    expect(html).toContain("出版周期");
     expect(html).toContain("周刊");
-    expect(html).toContain("5000");
 
-    // block 12: 近10年的发文量 + 占位
-    expect(html).toContain("近10年的发文量");
+    // Recommendation score (block 15) — NULL → 待评估
+    expect(html).toContain("待评估");
 
-    // block 13: CTA
-    expect(html).toContain("综合来看");
-    expect(html).toMatch(/适合：/);
+    // Summary (block 16)
+    expect(html).toContain("综合点评");
+    expect(html).toContain("录用率较高且审稿快");
+
+    // Submission advice (block 17)
+    expect(html).toContain("投稿建议");
+
+    // Advantages + cautions (block 18 + 19)
+    expect(html).toContain("✅ 优势");
+    expect(html).toContain("⚠️ 注意事项");
+
+    // Marketing CTA (block 20)
+    expect(html).toContain("需要投稿协助");
+
+    // Contact (block 21)
+    expect(html).toContain("联系方式");
+
+    // Disclaimer (block 22)
+    expect(html).toContain("免责声明");
+
+    // Footer (block 23)
+    expect(html).toContain("数据更新");
   });
 
-  it("skips abbreviation block when journal.abbreviation missing", async () => {
-    const j = { ...baseJournal, abbreviation: null };
-    const html = await generateShunshiStyleHtml(j, baseAi, undefined);
-    // 缩写区块整段不应出现（"Front Oncol" 是简称专属字符串）
-    expect(html).not.toContain("Front Oncol");
-    // 但其他区块仍在
-    expect(html).toContain("Frontiers in Oncology");
-    expect(html).toContain("今日期刊推荐");
+  it("renders ≥5 P1 placeholder cards when all 8 B-fields NULL", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    // 数据采集中 出现在每个 P1 占位卡片里
+    const matches = html.match(/数据采集中/g);
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("falls back gracefully when basic info fields are all missing", async () => {
+  it("section open/close tags balanced", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    const openCount = (html.match(SECTION_OPEN) || []).length;
+    const closeCount = (html.match(SECTION_CLOSE) || []).length;
+    expect(openCount).toBe(closeCount);
+    expect(openCount).toBeGreaterThan(15);
+  });
+
+  it("no literal undefined / null / [object Object] leakage", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(html).not.toMatch(/\bundefined\b/);
+    expect(html).not.toMatch(/\[object Object\]/);
+    // 'null' 单词级别不应出现（class= 等也不应有；字段值若为 null 应渲染为"暂无"）
+    expect(html).not.toMatch(/>null</);
+    expect(html).not.toMatch(/:\s*null\s*</);
+  });
+
+  it("falls back gracefully when basic info fields missing", async () => {
     const j = {
       ...baseJournal,
       foundingYear: null,
@@ -146,43 +162,97 @@ describe("generateShunshiStyleHtml", () => {
       website: null,
     };
     const html = await generateShunshiStyleHtml(j, baseAi, undefined);
-    // 主流程不应抛错；这些标签字符串都不应出现
-    expect(html).not.toContain("创刊时间");
-    expect(html).not.toContain("出版国家");
-    expect(html).not.toContain("期刊官方网站");
-    // 其他区块仍正常
-    expect(html).toContain("今日期刊推荐");
-    expect(html).toContain("JCR分区");
+    // 灰阶 fallback：出现"暂无"
+    expect(html).toContain("暂无");
+    // 主流程不抛错
+    expect(html).toContain("Frontiers in Oncology");
   });
 
   it("skips cover image when both coverUrl and coverImageUrl missing", async () => {
     const j = { ...baseJournal, coverUrl: null, coverImageUrl: null };
     const html = await generateShunshiStyleHtml(j, baseAi, undefined);
+    // 不应有 <img>（封面）；其他 <img> 也无
     expect(html).not.toMatch(/<img\s/);
   });
 
-  it("uses chart placeholders when historical data is unavailable", async () => {
-    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
-    // 两张柱状图占位都应出现
-    const chartMatches = html.match(/数据采集中/g);
-    expect(chartMatches && chartMatches.length).toBeGreaterThanOrEqual(3);
-    // dashed 边框 + 灰色文字
-    expect(html).toMatch(/border\s*:\s*1px dashed/);
+  it("renders JCR full panel when jcr_full populated, hides when null (P3)", async () => {
+    const jWithJcr = {
+      ...baseJournal,
+      jcrFull: {
+        wosLevel: "SCIE",
+        jifSubjects: [{ subject: "ONCOLOGY", zone: "Q2", rank: "92/241" }],
+        isTopJournal: true,
+        isReviewJournal: false,
+      },
+    };
+    const html = await generateShunshiStyleHtml(jWithJcr, baseAi, undefined);
+    expect(html).toContain("WoS Level");
+    expect(html).toContain("SCIE");
+    expect(html).toContain("ONCOLOGY");
+    expect(html).toContain("Top Journal");
+
+    // NULL 时整段隐藏（P3）
+    const htmlNull = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(htmlNull).not.toContain("WoS Level");
+    expect(htmlNull).not.toMatch(/JCR\s*详细/);
   });
 
-  it("renders fallback when JCR partition data totally absent", async () => {
+  it("renders recommendation score stars when 1-5, shows '待评估' for null/invalid", async () => {
+    const j5 = { ...baseJournal, recommendationScore: 5 };
+    const html5 = await generateShunshiStyleHtml(j5, baseAi, undefined);
+    expect(html5).toContain("★★★★★");
+    expect(html5).toContain("5 / 5");
+
+    const j3 = { ...baseJournal, recommendationScore: 3 };
+    const html3 = await generateShunshiStyleHtml(j3, baseAi, undefined);
+    expect(html3).toContain("★★★☆☆");
+
+    const jNull = { ...baseJournal, recommendationScore: null };
+    const htmlNull = await generateShunshiStyleHtml(jNull, baseAi, undefined);
+    expect(htmlNull).toContain("待评估");
+
+    // 越界值走 fallback
+    const jBad = { ...baseJournal, recommendationScore: 99 };
+    const htmlBad = await generateShunshiStyleHtml(jBad, baseAi, undefined);
+    expect(htmlBad).toContain("待评估");
+  });
+
+  it("renders if_history yoy delta when ≥2 data points", async () => {
     const j = {
       ...baseJournal,
-      partition: null,
-      casPartition: null,
-      casPartitionNew: null,
-      jcrSubjects: null,
-      discipline: null,
+      ifHistory: {
+        data: [
+          { year: 2022, if: 3.5 },
+          { year: 2023, if: 4.7 },
+        ],
+      },
     };
     const html = await generateShunshiStyleHtml(j, baseAi, undefined);
-    expect(html).toContain("JCR分区");
-    // 三张表都 absent 时降级成"分区数据采集中"
-    expect(html).toContain("分区数据采集中");
+    // 同比文字应出现（▲ 或 ▼ + 百分比）
+    expect(html).toMatch(/[▲▼]/);
+    expect(html).toMatch(/同比/);
+  });
+
+  it("renders top institutions (block 12) when populated, hides when empty (P3)", async () => {
+    const j = {
+      ...baseJournal,
+      publicationStats: {
+        topInstitutions: [
+          { name: "复旦大学", paperCount: 120 },
+          { name: "上海交通大学", paperCount: 95 },
+          { name: "中山大学", paperCount: 80 },
+        ],
+      },
+    };
+    const html = await generateShunshiStyleHtml(j, baseAi, undefined);
+    expect(html).toContain("国内 TOP 5 发文机构");
+    expect(html).toContain("复旦大学");
+    expect(html).toContain("上海交通大学");
+    expect(html).toContain("120 篇");
+
+    // 空数组 → P3 隐藏
+    const htmlEmpty = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(htmlEmpty).not.toContain("国内 TOP 5 发文机构");
   });
 
   it("WeChat compatibility: no flex / grid / class= / id= / position", async () => {
@@ -194,36 +264,37 @@ describe("generateShunshiStyleHtml", () => {
     expect(html).not.toMatch(/position\s*:\s*(absolute|fixed|relative)/);
   });
 
-  it("escapes user-provided strings to prevent XSS injection", async () => {
+  it("escapes user-provided strings to prevent XSS", async () => {
     const j = {
       ...baseJournal,
       name: "<script>alert(1)</script>",
       nameEn: "<script>alert(1)</script>",
       publisher: "<img onerror=alert(1)>",
-      abbreviation: "<svg onload=alert(1)>",
     };
     const html = await generateShunshiStyleHtml(j, baseAi, undefined);
     expect(html).not.toMatch(/<script>alert/);
     expect(html).not.toMatch(/<img\s+onerror/);
-    expect(html).not.toMatch(/<svg\s+onload/);
     expect(html).toContain("&lt;script&gt;");
   });
 
-  it("renders top institutions list when topInstitutions JSON populated", async () => {
-    const j = {
+  it("uses publication_costs APC fields when populated (P2 grey otherwise)", async () => {
+    const jWithCosts = {
       ...baseJournal,
-      topInstitutions: JSON.stringify(["复旦大学", "上海交通大学", "中山大学"]),
+      publicationCosts: {
+        apc: 2950,
+        currency: "USD",
+        openAccess: true,
+        fastTrack: false,
+      },
     };
-    const html = await generateShunshiStyleHtml(j, baseAi, undefined);
-    expect(html).toContain("国内近三年投稿活跃机构：");
-    expect(html).toContain("复旦大学");
-    expect(html).toContain("上海交通大学");
-    expect(html).toContain("中山大学");
-  });
+    const html = await generateShunshiStyleHtml(jWithCosts, baseAi, undefined);
+    expect(html).toContain("USD");
+    expect(html).toContain("2,950");
+    expect(html).toContain("APC 版面费");
 
-  it("uses recommendation summary in CTA when present", async () => {
-    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
-    // recommendation 摘要应出现
-    expect(html).toContain("录用率较高且审稿快");
+    // NULL → P2 灰阶 "暂无"
+    const htmlNull = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(htmlNull).toContain("APC 版面费");
+    expect(htmlNull).toContain("暂无");
   });
 });
