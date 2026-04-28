@@ -173,17 +173,17 @@ describe("selectVariantTemplates", () => {
 
   it("variants > available non-default+1 → fills remainder with defaultId", async () => {
     dbCallSeq = [[], []];
-    // Only data-card / storytelling / listicle registered (3). variants=5
-    // → [default, nonDefault, nonDefault, default, default]
-    const ids = await selectVariantTemplates("tenant-overflow", 5, {
+    // 4 templates registered (data-card default + 3 non-defaults). variants=6
+    // → [default, nd1, nd2, nd3, default, default]
+    const ids = await selectVariantTemplates("tenant-overflow", 6, {
       random: () => 0,
     });
-    expect(ids.length).toBe(5);
+    expect(ids.length).toBe(6);
     expect(ids[0]).toBe("data-card");
-    // first two non-default picks distinct
-    expect(new Set(ids.slice(1, 3)).size).toBe(2);
+    // 3 non-default picks all distinct
+    expect(new Set(ids.slice(1, 4)).size).toBe(3);
     // remaining slots filled by defaultId
-    expect(ids[3]).toBe("data-card");
     expect(ids[4]).toBe("data-card");
+    expect(ids[5]).toBe("data-card");
   });
 });
