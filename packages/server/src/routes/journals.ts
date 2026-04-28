@@ -13,6 +13,7 @@ import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
 import { eq, and, sql, gte, lte, ilike, desc, asc } from "drizzle-orm";
 import { logger } from "../config/logger.js";
+import { journalEnrichQueue } from "../services/task/queue.js";
 
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
@@ -350,6 +351,99 @@ export async function journalRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error({ err }, "导入期刊数据失败");
       return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  // ============ B.2.1.A: 期刊 enrichment ============
+
+  /** 单期刊 enrich：推一个 BullMQ 任务，立刻返回 jobId */
+  app.post("/journals/:id/enrich", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const tenantId = request.tenantId;
+      const body = (request.body as { dryRun?: boolean; skipLetpub?: boolean; skipDoaj?: boolean }) || {};
+
+      // 验期刊属于本租户
+      const rows = await db
+        .select({ id: journals.id, name: journals.name })
+        .from(journals)
+        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        .limit(1);
+      if (rows.length === 0) {
+        return reply.status(404).send({ code: "error", message: "期刊不存在或无权限" });
+      }
+
+      const job = await journalEnrichQueue.add(
+        "enrich-single",
+        { journalId: id, dryRun: !!body.dryRun, skipLetpub: !!body.skipLetpub, skipDoaj: !!body.skipDoaj },
+        { jobId: `enrich-${id}-${Date.now()}` }
+      );
+
+      logger.info({ jobId: job.id, journalId: id, journalName: rows[0].name }, "journal enrich queued");
+      return reply.send({
+        code: "ok",
+        data: { jobId: job.id, status: "queued", journalId: id },
+      });
+    } catch (err) {
+      logger.error({ err }, "推送 enrich 任务失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /** 查任务状态（BullMQ 内置） */
+  app.get("/journals/enrich/jobs/:jobId", async (request, reply) => {
+    try {
+      const { jobId } = request.params as { jobId: string };
+      const job = await journalEnrichQueue.getJob(jobId);
+      if (!job) {
+        return reply.status(404).send({ code: "error", message: "任务不存在或已过期" });
+      }
+      const state = await job.getState();
+      return reply.send({
+        code: "ok",
+        data: {
+          jobId: job.id,
+          state,
+          progress: job.progress,
+          returnvalue: job.returnvalue,
+          failedReason: job.failedReason,
+          attemptsMade: job.attemptsMade,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "查询 enrich 任务失败");
+      return reply.status(500).send({ code: "error", message: "操作失败" });
+    }
+  });
+
+  /** 批量 enrich 全部租户期刊（B.2.3 完整版后续做；本 PR 给最简版） */
+  app.post("/journals/enrich-all", async (request, reply) => {
+    try {
+      const tenantId = request.tenantId;
+      const all = await db
+        .select({ id: journals.id })
+        .from(journals)
+        .where(eq(journals.tenantId, tenantId));
+
+      const jobIds: string[] = [];
+      for (const j of all) {
+        const job = await journalEnrichQueue.add(
+          "enrich-single",
+          { journalId: j.id },
+          { jobId: `enrich-${j.id}-${Date.now()}` }
+        );
+        if (job.id) jobIds.push(job.id);
+      }
+
+      logger.info({ tenantId, count: jobIds.length }, "批量 enrich 任务已推送");
+      return reply.send({
+        code: "ok",
+        data: { count: jobIds.length, jobIds },
+        message: `已推送 ${jobIds.length} 个 enrich 任务（concurrency=1，按 LetPub 反爬节奏顺序处理）`,
+      });
+    } catch (err) {
+      logger.error({ err }, "批量 enrich 失败");
+      return reply.status(500).send({ code: "error", message: "操作失败" });
     }
   });
 }

@@ -69,12 +69,29 @@ export const videoQueueEvents = new QueueEvents("video-generation", {
   connection: getRedisConnection(),
 });
 
+/** 期刊 enrichment 队列（B.2.1.A） */
+export const journalEnrichQueue = new Queue("journal-enrich", {
+  connection: getRedisConnection(),
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 15000 },
+    removeOnComplete: 50,
+    removeOnFail: 50,
+  },
+});
+
+export const journalEnrichQueueEvents = new QueueEvents("journal-enrich", {
+  connection: getRedisConnection(),
+});
+
 export async function closeQueues(): Promise<void> {
   await contentQueue.close();
   await crawlerQueue.close();
   await videoQueue.close();
+  await journalEnrichQueue.close();
   await contentQueueEvents.close();
   await videoQueueEvents.close();
+  await journalEnrichQueueEvents.close();
   if (connection) {
     await connection.quit();
     connection = null;

@@ -29,6 +29,7 @@ import { errorHandler } from "./middleware/error.js";
 import { getProviders } from "./services/ai/provider-factory.js";
 import { initializeSkills } from "./services/skills/index.js";
 import { startContentWorker } from "./services/task/content-worker.js";
+import { startJournalEnrichWorker } from "./services/task/journal-enrich-worker.js";
 import { startPublishWorker, stopPublishWorker } from "./services/task/publish-worker.js";
 import { registerTaskWebSocket } from "./services/task/progress-ws.js";
 import { closeQueues } from "./services/task/queue.js";
@@ -196,6 +197,7 @@ async function bootstrap() {
   // 启动后台 Worker
   const contentWorker = startContentWorker();
   const videoWorker = startVideoWorker();
+  const journalEnrichWorker = startJournalEnrichWorker();
 
   // 启动发布 Worker
   startPublishWorker();
@@ -214,6 +216,7 @@ async function bootstrap() {
     } catch {}
     await contentWorker.close();
     await videoWorker.close();
+    await journalEnrichWorker.close();
     try {
       const { closeBrowser } = await import("./services/video/html-renderer.js");
       await closeBrowser();
