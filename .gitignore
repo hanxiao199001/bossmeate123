@@ -54,3 +54,6 @@ data/
 /test-*.cjs
 /fix-*.js
 /fix-*.cjs
+
+# Deploy artifacts (server-side pg_dump backups, never committed)
+.deploy-backups/
