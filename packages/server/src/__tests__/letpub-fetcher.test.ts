@@ -34,6 +34,7 @@ const {
   isZeroResultsSearchPage,
   extractJournalIdFromSearchHtml,
   applySingleRowLowValueIfHistoryGuard,
+  buildLetPubSearchFormData,
 } = await import(
   "../services/crawler/letpub-detail-scraper.js"
 );
@@ -140,5 +141,27 @@ describe("applySingleRowLowValueIfHistoryGuard", () => {
 
   it("preserves empty array unchanged (no FP to filter)", () => {
     expect(applySingleRowLowValueIfHistoryGuard([])).toEqual([]);
+  });
+});
+
+// ============ buildLetPubSearchFormData (b2.1.a.4 ISSN-only search) ============
+// LetPub does AND match on searchname+searchissn. "The Lancet"+0140-6736 → 0 hits
+// because LetPub's record is "Lancet" (no The). ISSN is unique, so prefer it.
+
+describe("buildLetPubSearchFormData", () => {
+  it("ISSN present: sends only searchissn, blanks searchname (avoids 'The X' AND mismatch)", () => {
+    const fd = buildLetPubSearchFormData("The Lancet", "0140-6736");
+    expect(fd?.get("searchissn")).toBe("0140-6736");
+    expect(fd?.get("searchname")).toBe("");
+  });
+
+  it("ISSN absent: sends only searchname (fallback path)", () => {
+    const fd = buildLetPubSearchFormData("Some Journal", null);
+    expect(fd?.get("searchissn")).toBe("");
+    expect(fd?.get("searchname")).toBe("Some Journal");
+  });
+
+  it("both null: returns null (caller skips network call)", () => {
+    expect(buildLetPubSearchFormData(null, null)).toBeNull();
   });
 });

@@ -195,17 +195,20 @@ export function extractJournalIdFromSearchHtml(html: string): string | null {
   return null;
 }
 
-async function fetchLetPubDetailPage(
-  journalName: string,
-  issn?: string
-): Promise<string | null> {
-  // 搜索期刊
-  const searchUrl = `${LETPUB_BASE}/index.php?page=journalapp&view=search`;
-  // 参数名按 LetPub 当前查询字符串规范。旧版用的 searchopen/searchsub/searchletter/currentpage
-  // 在新版被忽略 → 服务端返回 0 results。
-  const formData = new URLSearchParams({
-    searchname: journalName,
-    searchissn: issn || "",
+/**
+ * Bug B.2.1.A.4 修：LetPub 对 searchname+searchissn 做 AND 匹配 —
+ * "The Lancet"+0140-6736 命中 0 条（库内 searchname="Lancet" 无 The 前缀）。
+ * ISSN 已是唯一键，issn 在场时只发 ISSN，避免名称模糊匹配。
+ * Exported for unit testing.
+ */
+export function buildLetPubSearchFormData(
+  journalName: string | null,
+  issn: string | null,
+): URLSearchParams | null {
+  if (!issn && !journalName) return null;
+  return new URLSearchParams({
+    searchname: issn ? "" : (journalName ?? ""),
+    searchissn: issn ?? "",
     searchfield: "",
     searchsort: "",
     searchsortorder: "desc",
@@ -213,6 +216,18 @@ async function fetchLetPubDetailPage(
     searchimpacthigh: "",
     currentsearchpage: "1",
   });
+}
+
+async function fetchLetPubDetailPage(
+  journalName: string,
+  issn?: string
+): Promise<string | null> {
+  const formData = buildLetPubSearchFormData(journalName || null, issn || null);
+  if (!formData) {
+    logger.debug({ journalName, issn }, "LetPub: 缺 issn 与 journalName，跳过");
+    return null;
+  }
+  const searchUrl = `${LETPUB_BASE}/index.php?page=journalapp&view=search`;
 
   try {
     const searchResp = await fetchWithRetryLetPub(searchUrl, {
