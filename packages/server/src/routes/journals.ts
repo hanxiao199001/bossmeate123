@@ -14,6 +14,7 @@ import { journals } from "../models/schema.js";
 import { eq, and, sql, gte, lte, ilike, desc, asc } from "drizzle-orm";
 import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
+import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
 
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
@@ -427,11 +428,15 @@ export async function journalRoutes(app: FastifyInstance) {
         concurrency?: number;
         delayMs?: number;
         jitterMs?: number;
+        randomize?: boolean;
       }) || {};
       const skipExisting = body.skipExisting !== false; // default true
       const concurrency = body.concurrency ?? 1;
       const delayMs = body.delayMs ?? 10000;
       const jitterMs = body.jitterMs ?? 3000;
+      // B.3.1: 默认 shuffle，避免 seed 按学科聚集导致 streak 假阳性（首次跑 5 条中文
+      // 法学连击触发 abort，吞掉剩余 26 条任务）
+      const randomize = body.randomize !== false; // default true
       // 强制串行（防反爬）+ 最小间隔（避免有人传 0 烧 LetPub）
       if (concurrency !== 1) {
         return reply.status(400).send({
@@ -450,10 +455,11 @@ export async function journalRoutes(app: FastifyInstance) {
       const conditions = [eq(journals.tenantId, tenantId)];
       if (skipExisting) conditions.push(sql`${journals.ifHistory} IS NULL`);
 
-      const all = await db
+      const allRaw = await db
         .select({ id: journals.id, nameEn: journals.nameEn })
         .from(journals)
         .where(and(...conditions));
+      const all = randomize ? shuffleFisherYates(allRaw) : allRaw;
 
       const jobIds: string[] = [];
       for (const j of all) {
@@ -469,7 +475,7 @@ export async function journalRoutes(app: FastifyInstance) {
       const estimatedDuration = `~${Math.ceil(totalSec / 60)} 分钟（每条 ≈ ${(delayMs / 1000).toFixed(0)}s + enrich 处理时间）`;
 
       logger.info(
-        { tenantId, total: all.length, skipExisting, delayMs, jitterMs },
+        { tenantId, total: all.length, skipExisting, delayMs, jitterMs, randomize },
         "[B.3] 批量 enrich 任务已推送",
       );
       return reply.send({
@@ -478,9 +484,9 @@ export async function journalRoutes(app: FastifyInstance) {
           jobIds,
           total: all.length,
           estimatedDuration,
-          throttle: { concurrency, delayMs, jitterMs, skipExisting },
+          throttle: { concurrency, delayMs, jitterMs, skipExisting, randomize },
         },
-        message: `已推送 ${all.length} 个 enrich 任务（串行节流：${delayMs / 1000}s ± ${jitterMs / 1000}s）`,
+        message: `已推送 ${all.length} 个 enrich 任务（串行节流：${delayMs / 1000}s ± ${jitterMs / 1000}s${randomize ? "，shuffle" : ""}）`,
       });
     } catch (err) {
       logger.error({ err }, "批量 enrich 失败");

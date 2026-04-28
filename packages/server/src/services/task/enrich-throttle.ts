@@ -28,6 +28,20 @@ export function nextDelayMs(delayMs: number, jitterMs: number): number {
 }
 
 /**
+ * Fisher-Yates 洗牌（B.3.1 修：seed 数据按学科聚集，连续 5 条中文法学期刊触发 streak
+ * 假阳性 abort 整个批次）。打散到批次随机位置避免 N 连击。
+ * 不变 input；返回新数组。
+ */
+export function shuffleFisherYates<T>(arr: readonly T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
  * 串行 worker 内的失败计数器（concurrency=1 前提，所以单实例够用）。
  * worker 重启自动归零。
  */

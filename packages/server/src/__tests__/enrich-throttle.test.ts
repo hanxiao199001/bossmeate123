@@ -13,6 +13,7 @@ import {
   nextDelayMs,
   LetPubFailStreakTracker,
   MAX_LETPUB_FAIL_STREAK,
+  shuffleFisherYates,
 } from "../services/task/enrich-throttle.js";
 
 describe("letpubGotData", () => {
@@ -84,5 +85,32 @@ describe("LetPubFailStreakTracker", () => {
     t.reset();
     expect(t.current()).toBe(0);
     expect(t.shouldAbort()).toBe(false);
+  });
+});
+
+// B.3.1: shuffle 防 streak 假阳性（seed 按学科聚集 → 5 条中文法学连击触发 abort）
+describe("shuffleFisherYates", () => {
+  it("two runs on the same 50-item input return different orders (probabilistic)", () => {
+    const input = Array.from({ length: 50 }, (_, i) => `id-${i}`);
+    const a = shuffleFisherYates(input);
+    const b = shuffleFisherYates(input);
+    expect(a).toHaveLength(50);
+    expect(b).toHaveLength(50);
+    // 50! collision probability ≈ 0; if equal, RNG is broken
+    expect(a.join(",")).not.toBe(b.join(","));
+    // Same elements, just reordered
+    expect([...a].sort()).toEqual([...input].sort());
+  });
+  it("single-element array returns equivalent (no crash, length=1 boundary)", () => {
+    expect(shuffleFisherYates(["only"])).toEqual(["only"]);
+  });
+  it("empty array returns empty (no crash)", () => {
+    expect(shuffleFisherYates([])).toEqual([]);
+  });
+  it("does not mutate input array (returns new array)", () => {
+    const input = ["a", "b", "c", "d", "e"];
+    const snapshot = [...input];
+    shuffleFisherYates(input);
+    expect(input).toEqual(snapshot);
   });
 });
