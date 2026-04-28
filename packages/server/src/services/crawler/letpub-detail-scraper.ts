@@ -71,35 +71,6 @@ export interface LetPubJournalDetail {
 /**
  * 从 LetPub 搜索并抓取期刊详情数据
  */
-/**
- * Orchestrator-level sanity check：丢弃可疑的"单行低值"ifHistory 假阳性。
- *
- * FIXME(b2.1.a.2): parseIFHistory Strategy 3 regex `(20[12]\d)\D+([\d.]+)` falsely matches
- * citation dates like "2020-04" inside the detail page's "中国学者近期发文" article list,
- * yielding a stub `[{year:2020, value:4}]`. Until PR #27 (parser ECharts rewrite) replaces
- * Strategy 3, this orchestrator-level guard keeps callers from poisoning downstream consumers
- * (e.g. journal-enricher's recommendation_score) with this single artifact.
- *
- * Invariant rationale:
- *  - LetPub provides 5–10 years of IF history + a predicted next-year value, so a real
- *    journal's parsed `ifHistory` will always have length ≥ 3 (often 10).
- *    length === 1 is a strong "parser FP" signal regardless of the IF value.
- *  - Secondary `value < 10` filter avoids the (very narrow) edge case where a real
- *    low-IF journal could in theory expose a single year due to upstream cropping.
- *
- * After PR #27 fixes Strategy 3, this function becomes dead code → schedule removal review.
- *
- * Exported for unit testing.
- */
-export function applySingleRowLowValueIfHistoryGuard(
-  ifHistory: Array<{ year: number; value: number }>
-): Array<{ year: number; value: number }> {
-  if (ifHistory.length === 1 && ifHistory[0].value < 10) {
-    return [];
-  }
-  return ifHistory;
-}
-
 export async function scrapeLetPubDetail(
   journalName: string,
   issn?: string
@@ -112,17 +83,9 @@ export async function scrapeLetPubDetail(
       return null;
     }
 
-    // 第二步：解析各项数据
-    const rawIfHistory = parseIFHistory(detailHtml);
-    const guardedIfHistory = applySingleRowLowValueIfHistoryGuard(rawIfHistory);
-    if (rawIfHistory.length !== guardedIfHistory.length) {
-      logger.debug(
-        { journalName, dropped: rawIfHistory },
-        "discarding single-row low-value ifHistory (likely parser FP)"
-      );
-    }
+    // 第二步：解析各项数据（PR #30 后 parsers 直接读 ECharts，不再需要 guard 兜底）
     const result: LetPubJournalDetail = {
-      ifHistory: guardedIfHistory,
+      ifHistory: parseIFHistory(detailHtml),
       pubVolumeHistory: parsePubVolumeHistory(detailHtml),
       casPartitions: parseCASPartitions(detailHtml),
       jcrPartitions: parseJCRPartitions(detailHtml),
@@ -275,218 +238,145 @@ async function fetchLetPubDetailPage(
   }
 }
 
-// ============ 数据解析 ============
+// ============ 数据解析（PR #30: ECharts 适配重写） ============
 
 /**
- * 解析影响因子历年数据
+ * 通用：从 ECharts option 字面量按 series.name 提取年-值序列。
  *
- * LetPub 页面中 IF 趋势数据通常在 JavaScript 变量或 table 中：
- * - Highcharts: categories: ['2015','2016',...], data: [3.492, 5.133, ...]
- * - 或在表格行中
+ * 现 LetPub 详情页用 ECharts（不是 Highcharts）渲染图表。结构示例：
+ *   xAxis : [{ type:'category', data: ['2015-2016年度', ..., '2024-2025年度'] }]
+ *   series : [{ name:'IF值', data: [44.002, 47.831, ...] }]
+ *
+ * 年份取每个 'YYYY-YYYY年度' 的第一个 4 位数（"2024-2025年度" → 2024）。
+ * Exported for unit testing.
  */
-function parseIFHistory(html: string): Array<{ year: number; value: number }> {
-  const result: Array<{ year: number; value: number }> = [];
-
-  // 方式1: Highcharts categories + data 配对
-  // categories: ['2015','2016','2017','2018','2019','2020','2021','2022','2023','2024']
-  const catMatch = html.match(/categories\s*:\s*\[([^\]]+)\]/);
-  // data: [3.492, 5.133, 8.593, 10.9, 9.4, 13.5]
-  const dataMatch = html.match(/data\s*:\s*\[([0-9.,\s]+)\]/);
-
-  if (catMatch && dataMatch) {
-    const years = catMatch[1].match(/\d{4}/g) || [];
-    const values = dataMatch[1].split(",").map((v) => parseFloat(v.trim()));
-
-    for (let i = 0; i < Math.min(years.length, values.length); i++) {
-      if (!isNaN(values[i]) && values[i] > 0) {
-        result.push({ year: parseInt(years[i]), value: values[i] });
-      }
-    }
-    if (result.length > 0) return result;
-  }
-
-  // 方式2: 表格行 <td>2024</td><td>13.5</td>
-  const yearValuePairs = html.matchAll(
-    /(\d{4})\s*<\/td>\s*<td[^>]*>\s*([\d.]+)\s*<\/td>/gi
+export function parseEChartsLineChart(
+  html: string,
+  seriesName: string,
+): Array<{ year: number; value: number }> {
+  const escName = seriesName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const seriesIdx = html.search(new RegExp(`name\\s*:\\s*['"]${escName}['"]`));
+  if (seriesIdx === -1) return [];
+  // 向前回看找最近 xAxis ... data : [...]
+  const before = html.slice(Math.max(0, seriesIdx - 5000), seriesIdx);
+  const xMatches = [...before.matchAll(/xAxis\s*:\s*\[\s*\{[\s\S]*?data\s*:\s*\[([^\]]+)\]/g)];
+  if (xMatches.length === 0) return [];
+  const years = [...xMatches[xMatches.length - 1][1].matchAll(/['"](\d{4})/g)].map((m) =>
+    parseInt(m[1], 10),
   );
-  for (const m of yearValuePairs) {
-    const year = parseInt(m[1]);
-    const value = parseFloat(m[2]);
-    if (year >= 2010 && year <= 2030 && value > 0 && value < 500) {
-      result.push({ year, value });
-    }
+  // series.name 后第一个 data : [...]（series 内的）
+  const after = html.slice(seriesIdx, seriesIdx + 2000);
+  const dataMatch = after.match(/data\s*:\s*\[([\d.,\s-]+)\]/);
+  if (!dataMatch) return [];
+  const values = dataMatch[1]
+    .split(",")
+    .map((s) => parseFloat(s.trim()))
+    .filter((v) => !isNaN(v));
+  const out: Array<{ year: number; value: number }> = [];
+  for (let i = 0; i < Math.min(years.length, values.length); i++) {
+    if (values[i] > 0) out.push({ year: years[i], value: values[i] });
   }
+  return out;
+}
 
-  // 方式3: 用正则匹配 "影响因子" 相关的年份-数值对
-  const ifSection = html.match(/影响因子[^]*?(?=<\/table>|<\/div>\s*<div)/i);
-  if (ifSection) {
-    const pairs = ifSection[0].matchAll(
-      /(?:20[12]\d)\D+([\d.]+)/g
-    );
-    for (const p of pairs) {
-      const year = parseInt(p[0].match(/20[12]\d/)![0]);
-      const value = parseFloat(p[1]);
-      if (value > 0 && value < 500) {
-        result.push({ year, value });
-      }
-    }
-  }
+/** 影响因子历年（ECharts 'IF值' 系列） */
+export function parseIFHistory(html: string): Array<{ year: number; value: number }> {
+  return parseEChartsLineChart(html, "IF值");
+}
 
-  // 去重并按年份排序
-  const seen = new Set<number>();
-  return result
-    .filter((r) => {
-      if (seen.has(r.year)) return false;
-      seen.add(r.year);
-      return true;
-    })
-    .sort((a, b) => a.year - b.year);
+/** 发文量历年（ECharts '年文章数' 系列） */
+export function parsePubVolumeHistory(html: string): Array<{ year: number; count: number }> {
+  return parseEChartsLineChart(html, "年文章数").map((r) => ({
+    year: r.year,
+    count: Math.round(r.value),
+  }));
 }
 
 /**
- * 解析发文量历年数据
+ * 中科院/新锐分区。每个版本单独一张 4 列表：大类学科 / 小类学科 / Top期刊 / 综述期刊。
+ * 版本 anchor 形如：《新锐期刊分区表》(YYYY年M月发布) / 期刊分区表 (YYYY年M月升级版|基础版|旧的升级版)
+ * Exported for unit testing.
  */
-function parsePubVolumeHistory(html: string): Array<{ year: number; count: number }> {
-  const result: Array<{ year: number; count: number }> = [];
-
-  // Highcharts 发文量图表数据
-  // 通常和 IF 图表在同一页面但不同的 chart 配置中
-  // 找 "发文量" 或 "articles" 相关的 chart data
-  const pubSection = html.match(/发文[量情][^]*?data\s*:\s*\[([0-9.,\s]+)\]/i);
-  if (pubSection) {
-    const catMatch = html.match(
-      /发文[量情][^]*?categories\s*:\s*\[([^\]]+)\]/i
-    );
-    if (catMatch) {
-      const years = catMatch[1].match(/\d{4}/g) || [];
-      const counts = pubSection[1].split(",").map((v) => parseInt(v.trim()));
-      for (let i = 0; i < Math.min(years.length, counts.length); i++) {
-        if (!isNaN(counts[i]) && counts[i] > 0) {
-          result.push({ year: parseInt(years[i]), count: counts[i] });
-        }
-      }
-      if (result.length > 0) return result;
-    }
-  }
-
-  // 表格方式
-  const pubTableSection = html.match(
-    /(?:发文量|Article\s*Count|年发文)[^]*?<\/table>/i
-  );
-  if (pubTableSection) {
-    const pairs = pubTableSection[0].matchAll(
-      /(\d{4})\s*<\/td>\s*<td[^>]*>\s*(\d+)\s*<\/td>/gi
-    );
-    for (const m of pairs) {
-      result.push({ year: parseInt(m[1]), count: parseInt(m[2]) });
-    }
-  }
-
-  const seen = new Set<number>();
-  return result
-    .filter((r) => {
-      if (seen.has(r.year)) return false;
-      seen.add(r.year);
-      return true;
-    })
-    .sort((a, b) => a.year - b.year);
-}
-
-/**
- * 解析中科院分区数据
- */
-function parseCASPartitions(html: string): LetPubJournalDetail["casPartitions"] {
+export function parseCASPartitions(html: string): LetPubJournalDetail["casPartitions"] {
   const result: LetPubJournalDetail["casPartitions"] = [];
-
-  // 匹配 "新锐分区" / "中科院XXX年分区" 块
-  const casBlocks = html.matchAll(
-    /((?:新锐|中科院)\d{4}年分区[^]*?)(?=(?:新锐|中科院)\d{4}年分区|JCR分区|WOS|$)/gi
-  );
-
-  for (const block of casBlocks) {
-    const text = block[1];
-    const versionMatch = text.match(/((?:新锐|中科院)\d{4}年分区)/);
-    const dateMatch = text.match(/(\d{4}年\d{1,2}月\d{1,2}日发布)/);
-
-    // 大类
-    const majorMatch = text.match(/([1-4]区)\s*(医学|理学|工学|农学|经济学|管理学|[^\s<]+)/);
-
-    // 小类
-    const subCategories: Array<{ zone: string; subject: string }> = [];
-    const subMatches = text.matchAll(/([1-4]区)\s*(?:<\/[^>]+>\s*)?([^\s<]+(?:\s+[A-Z]+)?)/g);
-    for (const sm of subMatches) {
-      if (sm[2] && sm[2] !== majorMatch?.[2]) {
-        subCategories.push({ zone: sm[1], subject: sm[2].trim() });
-      }
-    }
-
-    const isTop = /TOP期刊[^否]*是/i.test(text) || /是\s*<\/td>/i.test(text);
-    const isReview = /综述期刊[^否]*是/i.test(text);
-
-    if (versionMatch) {
-      result.push({
-        version: versionMatch[1],
-        publishDate: dateMatch?.[1],
-        majorCategory: majorMatch ? `${majorMatch[1]} ${majorMatch[2]}` : "",
-        subCategories,
-        isTop,
-        isReview,
-      });
-    }
+  // 每个分区版本一个 anchor（《新锐期刊分区表》/ 期刊分区表 + YYYY年M月 + suffix）
+  const anchors = [
+    ...html.matchAll(
+      /(《新锐期刊分区表》|期刊分区表)[\s\S]{0,200}?(\d{4})年(\d{1,2})月(旧的升级版|旧的基础版|升级版|基础版|发布)/g,
+    ),
+  ];
+  for (let i = 0; i < anchors.length; i++) {
+    const m = anchors[i];
+    const start = m.index!;
+    const end = i + 1 < anchors.length ? anchors[i + 1].index! : Math.min(html.length, start + 6000);
+    const chunk = html.slice(start, end);
+    if (!chunk.includes("大类学科")) continue;
+    // 大类：4 列 header 后第一个数据行的 <td>NAME <span>X区</span>
+    const major = chunk.match(
+      /综述期刊\s*<\/th>\s*<\/tr>\s*<tr[^>]*>\s*<td[^>]*>\s*([^<\s][^<]*?)\s*<span[^>]*>\s*(\d区)/,
+    );
+    if (!major) continue;
+    // 小类：嵌套子表里的行（subject 大写英文 + 可选中文 br + 区号）
+    const subs = [
+      ...chunk.matchAll(
+        /<td[^>]*>\s*([A-Z][A-Z0-9 ,&\-/]+?)(?:\s*<br[^>]*>\s*([^<]+?))?\s*<\/td>[\s\S]{0,200}?<span[^>]*>\s*(\d区)/g,
+      ),
+    ].map((s) => ({
+      subject: s[2] ? `${s[1].trim()}（${s[2].trim()}）` : s[1].trim(),
+      zone: s[3],
+    }));
+    // Top期刊 + 综述期刊：嵌套子表之后两个 td
+    const tail = chunk.match(
+      /<\/table>\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>/,
+    );
+    const isTop = (tail?.[1] ?? "").trim() === "是";
+    const isReview = (tail?.[2] ?? "").trim() === "是";
+    result.push({
+      version: `${m[1].replace(/《|》/g, "")} ${m[2]}年${m[3]}月${m[4]}`,
+      publishDate: `${m[2]}年${m[3]}月`,
+      majorCategory: `${major[2]} ${major[1].trim()}`,
+      subCategories: subs,
+      isTop,
+      isReview,
+    });
   }
-
   return result;
 }
 
 /**
- * 解析 JCR 学科分区
+ * 通用：从 "按 X 指标学科分区" 表提取 4 列结构（学科 / 收录子集 / 分区 / 排名）。
+ * Exported for unit testing.
  */
-function parseJCRPartitions(html: string): LetPubJournalDetail["jcrPartitions"] {
-  const result: LetPubJournalDetail["jcrPartitions"] = [];
-
-  // JCR 表格通常格式：学科名称 | 收录数据库 | JCR分区 | 分区排名
-  const jcrSection = html.match(/JCR学科分类[^]*?<\/table>/i);
-  if (jcrSection) {
-    const rows = jcrSection[0].matchAll(
-      /<tr[^>]*>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>/gi
-    );
-    for (const row of rows) {
-      const subject = row[1].trim();
-      const database = row[2].trim();
-      const zone = row[3].trim();
-      const rank = row[4].trim();
-      if (subject && zone.match(/Q[1-4]/i)) {
-        result.push({ subject, database, zone, rank });
-      }
+export function parseQuartileTable(
+  html: string,
+  anchor: "JIF" | "JCI",
+): Array<{ subject: string; database: string; zone: string; rank: string }> {
+  const headerRe = new RegExp(`按${anchor}指标学科分区[\\s\\S]*?<\\/table>`, "i");
+  const section = html.match(headerRe);
+  if (!section) return [];
+  const result: Array<{ subject: string; database: string; zone: string; rank: string }> = [];
+  // 数据行：<td>学科：NAME</td><td>SCIE</td><td>Q1</td><td>1/332</td>...
+  const rowRe = /<tr[^>]*>\s*<td[^>]*>\s*(?:学科[：:]\s*)?([^<]+?)\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*(Q[1-4])\s*<\/td>\s*<td[^>]*>\s*([^<]+?)\s*<\/td>/gi;
+  for (const m of section[0].matchAll(rowRe)) {
+    const subject = m[1].trim();
+    const database = m[2].trim();
+    const zone = m[3].trim().toUpperCase();
+    const rank = m[4].trim();
+    if (subject && /^Q[1-4]$/.test(zone)) {
+      result.push({ subject, database, zone, rank });
     }
   }
-
   return result;
 }
 
-/**
- * 解析 JCI 学科分区
- */
-function parseJCIPartitions(html: string): LetPubJournalDetail["jciPartitions"] {
-  const result: LetPubJournalDetail["jciPartitions"] = [];
+/** JCR 分区（按 JIF 指标学科分区） */
+export function parseJCRPartitions(html: string): LetPubJournalDetail["jcrPartitions"] {
+  return parseQuartileTable(html, "JIF");
+}
 
-  const jciSection = html.match(/JCI学科分类[^]*?<\/table>/i);
-  if (jciSection) {
-    const rows = jciSection[0].matchAll(
-      /<tr[^>]*>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>/gi
-    );
-    for (const row of rows) {
-      const subject = row[1].trim();
-      const database = row[2].trim();
-      const zone = row[3].trim();
-      const rank = row[4].trim();
-      if (subject && zone.match(/Q[1-4]/i)) {
-        result.push({ subject, database, zone, rank });
-      }
-    }
-  }
-
-  return result;
+/** JCI 分区（按 JCI 指标学科分区） */
+export function parseJCIPartitions(html: string): LetPubJournalDetail["jciPartitions"] {
+  return parseQuartileTable(html, "JCI");
 }
 
 /**

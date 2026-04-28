@@ -1,13 +1,14 @@
 /**
- * letpub-detail-scraper fetcher-only tests.
+ * letpub-detail-scraper unit tests (fetcher + parser).
  *
- * Scope: 只测 fetcher 层（journalid 提取 + 0-results 检测）。
- * parser 层（parseIFHistory / parseCASPartitions / parseJCRPartitions / parseJCIPartitions
- * / parsePubVolumeHistory）尚未适配 ECharts，留给独立 PR。
+ * PR #30 (b2.1.a.2): parsers rewritten for ECharts. Guard `applySingleRowLowValueIfHistoryGuard`
+ * removed — its only purpose was tolerating Strategy 3 citation-date FP, which doesn't exist
+ * in the new ECharts-aware parsers.
  *
- * Fixtures（真实 LetPub 响应抓取于 2026-04-28）：
- *   - letpub-search-zero-results.html: 旧版无效参数触发的 0-results 错误页
- *   - letpub-search-lancet-1result.html: 修正参数后 ISSN 0140-6736 命中 1 条 (Lancet, journalid=5528)
+ * Fixtures (real LetPub responses captured 2026-04-28):
+ *   - letpub-search-zero-results.html      (PR #26 baseline)
+ *   - letpub-search-lancet-1result.html    (PR #26 baseline)
+ *   - letpub-lancet-detail-real.html       (487KB Lancet detail; IF=88.5)
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -33,15 +34,18 @@ vi.mock("../config/logger.js", () => ({
 const {
   isZeroResultsSearchPage,
   extractJournalIdFromSearchHtml,
-  applySingleRowLowValueIfHistoryGuard,
   buildLetPubSearchFormData,
-} = await import(
-  "../services/crawler/letpub-detail-scraper.js"
-);
+  parseIFHistory,
+  parsePubVolumeHistory,
+  parseCASPartitions,
+  parseJCRPartitions,
+  parseJCIPartitions,
+} = await import("../services/crawler/letpub-detail-scraper.js");
 
 const fixturesDir = join(__dirname, "fixtures");
 const zeroResultsHtml = readFileSync(join(fixturesDir, "letpub-search-zero-results.html"), "utf-8");
 const lancetSearchHtml = readFileSync(join(fixturesDir, "letpub-search-lancet-1result.html"), "utf-8");
+const lancetDetailHtml = readFileSync(join(fixturesDir, "letpub-lancet-detail-real.html"), "utf-8");
 
 describe("isZeroResultsSearchPage", () => {
   it("returns true for the actual 0-results LetPub error page", () => {
@@ -94,60 +98,6 @@ describe("extractJournalIdFromSearchHtml", () => {
   });
 });
 
-// ============ applySingleRowLowValueIfHistoryGuard (orchestrator FP guard) ============
-// Temporary guard against parseIFHistory Strategy 3 false positive matching citation
-// dates ("2020-04") in real detail HTML. Removable after PR #27 parser rewrite.
-
-describe("applySingleRowLowValueIfHistoryGuard", () => {
-  it("discards single-row low-value FP (the '2020-04' citation date case)", () => {
-    // Reproduces the exact stub observed in B.2.1.A live recon for Lancet/Nature/BMJ:
-    // parseIFHistory Strategy 3 matches "2020-04" → {year:2020, value:4}
-    const fp = [{ year: 2020, value: 4 }];
-    expect(applySingleRowLowValueIfHistoryGuard(fp)).toEqual([]);
-  });
-
-  it("preserves real well-formed history (10 years, Lancet-like)", () => {
-    const real = [
-      { year: 2015, value: 44.002 },
-      { year: 2016, value: 47.831 },
-      { year: 2017, value: 53.254 },
-      { year: 2018, value: 59.102 },
-      { year: 2019, value: 60.392 },
-      { year: 2020, value: 79.321 },
-      { year: 2021, value: 202.731 },
-      { year: 2022, value: 168.9 },
-      { year: 2023, value: 98.4 },
-      { year: 2024, value: 88.5 },
-    ];
-    expect(applySingleRowLowValueIfHistoryGuard(real)).toEqual(real);
-  });
-
-  it("preserves single-row HIGH value (e.g. one-year sample of a top journal — value=50, length=1)", () => {
-    // Edge: data source might temporarily return only one year. If value is high (≥10),
-    // it's almost certainly real, not a citation-date FP. Don't false-discard.
-    const single = [{ year: 2024, value: 50 }];
-    expect(applySingleRowLowValueIfHistoryGuard(single)).toEqual(single);
-  });
-
-  it("preserves length=2 even with low values (boundary — only length===1 triggers guard)", () => {
-    // A real low-IF journal could legitimately have 2 data points with values < 10.
-    // The guard's invariant is "length === 1" specifically (citation date FP is always 1 row).
-    const lowTwo = [
-      { year: 2023, value: 4 },
-      { year: 2024, value: 5 },
-    ];
-    expect(applySingleRowLowValueIfHistoryGuard(lowTwo)).toEqual(lowTwo);
-  });
-
-  it("preserves empty array unchanged (no FP to filter)", () => {
-    expect(applySingleRowLowValueIfHistoryGuard([])).toEqual([]);
-  });
-});
-
-// ============ buildLetPubSearchFormData (b2.1.a.4 ISSN-only search) ============
-// LetPub does AND match on searchname+searchissn. "The Lancet"+0140-6736 → 0 hits
-// because LetPub's record is "Lancet" (no The). ISSN is unique, so prefer it.
-
 describe("buildLetPubSearchFormData", () => {
   it("ISSN present: sends only searchissn, blanks searchname (avoids 'The X' AND mismatch)", () => {
     const fd = buildLetPubSearchFormData("The Lancet", "0140-6736");
@@ -163,5 +113,90 @@ describe("buildLetPubSearchFormData", () => {
 
   it("both null: returns null (caller skips network call)", () => {
     expect(buildLetPubSearchFormData(null, null)).toBeNull();
+  });
+});
+
+// ============ PR #30: parser ECharts rewrite ============
+
+describe("parseIFHistory (ECharts 'IF值' series)", () => {
+  it("extracts 10-year IF series from real Lancet detail HTML (88.5 in 2024)", () => {
+    const result = parseIFHistory(lancetDetailHtml);
+    expect(result.length).toBeGreaterThanOrEqual(5);
+    const last = result[result.length - 1];
+    expect(last.year).toBe(2024);
+    expect(last.value).toBeCloseTo(88.5, 1);
+    // 已知真值范围：所有 IF > 30（顶刊）
+    for (const r of result) expect(r.value).toBeGreaterThan(30);
+  });
+
+  it("returns [] for empty HTML (no chart present)", () => {
+    expect(parseIFHistory("<html></html>")).toEqual([]);
+  });
+});
+
+describe("parsePubVolumeHistory (ECharts '年文章数' series)", () => {
+  it("extracts multi-year pub volume from Lancet (271..251 range, integers)", () => {
+    const result = parsePubVolumeHistory(lancetDetailHtml);
+    expect(result.length).toBeGreaterThanOrEqual(5);
+    for (const r of result) {
+      expect(Number.isInteger(r.count)).toBe(true);
+      expect(r.count).toBeGreaterThan(0);
+      expect(r.count).toBeLessThan(10000);
+    }
+  });
+
+  it("returns [] for empty HTML", () => {
+    expect(parsePubVolumeHistory("<html></html>")).toEqual([]);
+  });
+});
+
+describe("parseCASPartitions (multi-version 4-col tables)", () => {
+  it("extracts ≥1 partition version from real Lancet HTML with 医学 1区/3区", () => {
+    const result = parseCASPartitions(lancetDetailHtml);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    const first = result[0];
+    expect(first.majorCategory).toContain("医学");
+    expect(/^[1-4]区/.test(first.majorCategory)).toBe(true);
+    // Lancet 是 TOP 期刊
+    expect(first.isTop).toBe(true);
+    // 子类 ≥ 1 项，含 MEDICINE
+    expect(first.subCategories.length).toBeGreaterThanOrEqual(1);
+    expect(first.subCategories[0].subject).toContain("MEDICINE");
+  });
+
+  it("returns [] for HTML without partition table headers", () => {
+    expect(parseCASPartitions("<html>no partition here</html>")).toEqual([]);
+  });
+});
+
+describe("parseJCRPartitions (按JIF指标学科分区)", () => {
+  it("extracts Lancet JCR Q1 in MEDICINE GENERAL & INTERNAL with rank 1/332", () => {
+    const result = parseJCRPartitions(lancetDetailHtml);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    const m = result[0];
+    expect(m.subject).toMatch(/MEDICINE/i);
+    expect(m.zone).toBe("Q1");
+    expect(m.database).toBe("SCIE");
+    expect(m.rank).toMatch(/^\d+\/\d+$/);
+  });
+
+  it("returns [] for HTML without JCR table", () => {
+    expect(parseJCRPartitions("<html></html>")).toEqual([]);
+  });
+});
+
+describe("parseJCIPartitions (按JCI指标学科分区)", () => {
+  it("extracts Lancet JCI Q1 in MEDICINE with rank 1/333", () => {
+    const result = parseJCIPartitions(lancetDetailHtml);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    const m = result[0];
+    expect(m.subject).toMatch(/MEDICINE/i);
+    expect(m.zone).toBe("Q1");
+    expect(m.database).toBe("SCIE");
+    expect(m.rank).toMatch(/^\d+\/\d+$/);
+  });
+
+  it("returns [] for HTML without JCI table", () => {
+    expect(parseJCIPartitions("<html></html>")).toEqual([]);
   });
 });
