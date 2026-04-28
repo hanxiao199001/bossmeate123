@@ -19,6 +19,7 @@ import type { AIGeneratedContent } from "./journal-template.js";
 import { generateWechatJournalArticleHtml } from "../publisher/adapters/wechat-article-template.js";
 import { generateStorytellingHtml } from "../publisher/adapters/storytelling-template.js";
 import { generateListicleHtml } from "../publisher/adapters/listicle-template.js";
+import { generateShunshiStyleHtml } from "../publisher/adapters/shunshi-style-template.js";
 import { logger } from "../../config/logger.js";
 
 export interface TemplateDefinition {
@@ -91,4 +92,13 @@ registerTemplate({
   aiPromptHints: "标题用'X 期刊：5 大优势 + 3 个避雷'结构。recommendation 偏向条目化、对比化、决策导向。",
 });
 
-logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "T4-3-3: template registry initialized");
+registerTemplate({
+  id: "shunshi-style",
+  name: "顺仕美途风格",
+  description: "标准期刊推荐排版：13 区块结构 + 数据可视化 + 红蓝白配色。视觉权威感最强。",
+  icon: "📰",
+  htmlGenerator: generateShunshiStyleHtml,
+  aiPromptHints: "标题用「影响因子X，今年预测涨至Y，N区TOP，国人友好」类钩子句式。recommendation 偏权威总结。",
+});
+
+logger.info({ count: registry.size, ids: Array.from(registry.keys()) }, "template registry initialized");
