@@ -676,6 +676,30 @@ BEGIN
   ) THEN
     ALTER TABLE journals ADD COLUMN jcr_full JSONB;
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'citing_journals_top10'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN citing_journals_top10 JSONB;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'recommendation_score'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN recommendation_score INTEGER;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'scope_details'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN scope_details JSONB;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'publication_costs'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN publication_costs JSONB;
+  END IF;
 END $$;
 `;
 
