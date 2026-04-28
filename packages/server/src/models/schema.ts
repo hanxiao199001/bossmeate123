@@ -257,6 +257,21 @@ export const journals = pgTable(
     // { wosLevel, jifSubjects: [{subject, zone, rank, percentile}, ...], jciSubjects: [...], isTopJournal, isReviewJournal, lastUpdatedAt }
     jcrFull: jsonb("jcr_full"),
 
+    // 引用前 10 种期刊（饼图数据）
+    // { topJournals: [{name, percent, count}, ...], totalCitations, lastUpdatedAt }
+    citingJournalsTop10: jsonb("citing_journals_top10"),
+
+    // 推荐指数 1-5 星（INTEGER，1=不推荐 / 5=强推荐）
+    recommendationScore: integer("recommendation_score"),
+
+    // 收稿范围详细分类 + 学科分布
+    // { categories: [{title, description}], articleTypes: [...], submissionNote, subjectDistribution: [{subject, percent}], lastUpdatedAt }
+    scopeDetails: jsonb("scope_details"),
+
+    // 版面费详细（OA + 订阅模式 + APC + VAT）
+    // { apc, currency, openAccess, fastTrack, extras: [...], lastUpdatedAt }
+    publicationCosts: jsonb("publication_costs"),
+
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
