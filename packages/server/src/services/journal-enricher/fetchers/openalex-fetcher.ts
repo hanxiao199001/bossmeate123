@@ -176,3 +176,138 @@ export async function fetchOpenAlexTopInstitutions(
   if (!res || !Array.isArray(res.group_by)) return null;
   return res.group_by as OpenAlexInstitutionRow[];
 }
+
+// ============ B.2.2: citing journals + CAR ============
+
+export interface CitingJournalsRaw {
+  /** group_by primary_location.source.id 聚合行 */
+  groups: OpenAlexInstitutionRow[];
+  /** 用于 self-cite 计算：某 sample 范围内的总引用数 */
+  totalCitations: number;
+  /** 自引次数（cites 同一 source 的子集） */
+  selfCount: number;
+  /** sample size（top-N papers used） */
+  sampleSize: number;
+}
+
+export interface FetchCitingOptions {
+  /** Top-N 最被引论文采样数（默认 100） */
+  sampleSize?: number;
+}
+
+/**
+ * 拿期刊 Top-N 最被引论文的合集 → 聚合所有引用方期刊（top 12）+ self-cite 计数。
+ * 走 3 个 query：
+ *   1. /works?filter=primary_location.source.id:Sxxx&sort=cited_by_count:desc&per_page=N&select=id
+ *      拿到 top-N 论文 IDs
+ *   2. /works?filter=cites:W1|W2|...&group_by=primary_location.source.id
+ *      聚合引用方期刊（meta.count = total citing works）
+ *   3. /works?filter=cites:W1|W2|...,primary_location.source.id:Sxxx&per_page=1
+ *      自引次数（meta.count = self-cite）
+ */
+export async function fetchOpenAlexCitingJournals(
+  sourceId: string,
+  opts: FetchCitingOptions = {},
+): Promise<CitingJournalsRaw | null> {
+  const idShort = sourceId.replace(/^https?:\/\/openalex\.org\//, "");
+  if (!/^S\d+$/.test(idShort)) {
+    logger.warn({ sourceId }, "OpenAlex citing journals: sourceId 非法");
+    return null;
+  }
+  const sampleSize = Math.min(Math.max(opts.sampleSize ?? 100, 10), 200);
+
+  // Step 1: top-N work IDs
+  const idsUrl = buildUrl("/works", {
+    filter: `primary_location.source.id:${idShort}`,
+    sort: "cited_by_count:desc",
+    per_page: String(sampleSize),
+    select: "id",
+  });
+  const idsRes = await fetchJsonWithRetry(idsUrl, "openalex.citing.top-n-ids");
+  if (!idsRes || !Array.isArray(idsRes.results) || idsRes.results.length === 0) return null;
+  const workIds = (idsRes.results as Array<{ id: string }>)
+    .map((w) => w.id?.replace(/^https?:\/\/openalex\.org\//, ""))
+    .filter((s): s is string => /^W\d+$/.test(s));
+  if (workIds.length === 0) return null;
+  const citesFilter = workIds.join("|");
+
+  // Step 2: citing aggregate
+  const aggUrl = buildUrl("/works", {
+    filter: `cites:${citesFilter}`,
+    group_by: "primary_location.source.id",
+    per_page: "12",
+  });
+  const aggRes = await fetchJsonWithRetry(aggUrl, "openalex.citing.aggregate");
+  if (!aggRes) return null;
+  const groups = Array.isArray(aggRes.group_by) ? (aggRes.group_by as OpenAlexInstitutionRow[]) : [];
+  const totalCitations = (aggRes.meta?.count as number) ?? 0;
+
+  // Step 3: self-cite count
+  const selfUrl = buildUrl("/works", {
+    filter: `cites:${citesFilter},primary_location.source.id:${idShort}`,
+    per_page: "1",
+    select: "id",
+  });
+  const selfRes = await fetchJsonWithRetry(selfUrl, "openalex.citing.self-cite");
+  const selfCount = (selfRes?.meta?.count as number) ?? 0;
+
+  return { groups, totalCitations, selfCount, sampleSize: workIds.length };
+}
+
+export interface CarYearRaw {
+  year: number;
+  total: number;
+  cn: number;
+}
+
+export interface FetchCarOptions {
+  /** 统计年数（默认 5，从 latestYear 倒推） */
+  years?: number;
+  /** 最新年份（默认当前年 - 1） */
+  latestYear?: number;
+}
+
+/**
+ * 按年统计 CN-affiliated paper 占比（CAR：Chinese Author Rate）。
+ * 每年 2 query：total + country_code:cn 子集。
+ *
+ * 默认 5 年（latestYear-4 → latestYear），latestYear 默认 currentYear-1（避开
+ * 当前年数据不全）。
+ */
+export async function fetchOpenAlexCarIndex(
+  sourceId: string,
+  opts: FetchCarOptions = {},
+): Promise<CarYearRaw[] | null> {
+  const idShort = sourceId.replace(/^https?:\/\/openalex\.org\//, "");
+  if (!/^S\d+$/.test(idShort)) {
+    logger.warn({ sourceId }, "OpenAlex CAR: sourceId 非法");
+    return null;
+  }
+  const latestYear = opts.latestYear ?? new Date().getUTCFullYear() - 1;
+  const yearsCount = Math.min(Math.max(opts.years ?? 5, 1), 10);
+
+  const yearList: number[] = [];
+  for (let i = yearsCount - 1; i >= 0; i--) yearList.push(latestYear - i);
+
+  const rows: CarYearRaw[] = [];
+  for (const year of yearList) {
+    const totalUrl = buildUrl("/works", {
+      filter: `primary_location.source.id:${idShort},from_publication_date:${year}-01-01,to_publication_date:${year}-12-31`,
+      per_page: "1",
+      select: "id",
+    });
+    const cnUrl = buildUrl("/works", {
+      filter: `primary_location.source.id:${idShort},authorships.institutions.country_code:cn,from_publication_date:${year}-01-01,to_publication_date:${year}-12-31`,
+      per_page: "1",
+      select: "id",
+    });
+    const [totalRes, cnRes] = await Promise.all([
+      fetchJsonWithRetry(totalUrl, "openalex.car.total"),
+      fetchJsonWithRetry(cnUrl, "openalex.car.cn"),
+    ]);
+    const total = (totalRes?.meta?.count as number) ?? 0;
+    const cn = (cnRes?.meta?.count as number) ?? 0;
+    rows.push({ year, total, cn });
+  }
+  return rows;
+}

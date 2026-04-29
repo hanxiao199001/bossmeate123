@@ -316,24 +316,25 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 // ============ 区块 6: CAR 指数历史 ============
 function renderCarHistoryBlock(journal: JournalInfo): string {
   const raw = (journal as any).carIndexHistory;
-  if (!isCarIndexHistory(raw)) {
+  if (!isCarIndexHistory(raw) || !Array.isArray(raw.data) || raw.data.length === 0) {
     return renderP1Placeholder({
-      title: "CAR 指数（被引活跃度）",
+      title: "CAR 指数（中国作者占比）",
       icon: "🎯",
       message: "数据采集中",
-      submessage: "CAR = Citation Activity Rank，B.2 阶段补真数据",
+      submessage: "B.2 阶段补真数据",
     });
   }
-  const years = raw.data.length;
-  const risk = raw.riskLevel
-    ? (raw.riskLevel === "low" ? "低风险" : raw.riskLevel === "high" ? "高风险" : "中等风险")
-    : "未评级";
-  return renderP1Placeholder({
-    title: "CAR 指数（被引活跃度）",
-    icon: "🎯",
-    message: `已收集 ${years} 年数据 · ${risk}`,
-    submessage: "C 阶段渲染历史柱状图",
-  });
+  const risk = raw.riskLevel === "low" ? "低风险" : raw.riskLevel === "high" ? "高风险" : "中等风险";
+  const riskColor = raw.riskLevel === "low" ? "#388E3C" : raw.riskLevel === "high" ? "#D32F2F" : "#F57C00";
+  const cells = raw.data
+    .map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`)
+    .join("");
+  const warned = (raw as any).isWarningListed ? `<span style="margin-left:6px;padding:2px 6px;background:#FFEBEE;color:#C62828;border-radius:3px;font-size:11px;">⚠ 中科院预警</span>` : "";
+  return `<section style="margin:0 0 22px 0;">` +
+    `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（中国作者占比）</p>` +
+    `<p style="margin:0 0 6px 0;text-align:center;font-size:14px;line-height:1.6;"><span style="color:${riskColor};font-weight:600;">${risk}</span>${warned}</p>` +
+    `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${cells}</div>` +
+    `</section>`;
 }
 
 // ============ 区块 7: JCR 详细面板（P3 隐藏 / P2 灰阶） ============
@@ -535,7 +536,7 @@ function renderTopInstitutionsBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
-// ============ 区块 13: 引用前 10 期刊饼图 ============
+// ============ 区块 13: 引用前 10 期刊 ============
 function renderCitingJournalsPie(journal: JournalInfo): string {
   const raw = (journal as any).citingJournalsTop10;
   if (!isCitingJournalsTop10(raw) || raw.topJournals.length === 0) {
@@ -543,38 +544,38 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
       title: "引用前 10 种期刊",
       icon: "🥧",
       message: "数据采集中",
-      submessage: "B.2 阶段补 Top 10 + 占比，C 阶段渲染饼图",
+      submessage: "B.2 阶段补 Top 10 + 占比",
     });
   }
-  const n = raw.topJournals.length;
-  return renderP1Placeholder({
-    title: "引用前 10 种期刊",
-    icon: "🥧",
-    message: `已收集 ${n} 种引用源`,
-    submessage: "C 阶段渲染饼图",
-  });
+  const items = raw.topJournals.slice(0, 10).map((j, i) => {
+    const pct = typeof j.percent === "number" ? `${j.percent}%` : "";
+    return `<li style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.6;"><span style="color:${MUTED};">${i + 1}.</span> ${esc(j.name)}${pct ? ` <span style="color:${BLUE};font-weight:600;">${pct}</span>` : ""}</li>`;
+  }).join("");
+  return `<section style="margin:0 0 22px 0;">` +
+    `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🥧 引用前 ${raw.topJournals.length} 种期刊</p>` +
+    `<ol style="margin:0;padding:12px 16px 12px 28px;background:#FAFAFA;border-radius:6px;list-style:none;">${items}</ol>` +
+    `</section>`;
 }
 
-// ============ 区块 14: 自引率徽章（P3 隐藏） ============
+// ============ 区块 14: 自引率徽章 ============
 function renderSelfCitationBadge(journal: JournalInfo): string {
   const raw = (journal as any).citingJournalsTop10;
-  if (!isCitingJournalsTop10(raw) || raw.topJournals.length === 0) {
-    return ""; // P3 隐藏（无引用数据）
+  if (!isCitingJournalsTop10(raw)) return ""; // P3 隐藏（无引用数据）
+  const rate = (raw as any).selfCitationRate;
+  const conf = (raw as any).selfCitationConfidence;
+  // confidence='low'（top-N=100 sample COVID 噪声）→ 不渲染数值，留 P1 占位
+  // task #50 升级 medium 后自动展示
+  if (typeof rate !== "number" || conf === "low") {
+    return `<section style="margin:0 0 18px 0;text-align:center;padding:10px 14px;background:#FAFAFA;border-radius:6px;">` +
+      `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.6;">自引率数据采集中</p>` +
+      `</section>`;
   }
-  // 推算自引率：topJournals 里是否含本刊
-  const selfName = (journal.nameEn || journal.name || "").toLowerCase();
-  const selfEntry = raw.topJournals.find((j) =>
-    j.name && j.name.toLowerCase().includes(selfName) && selfName.length >= 4
-  );
-  const selfPercent = selfEntry?.percent;
-  if (typeof selfPercent !== "number") {
-    return ""; // 没找到自身或无 percent
-  }
-  const risk = selfPercent < 10 ? "低" : selfPercent < 20 ? "中" : "高";
-  const color = selfPercent < 10 ? "#388E3C" : selfPercent < 20 ? "#F57C00" : "#D32F2F";
+  const pct = rate * 100;
+  const risk = pct < 5 ? "低" : pct < 15 ? "中" : "高";
+  const color = pct < 5 ? "#388E3C" : pct < 15 ? "#F57C00" : "#D32F2F";
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">自引率</p>` +
-    `<p style="margin:0;font-size:20px;font-weight:bold;color:${color};line-height:1.4;">${selfPercent.toFixed(1)}% · ${risk}风险</p>` +
+    `<p style="margin:0;font-size:20px;font-weight:bold;color:${color};line-height:1.4;">${pct.toFixed(1)}% · ${risk}风险</p>` +
     `</section>`;
 }
 

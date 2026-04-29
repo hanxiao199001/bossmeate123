@@ -81,6 +81,49 @@ export interface ScopeCategory {
   description?: string;
 }
 
+// ============ B.2.2 字段 ============
+
+export interface CitingJournalRow {
+  /** 引用方期刊名 */
+  name: string;
+  /** 引用次数 */
+  count: number;
+  /** 占 top-N 总和的百分比（已 0-100 整数） */
+  percent?: number;
+  /** OpenAlex source ID（对调试/去重有用，可省） */
+  openAlexId?: string;
+}
+
+export interface CitingJournalsTop10Shape {
+  topJournals: CitingJournalRow[];
+  /** 自引率 0-1 区间小数（journal cites itself / total citing samples） */
+  selfCitationRate?: number;
+  /**
+   * 自引率置信度：
+   *  - low：top-N=100 paper sample（COVID/年代偏差，task #50 升级 medium）
+   *  - medium：分年随机抽样
+   *  - high：全量 work 聚合（理论上限）
+   */
+  selfCitationConfidence?: "low" | "medium" | "high";
+  totalCitations?: number;
+  lastUpdatedAt: string;
+}
+
+export interface CarYearRow {
+  year: number;
+  /** 0-1 区间小数（CN-affiliated papers / total papers in year） */
+  carIndex: number;
+}
+
+export interface CarIndexHistoryShape {
+  data: CarYearRow[];
+  /** low / mid / high — 综合 fenqubiao 预警信号 + CAR latest year 阈值 */
+  riskLevel: "low" | "mid" | "high";
+  /** 是否在中科院预警名单（任一 5 年版本命中） */
+  isWarningListed?: boolean;
+  lastUpdatedAt: string;
+}
+
 export interface ScopeDetailsShape {
   categories?: ScopeCategory[];
   articleTypes?: string[];
@@ -109,6 +152,8 @@ export interface EnrichmentResult {
     publication_stats: boolean;
     publication_costs: boolean;
     scope_details: boolean;
+    citing_journals_top10: boolean;
+    car_index_history: boolean;
     recommendation_score: boolean;
   };
 }
@@ -120,6 +165,8 @@ export interface EnrichOptions {
   skipDoaj?: boolean;
   /** 跳过 OpenAlex（B.2.1.B.2；调试或 CI 用） */
   skipOpenAlex?: boolean;
+  /** 跳过 fenqubiao 预警名单（B.2.2；调试或 redis 不可用时） */
+  skipFenqubiao?: boolean;
   /** 跳过 Scimago + 期刊官网 stealth 抓取（B.2.1.B；现 dormant，仅作 fallback flag 保留） */
   skipStealth?: boolean;
   /** dry-run：算结果但不 UPDATE DB（仅 orchestrator 直调时用） */

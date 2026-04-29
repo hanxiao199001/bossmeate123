@@ -14,12 +14,19 @@
 import type {
   OpenAlexSource,
   OpenAlexInstitutionRow,
+  CitingJournalsRaw,
+  CarYearRaw,
 } from "../fetchers/openalex-fetcher.js";
+import type { FenqubiaoWarningMap } from "../fetchers/fenqubiao-fetcher.js";
 import type {
   TopInstitutionRow,
   ScopeDetailsShape,
   ScopeCategory,
   PublicationCostsShape,
+  CitingJournalsTop10Shape,
+  CitingJournalRow,
+  CarIndexHistoryShape,
+  CarYearRow,
 } from "../types.js";
 
 const MAX_INSTITUTIONS = 5;
@@ -133,4 +140,111 @@ export function extractPublisherFromOpenAlex(source: OpenAlexSource | null): str
   if (typeof name !== "string") return null;
   const trimmed = name.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 200) : null;
+}
+
+// ============ B.2.2: citing journals + CAR ============
+
+const MAX_CITING = 10;
+
+/**
+ * 从 citing aggregate raw → CitingJournalsTop10Shape。
+ *
+ * 排除自身（source 自己出现在 group_by 顶部时移除），保留前 MAX_CITING。
+ * percent 算法：每条 count / sum(top-MAX_CITING) × 100，四舍五入。
+ *
+ * selfCitationConfidence 固定 'low'（top-N=100 paper sample 偏 COVID 噪声；
+ * task #50 升级 medium 走分年随机抽样）。
+ */
+export function extractCitingJournalsTop10(
+  raw: CitingJournalsRaw | null,
+  selfSourceId: string,
+): CitingJournalsTop10Shape | null {
+  if (!raw || !Array.isArray(raw.groups) || raw.groups.length === 0) return null;
+  const selfIdShort = selfSourceId.replace(/^https?:\/\/openalex\.org\//, "");
+  // 过滤自身条目（避免 top-N 里包含自引）
+  const filtered = raw.groups.filter((g) => {
+    const k = (g.key || "").replace(/^https?:\/\/openalex\.org\//, "");
+    return k && k !== selfIdShort && typeof g.key_display_name === "string" && g.key_display_name.trim();
+  });
+  const top = filtered.slice(0, MAX_CITING);
+  if (top.length === 0) return null;
+  const sum = top.reduce((acc, g) => acc + (g.count || 0), 0);
+  const topJournals: CitingJournalRow[] = top.map((g) => ({
+    name: g.key_display_name.trim(),
+    count: g.count || 0,
+    percent: sum > 0 ? Math.round(((g.count || 0) / sum) * 100) : undefined,
+    openAlexId: g.key.replace(/^https?:\/\/openalex\.org\//, ""),
+  }));
+
+  const selfCitationRate =
+    raw.totalCitations > 0 ? raw.selfCount / raw.totalCitations : undefined;
+
+  return {
+    topJournals,
+    selfCitationRate:
+      typeof selfCitationRate === "number" && Number.isFinite(selfCitationRate)
+        ? Number(selfCitationRate.toFixed(4))
+        : undefined,
+    selfCitationConfidence: "low",
+    totalCitations: raw.totalCitations,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
+/** CAR riskLevel 阈值（暴露在文件顶部以便配置；本 PR 初版默认 5%/15%） */
+export const CAR_THRESHOLDS = {
+  /** carIndex < low → riskLevel = "low" */
+  low: 0.05,
+  /** carIndex >= mid → riskLevel = "high"；中间区段 = "mid" */
+  mid: 0.15,
+} as const;
+
+/**
+ * CAR per-year + 综合 riskLevel。
+ *
+ * riskLevel 优先级（从强到弱）：
+ *  1. fenqubiao 预警名单命中（任一年） → "high"（最强信号）
+ *  2. CAR latest year >= CAR_THRESHOLDS.mid → "high"
+ *  3. CAR latest year < CAR_THRESHOLDS.low → "low"
+ *  4. 否则 → "mid"
+ *
+ * 输入：
+ *  - rawYears: openalex 按年 [{year, total, cn}]
+ *  - warningList: fenqubiao Map (可空 Map)
+ *  - issn: 期刊 ISSN（用于查 warning map）
+ */
+export function extractCarIndexHistory(
+  rawYears: CarYearRaw[] | null,
+  warningList: FenqubiaoWarningMap | null,
+  issn: string | null,
+): CarIndexHistoryShape | null {
+  if (!Array.isArray(rawYears) || rawYears.length === 0) return null;
+  const data: CarYearRow[] = rawYears
+    .filter((r) => Number.isFinite(r.year) && r.total > 0)
+    .map((r) => ({ year: r.year, carIndex: Number((r.cn / r.total).toFixed(4)) }))
+    .sort((a, b) => a.year - b.year);
+  if (data.length === 0) return null;
+
+  const latest = data[data.length - 1].carIndex;
+  const issnUpper = issn ? issn.trim().toUpperCase() : "";
+  const isWarningListed =
+    !!warningList && !!issnUpper && warningList.has(issnUpper);
+
+  let riskLevel: "low" | "mid" | "high";
+  if (isWarningListed) {
+    riskLevel = "high";
+  } else if (latest >= CAR_THRESHOLDS.mid) {
+    riskLevel = "high";
+  } else if (latest < CAR_THRESHOLDS.low) {
+    riskLevel = "low";
+  } else {
+    riskLevel = "mid";
+  }
+
+  return {
+    data,
+    riskLevel,
+    isWarningListed,
+    lastUpdatedAt: new Date().toISOString(),
+  };
 }

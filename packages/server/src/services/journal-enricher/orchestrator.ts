@@ -1,24 +1,25 @@
 /**
- * journal-enricher orchestrator（B.2.1.A + B.2.1.B + B.2.1.B.2）
+ * journal-enricher orchestrator（B.2.1.A + B.2.1.B + B.2.1.B.2 + B.2.2）
  *
  * 主入口 enrichJournal(journalId, options?)：
  *   1. 从 DB load journal
- *   2. 并行 fetch（LetPub + DOAJ + OpenAlex source + OpenAlex Top global/CN 机构）。
- *      OpenAlex 是 B.2.1.B.2 主路径（0 反爬 + 服务器 IP 直通）。
- *      Scimago/期刊官网 stealth fetcher（PR #34）保留但 dormant — 数据中心 IP
- *      CF 屏蔽现实，调用也拿不到，已从 orchestrator 主路径移除。
- *   3. 串行 extract 每个字段，partial OK：
+ *   2. 并行 fetch（LetPub + DOAJ + OpenAlex source + fenqubiao 预警名单）
+ *   3. OpenAlex source 拿到后串行 fetch：
+ *      - Top global/CN 机构（B.2.1.B.2）
+ *      - citing journals 聚合 + self-cite（B.2.2）
+ *      - CAR per-year（B.2.2）
+ *   4. extract 字段（partial OK）：
  *      - if_history / jcr_full（LetPub）
  *      - publication_stats（LetPub + OpenAlex Top 机构 global/CN merge）
  *      - publication_costs（优先级 DOAJ > OpenAlex APC > journal.apcFee）
  *      - scope_details（OpenAlex topics → field rollup）
  *      - publisher（OpenAlex host_organization_name 仅回填 NULL，不覆盖手维值）
- *   4. 总是算 recommendation_score
- *   5. idempotent UPDATE journals
- *   6. 写 metadata.enrichmentLog（最近 3 条）
+ *      - citing_journals_top10（B.2.2，含 self-cite + confidence）
+ *      - car_index_history（B.2.2，含 fenqubiao 预警 OR 信号 → riskLevel）
+ *   5. 总是算 recommendation_score
+ *   6. idempotent UPDATE journals + 写 metadata.enrichmentLog（最近 3 条）
  *
- * 不在范围：
- *   ❌ car_index_history / citing_journals_top10（B.2.2 调研）
+ * Stealth fetcher（PR #34）保留但 dormant — 数据中心 IP CF 屏蔽，已从主路径移除。
  */
 
 import { db } from "../../models/db.js";
@@ -30,7 +31,10 @@ import { fetchDoajByIssn } from "./fetchers/doaj-fetcher.js";
 import {
   fetchOpenAlexJournal,
   fetchOpenAlexTopInstitutions,
+  fetchOpenAlexCitingJournals,
+  fetchOpenAlexCarIndex,
 } from "./fetchers/openalex-fetcher.js";
+import { fetchFenqubiaoWarningList } from "./fetchers/fenqubiao-fetcher.js";
 import { extractIfHistory } from "./extractors/if-history-extractor.js";
 import { extractJcrFull } from "./extractors/jcr-full-extractor.js";
 import { extractPublicationStats } from "./extractors/publication-stats-extractor.js";
@@ -40,6 +44,8 @@ import {
   extractScopeDetailsFromOpenAlex,
   extractPublicationCostsFromOpenAlex,
   extractPublisherFromOpenAlex,
+  extractCitingJournalsTop10,
+  extractCarIndexHistory,
 } from "./extractors/openalex-extractor.js";
 import { calculateRecommendationScore } from "./score/recommendation-score-calculator.js";
 import type { EnrichmentResult, EnrichOptions, TopInstitutionRow } from "./types.js";
@@ -83,8 +89,8 @@ export async function enrichJournal(
 
   // Step 2: parallel fetch (allSettled — 任一源失败不阻塞其他)
   // B.2.1.B.2: OpenAlex 主路径替代 stealth（数据中心 IP CF 屏蔽现实）。
-  // OpenAlex source 拿到后才能查 institutions，因此 institutions 是第二步串行。
-  const [letpubResult, doajResult, openalexSourceResult] = await Promise.allSettled([
+  // B.2.2: + fenqubiao 预警名单（redis cache 24h，多刊批量首调一次）
+  const [letpubResult, doajResult, openalexSourceResult, warningListResult] = await Promise.allSettled([
     options?.skipLetpub
       ? Promise.resolve(null)
       : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
@@ -94,11 +100,15 @@ export async function enrichJournal(
     options?.skipOpenAlex
       ? Promise.resolve(null)
       : fetchOpenAlexJournal(journal.issn),
+    options?.skipFenqubiao
+      ? Promise.resolve(null)
+      : fetchFenqubiaoWarningList(),
   ]);
 
   const letpub = letpubResult.status === "fulfilled" ? letpubResult.value : null;
   const doaj = doajResult.status === "fulfilled" ? doajResult.value : null;
   const openalex = openalexSourceResult.status === "fulfilled" ? openalexSourceResult.value : null;
+  const warningList = warningListResult.status === "fulfilled" ? warningListResult.value : null;
 
   if (letpubResult.status === "rejected") {
     errors["_letpub_fetch"] = String(letpubResult.reason);
@@ -112,19 +122,26 @@ export async function enrichJournal(
     errors["_openalex_fetch"] = String(openalexSourceResult.reason);
     logger.warn({ journalId, err: errors["_openalex_fetch"] }, "OpenAlex fetch rejected");
   }
+  if (warningListResult.status === "rejected") {
+    errors["_fenqubiao_fetch"] = String(warningListResult.reason);
+    logger.warn({ journalId, err: errors["_fenqubiao_fetch"] }, "fenqubiao fetch rejected");
+  }
 
-  // OpenAlex Top institutions（global + CN）— 仅当 source 拿到才走
+  // OpenAlex 二阶串行 fetch — 仅当 source 拿到才走
   let topInstitutions: TopInstitutionRow[] | null = null;
+  let citingRaw: Awaited<ReturnType<typeof fetchOpenAlexCitingJournals>> | null = null;
+  let carRaw: Awaited<ReturnType<typeof fetchOpenAlexCarIndex>> | null = null;
   if (openalex && !options?.skipOpenAlex) {
-    const [globalRes, cnRes] = await Promise.allSettled([
+    const [globalRes, cnRes, citingRes, carRes] = await Promise.allSettled([
       fetchOpenAlexTopInstitutions(openalex.id, { limit: 5 }),
       fetchOpenAlexTopInstitutions(openalex.id, { country: "cn", limit: 5 }),
+      fetchOpenAlexCitingJournals(openalex.id, { sampleSize: 100 }),
+      fetchOpenAlexCarIndex(openalex.id, { years: 5 }),
     ]);
     const globalRows = globalRes.status === "fulfilled" ? globalRes.value : null;
     const cnRows = cnRes.status === "fulfilled" ? cnRes.value : null;
     const globalInst = extractTopInstitutionsFromOpenAlex(globalRows);
     const cnInst = extractTopInstitutionsFromOpenAlex(cnRows, "CN");
-    // 合并：CN 在前（国内活跃更贴近用户视角），global 补足
     const merged: TopInstitutionRow[] = [];
     const seen = new Set<string>();
     for (const r of [...(cnInst ?? []), ...(globalInst ?? [])]) {
@@ -134,6 +151,15 @@ export async function enrichJournal(
       if (merged.length >= 8) break;
     }
     topInstitutions = merged.length > 0 ? merged : null;
+
+    citingRaw = citingRes.status === "fulfilled" ? citingRes.value : null;
+    carRaw = carRes.status === "fulfilled" ? carRes.value : null;
+    if (citingRes.status === "rejected") {
+      errors["_citing_fetch"] = String(citingRes.reason);
+    }
+    if (carRes.status === "rejected") {
+      errors["_car_fetch"] = String(carRes.reason);
+    }
   }
 
   // Step 3: extract each field（独立 try-catch，partial OK）
@@ -180,6 +206,16 @@ export async function enrichJournal(
 
   // scope_details: OpenAlex topics → field rollup
   tryExtract("scope_details", "scopeDetails", () => extractScopeDetailsFromOpenAlex(openalex));
+
+  // B.2.2: citing journals top 10 + self-cite confidence
+  tryExtract("citing_journals_top10", "citingJournalsTop10", () =>
+    openalex ? extractCitingJournalsTop10(citingRaw, openalex.id) : null,
+  );
+
+  // B.2.2: CAR 历史 + riskLevel（融合 fenqubiao 预警名单）
+  tryExtract("car_index_history", "carIndexHistory", () =>
+    extractCarIndexHistory(carRaw, warningList, journal.issn),
+  );
 
   // B.2.1.B.2: publisher 回填（仅当 DB 当前 NULL 才覆盖，避免覆盖手维值）
   if (!journal.publisher) {
@@ -265,6 +301,8 @@ export async function enrichJournal(
       publication_stats: !!updates.publicationStats,
       publication_costs: !!updates.publicationCosts,
       scope_details: !!updates.scopeDetails,
+      citing_journals_top10: !!updates.citingJournalsTop10,
+      car_index_history: !!updates.carIndexHistory,
       recommendation_score: typeof updates.recommendationScore === "number",
     },
   };
