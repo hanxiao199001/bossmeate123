@@ -1,28 +1,32 @@
 /**
- * publication_stats extractor（B.2.1.A）
+ * publication_stats extractor（B.2.1.A + B.2.1.B 扩展）
  *
- * Input: LetPubJournalDetail + JournalInfo（DB 已有的 frequency 字段）
+ * Input: LetPubJournalDetail + JournalInfo（DB 已有的 frequency 字段）+ Scimago Top 5 机构
  * Output: PublicationStatsShape (jsonb 写 journals.publication_stats)
- *
- * 本 PR 只填 frequency + annualVolumeHistory；topInstitutions 留 B.2.1.B。
  *
  * Mapping:
  *   frequency = journal.frequency (DB existing) 优先
  *   annualVolumeHistory = letpub.pubVolumeHistory（同形 {year, count}）
+ *   topInstitutions = Scimago HTML 抽出（B.2.1.B 新加）
  *
- * 两个子字段都没数据 → 返回 null
+ * 三个子字段都没数据 → 返回 null
  */
 
 import type { LetPubJournalDetail } from "../fetchers/letpub-adapter.js";
-import type { PublicationStatsShape, AnnualVolumeRow } from "../types.js";
+import type {
+  PublicationStatsShape,
+  AnnualVolumeRow,
+  TopInstitutionRow,
+} from "../types.js";
 
 export interface PubStatsInput {
   letpub: LetPubJournalDetail | null;
   journalFrequency?: string | null;
+  topInstitutions?: TopInstitutionRow[] | null; // B.2.1.B
 }
 
 export function extractPublicationStats(input: PubStatsInput): PublicationStatsShape | null {
-  const { letpub, journalFrequency } = input;
+  const { letpub, journalFrequency, topInstitutions } = input;
 
   const frequency = journalFrequency && typeof journalFrequency === "string"
     ? journalFrequency.trim() || undefined
@@ -37,11 +41,26 @@ export function extractPublicationStats(input: PubStatsInput): PublicationStatsS
     if (rows.length > 0) annualVolumeHistory = rows;
   }
 
-  if (!frequency && !annualVolumeHistory) return null;
+  const cleanedTopInstitutions =
+    topInstitutions && topInstitutions.length > 0
+      ? topInstitutions.filter((r) => typeof r.name === "string" && r.name.trim().length > 0)
+      : undefined;
+
+  if (
+    !frequency &&
+    !annualVolumeHistory &&
+    (!cleanedTopInstitutions || cleanedTopInstitutions.length === 0)
+  ) {
+    return null;
+  }
 
   return {
     frequency,
     annualVolumeHistory,
+    topInstitutions:
+      cleanedTopInstitutions && cleanedTopInstitutions.length > 0
+        ? cleanedTopInstitutions
+        : undefined,
     lastUpdatedAt: new Date().toISOString(),
   };
 }
