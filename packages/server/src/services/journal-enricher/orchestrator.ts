@@ -1,18 +1,20 @@
 /**
- * journal-enricher orchestrator（B.2.1.A）
+ * journal-enricher orchestrator（B.2.1.A + B.2.1.B）
  *
  * 主入口 enrichJournal(journalId, options?)：
  *   1. 从 DB load journal
- *   2. 并行 fetch（LetPub + DOAJ），allSettled 不阻塞
+ *   2. 并行 fetch（LetPub + DOAJ + Scimago + 期刊官网，stealth 走 puppeteer-extra-stealth），allSettled 不阻塞
  *   3. 串行 extract 每个字段，partial OK
+ *      - if_history / jcr_full（LetPub）
+ *      - publication_stats（LetPub + Scimago Top 5 机构）
+ *      - publication_costs（DOAJ → DB apcFee → 官网 LLM）
+ *      - scope_details（官网 LLM）
  *   4. 总是算 recommendation_score（即便所有 fetcher 失败）
  *   5. idempotent UPDATE journals
  *   6. 写 metadata.enrichmentLog（最近 3 条）
  *
- * 不在 B.2.1.A：
- *   ❌ Scimago fetch（403 + 需 Scrapling）→ B.2.1.B
- *   ❌ 期刊官网 LLM 解析（SPA 化 + JSON parse 风险）→ B.2.1.B
- *   ❌ topInstitutions / scope_details / car_index_history / citing_journals_top10
+ * 不在 B.2.1.B：
+ *   ❌ car_index_history / citing_journals_top10（B.2.2 调研）
  */
 
 import { db } from "../../models/db.js";
@@ -21,10 +23,17 @@ import { eq } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { fetchLetpubDetail } from "./fetchers/letpub-adapter.js";
 import { fetchDoajByIssn } from "./fetchers/doaj-fetcher.js";
+import { fetchScimagoByIssn } from "./fetchers/scimago-fetcher.js";
+import { fetchJournalWebsite } from "./fetchers/journal-website-fetcher.js";
 import { extractIfHistory } from "./extractors/if-history-extractor.js";
 import { extractJcrFull } from "./extractors/jcr-full-extractor.js";
 import { extractPublicationStats } from "./extractors/publication-stats-extractor.js";
-import { extractPublicationCosts } from "./extractors/publication-costs-extractor.js";
+import {
+  extractPublicationCosts,
+  extractPublicationCostsFromWebsite,
+} from "./extractors/publication-costs-extractor.js";
+import { extractTopInstitutions } from "./extractors/top-institutions-extractor.js";
+import { extractScopeDetails } from "./extractors/scope-details-extractor.js";
 import { calculateRecommendationScore } from "./score/recommendation-score-calculator.js";
 import type { EnrichmentResult, EnrichOptions } from "./types.js";
 
@@ -66,17 +75,26 @@ export async function enrichJournal(
   const errors: Record<string, string> = {};
 
   // Step 2: parallel fetch (allSettled — 任一源失败不阻塞另一源)
-  const [letpubResult, doajResult] = await Promise.allSettled([
+  // B.2.1.B 加 Scimago + journal-website 两个 stealth 抓取
+  const [letpubResult, doajResult, scimagoResult, websiteResult] = await Promise.allSettled([
     options?.skipLetpub
       ? Promise.resolve(null)
       : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
     options?.skipDoaj
       ? Promise.resolve(null)
       : fetchDoajByIssn(journal.issn),
+    options?.skipStealth
+      ? Promise.resolve(null)
+      : fetchScimagoByIssn({ issn: journal.issn }),
+    options?.skipStealth
+      ? Promise.resolve(null)
+      : fetchJournalWebsite({ websiteUrl: journal.website }),
   ]);
 
   const letpub = letpubResult.status === "fulfilled" ? letpubResult.value : null;
   const doaj = doajResult.status === "fulfilled" ? doajResult.value : null;
+  const scimagoHtml = scimagoResult.status === "fulfilled" ? scimagoResult.value : null;
+  const websiteHtml = websiteResult.status === "fulfilled" ? websiteResult.value : null;
 
   if (letpubResult.status === "rejected") {
     errors["_letpub_fetch"] = String(letpubResult.reason);
@@ -85,6 +103,14 @@ export async function enrichJournal(
   if (doajResult.status === "rejected") {
     errors["_doaj_fetch"] = String(doajResult.reason);
     logger.warn({ journalId, err: errors["_doaj_fetch"] }, "DOAJ fetch rejected");
+  }
+  if (scimagoResult.status === "rejected") {
+    errors["_scimago_fetch"] = String(scimagoResult.reason);
+    logger.warn({ journalId, err: errors["_scimago_fetch"] }, "Scimago fetch rejected");
+  }
+  if (websiteResult.status === "rejected") {
+    errors["_website_fetch"] = String(websiteResult.reason);
+    logger.warn({ journalId, err: errors["_website_fetch"] }, "Website fetch rejected");
   }
 
   // Step 3: extract each field（独立 try-catch，partial OK）
@@ -112,14 +138,65 @@ export async function enrichJournal(
 
   tryExtract("if_history", "ifHistory", () => extractIfHistory(letpub));
   tryExtract("jcr_full", "jcrFull", () => extractJcrFull(letpub));
+
+  // B.2.1.B: Scimago Top 5 机构（HTML→cheerio，同步）
+  let topInstitutions: ReturnType<typeof extractTopInstitutions> = null;
+  try {
+    topInstitutions = extractTopInstitutions(scimagoHtml);
+  } catch (err) {
+    errors["top_institutions"] = err instanceof Error ? err.message : String(err);
+    logger.warn({ journalId, err: errors["top_institutions"] }, "top-institutions extractor failed");
+  }
+
   tryExtract("publication_stats", "publicationStats", () => extractPublicationStats({
     letpub,
     journalFrequency: journal.frequency,
+    topInstitutions,
   }));
   tryExtract("publication_costs", "publicationCosts", () => extractPublicationCosts({
     doaj,
     journalApcFee: journal.apcFee,
   }));
+
+  // B.2.1.B: 官网 LLM 兜底 publication_costs（仅当 doaj+apcFee 都没拿到时）
+  if (!updates.publicationCosts && websiteHtml && journal.tenantId) {
+    try {
+      const llmCosts = await extractPublicationCostsFromWebsite({
+        websiteHtml,
+        journalName: selectQueryName(journal),
+        tenantId: journal.tenantId,
+      });
+      if (llmCosts) {
+        updates.publicationCosts = llmCosts;
+        successFields.push("publication_costs");
+      }
+    } catch (err) {
+      errors["publication_costs_llm"] = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { journalId, err: errors["publication_costs_llm"] },
+        "publication-costs LLM extractor failed",
+      );
+    }
+  }
+
+  // B.2.1.B: 官网 LLM 提取 scope_details
+  if (websiteHtml && journal.tenantId) {
+    try {
+      const scope = await extractScopeDetails({
+        websiteHtml,
+        journalName: selectQueryName(journal),
+        tenantId: journal.tenantId,
+      });
+      if (scope) {
+        updates.scopeDetails = scope;
+        successFields.push("scope_details");
+      }
+    } catch (err) {
+      failedFields.push("scope_details");
+      errors["scope_details"] = err instanceof Error ? err.message : String(err);
+      logger.warn({ journalId, err: errors["scope_details"] }, "scope-details extractor failed");
+    }
+  }
 
   // Step 4: 总是算 score（即便所有 extractor 都没数据，基于已有 journal 字段也算）
   try {
@@ -190,6 +267,7 @@ export async function enrichJournal(
       jcr_full: !!updates.jcrFull,
       publication_stats: !!updates.publicationStats,
       publication_costs: !!updates.publicationCosts,
+      scope_details: !!updates.scopeDetails,
       recommendation_score: typeof updates.recommendationScore === "number",
     },
   };

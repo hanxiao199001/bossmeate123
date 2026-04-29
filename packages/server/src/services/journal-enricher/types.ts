@@ -44,10 +44,18 @@ export interface AnnualVolumeRow {
   count: number;
 }
 
+/** Scimago Top 5 国内/全球高产机构（B.2.1.B） */
+export interface TopInstitutionRow {
+  name: string;
+  paperCount?: number;
+  percentile?: number;
+  country?: string;
+}
+
 export interface PublicationStatsShape {
   frequency?: string;
   annualVolumeHistory?: AnnualVolumeRow[];
-  // topInstitutions: 不在 B.2.1.A，B.2.1.B 加
+  topInstitutions?: TopInstitutionRow[]; // B.2.1.B Scimago Top 5
   lastUpdatedAt: string;
 }
 
@@ -56,7 +64,24 @@ export interface PublicationCostsShape {
   currency?: string;
   openAccess?: boolean;
   fastTrack?: boolean;
-  source?: "doaj" | "journal_apc_field"; // 标记数据来源便于排查
+  /** 数据来源：doaj=OA权威 / journal_apc_field=DB 兜底 / journal_website_llm=B.2.1.B 官网 LLM 抽取 */
+  source?: "doaj" | "journal_apc_field" | "journal_website_llm";
+  lastUpdatedAt: string;
+}
+
+/** 收稿范围分类（B.2.1.B） */
+export interface ScopeCategory {
+  title: string;
+  description?: string;
+}
+
+export interface ScopeDetailsShape {
+  categories?: ScopeCategory[];
+  articleTypes?: string[];
+  submissionNote?: string;
+  /** 学科分布 percent，0-100 区间 */
+  subjectDistribution?: Array<{ subject: string; percent: number }>;
+  source?: "journal_website_llm";
   lastUpdatedAt: string;
 }
 
@@ -76,6 +101,7 @@ export interface EnrichmentResult {
     jcr_full: boolean;
     publication_stats: boolean;
     publication_costs: boolean;
+    scope_details: boolean;
     recommendation_score: boolean;
   };
 }
@@ -85,6 +111,8 @@ export interface EnrichOptions {
   skipLetpub?: boolean;
   /** 跳过 DOAJ（调试用） */
   skipDoaj?: boolean;
+  /** 跳过 Scimago + 期刊官网 stealth 抓取（B.2.1.B；调试或 CI 用） */
+  skipStealth?: boolean;
   /** dry-run：算结果但不 UPDATE DB（仅 orchestrator 直调时用） */
   dryRun?: boolean;
 }
