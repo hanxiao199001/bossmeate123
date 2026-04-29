@@ -145,6 +145,10 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+
+  // OpenAlex polite-pool email（B.2.1.B.2）。配置后请求带 ?mailto=<email>
+  // 享受 10K req/day 免费 quota；不配置走 anonymous pool（更低额度）。
+  OPENALEX_MAILTO: z.string().email().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
