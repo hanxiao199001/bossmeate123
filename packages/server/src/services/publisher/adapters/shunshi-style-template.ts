@@ -53,6 +53,7 @@
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { esc } from "../../skills/journal-template.js";
+import { renderIfHistoryLineChart, renderAnnualVolumeBarChart } from "../svg-charts/index.js";
 
 type Abstracts = CollectionResult["abstracts"];
 
@@ -245,7 +246,7 @@ function renderJcrQuartileBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
-// ============ 区块 4: IF 历史折线图 ============
+// ============ 区块 4: IF 历史折线图（C 阶段：SVG 渲染） ============
 function renderIfHistoryChart(journal: JournalInfo): string {
   const raw = (journal as any).ifHistory;
   if (!isIfHistory(raw)) {
@@ -256,13 +257,26 @@ function renderIfHistoryChart(journal: JournalInfo): string {
       submessage: "B.2 阶段批量回填后渲染折线图",
     });
   }
-  const years = raw.data.length;
-  return renderP1Placeholder({
-    title: "近 10 年影响因子",
-    icon: "📈",
-    message: `已收集 ${years} 年数据`,
-    submessage: "C 阶段渲染折线图（柱状图占位）",
-  });
+  // shape 容忍：data 项可能 { year, if } 或 { year, value }
+  const series = raw.data
+    .map((d) => ({ year: d.year, if: typeof d.if === "number" ? d.if : (d.value ?? NaN) }))
+    .filter((d) => isFinite(d.if));
+  const svg = renderIfHistoryLineChart(series);
+  if (!svg) {
+    // 单点 / 空数据 → 走 P1 占位
+    return renderP1Placeholder({
+      title: "近 10 年影响因子",
+      icon: "📈",
+      message: `已收集 ${series.length} 年数据`,
+      submessage: "数据点不足，B.2 阶段补全后渲染折线图",
+    });
+  }
+  return (
+    `<section style="margin:0 0 22px 0;">` +
+    `<h3 style="margin:0 0 12px 0;font-size:16px;color:${RED};font-weight:bold;">📈 近 10 年影响因子</h3>` +
+    svg +
+    `</section>`
+  );
 }
 
 // ============ 区块 5: IF 最新值 + 同比变化 ============
@@ -475,18 +489,19 @@ function renderFrequencyBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
-// ============ 区块 11: 年发文量柱状图 ============
+// ============ 区块 11: 年发文量柱状图（C 阶段：SVG 渲染） ============
 function renderAnnualVolumeChart(journal: JournalInfo): string {
   const raw = (journal as any).publicationStats;
   if (isPublicationStats(raw) && Array.isArray(raw.annualVolumeHistory) && raw.annualVolumeHistory.length > 0) {
-    const years = raw.annualVolumeHistory.length;
-    const total = raw.annualVolumeHistory.reduce((s, x) => s + (x.count || 0), 0);
-    return renderP1Placeholder({
-      title: "近 10 年发文量",
-      icon: "📊",
-      message: `已收集 ${years} 年数据，累计 ${total} 篇`,
-      submessage: "C 阶段渲染柱状图",
-    });
+    const svg = renderAnnualVolumeBarChart(raw.annualVolumeHistory);
+    if (svg) {
+      return (
+        `<section style="margin:0 0 22px 0;">` +
+        `<h3 style="margin:0 0 12px 0;font-size:16px;color:${RED};font-weight:bold;">📊 近 10 年发文量</h3>` +
+        svg +
+        `</section>`
+      );
+    }
   }
   return renderP1Placeholder({
     title: "近 10 年发文量",
