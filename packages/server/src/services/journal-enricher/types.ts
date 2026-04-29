@@ -64,8 +64,14 @@ export interface PublicationCostsShape {
   currency?: string;
   openAccess?: boolean;
   fastTrack?: boolean;
-  /** 数据来源：doaj=OA权威 / journal_apc_field=DB 兜底 / journal_website_llm=B.2.1.B 官网 LLM 抽取 */
-  source?: "doaj" | "journal_apc_field" | "journal_website_llm";
+  /**
+   * 数据来源：
+   *  - doaj：OA 权威（含 has_apc + max[].price）
+   *  - openalex：B.2.1.B.2 主路径，apc_usd 直拉（hybrid OA 也覆盖）
+   *  - journal_apc_field：DB 已有 apcFee 字段兜底
+   *  - journal_website_llm：B.2.1.B stealth + LLM 抽（dormant，server IP CF 屏蔽）
+   */
+  source?: "doaj" | "openalex" | "journal_apc_field" | "journal_website_llm";
   lastUpdatedAt: string;
 }
 
@@ -81,7 +87,8 @@ export interface ScopeDetailsShape {
   submissionNote?: string;
   /** 学科分布 percent，0-100 区间 */
   subjectDistribution?: Array<{ subject: string; percent: number }>;
-  source?: "journal_website_llm";
+  /** journal_website_llm = PR #34 LLM 路径（dormant）；openalex = B.2.1.B.2 主路径 */
+  source?: "journal_website_llm" | "openalex";
   lastUpdatedAt: string;
 }
 
@@ -111,7 +118,9 @@ export interface EnrichOptions {
   skipLetpub?: boolean;
   /** 跳过 DOAJ（调试用） */
   skipDoaj?: boolean;
-  /** 跳过 Scimago + 期刊官网 stealth 抓取（B.2.1.B；调试或 CI 用） */
+  /** 跳过 OpenAlex（B.2.1.B.2；调试或 CI 用） */
+  skipOpenAlex?: boolean;
+  /** 跳过 Scimago + 期刊官网 stealth 抓取（B.2.1.B；现 dormant，仅作 fallback flag 保留） */
   skipStealth?: boolean;
   /** dry-run：算结果但不 UPDATE DB（仅 orchestrator 直调时用） */
   dryRun?: boolean;
