@@ -298,3 +298,91 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(htmlNull).toContain("暂无");
   });
 });
+
+// ============ task #35: 区块 21 contact_meta（tenant 入参）============
+
+describe("renderContactBlock — task #35 tenant.contactMeta", () => {
+  it("falls back to hardcoded text when tenant arg omitted", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(html).toContain("详见公众号底部二维码 · 工作日 9:00-18:00 答疑");
+    expect(html).toContain("联系方式");
+  });
+
+  it("falls back to hardcoded text when tenant.contactMeta is null/undefined", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, { contactMeta: null });
+    expect(html).toContain("详见公众号底部二维码 · 工作日 9:00-18:00 答疑");
+    const html2 = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, { contactMeta: undefined });
+    expect(html2).toContain("详见公众号底部二维码 · 工作日 9:00-18:00 答疑");
+  });
+
+  it("falls back when contactMeta is malformed (missing contactName)", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: { wechatId: "x", workingHours: "y" } as any,
+    });
+    expect(html).toContain("详见公众号底部二维码");
+  });
+
+  it("renders contactName + workingHours + wechatId when contactMeta valid", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: {
+        contactName: "BossMate 期刊小助手",
+        wechatId: "bossmate_journal",
+        workingHours: "工作日 9:00-18:00 答疑",
+      },
+    });
+    expect(html).toContain("BossMate 期刊小助手");
+    expect(html).toContain("bossmate_journal");
+    expect(html).toContain("工作日 9:00-18:00 答疑");
+    expect(html).toContain("微信：");
+    // hardcoded fallback 文案不应再出现
+    expect(html).not.toContain("详见公众号底部二维码");
+  });
+
+  it("renders qrCodeUrl as <img> when present", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: {
+        contactName: "测试小助手",
+        qrCodeUrl: "https://cos.example.com/qr.png",
+      },
+    });
+    expect(html).toContain('<img src="https://cos.example.com/qr.png"');
+    expect(html).toContain("测试小助手");
+  });
+
+  it("hides optional rows when only contactName provided", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: { contactName: "最小小助手" },
+    });
+    expect(html).toContain("最小小助手");
+    expect(html).not.toContain("微信：");
+    expect(html).not.toContain("邮箱：");
+    expect(html).not.toContain("电话：");
+    expect(html).not.toContain('alt="二维码"'); // QR code img absent (cover img unrelated)
+  });
+
+  it("escapes HTML in contactMeta fields", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: {
+        contactName: "<script>alert(1)</script>",
+        wechatId: "id&with<chars>",
+      },
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("id&amp;with&lt;chars&gt;");
+  });
+
+  it("renders email and phone rows when provided", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined, {
+      contactMeta: {
+        contactName: "全字段助手",
+        email: "ops@bossmate.cn",
+        phone: "+86 138-0000-0000",
+      },
+    });
+    expect(html).toContain("邮箱：");
+    expect(html).toContain("ops@bossmate.cn");
+    expect(html).toContain("电话：");
+    expect(html).toContain("+86 138-0000-0000");
+  });
+});
