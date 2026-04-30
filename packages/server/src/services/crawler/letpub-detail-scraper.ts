@@ -140,9 +140,22 @@ async function fetchWithRetryLetPub(
  * 检测搜索结果页是否为"0 结果"。
  * 用于防御性早返回，避免 fallback 把 0-results 错误页伪装成详情页。
  * Exported for unit testing.
+ *
+ * task #44 (BMJ 0959-8138)：LetPub 库不收录某些 ISSN 时返回**裸 search 表单**响应
+ * （HTTP 200，~75KB，仅含 form + 页眉 chrome），无标准 `搜索条件匹配 0 条记录` 标记。
+ * 兜底特征：(a) 无 `journalid=N` (b) 无 `view=detail` link (c) `<tr>` < 20。
  */
 export function isZeroResultsSearchPage(html: string): boolean {
-  return /搜索条件匹配[：:]\s*0条记录|暂无匹配结果/.test(html);
+  if (/搜索条件匹配[：:]\s*0条记录|暂无匹配结果/.test(html)) return true;
+  // BMJ-style 裸表单兜底（数据源边界，task #44）
+  // 仅在 html 是 LetPub search 响应（含 searchissn 表单字段）时才走兜底，
+  // 避免随便的小 HTML 被误判。
+  const isLetPubSearchResponse = /name=["']?searchissn["']?/i.test(html);
+  if (!isLetPubSearchResponse) return false;
+  const hasJournalIdLink = /journalid=\d+/.test(html);
+  const hasDetailLink = /view=detail/.test(html);
+  const trCount = (html.match(/<tr\b/g) || []).length;
+  return !hasJournalIdLink && !hasDetailLink && trCount < 20;
 }
 
 /**
