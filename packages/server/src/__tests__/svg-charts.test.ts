@@ -14,6 +14,8 @@ import { join, dirname } from "node:path";
 import {
   renderIfHistoryLineChart,
   renderAnnualVolumeBarChart,
+  renderCarHistoryLineChart,
+  renderCitingPieChart,
 } from "../services/publisher/svg-charts/index.js";
 
 // ===== Lancet 真实数据（来自 PR #29 deploy 后 server enrich，DB ground truth）=====
@@ -114,6 +116,120 @@ describe("renderAnnualVolumeBarChart", () => {
       renderAnnualVolumeBarChart([
         { year: 2023, count: 0 },
         { year: 2024, count: -5 },
+      ]),
+    ).toBe("");
+  });
+});
+
+// ===== Lancet 真实 CAR + citing 数据（PR #35 R4 enrich-all DB ground truth）=====
+const LANCET_CAR_HISTORY: ReadonlyArray<{ year: number; carIndex: number }> = [
+  { year: 2021, carIndex: 0.0317 },
+  { year: 2022, carIndex: 0.0476 },
+  { year: 2023, carIndex: 0.0549 },
+  { year: 2024, carIndex: 0.0612 },
+  { year: 2025, carIndex: 0.0695 },
+];
+
+const LANCET_CITING_TOP10: ReadonlyArray<{ name: string; count: number; percent: number }> = [
+  { name: "Research Square", count: 1900, percent: 19 },
+  { name: "BMJ", count: 1500, percent: 15 },
+  { name: "Cochrane Database of Systematic Reviews", count: 1200, percent: 12 },
+  { name: "JAMA", count: 1000, percent: 10 },
+  { name: "PLOS ONE", count: 900, percent: 9 },
+  { name: "Nature", count: 800, percent: 8 },
+  { name: "NEJM", count: 700, percent: 7 },
+  { name: "Lancet Oncology", count: 600, percent: 6 },
+  { name: "Lancet Public Health", count: 500, percent: 5 },
+  { name: "BMC Public Health", count: 400, percent: 4 },
+];
+
+describe("renderCarHistoryLineChart", () => {
+  it("renders 5-year Lancet CAR with viewBox + risk band + 5 markers", () => {
+    const svg = renderCarHistoryLineChart(LANCET_CAR_HISTORY, "mid");
+    expect(svg.length).toBeGreaterThan(500);
+    expect(svg).toMatch(/viewBox="0 0 600 260"/);
+    expect(svg).toMatch(/<polyline /);
+    expect(svg.match(/<circle /g) || []).toHaveLength(5);
+    // 风险带：mid → #FFE082 浅黄
+    expect(svg).toContain("#FFE082");
+    expect(svg).toContain("中等风险");
+    // 实际值百分比标签：6.95% (2025 latest)
+    expect(svg).toContain("6.95%");
+    expect(svg).toContain("3.17%"); // 2021 起始
+    // x 轴年份
+    expect(svg).toContain(">2021<");
+    expect(svg).toContain(">2025<");
+    writeFileSync(join(SNAPSHOT_DIR, "lancet-car-line.svg"), svg, "utf-8");
+  });
+
+  it("colors high risk band red (#FFCDD2) with 高风险 label", () => {
+    const svg = renderCarHistoryLineChart(LANCET_CAR_HISTORY, "high");
+    expect(svg).toContain("#FFCDD2");
+    expect(svg).toContain("高风险");
+  });
+
+  it("colors low risk band green (#C8E6C9) with 低风险 label", () => {
+    const svg = renderCarHistoryLineChart(LANCET_CAR_HISTORY, "low");
+    expect(svg).toContain("#C8E6C9");
+    expect(svg).toContain("低风险");
+  });
+
+  it("returns empty string for single-point input (caller falls back to placeholder)", () => {
+    expect(renderCarHistoryLineChart([{ year: 2025, carIndex: 0.05 }], "mid")).toBe("");
+  });
+
+  it("returns empty string for empty array", () => {
+    expect(renderCarHistoryLineChart([], "low")).toBe("");
+  });
+});
+
+describe("renderCitingPieChart", () => {
+  it("renders top-10 Lancet citing with 6 slices (top 5 + 其他) + legend", () => {
+    const svg = renderCitingPieChart(LANCET_CITING_TOP10);
+    expect(svg.length).toBeGreaterThan(500);
+    expect(svg).toMatch(/viewBox="0 0 600 320"/);
+    // 6 path 扇区（top 5 + 其他）
+    expect(svg.match(/<path /g) || []).toHaveLength(6);
+    // legend 用 6 色（top 5 + 其他）
+    expect(svg).toContain("#1976D2"); // top 1 蓝
+    expect(svg).toContain("#9E9E9E"); // 其他 灰
+    // legend label：Research Square + 其他
+    expect(svg).toContain("Research Square");
+    expect(svg).toContain("其他");
+    writeFileSync(join(SNAPSHOT_DIR, "lancet-citing-pie.svg"), svg, "utf-8");
+  });
+
+  it("renders top-3 only (no 其他 slice)", () => {
+    const svg = renderCitingPieChart(LANCET_CITING_TOP10.slice(0, 3));
+    expect(svg).toMatch(/<path /);
+    expect(svg.match(/<path /g) || []).toHaveLength(3);
+    expect(svg).not.toContain("其他");
+  });
+
+  it("does NOT render 自引 slice when confidence='low' (this PR's default)", () => {
+    const svg = renderCitingPieChart(LANCET_CITING_TOP10, 0.0034, "low");
+    expect(svg).not.toContain("自引");
+    // 仍是 6 扇区（top 5 + 其他）
+    expect(svg.match(/<path /g) || []).toHaveLength(6);
+  });
+
+  it("renders 自引 slice when confidence='medium' (task #50 follow-up)", () => {
+    const svg = renderCitingPieChart(LANCET_CITING_TOP10, 0.0034, "medium");
+    expect(svg).toContain("自引");
+    expect(svg).toContain("#5D4037"); // 自引 棕
+    // 7 扇区（top 5 + 其他 + 自引）
+    expect(svg.match(/<path /g) || []).toHaveLength(7);
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(renderCitingPieChart([])).toBe("");
+  });
+
+  it("filters out zero/negative weights; returns '' if all zero", () => {
+    expect(
+      renderCitingPieChart([
+        { name: "A", count: 0 },
+        { name: "B", percent: 0 },
       ]),
     ).toBe("");
   });
