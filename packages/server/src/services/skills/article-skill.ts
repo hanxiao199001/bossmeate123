@@ -25,7 +25,7 @@ import { validateAIContent, type ValidationIssue } from "./ai-content-validator.
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
-import { platformAccounts } from "../../models/schema.js";
+import { platformAccounts, tenants } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
@@ -227,7 +227,8 @@ export class ArticleSkill implements ISkill {
       previousFeedback,
       collectionResult,
       variants,
-      templateIds
+      templateIds,
+      context.tenantId, // task #35: 透传给 generateJournalRecommendation 拉 contact_meta
     );
     const totalVariants = (extraVariants?.length ?? 0) + 1;
 
@@ -509,7 +510,8 @@ export class ArticleSkill implements ISkill {
     previousFeedback?: string,
     journalData?: CollectionResult,
     variants: number = 1,
-    templateIds: string[] = [getDefaultTemplateId()]
+    templateIds: string[] = [getDefaultTemplateId()],
+    tenantId?: string,
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -576,7 +578,7 @@ export class ArticleSkill implements ISkill {
     // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
     // T4-3-4: 每个 variant 用 templateIds[i]，缺位时退回 templateIds[0] / default
     const primaryTemplateId = templateIds[0] ?? getDefaultTemplateId();
-    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId);
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId, tenantId);
 
     // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性 + 不同 templateId）
     if (requestedVariants > 1) {
@@ -587,7 +589,7 @@ export class ArticleSkill implements ISkill {
       }>> = [];
       for (let i = 1; i < requestedVariants; i++) {
         const tid = templateIds[i] ?? primaryTemplateId;
-        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, tid));
+        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, tid, tenantId));
       }
       const extraVariants = await Promise.all(subPromises);
       logger.info(
@@ -720,7 +722,8 @@ export class ArticleSkill implements ISkill {
   async generateJournalRecommendation(
     requirement: ParsedRequirement,
     journalData: CollectionResult,
-    templateId: string = getDefaultTemplateId()
+    templateId: string = getDefaultTemplateId(),
+    tenantId?: string,
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -832,10 +835,26 @@ export class ArticleSkill implements ISkill {
       logger.warn({ templateId, fallback: getDefaultTemplateId() }, "template not registered, falling back to default");
       template = getTemplate(getDefaultTemplateId());
     }
+    // task #35: 拉 tenant.contact_meta 透传给模板（仅 shunshi-style 用，其他模板忽略）。
+    // 失败 / 找不到 / 未传 tenantId 时 tenantInfo = null → 模板走 hardcoded fallback。
+    let tenantInfo: { contactMeta?: unknown } | null = null;
+    if (tenantId) {
+      try {
+        const [t] = await db
+          .select({ contactMeta: tenants.contactMeta })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1);
+        if (t) tenantInfo = { contactMeta: t.contactMeta };
+      } catch (err) {
+        logger.warn({ err, tenantId }, "tenant contactMeta lookup failed; using template fallback");
+      }
+    }
     const articleBody = await template!.htmlGenerator(
       journal,
       aiContent,
-      journalData.abstracts
+      journalData.abstracts,
+      tenantInfo,
     );
 
     const article: GeneratedArticle = {

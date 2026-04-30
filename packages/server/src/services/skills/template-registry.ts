@@ -31,11 +31,17 @@ export interface TemplateDefinition {
   description: string;
   /** 可选 emoji 图标 */
   icon?: string;
-  /** HTML 生成函数（核心契约） */
+  /**
+   * HTML 生成函数（核心契约）。
+   *
+   * tenant 参数（task #35）：可选，目前仅 shunshi-style 用于区块 21 联系信息渲染；
+   * 其他模板忽略此参数（保持向后兼容）。未传 tenant 时模板走 hardcoded fallback。
+   */
   htmlGenerator: (
     journal: JournalInfo,
     aiContent: AIGeneratedContent,
-    abstracts?: CollectionResult["abstracts"]
+    abstracts?: CollectionResult["abstracts"],
+    tenant?: { contactMeta?: unknown } | null,
   ) => Promise<string>;
   /** 给 AI 生成 title/scope/recommendation 时附加的风格提示（可选，后续模板使用） */
   aiPromptHints?: string;

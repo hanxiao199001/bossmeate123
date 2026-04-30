@@ -21,6 +21,12 @@ export const tenants = pgTable("tenants", {
   plan: varchar("plan", { length: 20 }).notNull().default("trial"), // trial | basic | pro
   status: varchar("status", { length: 20 }).notNull().default("active"), // active | suspended
   config: jsonb("config").default({}), // 租户级别配置（模型偏好、Token限额等）
+  /**
+   * 联系信息（shunshi-style 区块 21 等模板渲染源；admin UI 5-13 后维护）。
+   * Shape: { contactName, wechatId?, workingHours?, qrCodeUrl?, email?, phone?, lastUpdatedAt? }
+   * null → 模板走 hardcoded fallback 文案。
+   */
+  contactMeta: jsonb("contact_meta"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

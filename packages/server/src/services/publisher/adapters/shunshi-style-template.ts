@@ -161,6 +161,32 @@ function isPublicationCosts(v: unknown): v is PublicationCostsShape {
   return true;
 }
 
+/**
+ * 租户级联系信息（task #35）。来自 tenants.contact_meta jsonb。
+ * admin UI 5-13 后由老板自维护；本 PR 用 migration seed 写一个 BossMate 默认 placeholder。
+ */
+export interface ContactMeta {
+  contactName: string;
+  wechatId?: string;
+  workingHours?: string;
+  qrCodeUrl?: string;
+  email?: string;
+  phone?: string;
+  lastUpdatedAt?: string;
+}
+/**
+ * TenantInfo（minimal）：只取区块 21 需要的字段，避免污染 JournalInfo / 跨层耦合。
+ * contactMeta 用 unknown — 来自 jsonb，运行时由 isContactMeta type guard 校验。
+ */
+export interface TenantInfo {
+  contactMeta?: unknown;
+}
+function isContactMeta(v: unknown): v is ContactMeta {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.contactName === "string" && o.contactName.trim().length > 0;
+}
+
 // ============ 通用工具 ============
 
 /** P1 占位卡（最显眼）：核心 selling point 缺数据时用 */
@@ -773,10 +799,36 @@ function renderMarketingCtaBlock(journal: JournalInfo): string {
 }
 
 // ============ 区块 21: 联系方式 / 二维码 ============
-function renderContactBlock(): string {
+function renderContactBlock(tenant?: TenantInfo | null): string {
+  // tenant.contactMeta 是 unknown（来自 jsonb），用 type guard 校验
+  const meta: unknown = tenant?.contactMeta;
+  // 缺 tenant / 缺 contact_meta / 缺 contactName → graceful fallback（老板未维护场景）
+  if (!isContactMeta(meta)) {
+    return `<section style="margin:0 0 18px 0;text-align:center;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
+      `<p style="margin:0 0 4px 0;font-size:14px;color:${TEXT};font-weight:600;line-height:1.6;">联系方式</p>` +
+      `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.7;">详见公众号底部二维码 · 工作日 9:00-18:00 答疑</p>` +
+      `</section>`;
+  }
+  const lines: string[] = [];
+  if (meta.workingHours) {
+    lines.push(`<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.7;">${esc(meta.workingHours)}</p>`);
+  }
+  if (meta.wechatId) {
+    lines.push(`<p style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.7;"><strong>微信：</strong>${esc(meta.wechatId)}</p>`);
+  }
+  if (meta.email) {
+    lines.push(`<p style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.7;"><strong>邮箱：</strong>${esc(meta.email)}</p>`);
+  }
+  if (meta.phone) {
+    lines.push(`<p style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.7;"><strong>电话：</strong>${esc(meta.phone)}</p>`);
+  }
+  const qr = meta.qrCodeUrl
+    ? `<img src="${esc(meta.qrCodeUrl)}" alt="二维码" style="display:block;margin:10px auto 4px auto;width:120px;height:120px;border-radius:4px;"/>`
+    : "";
   return `<section style="margin:0 0 18px 0;text-align:center;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
-    `<p style="margin:0 0 4px 0;font-size:14px;color:${TEXT};font-weight:600;line-height:1.6;">联系方式</p>` +
-    `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.7;">详见公众号底部二维码 · 工作日 9:00-18:00 答疑</p>` +
+    `<p style="margin:0 0 6px 0;font-size:14px;color:${TEXT};font-weight:600;line-height:1.6;">${esc(meta.contactName)}</p>` +
+    qr +
+    lines.join("") +
     `</section>`;
 }
 
@@ -812,7 +864,8 @@ function renderFooterBlock(journal: JournalInfo): string {
 export async function generateShunshiStyleHtml(
   journal: JournalInfo,
   aiContent: AIGeneratedContent,
-  _abstracts?: Abstracts
+  _abstracts?: Abstracts,
+  tenant?: TenantInfo | null,
 ): Promise<string> {
   const sections: string[] = [];
 
@@ -836,7 +889,7 @@ export async function generateShunshiStyleHtml(
   sections.push(renderAdvantagesBlock(journal, aiContent));           // 18
   sections.push(renderCautionsBlock(journal, aiContent));             // 19
   sections.push(renderMarketingCtaBlock(journal));                    // 20
-  sections.push(renderContactBlock());                                // 21
+  sections.push(renderContactBlock(tenant));                          // 21 🔄 task #35
   sections.push(renderDisclaimerBlock());                             // 22
   sections.push(renderFooterBlock(journal));                          // 23
 

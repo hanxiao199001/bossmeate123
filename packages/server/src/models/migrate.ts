@@ -700,7 +700,25 @@ BEGIN
   ) THEN
     ALTER TABLE journals ADD COLUMN publication_costs JSONB;
   END IF;
+  -- task #35: tenants.contact_meta（shunshi-style 区块 21 联系方式 / 二维码渲染源）
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'tenants' AND column_name = 'contact_meta'
+  ) THEN
+    ALTER TABLE tenants ADD COLUMN contact_meta JSONB;
+  END IF;
 END $$;
+
+-- ============ task #35 seed: BossMate 默认 tenant placeholder（admin UI 5-13 后由老板自维护）============
+-- 仅为 contact_meta IS NULL 的 BossMate 租户写入；已有值的不覆盖（idempotent）。
+UPDATE tenants
+SET contact_meta = '{
+  "contactName": "BossMate 期刊小助手",
+  "wechatId": "bossmate_journal",
+  "workingHours": "工作日 9:00-18:00 答疑",
+  "lastUpdatedAt": "2026-04-30T00:00:00.000Z"
+}'::jsonb
+WHERE name = 'BossMate' AND contact_meta IS NULL;
 `;
 
 async function migrate() {
