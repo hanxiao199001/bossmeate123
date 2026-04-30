@@ -1,6 +1,8 @@
 /**
  * 数据库迁移脚本
- * 使用方式：pnpm db:migrate
+ * 使用方式：
+ *   pnpm db:migrate                  # 真实迁移
+ *   pnpm db:migrate -- --dry-run     # 只打印 SQL，不执行（task #57）
  *
  * 首次运行时创建所有表
  * 使用 drizzle-kit 管理后续迁移
@@ -8,6 +10,14 @@
 import pg from "pg";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
+
+/**
+ * 解析 migrate 入参（task #57）。
+ * Exported for unit testing.
+ */
+export function parseMigrateArgs(argv: string[]): { dryRun: boolean } {
+  return { dryRun: argv.includes("--dry-run") };
+}
 
 const SQL_CREATE_TABLES = `
 -- 租户表
@@ -722,14 +732,28 @@ WHERE name = 'BossMate' AND contact_meta IS NULL;
 `;
 
 async function migrate() {
-  logger.info("🔄 开始数据库迁移...");
+  const { dryRun } = parseMigrateArgs(process.argv.slice(2));
+  if (dryRun) {
+    logger.info("🔎 dry-run 模式：仅打印 SQL，不执行迁移");
+  } else {
+    logger.info("🔄 开始数据库迁移...");
+  }
 
   const client = new pg.Client({ connectionString: env.DATABASE_URL });
 
   try {
     await client.connect();
-    await client.query(SQL_CREATE_TABLES);
-    logger.info("✅ 数据库迁移完成，所有表已创建");
+    if (dryRun) {
+      console.log("=== DRY RUN MODE ===");
+      console.log("Would execute the following SQL:");
+      console.log("---");
+      console.log(SQL_CREATE_TABLES);
+      console.log("---");
+      console.log("No changes made to database.");
+    } else {
+      await client.query(SQL_CREATE_TABLES);
+      logger.info("✅ 数据库迁移完成，所有表已创建");
+    }
   } catch (err) {
     logger.fatal(err, "❌ 数据库迁移失败");
     process.exit(1);
