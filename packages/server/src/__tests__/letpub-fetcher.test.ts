@@ -46,6 +46,8 @@ const fixturesDir = join(__dirname, "fixtures");
 const zeroResultsHtml = readFileSync(join(fixturesDir, "letpub-search-zero-results.html"), "utf-8");
 const lancetSearchHtml = readFileSync(join(fixturesDir, "letpub-search-lancet-1result.html"), "utf-8");
 const lancetDetailHtml = readFileSync(join(fixturesDir, "letpub-lancet-detail-real.html"), "utf-8");
+// task #44: BMJ ISSN 0959-8138 captured 2026-04-30; LetPub 库内无此期刊 → 裸 search 表单响应
+const bmjBareFormHtml = readFileSync(join(fixturesDir, "letpub-search-bare-form-bmj.html"), "utf-8");
 
 describe("isZeroResultsSearchPage", () => {
   it("returns true for the actual 0-results LetPub error page", () => {
@@ -66,6 +68,31 @@ describe("isZeroResultsSearchPage", () => {
 
   it("returns false for benign HTML without these markers", () => {
     expect(isZeroResultsSearchPage("<html><body>foo</body></html>")).toBe(false);
+  });
+
+  // task #44: BMJ-style bare-form 数据源边界检测
+  it("returns true for BMJ-style bare-form response (LetPub 库不收录的 ISSN)", () => {
+    expect(isZeroResultsSearchPage(bmjBareFormHtml)).toBe(true);
+  });
+
+  it("does NOT regress on Lancet (has journalid + tr=39 ≥ 20)", () => {
+    expect(isZeroResultsSearchPage(lancetSearchHtml)).toBe(false);
+  });
+
+  it("returns false at tr=20 boundary when no journalid/detail link (border 安全)", () => {
+    // 20 个 <tr> 但无 journalid / detail → 不判 0-results（避免误判 broken-but-real 响应）
+    const html = '<input name="searchissn"><body>' + "<tr>row</tr>".repeat(20) + "</body>";
+    expect(isZeroResultsSearchPage(html)).toBe(false);
+  });
+
+  it("returns true at tr=19 with no journalid/detail (BMJ-style threshold)", () => {
+    const html = '<input name="searchissn"><body>' + "<tr>row</tr>".repeat(19) + "</body>";
+    expect(isZeroResultsSearchPage(html)).toBe(true);
+  });
+
+  it("does NOT classify random small HTML lacking searchissn form as 0-results", () => {
+    // 防御：bare-form 兜底仅在 LetPub search 响应（含 searchissn 字段）时生效
+    expect(isZeroResultsSearchPage("<html><body><tr>row</tr></body></html>")).toBe(false);
   });
 });
 
