@@ -53,7 +53,12 @@
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { esc } from "../../skills/journal-template.js";
-import { renderIfHistoryLineChart, renderAnnualVolumeBarChart } from "../svg-charts/index.js";
+import {
+  renderIfHistoryLineChart,
+  renderAnnualVolumeBarChart,
+  renderCarHistoryLineChart,
+  renderCitingPieChart,
+} from "../svg-charts/index.js";
 
 type Abstracts = CollectionResult["abstracts"];
 
@@ -326,14 +331,16 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
   }
   const risk = raw.riskLevel === "low" ? "低风险" : raw.riskLevel === "high" ? "高风险" : "中等风险";
   const riskColor = raw.riskLevel === "low" ? "#388E3C" : raw.riskLevel === "high" ? "#D32F2F" : "#F57C00";
-  const cells = raw.data
-    .map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`)
-    .join("");
   const warned = (raw as any).isWarningListed ? `<span style="margin-left:6px;padding:2px 6px;background:#FFEBEE;color:#C62828;border-radius:3px;font-size:11px;">⚠ 中科院预警</span>` : "";
+  const svg = renderCarHistoryLineChart(raw.data, raw.riskLevel ?? "mid");
+  // svg 空（< 2 数据点）→ fallback 老 tag list
+  const body = svg
+    ? `<div style="margin:6px 0 0 0;">${svg}</div>`
+    : `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${raw.data.map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`).join("")}</div>`;
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（中国作者占比）</p>` +
     `<p style="margin:0 0 6px 0;text-align:center;font-size:14px;line-height:1.6;"><span style="color:${riskColor};font-weight:600;">${risk}</span>${warned}</p>` +
-    `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${cells}</div>` +
+    body +
     `</section>`;
 }
 
@@ -542,18 +549,25 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
   if (!isCitingJournalsTop10(raw) || raw.topJournals.length === 0) {
     return renderP1Placeholder({
       title: "引用前 10 种期刊",
-      icon: "🥧",
+      icon: "📊",
       message: "数据采集中",
       submessage: "B.2 阶段补 Top 10 + 占比",
     });
   }
-  const items = raw.topJournals.slice(0, 10).map((j, i) => {
-    const pct = typeof j.percent === "number" ? `${j.percent}%` : "";
-    return `<li style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.6;"><span style="color:${MUTED};">${i + 1}.</span> ${esc(j.name)}${pct ? ` <span style="color:${BLUE};font-weight:600;">${pct}</span>` : ""}</li>`;
-  }).join("");
+  const svg = renderCitingPieChart(
+    raw.topJournals.slice(0, 10),
+    (raw as any).selfCitationRate,
+    (raw as any).selfCitationConfidence,
+  );
+  const body = svg
+    ? `<div style="margin:6px 0 0 0;">${svg}</div>`
+    : `<ol style="margin:0;padding:12px 16px 12px 28px;background:#FAFAFA;border-radius:6px;list-style:none;">${raw.topJournals.slice(0, 10).map((j, i) => {
+        const pct = typeof j.percent === "number" ? `${j.percent}%` : "";
+        return `<li style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.6;"><span style="color:${MUTED};">${i + 1}.</span> ${esc(j.name)}${pct ? ` <span style="color:${BLUE};font-weight:600;">${pct}</span>` : ""}</li>`;
+      }).join("")}</ol>`;
   return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🥧 引用前 ${raw.topJournals.length} 种期刊</p>` +
-    `<ol style="margin:0;padding:12px 16px 12px 28px;background:#FAFAFA;border-radius:6px;list-style:none;">${items}</ol>` +
+    `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">📊 引用前 ${raw.topJournals.length} 期刊分布</p>` +
+    body +
     `</section>`;
 }
 
