@@ -15,7 +15,8 @@
     "lint": "oxlint .",
     "test": "vitest",
     "db:migrate": "pnpm --filter @bossmate/server db:migrate",
-    "db:seed": "pnpm --filter @bossmate/server db:seed"
+    "db:seed": "pnpm --filter @bossmate/server db:seed",
+    "deploy:smart": "./scripts/deploy-with-fallback.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
