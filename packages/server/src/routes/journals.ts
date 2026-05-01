@@ -17,7 +17,55 @@ import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
 
-/** Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单（jsonb 字段不开放，留给 enrich pipeline） */
+/**
+ * Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单。
+ * Day 4 PR-1（admin v2）：扩展 3 个 jsonb sub-schema（ifHistory / publicationCosts / scopeDetails），
+ *   全部 .strict() + array .max(50) DoS 防御 + 数值/枚举 range 守护。
+ *   metadata 仍不开放编辑（enricher 写 wanfang 子键，admin 越权风险）。
+ */
+
+// ifHistory: { data: [{year, if}], predicted?: {year, if, source?}, lastUpdatedAt }
+const ifHistoryRowSchema = z.object({
+  year: z.number().int().min(1900).max(2100),
+  if: z.number().min(0).max(200),
+}).strict();
+
+const ifHistorySchema = z.object({
+  data: z.array(ifHistoryRowSchema).max(50),
+  predicted: z.object({
+    year: z.number().int().min(1900).max(2100),
+    if: z.number().min(0).max(200),
+    source: z.string().max(100).optional(),
+  }).strict().optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
+// publicationCosts: 纯 scalar object
+const publicationCostsSchema = z.object({
+  apc: z.number().min(0).max(100000).optional(),
+  currency: z.string().min(1).max(10).optional(),
+  openAccess: z.boolean().optional(),
+  fastTrack: z.boolean().optional(),
+  source: z.enum(["doaj", "openalex", "journal_apc_field", "journal_website_llm"]).optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
+// scopeDetails: mixed —— categories 数组 + articleTypes 字符串数组 + scalar
+const scopeDetailsSchema = z.object({
+  categories: z.array(z.object({
+    title: z.string().min(1).max(200),
+    description: z.string().max(1000).optional(),
+  }).strict()).max(50).optional(),
+  articleTypes: z.array(z.string().min(1).max(100)).max(50).optional(),
+  submissionNote: z.string().max(2000).optional(),
+  subjectDistribution: z.array(z.object({
+    subject: z.string().min(1).max(200),
+    percent: z.number().min(0).max(100),
+  }).strict()).max(50).optional(),
+  source: z.enum(["journal_website_llm", "openalex"]).optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
 const journalPatchSchema = z.object({
   discipline: z.string().min(1).max(100).optional().nullable(),
   partition: z.enum(["Q1", "Q2", "Q3", "Q4"]).optional().nullable(),
@@ -28,7 +76,11 @@ const journalPatchSchema = z.object({
   website: z.string().url().max(500).optional().nullable(),
   annualVolume: z.number().int().min(0).optional().nullable(),
   apcFee: z.number().min(0).optional().nullable(),
-}).strict(); // strict: 拦截未知字段（防止 jsonb 越权写入）
+  // Day 4 PR-1：3 jsonb 字段（null = 清空）
+  ifHistory: ifHistorySchema.nullable().optional(),
+  publicationCosts: publicationCostsSchema.nullable().optional(),
+  scopeDetails: scopeDetailsSchema.nullable().optional(),
+}).strict(); // strict: 拦截未知字段（防止 jsonb 越权写入，比如 metadata.wanfang）
 
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
