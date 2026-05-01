@@ -4,6 +4,7 @@ import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import { toast } from "../components/Toast";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
+import RewriteSectionModal from "../components/RewriteSectionModal";
 
 // ===== 类型定义 =====
 interface VariantSibling {
@@ -150,6 +151,9 @@ export default function ContentDetailPage() {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
+
+  // T4-2-2: AI 改段 Modal 开关（task #20）
+  const [showRewriteModal, setShowRewriteModal] = useState(false);
 
   // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
   const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
@@ -497,6 +501,17 @@ export default function ContentDetailPage() {
           {/* 保存提示 */}
           {saveMsg && (
             <span className="text-xs text-green-600 animate-pulse">{saveMsg}</span>
+          )}
+
+          {/* T4-2-2: AI 改段（task #20）— 仅在可编辑且正文有 ## 章节时启用 */}
+          {canEdit && /^##\s+/m.test(editBody) && (
+            <button
+              onClick={() => setShowRewriteModal(true)}
+              className="px-3 py-1.5 text-sm font-medium rounded-lg bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+              title="按章节调用 AI 重写（不直接落库，先预览 diff）"
+            >
+              ✨ 改段
+            </button>
           )}
 
           {/* 保存按钮 */}
@@ -994,6 +1009,21 @@ export default function ContentDetailPage() {
           </div>
         )}
       </div>
+
+      {/* T4-2-2: AI 改段 Modal（task #20） */}
+      {id && (
+        <RewriteSectionModal
+          contentId={id}
+          currentBody={editBody}
+          open={showRewriteModal}
+          onClose={() => setShowRewriteModal(false)}
+          onApplied={(updatedBody) => {
+            setEditBody(updatedBody);
+            // server 已落库，本地 content 同步刷新（避免 hasChanges 误判脏）
+            setContent((c) => (c ? { ...c, body: updatedBody } : c));
+          }}
+        />
+      )}
     </div>
   );
 }
