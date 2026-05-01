@@ -237,6 +237,12 @@ export const journals = pgTable(
     catalogs: jsonb("catalogs").default([]), // 所属多个目录 ["cssci","pku-core"]
     frequency: varchar("frequency", { length: 20 }), // 刊期: 月刊/双月刊/季刊
 
+    // B.4-1: 中文核心目录标签（CSCD 中国科学引文数据库 + 北大核心总览，目录类静态字段）
+    // cscdLevel: "核心库" | "扩展库" | null
+    // pkuCoreLevel: "北大核心" | null（北大核心总览 2023 第 10 版）
+    cscdLevel: varchar("cscd_level", { length: 30 }),
+    pkuCoreLevel: varchar("pku_core_level", { length: 30 }),
+
     // === Springer Link 批量爬取字段 ===
     springerJournalId: varchar("springer_journal_id", { length: 20 }), // Springer Link 期刊 ID
     citeScore: real("cite_score"), // CiteScore

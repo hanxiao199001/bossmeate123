@@ -717,6 +717,19 @@ BEGIN
   ) THEN
     ALTER TABLE tenants ADD COLUMN contact_meta JSONB;
   END IF;
+  -- B.4-1: 中文核心目录标签（CSCD + 北大核心总览，由 ingest-cscd-pku 脚本一次性写入）
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'cscd_level'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN cscd_level VARCHAR(30);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'pku_core_level'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN pku_core_level VARCHAR(30);
+  END IF;
 END $$;
 
 -- ============ task #35 seed: BossMate 默认 tenant placeholder（admin UI 5-13 后由老板自维护）============

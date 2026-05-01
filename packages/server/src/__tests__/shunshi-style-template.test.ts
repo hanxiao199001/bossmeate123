@@ -197,6 +197,24 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(htmlNull).not.toMatch(/JCR\s*详细/);
   });
 
+  it("renders CSCD / 北大核心 rows in JCR panel when populated (B.4-1)", async () => {
+    // 即便 jcrFull 为 NULL，只要中文核心目录字段有值，区块 7 也应渲染
+    const jWithZh = { ...baseJournal, cscdLevel: "核心库", pkuCoreLevel: "北大核心" };
+    const html = await generateShunshiStyleHtml(jWithZh, baseAi, undefined);
+    expect(html).toMatch(/JCR\s*详细/);
+    expect(html).toContain("CSCD");
+    expect(html).toContain("核心库");
+    expect(html).toContain("北大核心");
+    // 没给 jcrFull，所以 WoS Level 行不渲染
+    expect(html).not.toContain("WoS Level");
+  });
+
+  it("hides JCR panel when both jcrFull and CSCD/PKU empty (P3)", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
+    expect(html).not.toMatch(/JCR\s*详细/);
+    expect(html).not.toContain("CSCD");
+  });
+
   it("renders recommendation score stars when 1-5, shows '待评估' for null/invalid", async () => {
     const j5 = { ...baseJournal, recommendationScore: 5 };
     const html5 = await generateShunshiStyleHtml(j5, baseAi, undefined);
