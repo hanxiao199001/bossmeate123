@@ -186,24 +186,45 @@ export interface CitingJournalsRaw {
   totalCitations: number;
   /** 自引次数（cites 同一 source 的子集） */
   selfCount: number;
-  /** sample size（top-N papers used） */
+  /** sample size（实际拿到的 work 总数） */
   sampleSize: number;
+  /** B.2.2 stratified 升级：覆盖到的年份数（如 5 = latestYear-4..latestYear） */
+  strataYears?: number;
+  /** 每个 stratum 的样本量（可能 < perStratum，年份新刊文章少） */
+  strataSampleSizes?: number[];
 }
 
 export interface FetchCitingOptions {
-  /** Top-N 最被引论文采样数（默认 100） */
+  /**
+   * Top-N 最被引论文采样数（默认 100）。
+   * stratified=false 时是单 stratum 的 cited_by_count desc top-N。
+   * stratified=true 时被忽略（用 perStratum × strataYears 替代）。
+   */
   sampleSize?: number;
+  /**
+   * B.2.2 升级：是否走分年分层抽样。默认 true（task #50 默认 medium 路径）。
+   * 旧 top-N 路径保留以便对照测试 / 应急回退。
+   */
+  stratified?: boolean;
+  /** 分层数（年份数，默认 5：latestYear-4..latestYear） */
+  strataYears?: number;
+  /** 每年取多少篇（cited_by_count desc，默认 30，总样本 ~150） */
+  perStratum?: number;
+  /** 最新年份（默认 currentYear-1，避开当年数据不全） */
+  latestYear?: number;
 }
 
 /**
- * 拿期刊 Top-N 最被引论文的合集 → 聚合所有引用方期刊（top 12）+ self-cite 计数。
- * 走 3 个 query：
- *   1. /works?filter=primary_location.source.id:Sxxx&sort=cited_by_count:desc&per_page=N&select=id
- *      拿到 top-N 论文 IDs
- *   2. /works?filter=cites:W1|W2|...&group_by=primary_location.source.id
- *      聚合引用方期刊（meta.count = total citing works）
- *   3. /works?filter=cites:W1|W2|...,primary_location.source.id:Sxxx&per_page=1
- *      自引次数（meta.count = self-cite）
+ * 拿期刊论文样本 → 聚合所有引用方期刊（top 12）+ self-cite 计数。
+ *
+ * **stratified=true 路径（task #50 升级，默认）**：
+ *   分年抽样（latestYear-N+1 .. latestYear，每年取 cited_by_count desc 前 perStratum 篇）。
+ *   解决 top-N=100 全期合并被高被引老论文 / COVID 异常年代主导的偏差。
+ *   query 数：strataYears + 2（每年 1 次拉 IDs，+ 1 次 aggregate + 1 次 self-cite）。
+ *   单刊耗时增量：strataYears × 1-1.5s（OpenAlex 0 反爬）。
+ *
+ * **stratified=false 路径（旧 top-N=100，应急回退 / 对照测试）**：
+ *   单 query 拉 top-N，按 cited_by_count desc。query 数：3。
  */
 export async function fetchOpenAlexCitingJournals(
   sourceId: string,
@@ -214,44 +235,108 @@ export async function fetchOpenAlexCitingJournals(
     logger.warn({ sourceId }, "OpenAlex citing journals: sourceId 非法");
     return null;
   }
-  const sampleSize = Math.min(Math.max(opts.sampleSize ?? 100, 10), 200);
 
-  // Step 1: top-N work IDs
-  const idsUrl = buildUrl("/works", {
-    filter: `primary_location.source.id:${idShort}`,
-    sort: "cited_by_count:desc",
-    per_page: String(sampleSize),
-    select: "id",
-  });
-  const idsRes = await fetchJsonWithRetry(idsUrl, "openalex.citing.top-n-ids");
-  if (!idsRes || !Array.isArray(idsRes.results) || idsRes.results.length === 0) return null;
-  const workIds = (idsRes.results as Array<{ id: string }>)
-    .map((w) => w.id?.replace(/^https?:\/\/openalex\.org\//, ""))
-    .filter((s): s is string => /^W\d+$/.test(s));
+  const stratified = opts.stratified !== false;
+  let workIds: string[];
+  let strataYears: number | undefined;
+  let strataSampleSizes: number[] | undefined;
+
+  if (stratified) {
+    // === Step 1 (stratified): 每年单独拉 cited_by_count desc 前 perStratum 篇 ===
+    const yearsCount = Math.min(Math.max(opts.strataYears ?? 5, 2), 10);
+    const perStratum = Math.min(Math.max(opts.perStratum ?? 30, 5), 60);
+    const latestYear = opts.latestYear ?? new Date().getUTCFullYear() - 1;
+    strataYears = yearsCount;
+    strataSampleSizes = [];
+
+    const allIds: string[] = [];
+    for (let i = yearsCount - 1; i >= 0; i--) {
+      const y = latestYear - i;
+      const yearUrl = buildUrl("/works", {
+        filter: `primary_location.source.id:${idShort},from_publication_date:${y}-01-01,to_publication_date:${y}-12-31`,
+        sort: "cited_by_count:desc",
+        per_page: String(perStratum),
+        select: "id",
+      });
+      const yearRes = await fetchJsonWithRetry(yearUrl, `openalex.citing.stratum-${y}`);
+      const yearIds = Array.isArray(yearRes?.results)
+        ? (yearRes.results as Array<{ id: string }>)
+            .map((w) => w.id?.replace(/^https?:\/\/openalex\.org\//, ""))
+            .filter((s): s is string => /^W\d+$/.test(s))
+        : [];
+      strataSampleSizes.push(yearIds.length);
+      allIds.push(...yearIds);
+    }
+    // OpenAlex `cites:` filter 上限 ~50 IDs/clause；分批查 + 累加
+    workIds = allIds;
+  } else {
+    // === Step 1 (legacy top-N): 单 query 全期 cited_by_count desc ===
+    const sampleSize = Math.min(Math.max(opts.sampleSize ?? 100, 10), 200);
+    const idsUrl = buildUrl("/works", {
+      filter: `primary_location.source.id:${idShort}`,
+      sort: "cited_by_count:desc",
+      per_page: String(sampleSize),
+      select: "id",
+    });
+    const idsRes = await fetchJsonWithRetry(idsUrl, "openalex.citing.top-n-ids");
+    if (!idsRes || !Array.isArray(idsRes.results) || idsRes.results.length === 0) return null;
+    workIds = (idsRes.results as Array<{ id: string }>)
+      .map((w) => w.id?.replace(/^https?:\/\/openalex\.org\//, ""))
+      .filter((s): s is string => /^W\d+$/.test(s));
+  }
+
   if (workIds.length === 0) return null;
-  const citesFilter = workIds.join("|");
 
-  // Step 2: citing aggregate
-  const aggUrl = buildUrl("/works", {
-    filter: `cites:${citesFilter}`,
-    group_by: "primary_location.source.id",
-    per_page: "12",
-  });
-  const aggRes = await fetchJsonWithRetry(aggUrl, "openalex.citing.aggregate");
-  if (!aggRes) return null;
-  const groups = Array.isArray(aggRes.group_by) ? (aggRes.group_by as OpenAlexInstitutionRow[]) : [];
-  const totalCitations = (aggRes.meta?.count as number) ?? 0;
+  // OpenAlex `cites:W1|W2|...` filter 上限约 50 IDs/clause（URL 长度 + meta 限制），
+  // stratified 默认 5×30=150 → 拆 3 批；每批分别走 aggregate + self-cite，再合并 group_by。
+  const BATCH = 50;
+  const batches: string[][] = [];
+  for (let i = 0; i < workIds.length; i += BATCH) batches.push(workIds.slice(i, i + BATCH));
 
-  // Step 3: self-cite count
-  const selfUrl = buildUrl("/works", {
-    filter: `cites:${citesFilter},primary_location.source.id:${idShort}`,
-    per_page: "1",
-    select: "id",
-  });
-  const selfRes = await fetchJsonWithRetry(selfUrl, "openalex.citing.self-cite");
-  const selfCount = (selfRes?.meta?.count as number) ?? 0;
+  // 累加器：合并所有 batch 的 group_by + totalCitations + selfCount
+  const groupAcc = new Map<string, OpenAlexInstitutionRow>();
+  let totalCitations = 0;
+  let selfCount = 0;
 
-  return { groups, totalCitations, selfCount, sampleSize: workIds.length };
+  for (const batch of batches) {
+    const citesFilter = batch.join("|");
+    const aggUrl = buildUrl("/works", {
+      filter: `cites:${citesFilter}`,
+      group_by: "primary_location.source.id",
+      per_page: "12",
+    });
+    const aggRes = await fetchJsonWithRetry(aggUrl, "openalex.citing.aggregate");
+    if (aggRes) {
+      const rows = Array.isArray(aggRes.group_by) ? (aggRes.group_by as OpenAlexInstitutionRow[]) : [];
+      for (const r of rows) {
+        if (!r.key) continue;
+        const prev = groupAcc.get(r.key);
+        if (prev) prev.count = (prev.count || 0) + (r.count || 0);
+        else groupAcc.set(r.key, { ...r });
+      }
+      totalCitations += (aggRes.meta?.count as number) ?? 0;
+    }
+
+    const selfUrl = buildUrl("/works", {
+      filter: `cites:${citesFilter},primary_location.source.id:${idShort}`,
+      per_page: "1",
+      select: "id",
+    });
+    const selfRes = await fetchJsonWithRetry(selfUrl, "openalex.citing.self-cite");
+    selfCount += (selfRes?.meta?.count as number) ?? 0;
+  }
+
+  // group_by 按聚合 count 降序（合 batch 后顺序可能错乱）
+  const groups = [...groupAcc.values()].sort((a, b) => (b.count || 0) - (a.count || 0));
+
+  return {
+    groups,
+    totalCitations,
+    selfCount,
+    sampleSize: workIds.length,
+    strataYears,
+    strataSampleSizes,
+  };
 }
 
 export interface CarYearRaw {

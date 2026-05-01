@@ -146,14 +146,41 @@ export function extractPublisherFromOpenAlex(source: OpenAlexSource | null): str
 
 const MAX_CITING = 10;
 
+/** B.2.2 task #50: stratified medium 阈值（≥3 年覆盖 + ≥150 总样本 → medium）。 */
+export const SELF_CITATION_CONFIDENCE_THRESHOLDS = {
+  /** 升 medium 需覆盖年数 */
+  mediumMinYears: 3,
+  /** 升 medium 需总样本 */
+  mediumMinSamples: 150,
+} as const;
+
+/**
+ * 根据 stratified 抽样元数据判定 confidence label。
+ *
+ *  - high：暂不实施（需全量引用图）；预留 enum 给 v2
+ *  - medium：年份 ≥3 且总样本 ≥150（task #50 默认 5×30=150 命中下限）
+ *  - low：单年 / 跨年 <3 / 总样本 <150 / 旧 top-N 路径（无 strata 元数据）
+ */
+function inferSelfCitationConfidence(raw: CitingJournalsRaw): "low" | "medium" | "high" {
+  const years = raw.strataYears ?? 0;
+  const totalSamples = raw.sampleSize ?? 0;
+  if (
+    years >= SELF_CITATION_CONFIDENCE_THRESHOLDS.mediumMinYears &&
+    totalSamples >= SELF_CITATION_CONFIDENCE_THRESHOLDS.mediumMinSamples
+  ) {
+    return "medium";
+  }
+  return "low";
+}
+
 /**
  * 从 citing aggregate raw → CitingJournalsTop10Shape。
  *
  * 排除自身（source 自己出现在 group_by 顶部时移除），保留前 MAX_CITING。
  * percent 算法：每条 count / sum(top-MAX_CITING) × 100，四舍五入。
  *
- * selfCitationConfidence 固定 'low'（top-N=100 paper sample 偏 COVID 噪声；
- * task #50 升级 medium 走分年随机抽样）。
+ * selfCitationConfidence 由抽样元数据判定（task #50）：分年抽样 ≥3 年 + ≥150 样本 → medium，
+ * 否则 low（旧 top-N 路径自动 low，因为 strataYears 缺）。
  */
 export function extractCitingJournalsTop10(
   raw: CitingJournalsRaw | null,
@@ -185,7 +212,7 @@ export function extractCitingJournalsTop10(
       typeof selfCitationRate === "number" && Number.isFinite(selfCitationRate)
         ? Number(selfCitationRate.toFixed(4))
         : undefined,
-    selfCitationConfidence: "low",
+    selfCitationConfidence: inferSelfCitationConfidence(raw),
     totalCitations: raw.totalCitations,
     lastUpdatedAt: new Date().toISOString(),
   };

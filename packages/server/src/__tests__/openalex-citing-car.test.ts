@@ -62,6 +62,7 @@ const {
   extractCitingJournalsTop10,
   extractCarIndexHistory,
   CAR_THRESHOLDS,
+  SELF_CITATION_CONFIDENCE_THRESHOLDS,
 } = await import("../services/journal-enricher/extractors/openalex-extractor.js");
 const {
   fetchOpenAlexCitingJournals,
@@ -89,7 +90,7 @@ describe("extractCitingJournalsTop10", () => {
     expect(out).not.toBeNull();
     expect(out!.topJournals.length).toBeGreaterThan(0);
     expect(out!.topJournals.length).toBeLessThanOrEqual(10);
-    // self-cite confidence is always "low" in this PR
+    // 旧 top-N 路径无 strata → 仍判 low
     expect(out!.selfCitationConfidence).toBe("low");
     // self-rate = selfCount / totalCitations (Lancet ≈ 0.0030)
     expect(out!.selfCitationRate).toBeGreaterThan(0);
@@ -141,6 +142,58 @@ describe("extractCitingJournalsTop10", () => {
       LANCET_ID,
     );
     expect(out!.selfCitationRate).toBeUndefined();
+  });
+
+  // ============ task #50 stratified confidence rule ============
+
+  it("confidence='medium' when stratified ≥3 years AND ≥150 samples", () => {
+    const out = extractCitingJournalsTop10(
+      {
+        groups: [{ key: "S2", key_display_name: "X", count: 100 }],
+        totalCitations: 1000,
+        selfCount: 30,
+        sampleSize: 150,
+        strataYears: 5,
+        strataSampleSizes: [30, 30, 30, 30, 30],
+      },
+      LANCET_ID,
+    );
+    expect(out!.selfCitationConfidence).toBe("medium");
+  });
+
+  it("confidence='low' when stratified but <3 years (insufficient strata)", () => {
+    const out = extractCitingJournalsTop10(
+      {
+        groups: [{ key: "S2", key_display_name: "X", count: 100 }],
+        totalCitations: 500,
+        selfCount: 10,
+        sampleSize: 200,
+        strataYears: 2,
+        strataSampleSizes: [100, 100],
+      },
+      LANCET_ID,
+    );
+    expect(out!.selfCitationConfidence).toBe("low");
+  });
+
+  it("confidence='low' when stratified ≥3 years but total samples <150 (新刊文章稀少)", () => {
+    const out = extractCitingJournalsTop10(
+      {
+        groups: [{ key: "S2", key_display_name: "X", count: 50 }],
+        totalCitations: 200,
+        selfCount: 5,
+        sampleSize: 100,
+        strataYears: 5,
+        strataSampleSizes: [20, 20, 20, 20, 20],
+      },
+      LANCET_ID,
+    );
+    expect(out!.selfCitationConfidence).toBe("low");
+  });
+
+  it("SELF_CITATION_CONFIDENCE_THRESHOLDS exposes config knobs", () => {
+    expect(SELF_CITATION_CONFIDENCE_THRESHOLDS.mediumMinYears).toBe(3);
+    expect(SELF_CITATION_CONFIDENCE_THRESHOLDS.mediumMinSamples).toBe(150);
   });
 });
 
@@ -213,19 +266,22 @@ describe("fetchOpenAlexCitingJournals", () => {
     vi.unstubAllGlobals();
   });
 
-  it("makes 3 sequential requests (ids → aggregate → self-cite)", async () => {
+  it("legacy (stratified=false) with ≤50 IDs runs single-batch (ids → aggregate → self-cite)", async () => {
+    // 50 IDs = 1 batch（不触发 batch 拆分）
+    const small50Ids = { results: fixtureTop100Ids.results.slice(0, 50) };
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => fixtureTop100Ids })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => small50Ids })
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => fixtureCitingAgg })
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => fixtureSelfCite });
     vi.stubGlobal("fetch", fetchMock);
 
-    const out = await fetchOpenAlexCitingJournals("S49861241", { sampleSize: 100 });
+    const out = await fetchOpenAlexCitingJournals("S49861241", { stratified: false, sampleSize: 50 });
     expect(out).not.toBeNull();
     expect(out!.groups.length).toBeGreaterThan(0);
     expect(out!.totalCitations).toBe(fixtureCitingAgg.meta.count);
     expect(out!.selfCount).toBe(fixtureSelfCite.meta.count);
-    expect(out!.sampleSize).toBe(100);
+    expect(out!.sampleSize).toBe(50);
+    expect(out!.strataYears).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -234,23 +290,66 @@ describe("fetchOpenAlexCitingJournals", () => {
     expect(out).toBeNull();
   });
 
-  it("returns null when ids step has no results", async () => {
+  it("legacy: returns null when ids step has no results", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({ results: [] }),
     }));
-    const out = await fetchOpenAlexCitingJournals("S49861241");
+    const out = await fetchOpenAlexCitingJournals("S49861241", { stratified: false });
     expect(out).toBeNull();
   });
 
-  it("clamps sampleSize to [10, 200]", async () => {
+  it("legacy: clamps sampleSize to [10, 200]", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValue({ ok: true, status: 200, json: async () => fixtureTop100Ids });
     vi.stubGlobal("fetch", fetchMock);
-    await fetchOpenAlexCitingJournals("S49861241", { sampleSize: 5 });
+    await fetchOpenAlexCitingJournals("S49861241", { stratified: false, sampleSize: 5 });
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("per_page=10"); // clamped up to 10
+  });
+
+  // ============ task #50 stratified path ============
+
+  it("stratified (default) fires N year queries + batch-aggregates 150 IDs across batches", async () => {
+    // 5 strata × 30 IDs = 150 IDs → 3 cites batches (50/each) → 6 agg+self queries
+    const stratumIds = (year: number, n = 30) => ({
+      results: Array.from({ length: n }, (_, i) => ({ id: `https://openalex.org/W${year}${i.toString().padStart(3, "0")}` })),
+    });
+    const aggResp = { meta: { count: 100 }, group_by: [{ key: "https://openalex.org/S2", key_display_name: "X", count: 50 }] };
+    const selfResp = { meta: { count: 5 }, results: [] };
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("from_publication_date")) {
+        // 哪一年 stratum — 取 from_publication_date 年份
+        const m = url.match(/from_publication_date:(\d{4})/);
+        return { ok: true, status: 200, json: async () => stratumIds(Number(m?.[1] ?? 2024)) };
+      }
+      if (url.includes("group_by")) return { ok: true, status: 200, json: async () => aggResp };
+      return { ok: true, status: 200, json: async () => selfResp };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await fetchOpenAlexCitingJournals("S49861241", { strataYears: 5, perStratum: 30, latestYear: 2024 });
+    expect(out).not.toBeNull();
+    expect(out!.sampleSize).toBe(150);
+    expect(out!.strataYears).toBe(5);
+    expect(out!.strataSampleSizes).toEqual([30, 30, 30, 30, 30]);
+    // 5 stratum queries + 3 batches × (1 agg + 1 self) = 11
+    expect(fetchMock).toHaveBeenCalledTimes(11);
+    // 累加：3 batches × selfResp.meta.count(5) = 15
+    expect(out!.selfCount).toBe(15);
+    expect(out!.totalCitations).toBe(300); // 3 × 100
+  });
+
+  it("stratified: returns null when 0 IDs across all strata", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [] }),
+    }));
+    const out = await fetchOpenAlexCitingJournals("S49861241", { strataYears: 3, perStratum: 30 });
+    expect(out).toBeNull();
   });
 });
 
