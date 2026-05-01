@@ -9,12 +9,26 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
 import { eq, and, sql, gte, lte, ilike, desc, asc } from "drizzle-orm";
 import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
+
+/** Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单（jsonb 字段不开放，留给 enrich pipeline） */
+const journalPatchSchema = z.object({
+  discipline: z.string().min(1).max(100).optional().nullable(),
+  partition: z.enum(["Q1", "Q2", "Q3", "Q4"]).optional().nullable(),
+  impactFactor: z.number().min(0).max(200).optional().nullable(),
+  acceptanceRate: z.number().min(0).max(1).optional().nullable(),
+  reviewCycle: z.string().max(50).optional().nullable(),
+  publisher: z.string().max(200).optional().nullable(),
+  website: z.string().url().max(500).optional().nullable(),
+  annualVolume: z.number().int().min(0).optional().nullable(),
+  apcFee: z.number().min(0).optional().nullable(),
+}).strict(); // strict: 拦截未知字段（防止 jsonb 越权写入）
 
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
@@ -108,6 +122,40 @@ export async function journalRoutes(app: FastifyInstance) {
       return reply.send({ code: "ok", data: result[0] });
     } catch (err) {
       logger.error({ err }, "获取期刊详情失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  // ============ Day 2 PR B: 编辑期刊基础字段（owner/admin only）============
+  app.patch("/journals/:id", async (request, reply) => {
+    const role = request.user?.role;
+    if (role !== "owner" && role !== "admin") {
+      return reply.status(403).send({ code: "FORBIDDEN", message: "仅 owner / admin 可编辑期刊" });
+    }
+    try {
+      const { id } = request.params as { id: string };
+      const tenantId = request.tenantId;
+      const parsed = journalPatchSchema.parse(request.body);
+
+      const [updated] = await db
+        .update(journals)
+        .set({ ...parsed, updatedAt: new Date() })
+        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        .returning();
+      if (!updated) {
+        return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在或无权限" });
+      }
+      logger.info({ tenantId, journalId: id, fields: Object.keys(parsed) }, "PR B: 期刊字段已更新");
+      return reply.send({ code: "ok", data: updated });
+    } catch (err: any) {
+      if (err?.name === "ZodError") {
+        return reply.status(400).send({
+          code: "VALIDATION_ERROR",
+          message: "字段校验失败（仅允许编辑白名单字段）",
+          data: err.issues,
+        });
+      }
+      logger.error({ err }, "更新期刊失败");
       return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
   });

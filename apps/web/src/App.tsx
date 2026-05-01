@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./hooks/useAuthStore";
 import { ToastContainer } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import ProtectedAdminRoute from "./components/ProtectedAdminRoute";
 
 // 页面
 import LoginPage from "./pages/LoginPage";
@@ -18,6 +19,7 @@ import KnowledgePage from "./pages/KnowledgePage";
 import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
 import VideoCreationPage from "./pages/VideoCreationPage";
+import JournalsAdminPage from "./pages/JournalsAdminPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -149,6 +151,16 @@ export default function App() {
           <ProtectedRoute>
             <AccountsPage />
           </ProtectedRoute>
+        }
+      />
+
+      {/* Day 2 PR B: admin 期刊管理（owner/admin only） */}
+      <Route
+        path="/admin/journals"
+        element={
+          <ProtectedAdminRoute>
+            <JournalsAdminPage />
+          </ProtectedAdminRoute>
         }
       />
 
