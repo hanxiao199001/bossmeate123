@@ -5,6 +5,7 @@ import { api } from "../utils/api";
 import { toast } from "../components/Toast";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 import RewriteSectionModal from "../components/RewriteSectionModal";
+import EditTimelineDrawer from "../components/EditTimelineDrawer";
 
 // ===== 类型定义 =====
 interface VariantSibling {
@@ -154,6 +155,9 @@ export default function ContentDetailPage() {
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
+  // T4-2-3: 编辑历史 Drawer（task #21）+ refresh nonce 在 applyRewrite 后递增触发刷新
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+  const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
 
   // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
   const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
@@ -513,6 +517,16 @@ export default function ContentDetailPage() {
               ✨ 改段
             </button>
           )}
+
+          {/* T4-2-3: 编辑历史（task #21） */}
+          <button
+            onClick={() => setShowHistoryDrawer(true)}
+            className="px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100"
+            title="查看老板对这条内容的所有编辑动作"
+          >
+            📝 历史
+          </button>
+
 
           {/* 保存按钮 */}
           {canEdit && (
@@ -1021,7 +1035,20 @@ export default function ContentDetailPage() {
             setEditBody(updatedBody);
             // server 已落库，本地 content 同步刷新（避免 hasChanges 误判脏）
             setContent((c) => (c ? { ...c, body: updatedBody } : c));
+            // T4-2-3: 触发历史侧栏刷新（如已开着 Drawer 立刻显示新 rewrite_section 卡）
+            setHistoryRefreshNonce((n) => n + 1);
           }}
+        />
+      )}
+
+      {/* T4-2-3: 编辑历史 Drawer（task #21） */}
+      {id && (
+        <EditTimelineDrawer
+          contentId={id}
+          open={showHistoryDrawer}
+          onClose={() => setShowHistoryDrawer(false)}
+          resolveTemplateName={(tid) => templates.get(tid)?.name}
+          refreshNonce={historyRefreshNonce}
         />
       )}
     </div>
