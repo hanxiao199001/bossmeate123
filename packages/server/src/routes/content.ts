@@ -732,4 +732,38 @@ export async function contentRoutes(app: FastifyInstance) {
       });
     }
   });
+
+  /**
+   * T4-2-3: GET /content/:id/edits —— 编辑历史时间线（task #21）
+   *
+   * 返回某条 content 的全部 boss_edits 记录（含 select_variant / rewrite_section /
+   * approve / edit / reject 五类）。tenantId 双过滤防越权。
+   */
+  app.get("/:id/edits", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      // 防御：先验内容归属（即使 boss_edits 也带 tenantId，多一层早返回 404 让 UI 干净）
+      const [content] = await db
+        .select({ id: contents.id })
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
+      if (!content) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+      const rows = await db
+        .select()
+        .from(bossEdits)
+        .where(and(eq(bossEdits.contentId, id), eq(bossEdits.tenantId, request.tenantId)))
+        .orderBy(desc(bossEdits.createdAt))
+        .limit(50);
+      return { code: "OK", data: { edits: rows, total: rows.length } };
+    } catch (err) {
+      logger.error({ err }, "T4-2-3: 编辑历史查询失败");
+      return reply.code(500).send({
+        code: "INTERNAL_ERROR",
+        message: "编辑历史查询失败，请稍后重试",
+      });
+    }
+  });
 }
