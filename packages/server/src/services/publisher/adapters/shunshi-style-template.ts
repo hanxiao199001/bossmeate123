@@ -373,16 +373,26 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
 // ============ 区块 7: JCR 详细面板（P3 隐藏 / P2 灰阶） ============
 function renderJcrFullPanel(journal: JournalInfo): string {
   const raw = (journal as any).jcrFull;
-  if (!isJcrFull(raw)) {
-    return ""; // P3 隐藏
+  // B.4-1：CSCD / 北大核心标签独立信号（中文核心目录），即便 jcrFull 为空也渲染
+  const cscd = (journal as any).cscdLevel as string | null | undefined;
+  const pku = (journal as any).pkuCoreLevel as string | null | undefined;
+  const hasZhCore = (typeof cscd === "string" && cscd.trim()) || (typeof pku === "string" && pku.trim());
+
+  if (!isJcrFull(raw) && !hasZhCore) {
+    return ""; // P3 隐藏：JCR / 中文核心皆无
   }
   const rows: string[] = [];
 
-  rows.push(jcrRow("WoS Level", raw.wosLevel));
-  rows.push(jcrRow("JIF Subjects", formatJcrSubjects(raw.jifSubjects)));
-  rows.push(jcrRow("JCI Subjects", formatJcrSubjects(raw.jciSubjects)));
-  rows.push(jcrRow("Top Journal", typeof raw.isTopJournal === "boolean" ? (raw.isTopJournal ? "是" : "否") : null));
-  rows.push(jcrRow("Review Journal", typeof raw.isReviewJournal === "boolean" ? (raw.isReviewJournal ? "是" : "否") : null));
+  if (isJcrFull(raw)) {
+    rows.push(jcrRow("WoS Level", raw.wosLevel));
+    rows.push(jcrRow("JIF Subjects", formatJcrSubjects(raw.jifSubjects)));
+    rows.push(jcrRow("JCI Subjects", formatJcrSubjects(raw.jciSubjects)));
+    rows.push(jcrRow("Top Journal", typeof raw.isTopJournal === "boolean" ? (raw.isTopJournal ? "是" : "否") : null));
+    rows.push(jcrRow("Review Journal", typeof raw.isReviewJournal === "boolean" ? (raw.isReviewJournal ? "是" : "否") : null));
+  }
+  // B.4-1：中文核心目录（CSCD + 北大核心）— 静态目录字段，B.4-2 万方 / B.4-3 CNKI 后再扩
+  if (typeof cscd === "string" && cscd.trim()) rows.push(jcrRow("CSCD", cscd));
+  if (typeof pku === "string" && pku.trim()) rows.push(jcrRow("北大核心", pku));
 
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">JCR 详细</p>` +
