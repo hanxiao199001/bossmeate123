@@ -4,20 +4,33 @@ import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { z } from "zod";
 
-// 从当前目录向上查找 .env 文件（支持 monorepo）
-function findEnvFile(): string | undefined {
-  let dir = process.cwd();
-  for (let i = 0; i < 5; i++) {
-    const envPath = resolve(dir, ".env");
-    if (existsSync(envPath)) return envPath;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Monorepo 根 .env 绝对路径（src/config 或 dist/config 上 4 级 = monorepo root）。
+ * task #1 root cause：旧 walk-up 模糊查找会先命中影子 `packages/server/.env`，
+ * 导致 4-30 root .env JWT 48 字符 fix 从未生效。改绝对路径锁死后杜绝 cwd 影响。
+ */
+const DEFAULT_ENV_PATH = resolve(__dirname, "../../../../.env");
+
+/**
+ * 解析 .env 路径：优先 process.env.ENV_FILE_PATH override，否则用 DEFAULT_ENV_PATH 绝对路径。
+ * 不存在直接 throw（fail fast，杜绝 silent fallback 导致的鬼故事）。
+ * Exported for unit testing.
+ */
+export function findEnvFile(envFilePath: string | undefined = process.env.ENV_FILE_PATH): string {
+  const target = envFilePath && envFilePath.trim() ? envFilePath : DEFAULT_ENV_PATH;
+  if (!existsSync(target)) {
+    throw new Error(
+      `❌ .env file not found at ${target}. Set ENV_FILE_PATH env var or place .env at monorepo root.`,
+    );
   }
-  return undefined;
+  return target;
 }
 
-config({ path: findEnvFile() });
+const ENV_FILE = findEnvFile();
+console.log(`[env] Loaded env from: ${ENV_FILE}`);
+config({ path: ENV_FILE });
 
 const envSchema = z.object({
   // 服务
