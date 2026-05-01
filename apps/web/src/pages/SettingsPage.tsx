@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import ContactMetaSection from "../components/ContactMetaSection";
 
 interface WechatConfig {
   appId: string;
@@ -481,6 +482,9 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {/* Day 2 PR A: 联系方式（contact_meta）— 区块 21 渲染源 */}
+        <ContactMetaSection />
 
         {/* 配置指南 */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
