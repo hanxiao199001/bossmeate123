@@ -35,6 +35,8 @@ import {
   fetchOpenAlexCarIndex,
 } from "./fetchers/openalex-fetcher.js";
 import { fetchFenqubiaoWarningList } from "./fetchers/fenqubiao-fetcher.js";
+import { fetchWanfangPeriodical } from "./fetchers/wanfang-fetcher.js";
+import { extractWanfangPeriodical, type WanfangExtractedShape } from "./extractors/wanfang-extractor.js";
 import { extractIfHistory } from "./extractors/if-history-extractor.js";
 import { extractJcrFull } from "./extractors/jcr-full-extractor.js";
 import { extractPublicationStats } from "./extractors/publication-stats-extractor.js";
@@ -90,7 +92,9 @@ export async function enrichJournal(
   // Step 2: parallel fetch (allSettled — 任一源失败不阻塞其他)
   // B.2.1.B.2: OpenAlex 主路径替代 stealth（数据中心 IP CF 屏蔽现实）。
   // B.2.2: + fenqubiao 预警名单（redis cache 24h，多刊批量首调一次）
-  const [letpubResult, doajResult, openalexSourceResult, warningListResult] = await Promise.allSettled([
+  // B.4-2: + 万方期刊详情（仅当 metadata.wanfang.perioId admin 预填时触发）
+  const wanfangPerioId = ((journal.metadata as Record<string, any> | null)?.wanfang?.perioId ?? null) as string | null;
+  const [letpubResult, doajResult, openalexSourceResult, warningListResult, wanfangResult] = await Promise.allSettled([
     options?.skipLetpub
       ? Promise.resolve(null)
       : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
@@ -103,12 +107,16 @@ export async function enrichJournal(
     options?.skipFenqubiao
       ? Promise.resolve(null)
       : fetchFenqubiaoWarningList(),
+    options?.skipWanfang || !wanfangPerioId
+      ? Promise.resolve(null)
+      : fetchWanfangPeriodical({ perioId: wanfangPerioId, issn: journal.issn, nameZh: journal.name }),
   ]);
 
   const letpub = letpubResult.status === "fulfilled" ? letpubResult.value : null;
   const doaj = doajResult.status === "fulfilled" ? doajResult.value : null;
   const openalex = openalexSourceResult.status === "fulfilled" ? openalexSourceResult.value : null;
   const warningList = warningListResult.status === "fulfilled" ? warningListResult.value : null;
+  const wanfangRaw = wanfangResult.status === "fulfilled" ? wanfangResult.value : null;
 
   if (letpubResult.status === "rejected") {
     errors["_letpub_fetch"] = String(letpubResult.reason);
@@ -217,6 +225,24 @@ export async function enrichJournal(
     extractCarIndexHistory(carRaw, warningList, journal.issn),
   );
 
+  // B.4-2: 万方 extract（partial OK）+ cscd / pku 互补（仅 NULL 才填，不覆盖 B.4-1 静态权威）
+  let wanfangData: WanfangExtractedShape | null = null;
+  try {
+    wanfangData = extractWanfangPeriodical(wanfangRaw);
+    if (wanfangData) successFields.push("wanfang");
+  } catch (err) {
+    failedFields.push("wanfang");
+    errors["wanfang"] = err instanceof Error ? err.message : String(err);
+  }
+  if (wanfangData?.cscdLevelDynamic && !journal.cscdLevel) {
+    updates.cscdLevel = wanfangData.cscdLevelDynamic;
+    successFields.push("cscd_level (wanfang dynamic)");
+  }
+  if (wanfangData?.pkuCoreDynamic && !journal.pkuCoreLevel) {
+    updates.pkuCoreLevel = wanfangData.pkuCoreDynamic;
+    successFields.push("pku_core_level (wanfang dynamic)");
+  }
+
   // B.2.1.B.2: publisher 回填（仅当 DB 当前 NULL 才覆盖，避免覆盖手维值）
   if (!journal.publisher) {
     try {
@@ -267,7 +293,13 @@ export async function enrichJournal(
       ? (existingMeta.enrichmentLog as EnrichLogEntry[])
       : [];
     const newLog = [logEntry, ...existingLog].slice(0, MAX_LOG_ENTRIES);
-    const newMeta = { ...existingMeta, enrichmentLog: newLog };
+    // B.4-2: metadata.wanfang sub-key 合并（保留 admin 预填的 perioId 等键）
+    const existingWanfang = (existingMeta.wanfang as Record<string, unknown>) || {};
+    const newMeta = {
+      ...existingMeta,
+      enrichmentLog: newLog,
+      ...(wanfangData ? { wanfang: { ...existingWanfang, ...wanfangData } } : {}),
+    };
 
     await db.update(journals)
       .set({ ...updates, metadata: newMeta, updatedAt: new Date() })

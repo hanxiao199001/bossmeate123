@@ -1,0 +1,2396 @@
+
+
+
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>中华医学杂志-本刊信息-万方医学网</title>
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=2.0, user-scalable=no">
+    <meta name="baidu-site-verification" content="O72tn7kniC">
+    <meta name="google-site-verification" content="ZPZFS1qLYw-yvmtPVzjHBWDq73PM3ldVD4GnuCfn7zc">
+    <link rel="shortcut icon" href="/Content/favicon.ico">
+    <!--适用于 Retina 屏的 iPad-->
+    <link rel="apple-touch-icon-precomposed" sizes="144x144" href="/Content/src/img/mobile/144.png">
+    <!--适用于 Retina 屏的 iPhone-->
+    <link rel="apple-touch-icon-precomposed" sizes="120x120" href="/Content/src/img/mobile/120.png">
+    <!--适用于非 Retina 屏的 iPad-->
+    <link rel="apple-touch-icon-precomposed" sizes="72x72" href="/Content/src/img/mobile/72.png">
+    <!--适用于非 Retina 屏的 iPhone-->
+    <link rel="apple-touch-icon-precomposed" href="/Content/src/img/mobile/72.png">
+    <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/_reset-1.0.css?v=639132654789851136" rel="stylesheet"/>
+    <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/_common-1.4.css?v=639132654789851136" rel="stylesheet"/>
+    <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/NewHome/paperSearch.min.css?v=639132654789851136" rel="stylesheet"/>
+    
+     <link href="https://cdn.med.wanfangdata.com.cn/Share/Css/dialog-1.0.0.min.css?v=639132654789851136" rel="stylesheet"/>
+     <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/periodical-1.2.2.css?v=639132654789851136" rel="stylesheet"/>
+	<!--[if lte ie 8]><link href="https://cdn.med.wanfangdata.com.cn/Content/Css/periodical-ie-1.2.css?v=639132654789851136" rel="stylesheet"/><![endif]-->
+
+    <script src="https://cdn.med.wanfangdata.com.cn/Share/Scripts/Lib/jquery-1.11.3.min.js?v=639132654789851136" type="text/javascript"></script>
+    <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/resource.min.css?v=639132654789851136" rel="stylesheet"/>
+</head>
+<body>
+    <div id="med_header" class="med-header">
+        <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/NewHome/NewMedHeader.css?v=3.1.1" rel="stylesheet">
+<link rel="stylesheet" href="https://login.med.wanfangdata.com.cn/Content/NewResources/css/newGroupHead.min.css?v=2025317"/>
+<script src="https://med.wanfangdata.com.cn/Config/Domain?v=1.0"></script>
+<script type="text/javascript">
+    var indexHotSearchWord = ['护理','糖尿病','高血压','肿瘤','指南','脑卒中','乳腺癌','专家共识','癫痫','肺癌','带状疱疹','肺结核','葛根','压力性损伤','安宁疗护','肺栓塞','肝硬化','心力衰竭','脓毒症','个案护理','脑梗死','糖尿病足','胃癌','军事护理','川崎病','肺炎','叙事护理','血液透析','冠心病','糖尿病肾病','系统性红斑狼疮','骨质疏松','心肺复苏','脑出血','肺动脉高压','急性胰腺炎','消化道出血','产后甲状腺炎','护理研究','伤寒','2型糖尿病','甲状腺','主动脉夹层','支气管哮喘','慢阻肺','肾结石','综述','脓毒血症','重症肺炎','肺功能检查'];
+    var IndexAiHotSearchWord = ['最新肥胖症诊疗指南有哪些？','近五年非小细胞肺癌领域被引>5的药物治疗文献有哪些？','关于胃癌手术治疗的研究综述有哪些？','帮我查病毒性肠炎的病例文献？'];
+
+    function HotSearch(param, page, size) {
+        this.param = param
+        this.page = page || 1
+        this.size = size || 5
+        this.total = Math.ceil(param.length / this.size)
+    }
+
+    HotSearch.prototype.getHotArr = function () {
+        var current = this.param.slice(this.size * (this.page - 1), this.size * this.page)
+        this.page++
+        if (this.page > this.total) {
+            this.page = 1
+        }
+        return current
+    }
+    HotSearch.prototype.setHotWord = function ($box, key) {
+        var hotArr = this.getHotArr()
+        var domStr = ""
+        for (var i = 0, len = hotArr.length; i < len; i++) {
+            if (hotArr[i]) {
+                if (key == 0) {
+                    domStr += '<a href="https://med.wanfangdata.com.cn/Paper/Search?q=' + encodeURIComponent(hotArr[i]) + '&资源类型_fl=(中文期刊%20OR%20外文期刊%20OR%20学位论文%20OR%20会议论文)&SearchMode=Default" title="' + hotArr[i] + '">' + hotArr[i] + '</a>'
+                } else {
+                    domStr += '<a href="https://med.wanfangdata.com.cn/AIPaper/Search?q=' + encodeURIComponent(hotArr[i]) + '" title="' + hotArr[i] + '">' + hotArr[i] + '</a>'
+                }
+            }
+        }
+        $box.html(domStr)
+    }
+    $(function () {
+        var hot = new HotSearch(indexHotSearchWord)
+        var hot1 = new HotSearch(IndexAiHotSearchWord)
+        var $box = $(".hotSearchWord .hotSearchWord-box").eq(0)
+        var $box1 = $(".hotSearchWord .hotSearchWord-box").eq(1)
+        hot.setHotWord($box, 0)
+        hot1.setHotWord($box1, 1)
+        if ($(".paperSearch-select .active .allSelect li.active").index() === 1) {
+            $(".hotSearchWord:last-child").addClass("show")
+        } else {
+            $(".hotSearchWord:first").addClass("show")
+        }
+
+        $(".hotSearchWord span").on("click", function () {
+            var idx = $(".MedTabContext .tabs .active").index()
+            if(idx === -1){
+                idx = $(".paperSearch .allSelect .active").index()
+            }
+            hot.setHotWord($box,idx)
+        })
+        $box.find("a").on("click", function () {
+            $.ajax({
+                url: "https://med.wanfangdata.com.cn/api/visit?type=SearchWord&operation=Med.J&detail=" + document.location.href,
+                type: "GET",
+                dataType: "jsonp"
+            });
+        })
+
+    })
+</script>
+<!--头部导航-->
+<div class="headNavigation">
+    <ul class="ResourceType">
+        <li>
+            <a href="https://med.wanfangdata.com.cn/" class="master-top-logo">
+                <img src="https://cdn.med.wanfangdata.com.cn/Content/Images/rwd/hf/logo-MED-lg-top.png" alt="万方医学">
+            </a>
+        </li>
+        <li>
+            <span>资源导航</span><em class="More"></em>
+            <ul>
+                <li><a href="https://med.wanfangdata.com.cn/Periodical" data-id="nav_periodical">期刊</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Thesis" data-id="nav_paper_thesis">学位</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Conference" data-id="nav_paper_conference">会议</a></li>
+                <li><a href="https://v.med.wanfangdata.com.cn/" data-id="nav_paper_video">视频</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Patent" data-id="nav_paper_patent">专利</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Cstad" data-id="nav_paper_cstad">成果</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Standard" data-id="nav_paper_standard">标准</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Law" data-id="nav_paper_law">法规</a></li>
+            </ul>
+        </li>
+        <li>
+            <span>知识库</span> <em class="More"></em>
+            <ul class="LCZL_List">
+                <li><a href="https://lczl.med.wanfangdata.com.cn/" data-id="nav_paper_lczl">临床诊疗知识库</a></li>
+                <li><a href="https://tcm.med.wanfangdata.com.cn/" data-id="nav_paper_tcm">中医药知识库</a></li>
+                <li><a href="https://jkkp.med.wanfangdata.com.cn/index.html" data-id="nav_paper_jkkpk">健康科普平台</a></li>
+                <li><a href="https://topic.med.wanfangdata.com.cn/BaiJia/Home/Index" data-id="nav_baijia">临床百家</a></li>
+            </ul>
+        </li>
+        <li>
+            <span>评价分析</span><em class="More"></em>
+            <ul>
+                <li><a href="https://analytics.med.wanfangdata.com.cn/Author/Index" data-id="nav_author">作者空间</a></li>
+                <li><a href="https://analytics.med.wanfangdata.com.cn/Organization/Index" data-id="nav_organization">机构空间</a></li>
+                <li><a href="https://report.med.wanfangdata.com.cn/" data-id="nav_report">咨询报告</a></li>
+            </ul>
+        </li>
+
+        <li><a href="https://topic.med.wanfangdata.com.cn/Guideline/Home" data-id="nav_paper_guideline">临床指南</a></li>
+        <li><a href="https://info.med.wanfangdata.com.cn/">医事流</a></li>
+        <li>
+            <span>学术频道</span><em class="More"></em>
+            <ul>
+                <li><a href="https://mac.med.wanfangdata.com.cn/index.html" data-id="nav_paper_science">学术专题</a></li>
+                <li><a href="https://mac.med.wanfangdata.com.cn/index.html#/activity" data-id="nav_paper_topic">主题活动</a></li>
+                <li><a href="https://mac.med.wanfangdata.com.cn/index.html#/expert" data-id="nav_paper_topic">专家荐文</a></li>
+            </ul>
+        </li>
+        <li>
+            <span>合作专区</span><em class="More"></em>
+            <ul style="width:220px;left:-40px;">
+                <li class="chinaCase"><a>中国临床案例成果数据库</a></li>
+                <li><a href="https://appeqzvfzni5118.pc.xiaoe-tech.com/index">健康教育</a></li>
+                <li><a href="https://subject.med.wanfangdata.com.cn/Channel/15">临床科研</a></li>
+                <li><a href="http://mcl-lioc.marryhealthscience.com/index.html">肿瘤临床营养</a></li>
+                <li><a href="https://jkkp.med.wanfangdata.com.cn/index.html#/ADHD">多动症专病科普栏目</a></li>
+                <li><a href="https://zhjyyxpd.med.wanfangdata.com.cn/">智慧检验医学</a></li>
+            </ul>
+        </li>
+    </ul>
+    <div class="MedUserInfo">
+        <ul class="userinfo_Person">
+
+            <li id="MedLoginUserName">
+                <a href="https://med.wanfangdata.com.cn/Home/PersonCenter" class="uid" title="会员中心" id="loginUserName">
+                      <span class="UserInfo">
+                        <i class="IconFont User"></i>
+                         <img src="https://login.med.wanfangdata.com.cn/Content/Images/studyImg/newHomeIcon.png" class="virtual" style="display:none"
+                              onerror="errorImg"/>
+                      </span>
+                    <span id="UserInfoName"></span>
+                </a>
+                <em class="More"></em>
+                <div id="individualUserPopUp" class="personalAccountPopUp">
+                    <div class="wrapper">
+                        <div class="userInformation">
+                            <div class="avatar"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/personalAccountPopUp/userAvatar.png"
+                                                     alt=""></div>
+                            <div class="userinfo">
+                                <p class="userNameAndUserId"><span class="userName"></span><small
+                                        class="userId"></small></p>
+                                <div class="tag myPoints"><a href="https://tran.med.wanfangdata.com.cn/Point/Index">我的积分：0</a></div>
+                            </div>
+                            <div class="exit"><a href="https://login.med.wanfangdata.com.cn/Account/LogOut"><em></em><span>退出</span></a></div>
+                        </div>
+                        <div class="affiliation"><label>所属机构：</label><span class="nameOfTheInstitution"></span></div>
+                        <div class="userAccount">
+                            <div class="balance"><label>账户余额：</label><a
+                                    href="https://tran.med.wanfangdata.com.cn/UserAccount/Detail"><span>查看</span><em></em></a></div>
+                            <div class="recharge">
+                                <a href="https://tran.med.wanfangdata.com.cn/ChargeCard/Charge">充值</a>
+                            </div>
+                        </div>
+                        <div class="hourPackagePackage">
+                            <div class="packageTitle"><label class="packageTitleLabel">包时套餐：</label><a
+                                    class="packageTitleHref" href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index">更多</a>
+                            </div>
+                            <div class="packageList"></div>
+                        </div>
+                        <div class="advertising"><a href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/ProductList"><img width="100%" src="https://img.med.wanfangdata.com.cn/ad/headerAd.png" alt="广告"></a></div>
+                        <div class="featureNavigation">
+                            <div class="memberCenter">
+                                <a href="https://med.wanfangdata.com.cn/Home/PersonCenter"><em></em>
+                                    <span>会员中心</span></a>
+                            </div>
+                            <div class="academicCenter">
+                                <a href="https://login.med.wanfangdata.com.cn/Scholar/Index"><em></em>
+                                    <span>学术中心</span></a>
+                            </div>
+                            <div class="mySubscription">
+                                <a href="https://info.med.wanfangdata.com.cn/Home/SubIndex"><em></em>
+                                    <span>我的订阅</span></a>
+                            </div>
+                            <div class="myCollection">
+                                <a href="https://med.wanfangdata.com.cn/Favourite?Category=Paper"><em></em>
+                                    <span>我的收藏</span></a>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </li>
+            <li id="MedLogin"><a href="https://login.med.wanfangdata.com.cn/Account/LogOn" id="loginUrl">登录/注册</a>
+                <ul>
+                    <li><a href="https://med.wanfangdata.com.cn/Home/PersonCenter">会员中心</a></li>
+                    <li><a href="https://login.med.wanfangdata.com.cn/Scholar/Index">学术中心</a></li>
+                </ul>
+            </li>
+
+            <li class="messages">
+                <a href="https://news.med.wanfangdata.com.cn/Message/Index">
+                    <span>通知</span>
+                    <span class="messageCount"></span>
+                </a>
+            </li>
+            <li><a href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/ProductList" title="会员">会员</a></li>
+            <li>
+                简体<em class="More"></em>
+                <ul>
+                    <li><a id="zh-CN" href="#" name="multiLanguageSwitch">&#x7B80;&#x4F53;</a></li>
+                    <li><a id="zh-TW" href="#" name="multiLanguageSwitch">繁體</a></li>
+                    <li><a href="http://eng.med.wanfangdata.com.cn">English</a></li>
+                </ul>
+            </li>
+        </ul>
+        <div id="institution-wrap">
+            <div class="wrap-login">
+                <div class="wrap-img">
+                    <img src="" alt="机构名称">
+                </div>
+                <div class="wrap-open"></div>
+            </div>
+            <div class="wrap-info">
+                <div class="wrap-info-hear">
+                    <em></em>
+                    <span></span>
+                </div>
+                <div class="wrap-info-context">
+                    <div class="NOAcademic">
+                        <div class="wrap-func">
+                            <p><a href="https://med.wanfangdata.com.cn/Home/PersonCenter">会员中心</a></p>
+                            <p><span>|</span></p>
+                            <p class="notice"><a href="https://news.med.wanfangdata.com.cn/Message/Index">通知</a> <small
+                                    class="fund messageCount"></small></p>
+                            <p><span>|</span></p>
+                            <p><a href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Page">订购</a></p>
+                        </div>
+                    </div>
+                    <div class="HaveAcademic">
+                        <div class="wrap-func" id="wrap-academic">
+                            <p><a href="https://med.wanfangdata.com.cn/Home/PersonCenter">会员中心</a></p>
+                            <p><span>|</span></p>
+                            <p class="academic"><a href="https://login.med.wanfangdata.com.cn/Scholar/Index">学术中心</a></p>
+                        </div>
+                        <div class="wrap-func three">
+                            <p><a href="https://tran.med.wanfangdata.com.cn/Point/Index">积分</a></p>
+                            <p><span>|</span></p>
+                            <p class="notice"><a href="https://news.med.wanfangdata.com.cn/Message/Index">通知</a> <small
+                                    class="fund messageCount"></small></p>
+                            <p><span>|</span></p>
+                            <p><a href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Page">订购</a></p>
+                        </div>
+                    </div>
+                    <div class="wrap-language">
+                        <ul>
+                            <li><a id="zh-CN" href="#" name="multiLanguageSwitch">简体</a></li>
+                            <li><a id="zh-TW" href="#" name="multiLanguageSwitch">繁体</a></li>
+                            <li><a href="http://eng.med.wanfangdata.com.cn">English</a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="wrap-bottom">
+                    <a href="https://login.med.wanfangdata.com.cn/Account/LogOut">
+                        <span>退出</span>
+                        <i class="clone"></i>
+                    </a>
+                </div>
+            </div>
+            <div id="institutionalUserPopUp" class="personalAccountPopUp">
+                <div class="wrapper">
+                    <div class="userInformation">
+                        <div class="avatar"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/personalAccountPopUp/userAvatar.png"
+                                                 alt=""></div>
+                        <div class="userinfo">
+                            <p class="userNameAndUserId"><span class="userName"></span><small
+                                    class="userId"></small></p>
+                            <div class="tag myPoints"><a href="https://tran.med.wanfangdata.com.cn/Point/Index">我的积分：0</a></div>
+                        </div>
+                        <div class="exit"><a href="https://login.med.wanfangdata.com.cn/Account/LogOut"><em></em><span>退出</span></a></div>
+                    </div>
+                    <div class="affiliation"><label>所属机构：</label><span class="nameOfTheInstitution"></span></div>
+                    <div class="userAccount">
+                        <div class="balance"><label>账户余额：</label><a
+                                href="https://tran.med.wanfangdata.com.cn/UserAccount/Detail"><span>查看</span><em></em></a></div>
+                        <div class="recharge">
+                            <a href="https://tran.med.wanfangdata.com.cn/ChargeCard/Charge">充值</a>
+                        </div>
+                    </div>
+                    <div class="hourPackagePackage">
+                        <div class="packageTitle"><label class="packageTitleLabel">包时套餐：</label>
+                            <a class="packageTitleHref" href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index">更多</a>
+                        </div>
+                        <div class="packageList"></div>
+                    </div>
+                    <div class="advertising"><a href="https://tran.med.wanfangdata.com.cn/TimeResourceLimit/ProductList"><img width="100%" src="https://img.med.wanfangdata.com.cn/ad/headerAd.png" alt="广告"></a></div>
+                    <div class="featureNavigation">
+                        <div class="memberCenter">
+                            <a href="https://med.wanfangdata.com.cn/Home/PersonCenter"><em></em>
+                                <span>会员中心</span></a>
+                        </div>
+                        <div class="academicCenter">
+                            <a href="https://login.med.wanfangdata.com.cn/Scholar/Index"><em></em>
+                                <span>学术中心</span></a>
+                        </div>
+                        <div class="mySubscription">
+                            <a href="https://info.med.wanfangdata.com.cn/Home/SubIndex"><em></em>
+                                <span>我的订阅</span></a>
+                        </div>
+                        <div class="myCollection">
+                            <a href="https://med.wanfangdata.com.cn/Favourite?Category=Paper"><em></em>
+                                <span>我的收藏</span></a>
+                        </div>
+                        <div class="myNotice">
+                            <a href="https://news.med.wanfangdata.com.cn/Message/Index"><em></em>
+                                <span>我的通知</span>
+                                <small class="numberOfNotifications">0</small>
+                            </a>
+                        </div>
+                    </div>
+                    <div class="language">
+                        <div class="list"><a id="zh-CN" href="#" name="multiLanguageSwitch">简</a></div>
+                        <div class="list"><a id="zh-TW" href="#" name="multiLanguageSwitch">繁</a></div>
+                        <div class="list"><a href="http://eng.med.wanfangdata.com.cn">English</a></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="MobileHeader">
+        <div class="Mover">
+            <img src="https://cdn.med.wanfangdata.com.cn/Content/Images/NewHome/Mover.png" alt="更多"/>
+
+            <ul id="mainNavSM" class="med-nav-sm">
+                <li><a href="https://med.wanfangdata.com.cn/" data-id="nav_paper">首页</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Paper" data-id="nav_paper_index">论文</a></li>
+                <li class="dropdown">
+                    <span><a href="#">资源导航</a></span>
+                    <div>
+                        <ul>
+                            <li><a href="https://med.wanfangdata.com.cn/Periodical" data-id="nav_periodical">期刊</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Thesis" data-id="nav_paper_thesis">学位</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Conference" data-id="nav_paper_conference">会议</a></li>
+                            <li><a href="https://v.med.wanfangdata.com.cn/" data-id="nav_paper_video">视频</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Patent" data-id="nav_paper_patent">专利</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Cstad" data-id="nav_paper_cstad">成果</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Standard" data-id="nav_paper_standard">标准</a></li>
+                            <li><a href="https://med.wanfangdata.com.cn/Law" data-id="nav_paper_law">法规</a></li>
+                        </ul>
+                    </div>
+                </li>
+                <li class="dropdown">
+                    <span><a href="#">知识库</a></span>
+                    <div>
+                        <ul>
+                            <li><a href="https://lczl.med.wanfangdata.com.cn/" data-id="nav_paper_lczl">临床诊疗知识库</a></li>
+                            <li><a href="https://tcm.med.wanfangdata.com.cn/" data-id="nav_paper_tcm">中医药知识库</a></li>
+                            <li><a href="https://jkkp.med.wanfangdata.com.cn/index.html" data-id="nav_paper_jkkpk">健康科普平台</a></li>
+                            <li><a href="https://topic.med.wanfangdata.com.cn/BaiJia/Home/Index" data-id="nav_baijia">临床百家</a></li>
+                        </ul>
+                    </div>
+                </li>
+                <li class="dropdown">
+                    <span><a href="#">评价分析</a></span>
+                    <div>
+                        <ul>
+                            <li><a href="https://analytics.med.wanfangdata.com.cn/Author/Index" data-id="nav_author">作者空间</a></li>
+                            <li><a href="https://analytics.med.wanfangdata.com.cn/Organization/Index" data-id="nav_organization">机构空间</a>
+                            </li>
+                            <li><a href="https://report.med.wanfangdata.com.cn/" data-id="nav_report">咨询报告</a></li>
+                        </ul>
+                    </div>
+                </li>
+                <li><a href="https://topic.med.wanfangdata.com.cn/Guideline/Home" data-id="nav_paper_guideline">临床指南</a></li>
+                <li><a href="https://info.med.wanfangdata.com.cn/">医事流</a></li>
+                <li class="dropdown">
+                    <span><a href="#">学术频道</a></span>
+                    <div>
+                        <ul>
+                            <li><a href="https://mac.med.wanfangdata.com.cn/index.html" data-id="nav_paper_science">学术专题</a></li>
+                            <li><a href="https://mac.med.wanfangdata.com.cn/index.html#/activity" data-id="nav_paper_topic">主题活动</a></li>
+                            <li><a href="https://mac.med.wanfangdata.com.cn/index.html#/expert" data-id="nav_paper_topic">专家荐文</a></li>
+                            <li><a href="https://subject.med.wanfangdata.com.cn/Channel/7">新冠专题</a></li>
+                        </ul>
+                    </div>
+                </li>
+                <li class="dropdown">
+                    <span><a href="#">合作专区</a></span>
+                    <div>
+                        <ul>
+                            <li><a href="https://tran.med.wanfangdata.com.cn/InnovateReport/Index">创新之路报告专题</a></li>
+                            <li><a href="http://cmcr.yiigle.com/index">中国临床案例成果数据库</a></li>
+                            <li><a href="https://appeqzvfzni5118.pc.xiaoe-tech.com/index"
+                                   data-id="nav_jkjykc">健康教育</a></li>
+                            <li><a href="https://subject.med.wanfangdata.com.cn/Channel/15" data-id="nav_lckyfw">临床科研</a></li>
+                            <li><a href="http://mcl-lioc.marryhealthscience.com/index.html">肿瘤临床营养</a></li>
+                            <li><a href="https://jkkp.med.wanfangdata.com.cn/index.html#/ADHD">多动症专病科普栏目</a></li>
+                            <li><a href="https://zhjyyxpd.med.wanfangdata.com.cn/">智慧检验医学</a></li>
+                        </ul>
+                    </div>
+                    <div class="language" id="language">
+                        <a id="zh-CN" href="#" name="multiLanguageSwitch" style="border: none;">&#x7B80;&#x4F53;</a>
+                        <span class="med-splitline med-visible-sm-inline">·</span>
+                        <a id="zh-TW" href="#" name="multiLanguageSwitch" style="border: none;">繁體</a>
+                        <span class="med-splitline med-visible-sm-inline">·</span>
+                        <a href="http://eng.med.wanfangdata.com.cn" style="border: none;">English</a>
+                    </div>
+                </li>
+            </ul>
+
+        </div>
+
+        <a href="https://med.wanfangdata.com.cn/" class="logo"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/rwd/hf/logo-MED-lg-top.png" alt="医学网"/></a>
+        <a href="https://news.med.wanfangdata.com.cn/Message/Index" class="mobileMessage">
+            <span>通知</span>
+            <span class="messageCounts"></span>
+        </a>
+        <div class="User" id="User">
+            <ul class="nweUserList">
+                <li><a href="https://med.wanfangdata.com.cn/Home/PersonCenter">会员中心</a></li>
+                <li><a href="https://login.med.wanfangdata.com.cn/Scholar/Index">学术中心</a></li>
+                <li><a href="https://tran.med.wanfangdata.com.cn/Point/Index">我的积分</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Favourite?Category=Paper">我的收藏</a></li>
+                <li><a href="https://info.med.wanfangdata.com.cn/Home/SubIndex">我的订阅</a></li>
+                <li class="LogOut"><a href="https://login.med.wanfangdata.com.cn/Account/LogOut">退出</a></li>
+            </ul>
+        </div>
+
+    </div>
+</div>
+<div class="med-overlay" id="overlay"></div>
+<input type="hidden" value="https://med.wanfangdata.com.cn/" id="longin">
+<script>
+    // 检测是否为IE内核
+    function isTrident() {
+        return 'ActiveXObject' in window ||
+            /Trident\/7.0/.test(navigator.userAgent) ||
+            /MSIE/.test(navigator.userAgent);
+    }
+
+    // 如果是IE内核且浏览器支持切换，则切换到极速模式
+    if (isTrident()) {
+        // 360浏览器切换方法
+        if (typeof window.external !== 'undefined' &&
+            typeof window.external.switchToChromium !== 'undefined') {
+            window.external.switchToChromium();
+        }
+        // QQ浏览器切换方法
+        else if (typeof window.external !== 'undefined' &&
+            typeof window.external.ChangeToChromium !== 'undefined') {
+            window.external.ChangeToChromium();
+        }
+        // 其他双核浏览器...
+    }
+
+
+    var perform_tasks = function (data) {
+
+        $.ajax({
+            url: "https://tran.med.wanfangdata.com.cn/Point/AddPoint",
+            type: "get",
+            data: data,
+            dataType: "JSONP",
+            success: function (res) {
+                console.log(res);
+            },
+            error: function (err) {
+                console.error(err);
+            }
+        })
+    }
+
+    Function.prototype.method = function (name, func) {
+        this.prototype[name] = func;
+        return this;
+    };
+    if (!String.prototype.trim) { //判断下浏览器是否自带有trim()方法
+        String.method('trim', function () {
+            return this.replace(/^\s+|\s+$/g, '');
+        });
+        String.method('ltrim', function () {
+            return this.replace(/^\s+/g, '');
+        });
+        String.method('rtrim', function () {
+            return this.replace(/\s+$/g, '');
+        });
+    }
+    $(function () {
+        (function () {
+            if (!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                $(window).on("scroll", function () {
+                    var _top = $(this).scrollTop();
+                    if (_top > 0) {
+                        $(".headNavigation").addClass("scale");
+                        $(".showBlock").css("display", "none");
+                        $(".showBlock1").css("display", "block");
+                        $(".showBlocks1").css("display", "block");
+                    } else {
+                        $(".headNavigation").removeClass("scale");
+                        $(".showBlock1").css("display", "none");
+                        $(".showBlocks1").css("display", "none");
+                        $(".showBlock").css("display", "block");
+                    }
+                })
+                var path = location.pathname.toLowerCase().replace(/\//ig, "");
+                var pathArr = ["periodical", "thesis", "conference", "patent", "cstad", "standard", "law"];
+                var setMark = function ($dom) {
+                    $dom.addClass("active").find("i").addClass("IconFont");
+                    $dom.find("input").prop("checked", true);
+                }
+                if (path && pathArr.join("").indexOf(path) > -1) {
+                    setMark($("[select=" + path + "]"))
+                } else {
+                    setMark($("[select=periodical]"))
+                    setMark($("[select=thesis]"))
+                    setMark($("[select=conference]"))
+                }
+
+                var url = location.href;
+                $(".ResourceType a").each(function () {
+                    var _url = $(this).attr("href");
+                    if (url === _url) {
+                        $(this).closest("ul").siblings("span").text($(this).text())
+                    }
+                })
+            }
+        })();
+
+
+        $('.questionnaire-close img').click(function () {
+            $(this).parent().parent().hide();
+            $(this).parent().hide();
+        })
+        if (window.location.pathname.indexOf('Periodical') != -1) {
+            {
+                $(".periodical").show();
+            }
+        }
+    })
+
+    var tabFn = function () {
+        var _that = $(this);
+        var idx = _that.index();
+        _that.addClass("active").siblings().removeClass("active");
+        $('.medSearch .MedTab i').removeClass("active");
+        _that.children('i').addClass("active");
+        $(".MedResourceSearch div.MedTabContext").eq(idx).show().siblings().hide();
+        if (idx == 0) {
+            $(".hotSearchWord").addClass("show")
+        } else {
+            $(".hotSearchWord").removeClass("show")
+        }
+        $(".autocompleteList").hide();
+    }
+
+    $(".medSearch .MedTab").on('click', 'li', tabFn);
+    $(".MedAcademic .MedTab").on('click', 'li', tabFn);
+
+
+    var setMark = function ($dom) {
+        $dom.addClass("active").find("i").addClass("IconFont");
+        $dom.find("input").prop("checked", true);
+    }
+    var outMark = function ($dom) {
+        $dom.removeClass("active").find("i").removeClass("IconFont");
+        $dom.find("input").prop("checked", false);
+    }
+    var selectSingleFn = function () {
+        var _that = $(this);
+        var che = _that.children("input");
+        var labelI = _that.children("label").children("i");
+        /*判断是否选中*/
+        if (che.is(':checked')) {
+            /*选中
+            che.prop("checked", false);
+            labelI.removeClass("IconFont");*/
+        } else {
+            /*未选中*/
+            _that.parent().children('li').children("input").prop("checked", false);
+            _that.parent().children('li').children("label").children("i").removeClass("IconFont");
+            _that.addClass("active").siblings("li").removeClass("active")
+            che.prop("checked", true);
+            labelI.addClass("IconFont");
+            _that.closest(".MedTabContext").find(".input_search0").attr("data-val", "").next().html("").hide()
+        }
+
+        /*切换placeholder*/
+        var $MedTabContext = _that.closest(".MedTabContext")
+        var $checked = $MedTabContext.find("input:checked")
+        if ($checked.length === 1) {
+            $MedTabContext.find(".RetrieveInp input").attr("placeholder", $checked.data("title") || "请输入检索词进行检索")
+        } else {
+            $MedTabContext.find(".RetrieveInp input").attr("placeholder", "请输入检索词进行检索")
+        }
+    }
+
+    $(".KnowledgeBase .TypeSelection").on("click", 'li', selectSingleFn);
+    $(".Seientifuc .TypeSelection").on("click", 'li', selectSingleFn);
+    $(".MedResourceSearch .resourceSelection").on("click", '.indicate', function () {
+        var _$selectAResourceType = $(".MedResourceSearch .resourceSelection .selectAResourceType")
+        if (_$selectAResourceType.is(":hidden")) {
+            _$selectAResourceType.show();
+        } else {
+            _$selectAResourceType.hide();
+        }
+        return false
+    });
+
+    /*登录状态*/
+
+    var LoginStatus = function () {
+        function GetDisplayName(context, accountIdStr) {
+            for (var i = 0; i < context.Data.length; i++) {
+                if (context.Data[i].Key === (accountIdStr + ".DisplayName") && context.Data[i].Value.length > 0) {
+                    return decodeURIComponent(context.Data[i].Value);
+                }
+            }
+            return GetAccountIdObj(accountIdStr).Key;
+        }
+
+        function GetAccountIdObj(accountIdStr) {
+            var accountId = {
+                    AccountType: '',
+                    Key: ''
+                },
+                index = accountIdStr.indexOf(".");
+            if (index === -1) {
+                accountId.AccountType = accountIdStr;
+            } else {
+                accountId.AccountType = accountIdStr.substring(0, index);
+                accountId.Key = accountIdStr.substring(index + 1);
+            }
+            return accountId;
+        }
+
+        /* 页头 登录 */
+        function GetAuthContext() {
+            var context = null;
+            var cookieArray = document.cookie.split("; ");
+            $(cookieArray).each(function () {
+                var arr = this.split("=");
+                if (arr[0] == config.cookieName) {
+                    context = eval("(" + decodeURIComponent(arr[1]) + ")");
+                }
+                ;
+            });
+            return context;
+        }
+
+        /* 合作专区-中国临床案例成果数据库  判断是否登录  登录后才跳转 */
+        $(".chinaCase").click(function () {
+            var state = GetAuthContext();
+            var hrefs = "http://cmcr.yiigle.com/index";
+            if (state == null || state.Context.AccountIds.length == 0) {
+                $("#userLogout").hide();
+                $("#userLogin").show();
+
+                var returnUrl = document.location.href.toLocaleLowerCase().indexOf("returnurl") != -1 ? "" : '?ReturnUrl=' +
+                    encodeURIComponent(hrefs);
+                window.location.href = "https://login.med.wanfangdata.com.cn/Account/LogOn" + returnUrl;
+                return;
+            } else {
+                $(".chinaCase a").attr("href", hrefs);
+                window.location.href = hrefs;
+            }
+        })
+        var getInfoArr = function (arr1, arr2) {
+            var arr = []
+            if (arr1.length != arr2.length) {
+                return arr1;
+            }
+            for (var i = 0; i < arr1.length; i++) {
+                var obj = arr1[i];
+                var isExist = false;
+                for (var j = 0; j < arr2.length; j++) {
+                    var aj = arr2[j];
+                    if (obj == aj) {
+                        isExist = true;
+                        break;
+                    }
+                }
+                if (!isExist) {
+                    arr.push(obj);
+                }
+            }
+            return arr;
+        }
+
+        /* 登录状态 */
+        function InitLoginStatus() {
+            var id = "";
+            var authContext = GetAuthContext();
+
+            if (authContext == null || authContext.Context.AccountIds.length == 0) {
+                $("#userLogout").hide();
+                $("#userLogin").show();
+                var returnUrl = document.location.href.toLocaleLowerCase().indexOf("returnurl") != -1 ? "" : '?ReturnUrl=' +
+                    encodeURIComponent(document.location.href);
+                $("#loginUrl").attr("href", $("#loginUrl").attr("href") + returnUrl);
+                $("#registerUrl").attr("href", $("#registerUrl").attr("href") + returnUrl);
+                $("#btnUser a").attr("href", $("#loginUrl").attr("href"));
+                return;
+            }
+
+            $(".messages").css("display", "block");
+            $(".mobileMessage").css("display", "block");
+
+            var loginUserName = $("#loginUserName");
+            var UserInfoName = $("#loginUserName #UserInfoName");
+            var WFMedAuthTest = getCookie(config.cookieName);
+            var contendIds = authContext.Context.AccountIds;
+            var isImg = '';
+            var usertype = [];
+            var whetherToExecuteOrNot = false;
+            $(authContext.Context.AccountIds).each(function (v, i) {
+                if (this.indexOf("MedAreaGroupAdmin") >= 0) {
+                    // 区域管理员
+                    usertype.push("MedAreaGroupAdmin");
+                }
+                if (this.indexOf("MedGroupAdmin") >= 0) {
+                    // 机构管理员
+                    usertype.push("MedGroupAdmin");
+                }
+                if (this.indexOf("MedPerson") >= 0) {
+                    // 普通用户
+                    id = this
+                    usertype.push("MedPerson");
+                }
+                if (this.indexOf("MedGroup") >= 0) {
+                    // 机构流量
+                    if (id == '' && id.indexOf(".") == -1) {
+                        id = this
+                    }
+                    usertype.push("MedGroup");
+                }
+            })
+            if (getInfoArr(usertype, ["MedPerson", "MedAreaGroupAdmin"]).toString() == "") {
+                // 区域管理员账户
+                $(".personalAccountPopUp").remove();
+                $.ajax({
+                    url: "https://login.med.wanfangdata.com.cn/User/MyProfilePhoto",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        var MedGroupAdminImg = ""
+                        if (data) {
+                            $("#institution-wrap .wrap-img img").attr("src", data);
+                            $("#institution-wrap .avatar img").attr("src", data);
+                            MedGroupAdminImg = false
+                        } else {
+                            $("#institution-wrap .wrap-img img").remove();
+                            $("#institution-wrap .wrap-img").html("<span>" + displayName1 + "</span>");
+                            MedGroupAdminImg = true
+                        }
+                        $("#institution-wrap").show();
+                        $(".headNavigation .MedUserInfo .userinfo_Person").hide();
+                    },
+                });
+            }
+            if (getInfoArr(usertype, ["MedGroupAdmin", "MedGroup"]).toString() == "") {
+                $(".personalAccountPopUp").remove();
+                // 机构管
+                $.ajax({
+                    url: "https://login.med.wanfangdata.com.cn/User/MyProfilePhoto",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        var isImg = ""
+                        if (data) {
+                            $("#institution-wrap .wrap-img img").attr("src", data);
+                            $("#institution-wrap .avatar img").attr("src", data);
+                            isImg = false
+                        } else {
+                            $("#institution-wrap .wrap-img img").remove();
+                            $("#institution-wrap .wrap-img").html("<span>" + displayName1 + "</span>");
+                            isImg = true
+                        }
+                        $("#institution-wrap").show();
+                        $(".headNavigation .MedUserInfo .userinfo_Person").hide();
+                    },
+                });
+            }
+            if (getInfoArr(usertype, ["MedGroup"]).toString() == "") {
+                $(".personalAccountPopUp").remove();
+                // 机构流量
+                $.ajax({
+                    url: "https://login.med.wanfangdata.com.cn/User/MyProfilePhoto",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        var isImg = ""
+                        if (data) {
+                            $("#institution-wrap .wrap-img img").attr("src", data);
+                            $("#institution-wrap .avatar img").attr("src", data);
+                            isImg = false
+                        } else {
+                            $("#institution-wrap .wrap-img img").remove();
+                            $("#institution-wrap .wrap-img").html("<span>" + displayName1 + "</span>");
+                            isImg = true
+                        }
+                        $("#institution-wrap").show();
+                        $(".headNavigation .MedUserInfo .userinfo_Person").hide();
+                    },
+                });
+            }
+            if (getInfoArr(usertype, ["MedGroup", "MedPerson"]).toString() == "") {
+                // 子账号
+                whetherToExecuteOrNot = true;
+                // 文字修改
+                $(".packageTitleLabel").text("服务权限");
+                $(".packageTitleHref").attr("href", "https://tran.med.wanfangdata.com.cn/ResourceContract/List");
+
+                $.ajax({
+                    url: "https://login.med.wanfangdata.com.cn/User/MyProfilePhoto",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        if (data) {
+                            $("#institution-wrap .wrap-img img").attr("src", data);
+                            $("#institution-wrap .avatar img").attr("src", data);
+                            // $(".personalAccountPopUp .avatar img").attr("src", data);
+                            $("#institution-wrap").show();
+                            $("#institution-wrap .HaveAcademic").show();
+                            $("#institution-wrap .NOAcademic").hide();
+                            $(".headNavigation .MedUserInfo .userinfo_Person").hide();
+                        }else {
+                            $(".personalAccountPopUp .avatar img").attr("src", data);
+                        }
+                    }
+                });
+            }
+            if (getInfoArr(usertype, ["MedPerson"]).toString() == "") {
+                // 独立账号
+                whetherToExecuteOrNot = true;
+                $(".affiliation").remove();
+                $.ajax({
+                    url: "https://login.med.wanfangdata.com.cn/User/MyProfilePhoto",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        if (data) {
+                            $(".personalAccountPopUp .avatar img").attr("src", data);
+                        }
+                    },
+                });
+            }
+            if (whetherToExecuteOrNot) {
+                $.ajax({
+                    url: "https://tran.med.wanfangdata.com.cn/UserAccount/GetUserInfo",
+                    dataType: "jsonp",
+                    success: function (data) {
+                        $(".affiliation .nameOfTheInstitution").text(data.GroupName);
+                        $(".myPoints a").text("我的积分：" + data.Points);
+                        var str = "";
+                        if (data.TimeResourceCount === 0) {
+                            // 未开通任何包时服务
+                            str += "<div class=\"item\">\n" +
+                                "                                    <div class=\"wrap\">\n" +
+                                "                                        <div class=\"title\">\n" +
+                                "                                            <p class=\"type_text\">期刊全文</p>\n" +
+                                "                                        </div>\n" +
+                                "                                        <div class=\"expirationDate\">1100万余篇医学期刊全文</div>\n" +
+                                "                                        <div class=\"buttonGroups\">\n" +
+                                "                                            <button class=\"goToTheOpening\"><a href='https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index'>去开通</a></button>\n" +
+                                "                                        </div>\n" +
+                                "                                    </div>\n" +
+                                "                                </div>"
+                            str += "<div class=\"item\">\n" +
+                                "                                    <div class=\"wrap\">\n" +
+                                "                                        <div class=\"title\">\n" +
+                                "                                            <p class=\"type_text\">临床诊疗知识库</p>\n" +
+                                "                                        </div>\n" +
+                                "                                        <div class=\"expirationDate\">诊疗知识与关联文献</div>\n" +
+                                "                                        <div class=\"buttonGroups\">\n" +
+                                "                                            <button class=\"goToTheOpening\"><a href='https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index'>去开通</a></button>\n" +
+                                "                                        </div>\n" +
+                                "                                    </div>\n" +
+                                "                                </div>"
+                        } else {
+                            for (var i = 0; i < data.TimeResourceList.length; i++) {
+                                var uri = '';
+                                switch (data.TimeResourceList[i]['ResourceType']) {
+                                    case 'PeriodicalFulltext':
+                                        uri = "https://med.wanfangdata.com.cn/Periodical"
+                                        break;
+                                    case 'ThesisFulltext':
+                                        uri = "https://med.wanfangdata.com.cn/Thesis"
+                                        break;
+                                    case 'ConferenceFulltext':
+                                        uri = "https://med.wanfangdata.com.cn/Conference"
+                                        break;
+                                    case 'LCZL':
+                                        uri = "https://lczl.med.wanfangdata.com.cn/"
+                                        break;
+                                    case 'CM':
+                                        uri = "https://tcm.med.wanfangdata.com.cn/"
+                                        break;
+                                    case 'JGKJ':
+                                        uri = "https://analytics.med.wanfangdata.com.cn/Organization/Index"
+                                        break;
+                                    case 'ZZKJ':
+                                        uri = "https://analytics.med.wanfangdata.com.cn/Author/Index"
+                                        break;
+                                    default:
+                                        uri = "https://med.wanfangdata.com.cn/"
+                                        break;
+                                }
+                                str += "<div class=\"item\">\n" +
+                                    "                                    <div class=\"wrap\">\n" +
+                                    "                                        <div class=\"title\">\n" +
+                                    "                                            <p class=\"type_text\">" + data.TimeResourceList[i]['Name'] + "</p>\n";
+                                if(($(".packageTitleLabel").text()).indexOf("服务权限") === -1){
+                                    if (data.TimeResourceList[i]['ResourceType'] === 'PeriodicalFulltext' || data.TimeResourceList[i]['ResourceType'] === 'ThesisFulltext' || data.TimeResourceList[i]['ResourceType'] === 'ConferenceFulltext') {
+                                        str += "                                            <div class=\"remaining\"><span>剩余</span><span\n" +
+                                            "                                                    class=\"allowance\">" + data.TimeResourceList[i]['RemainCount'] + "</span><span>篇</span>\n" +
+                                            "                                            </div>\n"
+                                    }
+                                }
+                                str += "                                        </div>";
+                                if(data.TimeResourceList[i]['EndTime'] !== null){
+                                    str += "<div class=\"expirationDate\">有效期至" + data.TimeResourceList[i]['EndTime'] + "</div>";
+                                }else {
+                                    if((data.TimeResourceList[i]['Name']).indexOf("期刊") !==-1){
+                                        str += "<div class=\"expirationDate\">1100万余篇医学期刊全文</div>";
+                                    }else if((data.TimeResourceList[i]['Name']).indexOf("学位") !== -1){
+                                        str += "<div class=\"expirationDate\">近100万篇医学学位全文</div>";
+                                    } else {
+                                        str += "<div class=\"expirationDate\">近60万篇医学会议全文</div>";
+                                    }
+                                }
+
+                                str += "                                        <div class=\"buttonGroups\">\n" +
+                                    "                                            <button class=\"toUse\"><a href='"+uri+"'>去使用</a></button>\n" +
+                                    "                                        </div>\n" +
+                                    "                                    </div>\n" +
+                                    "                                </div>"
+                            }
+                            if (data.TimeResourceCount === 1) {
+                                if (data.TimeResourceList[0]['ResourceType'] !== 'PeriodicalFulltext' && data.TimeResourceList[0]['Name'] !== "期刊全文") {
+                                    str += "<div class=\"item\">\n" +
+                                        "                                    <div class=\"wrap\">\n" +
+                                        "                                        <div class=\"title\">\n" +
+                                        "                                            <p class=\"type_text\">期刊全文</p>\n" +
+                                        "                                        </div>\n" +
+                                        "                                        <div class=\"expirationDate\">1100万余篇医学期刊全文</div>\n" +
+                                        "                                        <div class=\"buttonGroups\">\n" +
+                                        "                                            <button class=\"goToTheOpening\"><a href='https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index'>去开通</a></button>\n" +
+                                        "                                        </div>\n" +
+                                        "                                    </div>\n" +
+                                        "                                </div>"
+                                } else {
+                                    str += "<div class=\"item\">\n" +
+                                        "                                    <div class=\"wrap\">\n" +
+                                        "                                        <div class=\"title\">\n" +
+                                        "                                            <p class=\"type_text\">临床诊疗知识库</p>\n" +
+                                        "                                        </div>\n" +
+                                        "                                        <div class=\"expirationDate\">诊疗知识与关联文献</div>\n" +
+                                        "                                        <div class=\"buttonGroups\">\n" +
+                                        "                                            <button class=\"goToTheOpening\"><a href='https://tran.med.wanfangdata.com.cn/TimeResourceLimit/Index'>去开通</a></button>\n" +
+                                        "                                        </div>\n" +
+                                        "                                    </div>\n" +
+                                        "                                </div>"
+                                }
+                            }
+                        }
+                        $(".personalAccountPopUp .packageList").html(str);
+                    },
+                });
+            }
+
+            $("body .headNavigation .MobileHeader .User .nweUserList li.LogOut").show();
+            var displayName1 = GetDisplayName(authContext.Context, id);
+            UserInfoName.attr("title", displayName);
+            var displayName = displayName1.substring(0, 6);
+            UserInfoName.text(displayName);
+            $(".wrap-info-hear span").text(displayName1);
+            if (displayName1 !== id.substring(id.indexOf(".") + 1, id.length)) {
+                $(".personalAccountPopUp .userName").text(displayName1);
+                $(".personalAccountPopUp .userId").text("ID：" + id.substring(id.indexOf(".") + 1, id.length));
+            } else {
+                $(".personalAccountPopUp .userName").text("ID：" + displayName1);
+                $(".personalAccountPopUp .userId").remove();
+            }
+
+            $("#btnUser a").attr("href", $("#loginUserName").attr("href"));
+            ($.inArray("MedVIP", authContext.Context.AccountIds) == -1) ? $('.med-login .info .user-box i').hide() : $(
+                '.med-login .info .user-box i').css('display', 'inline-block');
+
+            $("#MedLoginUserName, #MedLogOut").show();
+            $("#MedLogin, #MedRegistered").hide();
+
+            $.ajax({
+                url: "https://news.med.wanfangdata.com.cn/Message/UnRead",
+                type: "post",
+                dataType: "jsonp",
+                success: function (data) {
+                    if (data.state == "200") {
+                        var count = data.notify + data.remind;
+
+                        if (count > 99) {
+                            count = "99";
+                            $(".messageCount").text(count);
+                            $(".messageCounts").text(count);
+                            $(".numberOfNotifications").text(count);
+                        } else if (count > 0 && count <= 99) {
+                            $(".messageCount").text(count);
+                            $(".messageCounts").text(count);
+                            $(".numberOfNotifications").text(count);
+                        } else {
+                            $(".messageCount").css("display", "none");
+                            $(".messageCounts").css("display", "none");
+                            $(".numberOfNotifications").css("display", "none");
+                        }
+
+
+                    } else {
+                        $(".messageCount").css("display", "none");
+                        $(".messageCounts").css("display", "none");
+                    }
+                }
+            })
+
+            $.ajax({
+                url: "https://login.med.wanfangdata.com.cn/Scholar/MyProfilePhoto",
+                dataType: "jsonp",
+                success: function (data) {
+                    if (data) {
+                        $(".UserInfo .User ").css("background-image", "url(" + data + ")");
+                        $(".UserInfo .virtual").attr("src", data);
+                        $(".UserInfo .User ").css("background-repeat", "round");
+                        $(".UserInfo .User ").css("background-position", "0px 0px");
+
+                    }
+
+                }
+            })
+        }
+
+        /* 头像错误展示默认 */
+        function errorImg(obj) {
+            $(".UserInfo .User ").css("background", "url('https://login.med.wanfangdata.com.cn/Content/Images/studyImg/newHomeIcon.png')  no-repeat");
+            $(".UserInfo .User ").css("background-position", "-4px -7px");
+        }
+
+        /* 双logo展示 */
+        function GetLogoDisplayInfo(context, accountIdStr) {
+            for (var i = 0; i < context.Data.length; i++) {
+                if (context.Data[i].Key === accountIdStr && context.Data[i].Value.length > 0) {
+                    return decodeURIComponent(context.Data[i].Value);
+                }
+            }
+            return GetAccountIdObj(accountIdStr).Key;
+        }
+
+        function groupLogoShow() {
+            var authContext = GetAuthContext();
+            if (authContext) {
+                return GetLogoDisplayInfo(authContext.Context, 'logo');
+            } else {
+                return null;
+            }
+        }
+
+        function setCooLogo(logoId, logoUrl) {
+            var $cooLogoBox = $(".medSearch .MedLogoTypesOf .master-logo"),
+                $cooPcLogo = $('.medSearch .MedLogoTypesOf .master-logo img'),
+                $cooNewLogoBox = $('.headNavigation .master-top-logo img'),
+                $cooMLogoBox = $('.headNavigation .MobileHeader .logo'),
+                $cooMLogo = $('.headNavigation .MobileHeader .logo img');
+            $cooLogoBox.attr('href', logoUrl);
+            $cooMLogoBox.attr('href', logoUrl);
+            $cooNewLogoBox.attr('src', 'https://img.med.wanfangdata.com.cn/doublelogo/' + logoId + '-large.png');
+            $cooPcLogo.attr('src', 'https://img.med.wanfangdata.com.cn/doublelogo/' + logoId + '-large.png');
+            $cooMLogo.attr('src', 'https://img.med.wanfangdata.com.cn/doublelogo/' + logoId + '-small.png');
+            $cooPcLogo.css({
+                width: '300px'
+            })
+
+            $cooMLogoBox.css({
+                width: '247px',
+                height: '27px',
+                'margin-left': '-127px'
+            })
+        }
+
+        if (getCookie('logo')) {
+            var doublelogo = eval("(" + getCookie('logo') + ")");
+            setCooLogo(doublelogo.logoid, doublelogo.logourl);
+        } else if (groupLogoShow()) {
+            var doublelogo = eval("(" + groupLogoShow() + ")");
+            setCooLogo(doublelogo.logoid, doublelogo.logourl);
+        }
+
+        InitLoginStatus();
+    }
+
+    /*获取cookie*/
+    function getCookie(name) {
+        var arr, reg = new RegExp("(^| )" + name + "=([^;]*)(;|$)");
+        if (arr = document.cookie.match(reg))
+            return decodeURIComponent(arr[2]);
+        else
+            return null;
+    }
+
+    /* 繁简体转换 */
+    function InitSimpleTradeConvert() {
+        $("a[name='multiLanguageSwitch']").click(function () {
+            var date = new Date();
+            date.setTime(date.getTime() + 24 * 60 * 60 * 1000);
+            var expires = date.toUTCString();
+            var cookieValue = "PreferredCulture=" + escape(this.id);
+            cookieValue += ";expires=" + expires;
+            cookieValue += ";path=/;domain=.wanfangdata.com.cn";
+            cookieValue += ";true";
+            document.cookie = cookieValue;
+            //保持原站点简繁体cookie
+            var lng = this.id == "zh-CN" ? "zh_cn" : (this.id === "zh-TW" ? "zh_TW" : this.id);
+            cookieValue = "lng=" + escape(lng);
+            cookieValue += ";expires=" + expires;
+            cookieValue += ";path=/;domain=med.wanfangdata.com.cn";
+            cookieValue += ";true";
+            document.cookie = cookieValue;
+            window.location.href = document.location.protocol + "//" + document.location.host + document.location
+                .pathname + document.location.search;
+            return false;
+        });
+    }
+
+    var Backfill = function () {
+        var wd = $("#goToPageForm input[name=q]").val();
+        if (wd != undefined) {
+            $(".MedLister  .RetrieveInp input[type=text]").val(wd);
+        }
+    }
+
+    $(function () {
+        LoginStatus();
+        InitSimpleTradeConvert();
+    });
+    var showHide = function (event) {
+        var mainNavSM = $("#mainNavSM");
+        if (mainNavSM.is(':hidden')) {
+            $("#mainNavSM").show();
+            $("#overlay").height($("body").height());
+            $("#overlay").show();
+        } else {
+            $("#mainNavSM").hide();
+            $("#overlay").hide();
+        }
+        return false;
+    }
+    $(".MobileHeader .Mover img").click(showHide);
+    $("#mainNavSM li.dropdown").click(function (event) {
+
+        if ($(this).children("div").is(':hidden')) {
+            $("#mainNavSM li.dropdown div").hide();
+            $(this).children("div").show();
+        } else {
+            $(this).children("div").hide();
+        }
+        event.stopPropagation(); //不在派发事件
+    })
+
+    $("#overlay").click(function () {
+        if (!$("#mainNavSM").is(':hidden')) {
+            $("#mainNavSM").hide();
+            $("#overlay").hide();
+        }
+        return false;
+    })
+
+    function setsearchHistoryList(_searchHistory) {
+        var searchHistory = _searchHistory;
+        var str = "";
+        var historiesStr = "";
+        var name = "";
+        var url = "";
+        if (searchHistory != null) {
+            for (var i = 0; i < searchHistory.length; i++) {
+                if(searchHistory[i]['url']===undefined){continue;}
+                name = JSON.parse(searchHistory[i]["FavouriteContent"])
+                str += "<span><b href='https://med.wanfangdata.com.cn/Paper/Search?" + searchHistory[i]['url'] + "&SearchMode=Default'>" + name[0]['Value'] + "</b><small>x</small></span>";
+                if (i <= 9) {
+                    if (searchHistory[i]['type'] == undefined || searchHistory[i]['type'] == "") {
+                        url = "https://med.wanfangdata.com.cn/Paper/Search"
+                    } else {
+                        url = "https://med.wanfangdata.com.cn/AIPaper/Search"
+                    }
+                    historiesStr += "<li><a href='" + url + "?" + searchHistory[i]['url'] + "&SearchMode=Default'>" + name[0]['Value'] + "</a></li>"
+                }
+            }
+        }
+        $(".mobileSearch .historyBox .list").html(str);
+        var idx = $(".MedLister .tabs li.active").index();
+        if ($(".MedLister .RetrieveInp").eq(idx).find("input").val() === "") {
+            $(".MedLister .RetrieveInp").eq(idx).find(".autocompleteList").html(historiesStr);
+        }
+        if ($(".paperSearch .paperSearch-input-box input").val() === "") {
+            $(".paperSearch .paperSearch-input-box .autocompleteList").html(historiesStr);
+        }
+    }
+
+    window.addEventListener("message", function (e) {
+        if (!event.origin.match('wanfangdata.com.cn')) return
+        if (e.data) {
+            $._searchHistory = getHistory(e.data)
+            setsearchHistoryList($._searchHistory)
+        }
+    })
+
+    function sendLocalMessage(_obj) {
+        var _medWindow = document.querySelector("#mediframe");
+        if (!_medWindow) {
+            _medWindow = document.createElement("iframe")
+            _medWindow.id = "mediframe"
+            _medWindow.style.display = "none"
+            _medWindow.src = "https://med.wanfangdata.com.cn/Home/postMsg?v=" + new Date().getTime()
+            $("body").append(_medWindow)
+            $(_medWindow).load(function () {
+                _medWindow.contentWindow.postMessage(JSON.stringify(_obj), "*")
+            })
+        } else {
+            _medWindow.contentWindow.postMessage(JSON.stringify(_obj), "*")
+        }
+    }
+
+    function getHistory(_storage) {
+        var searchHistory = _storage || window.localStorage.getItem("searchHistory");
+        if (searchHistory == null) {
+            return null;
+        }
+        searchHistory = searchHistory.split(" ");
+        var str = "";
+        for (var i = 0; i < searchHistory.length; i++) {
+            str += String.fromCharCode(searchHistory[i]);
+        }
+        return JSON.parse(str);
+    }
+
+    $(".mobileSearch .historyBox .list").on("click", "span b", function () {
+        var text = $(this).text();
+        $(".mobileSearch .moboleSearchBox input[type=text]").val(text).focus();
+    })
+    $("#med_header").on('click', ' .mobileSearch .historyBox .list span small', function () {
+        var searchHistory = getHistory();
+        var idx = $(this).parent().index();
+        searchHistory.splice(idx, 1);
+        var arr = [];
+        searchHistory = JSON.stringify(searchHistory);
+        for (var i = 0; i < searchHistory.length; i++) {
+            arr.push(searchHistory[i].charCodeAt());
+        }
+        if ("https://med.wanfangdata.com.cn/".match(location.origin)) {
+            window.localStorage.setItem("searchHistory", arr.join(" "));
+        } else {
+            sendLocalMessage({fn: 'setSearchHistory', data: arr.join(" ")})
+        }
+        $(this).parent().remove()
+        return false;
+    })
+
+    $(".ClearHistory").click(function () {
+        if ("https://med.wanfangdata.com.cn/".match(location.origin)) {
+            window.localStorage.removeItem("searchHistory");
+        } else {
+            sendLocalMessage({fn: 'setSearchHistory'})
+        }
+        $(".mobileSearch .historyBox .list").html("")
+    })
+
+    function setCookie(cname, cvalue, exdays) {
+        document.cookie = cname + "=" + cvalue + "; " + exdays;
+    }
+
+
+    $(".ClearCookie").click(function () {
+        setCookie("searchHistory", "", "path=/");
+        setsearchHistoryList();
+    })
+
+    function getAutoComplateFn(word, $box) {
+
+        var type = null;
+        if ($(".MedTab li.active").text().trim() == "医学文献") {
+            if ($(".tabs li.active").index() === 1) {
+                $(".autocompleteList").hide();
+                return false;
+            }
+            type = "";
+        } else if ($(".MedTab li.active").text().trim() == "知识库") {
+            return false;
+        } else if ($(".MedTab li.active").text().trim() == "评价分析") {
+            if ($(".Seientifuc .TypeSelection li input[type=checkbox]:checked").val().indexOf('organization') != -1) {
+                type = "organization"; //机构
+            } else {
+                type = "author"; //作者
+            }
+        }
+
+        $.ajax({
+            url: 'https://med.wanfangdata.com.cn/AutoComplete',
+            data: {
+                q: word,
+                type: type
+            },
+            dataType: "jsonp",
+            success: function (res) {
+                var str = "";
+                for (var i = 0; i < res.length; i++) {
+                    str += '<li>';
+                    if (res[i]["Type"] == 2) {
+                        str += "<a href='https://analytics.med.wanfangdata.com.cn/Author/Overview/" + res[i]['KId'] +
+                            "' style='float: right; color: #1d9358;'>进入作者空间</a>";
+                    } else if (res[i]["Type"] == 3) {
+                        str += "<a href='https://med.wanfangdata.com.cn/Periodical/" + res[i]['KId'] +
+                            "' style='float: right; color: #1d9358;'>进入期刊首页</a>";
+                    } else if (res[i]["Type"] == 4) {
+                        str += "<a href='https://analytics.med.wanfangdata.com.cn/Organization/Overview/" + res[i][
+                            'KId'
+                            ] + "' style='float: right;; color: #1d9358;'>进入机构空间</a>";
+                    }
+                    str += '<span>';
+                    if (type == "") {
+                        if (res[i]["Type"] == 1) {
+                            str += "<strong>关键词=</strong>";
+                        } else if (res[i]["Type"] == 2) {
+                            str += "<strong>作者=</strong>";
+                        } else if (res[i]["Type"] == 3) {
+                            str += "<strong>期刊=</strong>";
+                        } else if (res[i]["Type"] == 4) {
+                            str += "<strong>机构=</strong>";
+                        }
+                    }
+                    str += res[i]["Keyword"];
+                    if (type == 'author') {
+                        str += "  (" + res[i]["KeywordInfo"] + ")";
+                    }
+                    str += "</span>";
+
+                    str += '</li>';
+                }
+                if (str) {
+                    $box.html(str).show().attr("data-index", -1);
+                    $box.find("li").click(function (event) {
+                        $('.RetrieveInp input[type=text]').val($(this).children('span').text());
+                        $box.hide();
+                        event.stopPropagation();
+                    })
+                    $box.find("li").on("mouseenter", function (event) {
+                        $(this).addClass("active").siblings(".active").removeClass("active");
+                        $(this).parent().attr("data-index", $(this).index())
+                        event.stopPropagation();
+                    })
+                }
+            },
+            error: function () {
+                //console.log('error');
+            }
+        });
+    }
+
+    $("body").on('click', function (e) {
+        var _event = e || window.event;
+        if ($(_event.target).hasClass("input_search0")) {
+            return false
+        }
+        $(".autocompleteList").each(function () {
+            if (!$(this).is(":hidden")) {
+                $(this).hide();
+            }
+        })
+        if ($(".item_inp_more_box .box").is(":visible")) {
+            $(".item_inp_more_box .box").hide()
+        }
+        if (!$(".selectAResourceType").is(":hidden")) {
+            $(".selectAResourceType").hide();
+        }
+    })
+
+</script>
+
+<!--检索数据-->
+<div class="medSearch">
+    <div class="MedLogoTypesOf">
+        <ul class="MedTab">
+            <li class="active">
+                <span>医学文献</span>
+                <i class="IconFont active"></i>
+            </li>
+            <li><span>知识库</span> <i class="IconFont"></i></li>
+            <li><span>评价分析</span> <i class="IconFont"></i></li>
+        </ul>
+    </div>
+    <!--医学资源类型检索-->
+    <div class="MedResourceSearch jq-box">
+        <!--医学文献-->
+        <div class="MedLister MedTabContext">
+            <ul class="tabs">
+                <li class="active">检索发现 <em></em></li>
+                <li><span class="AI"></span><span>增强检索</span><span class="new"></span><em></em></li>
+            </ul>
+            <div class="searchArea">
+                <div class="list">
+                    <!--检索输入框-->
+                    <div class="RetrieveInp">
+                        <div class="item_inp">
+                            <div class="item_inp_box">
+                                <div class="resourceSelection">
+                                    <div class="indicate"><span>默认</span><em></em></div>
+                                    <div class="selectAResourceType">
+                                        <div class="items">
+                                            <div class="item">
+                                                <label data-type="all"><i></i><span>全部</span></label>
+                                                <label class="active"
+                                                       data-type="期刊"><i></i><span>期刊</span></label>
+                                                <label class="active"
+                                                       data-type="外文"><i></i><span>外文</span></label>
+                                            </div>
+                                            <div class="item">
+                                                <label class="active"
+                                                       data-type="学位"><i></i><span>学位</span></label>
+                                                <label class="active"
+                                                       data-type="会议"><i></i><span>会议</span></label>
+                                                <label data-type="专利"><i></i><span>专利</span></label>
+                                            </div>
+                                            <div class="item">
+                                                <label data-type="成果"><i></i><span>成果</span></label>
+                                                <label data-type="标准"><i></i><span>标准</span></label>
+                                                <label data-type="法规"><i></i><span>法规</span></label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <input type="text" value="" class="input_search0" placeholder="请输入检索关键词">
+                                <span class="clearBtn">×</span>
+                                <button class="MedSearchBtn"
+                                        data-url="https://med.wanfangdata.com.cn/Paper/Search?q="
+                                        data-type="MedLister">
+                                    <i class="IconFont searchIcon"></i>
+                                    检索
+                                </button>
+                                <ul class="autocompleteList" style=""></ul>
+                            </div>
+                        </div>
+                        <!--推荐词 高级检索 检索历史-->
+                        <div class="IssueAdvanced">
+                            <a href="https://med.wanfangdata.com.cn/Paper" class="btn-advsearch med-hidden-sm">高级检索<img
+                                    src="https://cdn.med.wanfangdata.com.cn/Content/Images/NewHome/search-arrow-icon-left.png" alt=""></a>
+                            <a href="https://med.wanfangdata.com.cn/Search/SearchSetting" class="btn-advsearch med-hidden-sm">检索偏好<img
+                                    src="https://cdn.med.wanfangdata.com.cn/Content/Images/NewHome/search-arrow-icon-left.png" alt=""></a>
+                        </div>
+                    </div>
+                    <div class="hotSearchWord">
+                        <strong>热搜词：</strong>
+                        <div class="hotSearchWord-box"></div>
+                        <span title="点击换一批"><img
+                                src="https://cdn.med.wanfangdata.com.cn/Content/Images/NewHome/refresh.png" alt="">换一批</span>
+                    </div>
+                </div>
+                <div class="list">
+                    <!--检索输入框-->
+                    <div class="RetrieveInp">
+                        <div class="item_inp">
+                            <div class="item_inp_box">
+                                <input type="text" value="" class="input_search0"
+                                       placeholder="支持输入自然语言进行医学文献检索">
+                                <span class="clearBtn">×</span>
+                                <button class="MedSearchBtn"
+                                        data-url="https://med.wanfangdata.com.cn/Paper/Search?q="
+                                        data-type="MedLister">
+                                    <i class="IconFont searchIcon"></i>
+                                    检索
+                                </button>
+                                <ul class="autocompleteList" style=""></ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hotSearchWord">
+                        <div class="hotSearchWord-box">
+                            <a href="https://med.wanfangdata.com.cn/AIPaper/Search?q=2型糖尿病的最新治疗方案？" title="2型糖尿病的最新治疗方案？">2型糖尿病的最新治疗方案？</a>
+                            <a href="https://med.wanfangdata.com.cn/AIPaper/Search?q=胃癌治疗方式新进展？"
+                               title="胃癌治疗方式新进展？">胃癌治疗方式新进展？</a>
+                            <a href="https://med.wanfangdata.com.cn/AIPaper/Search?q=肺癌最新诊断及治疗方法有哪些？"
+                               title="肺癌最新诊断及治疗方法有哪些？">肺癌最新诊断及治疗方法有哪些？</a>
+                            <a href="https://med.wanfangdata.com.cn/AIPaper/Search?q=肺癌最新诊断及治疗方法有哪些？"
+                               title="肺癌最新诊断及治疗方法有哪些？">肺癌最新诊断及治疗方法有哪些？</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!--知识库-->
+        <div class="KnowledgeBase MedTabContext">
+            <ul class="TypeSelection">
+                <li class="active">
+                    <label><i class="IconFont"></i></label>
+                    <input type="checkbox" value="https://lczl.med.wanfangdata.com.cn/Home/Search?type=All&q="
+                           data-title="可直接输入：疾病、药品、检查等名称" checked/>
+                    <span>临床诊疗知识库</span>
+                </li>
+                <li>
+                    <label><i></i></label>
+                    <input type="checkbox"
+                           value="https://tcm.med.wanfangdata.com.cn/Home/Search?DbName=MedTCM_L&QueryStartDate=&QueryEndDate=&Q="
+                           data-title="可直接输入：疾病、中药、方剂等名称"/>
+                    <span>中医药知识库</span>
+                </li>
+            </ul>
+            <!--检索输入框-->
+            <div class="RetrieveInp">
+                <div class="item_inp">
+                    <input type="text" value="" class="input_search0"
+                           placeholder="可直接输入：疾病、药品、检查等名称"/>
+                    <span class="clearBtn">×</span>
+                    <ul class="autocompleteList" style="">
+                    </ul>
+                    <button class="MedSearchBtn" data-url="" data-type="KnowledgeBase">
+                        <i class="IconFont searchIcon"></i>
+                        检索
+                    </button>
+                </div>
+            </div>
+            <!--推荐词 高级检索 检索历史-->
+            <div class="MedSearchBottom">
+                <div class="IssueAdvanced">
+                </div>
+            </div>
+        </div>
+        <!--学科分析-->
+        <div class="Seientifuc MedTabContext">
+            <ul class="TypeSelection">
+                <li class="active">
+                    <label><i class="IconFont"></i></label>
+                    <input type="checkbox" data-title="在29余万家机构中检索"
+                           value="https://analytics.med.wanfangdata.com.cn/Organization/Search?province=全国&organizationName=" checked/>
+                    <span>机构</span>
+                </li>
+                <li>
+                    <label><i></i></label>
+                    <input type="checkbox" data-title="在300余万位作者中检索"
+                           value="https://analytics.med.wanfangdata.com.cn/Author/Search?Query="/>
+                    <span>作者</span>
+                </li>
+
+            </ul>
+            <!--检索输入框-->
+            <div class="RetrieveInp">
+                <div class="item_inp">
+                    <input type="text" value="" class="input_search0" placeholder="在29余万家机构中检索"/>
+                    <ul class="autocompleteList" style="">
+                    </ul>
+                    <button class="MedSearchBtn" data-url="" data-type="Seientifuc">
+                        <i class="IconFont searchIcon"></i>
+                        检索
+                    </button>
+                </div>
+            </div>
+            <!--推荐词 高级检索 检索历史-->
+            <div class="MedSearchBottom">
+                <div class="IssueAdvanced">
+                </div>
+            </div>
+        </div>
+    </div>
+    <!--移动端检索-->
+    <div class="mobileSearch">
+        <div class="periodical">
+            <span>论文</span><input type="radio" name="uri" value="https://med.wanfangdata.com.cn/Paper/Search?q=" checked/>
+            <span>期刊</span><input type="radio" name="uri" value="https://med.wanfangdata.com.cn/Periodical/Search?q="/>
+        </div>
+        <div class="moboleSearchBox">
+            <div>
+                <input type="text" placeholder="请输入检索关键词"/>
+                <button class="MedSearchBtn" data-url="https://med.wanfangdata.com.cn/Paper/Search?q="
+                        data-type="MedLister">检索
+                </button>
+            </div>
+            <span class="cancelSearch">取消</span>
+        </div>
+        <a href="https://med.wanfangdata.com.cn/Paper" class="AdvancedSearch">高级检索</a>
+        <div class="historyBox">
+            <h1>检索历史 <span class="ClearHistory">清除</span></h1>
+            <div class="list"></div>
+        </div>
+    </div>
+</div>
+<script>
+    var tabFn = function () {
+        var _that = $(this);
+        var idx = _that.index();
+        _that.addClass("active").siblings().removeClass("active");
+        $('.medSearch .MedTab i').removeClass("active");
+        _that.children('i').addClass("active");
+        $(".MedResourceSearch div.MedTabContext").eq(idx).show().siblings().hide();
+        if (idx == 0) {
+            $("#med_header .hotSearchWord").addClass("show")
+        } else {
+            $("#med_header .hotSearchWord").removeClass("show")
+        }
+        $(".autocompleteList").hide();
+    }
+
+    $(".medSearch .MedTab").on('click', 'li', tabFn);
+    $(".MedAcademic .MedTab").on('click', 'li', tabFn);
+
+
+    var setMark = function ($dom) {
+        $dom.addClass("active").find("i").addClass("IconFont");
+        $dom.find("input").prop("checked", true);
+    }
+    var outMark = function ($dom) {
+        $dom.removeClass("active").find("i").removeClass("IconFont");
+        $dom.find("input").prop("checked", false);
+    }
+    var selectSingleFn = function () {
+        var _that = $(this);
+        var che = _that.children("input");
+        var labelI = _that.children("label").children("i");
+        /*判断是否选中*/
+        if (che.is(':checked')) {
+            /*选中
+            che.prop("checked", false);
+            labelI.removeClass("IconFont");*/
+        } else {
+            /*未选中*/
+            _that.parent().children('li').children("input").prop("checked", false);
+            _that.parent().children('li').children("label").children("i").removeClass("IconFont");
+            _that.addClass("active").siblings("li").removeClass("active")
+            che.prop("checked", true);
+            labelI.addClass("IconFont");
+            _that.closest(".MedTabContext").find(".input_search0").attr("data-val", "").next().html("").hide()
+        }
+
+        /*切换placeholder*/
+        var $MedTabContext = _that.closest(".MedTabContext")
+        var $checked = $MedTabContext.find("input:checked")
+        if ($checked.length === 1) {
+            $MedTabContext.find(".RetrieveInp input").attr("placeholder", $checked.data("title") || "请输入检索词进行检索")
+        } else {
+            $MedTabContext.find(".RetrieveInp input").attr("placeholder", "请输入检索词进行检索")
+        }
+    }
+
+    var selectFn = function (e) {
+        var _that = $(this);
+        var domOldActive = $(".MedResourceSearch .selectAResourceType .items .item .active");
+        if (domOldActive.text() === _that.text()) {
+            return false;
+        }
+        var labelAll = $(".MedResourceSearch .selectAResourceType .items .item label");
+        var $resourceSelection = $(".resourceSelection .indicate span");
+        if (_that.hasClass("active")) {
+            _that.removeClass("active");
+            if (_that.text() === "全部") {
+                labelAll.each(function () {
+                    if ($(this).text() !== "期刊" && $(this).text() !== "外文" && $(this).text() !== "学位" && $(this).text() !== "会议") {
+                        $(this).removeClass("active");
+                        $resourceSelection.text("默认");
+                    }
+                })
+            }
+        } else {
+            _that.addClass("active");
+            if (_that.text() === "全部") {
+                labelAll.each(function () {
+                    $(this).addClass("active");
+                    $resourceSelection.text("全部");
+                })
+            }
+        }
+        var domActive = $(".MedResourceSearch .selectAResourceType .items .item .active");
+        var size = domActive.length;
+        var total = $(".MedResourceSearch .selectAResourceType .items .item label").length;
+
+        if (size === total) {
+            $resourceSelection.text("全部");
+            $(".searchArea .list:first-child .RetrieveInp .item_inp input[type=text]").attr("placeholder", "请输入检索关键词");
+            return false;
+        }
+        if (size > 1) {
+            var isDefault = false;
+            if (size === 4 && domActive.text() === "期刊外文学位会议") {
+                isDefault = true;
+            }
+            $resourceSelection.text(isDefault ? "默认" : "跨库");
+        }
+        if (size === 1) {
+            $resourceSelection.text(domActive.text());
+            var placeholderText = "";
+            switch (domActive.text()) {
+                case "期刊":
+                    placeholderText = "在海量中文期刊中检索";
+                    break;
+                case "外文":
+                    placeholderText = "在海量外文期刊中检索";
+                    break;
+                case "学位":
+                    placeholderText = "在100万余条学位论文中检索";
+                    break;
+                case "会议":
+                    placeholderText = "在130余万条会议论文中检索";
+                    break;
+                case "专利":
+                    placeholderText = "在510多万件专利中检索";
+                    break;
+                case "成果":
+                    placeholderText = "在90万余件成果中检索";
+                    break;
+                case "标准":
+                    placeholderText = "在2万余项标准中检索";
+                    break;
+                case "法规":
+                    placeholderText = "在6万余条法规中检索";
+                    break;
+                default:
+                    placeholderText = "请输入检索关键词";
+                    break;
+            }
+            $(".searchArea .list:first-child .RetrieveInp .item_inp input[type=text]").attr("placeholder", placeholderText);
+        } else {
+            $(".searchArea .list:first-child .RetrieveInp .item_inp input[type=text]").attr("placeholder", "请输入检索关键词");
+        }
+        if (size !== total) {
+            $(".MedResourceSearch .selectAResourceType .items .item label:first-child").eq(0).removeClass("active");
+        }
+
+        return false;
+    }
+    $(".KnowledgeBase .TypeSelection").on("click", 'li', selectSingleFn);
+    $(".Seientifuc .TypeSelection").on("click", 'li', selectSingleFn);
+    $(".MedResourceSearch .selectAResourceType .items .item").on("click", 'label', selectFn);
+    $(".MedResourceSearch .resourceSelection").on("click", '.indicate', function () {
+        var _$selectAResourceType = $(".MedResourceSearch .resourceSelection .selectAResourceType")
+        if (_$selectAResourceType.is(":hidden")) {
+            _$selectAResourceType.show();
+        } else {
+            _$selectAResourceType.hide();
+        }
+        return false
+    });
+
+    $(".MedLister .tabs").on("click", 'li', function () {
+        var _that = $(this);
+        var idx = $(this).index();
+        _that.addClass("active").siblings().removeClass("active");
+        $(".searchArea .list").eq(idx).show().siblings().hide();
+
+    });
+
+
+    /*检索*/
+    var searchFn = function (vio) {
+        var WFMedAuth = getCookie(config.cookieName);
+        if (WFMedAuth !== "" && WFMedAuth !== null) {
+            WFMedAuth = JSON.parse(WFMedAuth);
+            var Context = WFMedAuth.Context;
+            var AccountIds = Context.AccountIds;
+            var isPass = false;
+            for (var i = 0; i < AccountIds.length; i++) {
+                if (AccountIds[i].indexOf("MedPerson") !== -1) {
+                    isPass = true;
+                }
+            }
+            if (isPass) {
+                perform_tasks({"TypeId": 2, "TypeGroup": 1})
+            }
+        }
+        $(".autocompleteList").hide();
+        var _that = $(this);
+        var url = _that.attr("data-url");
+        var type = _that.attr("data-type");
+        var species = $(".resourceSelection .selectAResourceType .items .item label.active");
+        var active = $(".MedTab li.active");
+        var address = $(".MedTabContext .TypeSelection .active input").eq(active.index() - 1);
+        var spectArr = new Array();
+        var isAiIdx = $(".MedResourceSearch div.MedTabContext.MedLister .tabs li.active").index();
+        var searchText = $('.' + type + " .RetrieveInp input").val();
+        if (isAiIdx === 1 && type === "MedLister") {
+            searchText = $('.' + type + " .searchArea .list:last-child .RetrieveInp input").val();
+        }
+
+        if (window.location.pathname.indexOf('Periodical') != -1) {
+            url = $("input[name=uri]:checked").val();
+        }
+        if (!searchText) {
+            searchText = $(".moboleSearchBox input").val();
+        }
+        if (!searchText || !searchText.trim()) {
+            alert("请输入搜索关键词");
+            return false;
+        }
+        searchText = encodeURIComponent(searchText);
+        if (searchText.replace(/\*/g, "").length === 0) {
+            alert("检索关键词中包含非法字符，请修改后重新检索");
+            $('.' + type + " .RetrieveInp input").val("");
+            return false;
+        }
+        if ($(".MedResourceSearch div.MedTabContext.MedLister .tabs li.active").index() === 1) {
+            window.location.href = "https://med.wanfangdata.com.cn/AIPaper/Search?q=" + searchText;
+            return false;
+        }
+        if (url != "") {
+            url += searchText;
+            if (!$(".MedTab").is(":hidden")) {
+                species.each(function (i) {
+                    var dataType = $(this).attr("data-type");
+                    if (dataType === "期刊") {
+                        spectArr.push("中文期刊");
+                    } else if (dataType === "外文") {
+                        spectArr.push("外文期刊");
+                    } else {
+                        if (dataType === "学位" || dataType === "会议") {
+                            spectArr.push(dataType + "论文");
+                        } else {
+                            if (dataType !== "all") {
+                                spectArr.push(dataType);
+                            }
+                        }
+                    }
+                });
+                if (spectArr.length < 8) {
+                    var spectStr = spectArr.join(" OR ");
+                    url += "&资源类型_fl=(" + spectStr + ")";
+                } else if (spectArr.length == 8) {
+                    var str = "";
+                    url += str;
+                }
+            }
+        } else {
+            if (address.val() != undefined) {
+                url += address.val() + searchText;
+            } else {
+                alert("请选择资源");
+                return false;
+            }
+        }
+
+        window.location.href = url + "&SearchMode=Default";
+    }
+    $(".RetrieveInp .MedSearchBtn").on("click", searchFn);
+    $(".moboleSearchBox .MedSearchBtn").on("click", searchFn);
+    $(".moboleSearchBox .cancelSearch").on("click", function () {
+        $(".mobileSearch").hide()
+        $(".main").show()
+    })
+
+    /*一框式检索回车*/
+
+    $(".RetrieveInp input[type=text]").keypress(function (even) {
+        var _that = $(this);
+        var par = _that.parent().parent();
+        if (!par.is(":hidden")) {
+            if (even.which == 13) {
+                if ($(".autocompleteList li.active").index() !== -1) {
+                    // 是否选择
+                    if ($(".autocompleteList li.active a").length > 0) {
+                        window.location.href = $(".autocompleteList li.active a").attr("href");
+                        return false;
+                    } else {
+                        $(this).val($(".autocompleteList li.active").text());
+                    }
+                }
+                par.find(".MedSearchBtn").click();
+            }
+        }
+
+    });
+    $(".RetrieveInp").click(function () {
+        if ("https://med.wanfangdata.com.cn/".match(location.origin)) {
+            setsearchHistoryList(getHistory());
+        } else {
+            sendLocalMessage({fn: 'getSearchHistory'})
+        }
+        if ($("body").width() <= "950") {
+            $(".mobileSearch").show();
+            $(".moboleSearchBox input").focus();
+            $("input[type=text]").val("");
+            $(".main").hide();
+            $(".item_inp_more_box .box").hide()
+        } else {
+            if ($(".MedTab li.active").index() === 0) {
+                if($(".MedTabContext.MedLister .tabs li.active").index() === 1){
+                    console.log($(this).find("input[type=text]"));
+                    if($(this).find("input[type=text]").val() !== ""){
+                    $(".RetrieveInp .autocompleteList").hide();
+                    return false;
+                    }
+                }
+                $(".RetrieveInp .autocompleteList").show().find("li").on("mouseenter", function (event) {
+                    $(this).addClass("active").siblings(".active").removeClass("active");
+                    $(this).parent().attr("data-index", $(this).index())
+                    event.stopPropagation();
+                })
+            }
+        }
+    });
+
+    $(".MedLister input[type=text]").on('keyup', function (e) {
+        var TIdx = $(".MedLister .tabs li.active").index();
+        if ($(".autocompleteList").eq(TIdx).find("li").length > 0) {
+            if(TIdx == 1 && $.trim($(this).val()) !== ""){
+                $(".autocompleteList").eq(TIdx).hide();
+                return false;
+            }
+            $(".autocompleteList").eq(TIdx).show();
+        }
+        var idx = $(".autocompleteList li.active").index();
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (e.key === 'ArrowDown') {
+                if (idx < 0) {
+                    $(".autocompleteList").eq(TIdx).find("li").eq(0).addClass("active").siblings("li").removeClass("active");
+                } else if (idx == $(".autocompleteList").eq(TIdx).find("li").length - 1) {
+                    $(".autocompleteList").eq(TIdx).find("li").eq(0).addClass("active").siblings("li").removeClass("active");
+                } else {
+                    $(".autocompleteList").eq(TIdx).find("li").eq(idx + 1).addClass("active").siblings("li").removeClass("active");
+                }
+            }
+            if (e.key === 'ArrowUp') {
+                if (idx < 0) {
+                    $(".autocompleteList").eq(TIdx).find("li").eq($(".autocompleteList").eq(TIdx).find("li").length - 1).addClass("active").siblings("li").removeClass("active");
+                } else {
+                    $(".autocompleteList").eq(TIdx).find("li").eq(idx - 1).addClass("active").siblings("li").removeClass("active");
+                }
+            }
+        }
+    }).bind('input propertychange', function () {
+        var word = $.trim($(this).val());
+        var clearBtn = $('.clearBtn');
+        if (word) {
+            clearBtn.show();
+            $(this).attr("data-val", word)
+            getAutoComplateFn(word, $(this).siblings(".autocompleteList"))
+        } else {
+            clearBtn.hide();
+        }
+    })
+    $(".MedResourceSearch").on("click", ".clearBtn", function () {
+        $(".MedResourceSearch input[type=text]").each(function () {
+            $(this).val("");
+        })
+    })
+
+
+    $("#med_header .mobileSearch .historyBox .list").on("click", "span b", function () {
+        var text = $(this).text();
+        $("#med_header .mobileSearch .moboleSearchBox input[type=text]").val(text).focus();
+    })
+</script>
+    </div>
+  
+    <div class="main">
+        <div class="container">
+            
+
+<input id="topSearchHighLight" name="topSearchHighLight" type="hidden" value="periodical" />
+<!-- 面包屑导航 -->
+<div class="breadcrumbs hidden-sm">
+	<div class="path">
+		<a href="/">首页</a>
+		&gt;
+		<a href="/Periodical">期刊</a>
+			<b title=""> &gt; 中华医学杂志</b>
+	</div>
+</div>
+
+<input id="isChineseMagazine" name="isChineseMagazine" type="hidden" value="True" />
+<div class="topic">
+    <div class="btnpanel hidden-sm" data-id="zhyx">
+        <a class="favoriteorsub" data-type="fav" data-content="zhyx" href="#"><i class="icon Favorite"></i><span>收藏</span></a>
+    </div>
+    <h2 class="title">
+        <span class="lang-chn hidden-sm">中华医学杂志</span>
+        <span class="lang-eng hidden-sm">National Medical Journal of China  중화의학잡지</span>
+        <a href="/Periodical/zhyx" class="visible-sm-inline"><span class="lang-chn">中华医学杂志</span></a>
+    </h2>
+    <div class="infobar">
+        <div class="keywords">
+            	<span class="ico-earth hidden-sm" title="整刊在线阅读">阅读</span>
+	<span class="splitline hidden-sm">·</span>
+<span class="ico-book" title="美国国立医学图书馆Medline数据库(MEDLINE)，收录年份：2025">MEDLINE</span>    <span class="splitline hidden-sm">·</span>
+<span class="ico-book" title="中国科技论文统计源期刊(科技核心期刊) (ISTIC)，收录年份：2025">ISTIC</span>    <span class="splitline hidden-sm">·</span>
+<span class="ico-book" title="中文核心期刊要目总览(北大核心期刊) (PKU)，收录年份：2023">PKU</span>    <span class="splitline hidden-sm">·</span>
+<span class="ico-book" title="中国科学引文数据库(CSCD)，收录年份：2025">CSCD</span>    <span class="splitline hidden-sm">·</span>
+<span class="ico-book" title="美国《化学文摘》(Chemical Abstracts) (CA)，收录年份：2025">CA</span>    <span class="splitline hidden-sm">·</span>
+
+        </div>
+        <div class="factor">
+                            <div class="principal-factors clearfix">
+                    <span class="clearfix-sm">中信所核心影响因子：2.123</span>
+                            <div class="principal-factors-box">
+                                <h5>历年收录情况：</h5>
+                                <ul class="clearfix">
+                                        <li>2025</li>
+                                        <li>2024</li>
+                                        <li>2023</li>
+                                        <li>2022</li>
+                                        <li>2021</li>
+                                        <li>2020</li>
+                                        <li>2019</li>
+                                        <li>2018</li>
+                                        <li>2017</li>
+                                        <li>2016</li>
+                                        <li>2015</li>
+                                        <li>2014</li>
+                                        <li>2013</li>
+                                        <li>2012</li>
+                                        <li>2011</li>
+                                        <li>2010</li>
+                                        <li>2009</li>
+                                        <li>2008</li>
+                                        <li>2007</li>
+                                        <li>2006</li>
+                                        <li>2005</li>
+                                        <li>2004</li>
+                                        <li>2003</li>
+                                        <li>2002</li>
+                                </ul>
+                            </div>
+                </div>
+        </div>
+    </div>
+    <div class="btnpanel visible-sm-block" data-id="zhyx">
+        <a href="/Periodical/Detail/zhyx">查看本刊信息</a>
+        <a class="favoriteorsub" data-type="fav" data-content="zhyx" href="#"><i class="icon Favorite"></i><span>收藏</span></a>
+    </div>
+</div>
+<div class="subnav">
+    <div class="dborder-tb">
+        <ul class="hidden-sm">
+            <li><a href="/Periodical/zhyx" class="">期刊首页</a></li>
+            <li><a href="/Periodical/Issue?id=zhyx&amp;year=2026&amp;issue=15" class="">各期论文</a></li>
+            <li><a href="/Periodical/Stats/zhyx" class="">统计分析</a></li>
+            <li><a href="/Periodical/Detail/zhyx" class="current">本刊信息</a></li>
+        </ul>
+        <div class="advsearch">
+            <form id="innerSearchForm" method="GET" action ="/Periodical/InnerSearch">
+                <button id="innerSearchBtn">刊内检索</button>
+                <input type="text" id="innerQuery" name="q" autocomplete="off" />
+                <input type="hidden" value="zhyx" name="id">
+            </form>
+        </div>
+    </div>
+</div>
+
+
+
+<div class="main">
+    <div class="container">
+        <div class="sidebar hidden-sm">
+            <div class="classify-nav" id="infoNavCont">
+	<div class="hd">
+		<h2>信息导航</h2>
+	</div>
+	<div class="bd classify-list" id="InfoNav">
+		<ul>
+
+				<li><a href="#abstract" class=current>刊物简介</a></li>
+				<li><a href="#basicInfo">基本信息</a></li>
+				<li><a href="#contributionInvited">征稿启事</a></li>
+		</ul>
+	</div>
+</div>
+<script>
+	$(function() {
+		var $nav = $('#InfoNav ul li a');
+		$nav.click(function() {
+			$nav.removeClass('current');
+			$(this).addClass('current');
+		});
+		// 左侧导航定位
+		var $sidenav = $('#infoNavCont');
+		$(window).scroll(function() {
+			var $this = $(this);
+			var winTop = $this.scrollTop();
+			if (winTop > 400) {
+				$sidenav.css({
+					'position': 'fixed'
+				});
+			} else {
+				$sidenav.css({
+					'position': 'static'
+				});
+			};
+		});
+	});
+</script>
+        </div>
+        <div class="content">
+            <div class="pd-info" id="abstract">
+                <div class="hd">
+    <h2>刊物简介</h2>
+</div>
+<div class="bd">
+        <p>《中华医学杂志》创刊于中华医学会成立的1915年。创刊之初是中、英文双语期刊，英文刊名为National Medical Journal of 
+China。1932 年，中华医学杂志的英文部分与中国博医会的英文杂志;China Medical Journal;（博医会报）合并，以Chinese Medical Journal为刊名出版；中文部分仍称《中华医学杂志》继续出版，并继续保留;National Medical Journal of China的英文刊名，现在，在中华医学杂志的论著类文章中依然保留英文的作者姓名、通讯地址和严格的英文摘要。作为中国卫生部中华医学会的会刊、中华医学会主办的一本医学综合性学术期刊，中华医学杂志创刊100年来始终坚持以服务广大会员和医药卫生科技人员、促进国内外医学学术交流和医学事业发展为宗旨，全面反映中国医学最新的科研成果，紧密跟踪世界医学科技进步的潮流，理论与实践结合，提高与普及并重，积极推广医药卫生领域的新技术、新成果，及时交流防病治病的新经验，大力普及医学科技新知识，为提高中国广大医药卫生人员的思想和职业道德修养、医学科学理论和业务技术水平，推动中国医学科技进步和知识创新，以及繁荣中国医学科技出版事业，发挥了重要作用。</p>
+</div>
+
+            </div>
+            <div class="pd-info" id="basicInfo">
+                
+<div class="hd">
+    <h2>基本信息</h2>
+</div>
+<div class="bd">
+        <ul>
+                <li><strong>主管单位：</strong>中国科学技术协会</li>
+                <li><strong>主办单位：</strong>中华医学会</li>
+                <li><strong>编辑单位：</strong>中华医学杂志编辑委员会</li>
+                <li><strong>主　　编：</strong>高润霖</li>
+                <li><strong>主　　任：</strong>陈新石</li>
+                <li><strong>国内刊号：</strong>11-2137/R</li>
+                <li><strong>国际刊号：</strong>0376-2491</li>
+                <li><strong>邮发代号：</strong>2-588</li>
+                <li><strong>定　　价：</strong>22</li>
+                <li><strong>电　　话：</strong>010-51322161</li>
+                <li><strong>传　　真：</strong>010-85158355</li>
+                <li><strong>电子邮箱：</strong><span style="word-break: break-all;">nmjc@cmaph.org</span></li>
+                <li><strong>地　　址：</strong>北京市西城区宣武门东河沿街69号</li>
+                <li><strong>邮政编码：</strong>200030</li>
+        </ul>
+</div>
+
+            </div>
+                <div class="pd-info" id="contributionInvited">
+                    <div class="hd">
+    <h2>征稿启事</h2>
+</div>
+<div class="bd">
+        <p class="empty">暂无信息</p>
+</div>
+
+                </div>
+        </div>
+    </div>
+</div>
+
+<div id="dialogInfo" style="display: none;">
+    <p></p>
+</div>
+<script src="https://cdn.med.wanfangdata.com.cn/Content/js/newHome/CollectionUtil.min.js?v=639132654789851136" type="text/javascript"></script>
+        </div>
+    </div>
+    <link href="https://cdn.med.wanfangdata.com.cn/Content/Css/NewHome/NewMedFooter.min.css?v=20251021" rel="stylesheet">
+<!--尾部-->
+<div id="MedFooter">
+    <div class="med-container">
+        <p>特别提示：本网站仅提供医学学术资源服务，不销售任何药品和器械，有关药品和器械的销售信息，请查阅其他网站。</p>
+    </div>
+    <div id="MedFoortBox">
+        <!--logo-->
+        <div id="WFlogo">
+            <a href="https://med.wanfangdata.com.cn/" target="_blank"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/rwd/hf/logo-MED-lg.png" alt="万方医学" /></a>
+            <a href="http://www.wanfangdata.com.cn/" target="_blank"><img
+                    src="https://cdn.med.wanfangdata.com.cn/Content/Images/rwd/hf/logo-WF-lg.png" alt="万方数据"></a>
+        </div>
+        <div id="WFInfo">
+            <ul>
+                <li><a href="https://med.wanfangdata.com.cn/Home/AboutUs" target="_blank">关于我们</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Sitemap" target="_blank">网站地图</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Products" target="_blank">主要产品</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/ResourceService" target="_blank">资源服务</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/FAQ?type=helpdocument" target="_blank">使用帮助</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Commitment" target="_blank">服务承诺</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Recruitment" target="_blank">诚聘英才</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Links" target="_blank">友情链接</a></li>
+                <li><a href="https://med.wanfangdata.com.cn/Home/Statement" target="_blank">知识产权</a></li>
+            </ul>
+            <ul class="customer">
+                <li>
+                    <p>客服热线：4000-115-888 转3 (周一至周五：8:00至17:00)</p>
+                </li>
+                <li><span class="med-splitline">|</span></li>
+                <li>
+                    <p>客服邮箱：yiyao@wanfangdata.com.cn</p>
+                </li>
+            </ul>
+            <ul>
+                <li>
+                    <p>违法和不良信息举报电话：4000-115-888，举报邮箱：problem@wanfangdata.com.cn，<a href="https://www.12377.cn/"
+                                                                                                  target="_blank">举报专区</a></p>
+                </li>
+            </ul>
+            <ul>
+                <li><a href="https://med.wanfangdata.com.cn/licence.html" target="_blank">互联网出版许可证</a></li>
+                <li><span class="med-splitline">|</span></li>
+                <li><a href="https://med.wanfangdata.com.cn/hlwypxxfw.htm" target="_blank">药品医疗器械网络信息服务备案</a></li>
+                <li><span class="med-splitline">|</span></li>
+                <li><a href="https://ad.wanfangdata.com.cn/images/stjmxkz3.jpg" target="_blank">信息网络传播视听节目许可证</a></li>
+            </ul>
+            <ul>
+                <li><a href="https://ad.wanfangdata.com.cn/images/icp.jpg" target="_blank">京ICP证010071号</a></li>
+                <li><a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11010802020237"
+                       target="_blank">京公网安备11010802020237号</a></li>
+                <li><a href="https://beian.miit.gov.cn/" target="_blank">京ICP备08100800号-1</a></li>
+                <li><a href="javascript:;">网信算备10108958340801240023号</a></li>
+            </ul>
+        </div>
+        <div id="WFQRCode">
+            <div>
+                <i class="IconFont"></i>
+                <span>官方微信</span>
+            </div>
+            <div>
+                <i class="xiaocx"></i>
+                <span>万方医学小程序</span>
+            </div>
+        </div>
+        <div id="smMed">
+            <p><a href="https://med.wanfangdata.com.cn/Home/AboutUs" target="_blank">关于我们</a><a href="https://med.wanfangdata.com.cn/Home/Sitemap" target="_blank">网站地图</a><a href="https://med.wanfangdata.com.cn/Home/Statement" target="_blank">知识产权</a></p>
+            <p><a href="http://www.wanfangdata.com.cn/" target="_blank">北京万方数据股份有限公司</a></p>
+            <p><a href="http://www.wanfangdata.com.cn/" target="_blank">万方数据电子出版社</a></p>
+            <p><a href="https://ad.wanfangdata.com.cn/images/icp.jpg" target="_blank">京ICP证010071号</a></p>
+            <p><a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11010802020237"
+                  target="_blank">京公网安备11010802020237号</a></p>
+            <p><a href="https://beian.miit.gov.cn/" target="_blank">京ICP备08100800号-1</a></p>
+            <p><a href="javascript:;">网信算备10108958340801240023号</a></p>
+            <p>违法和不良信息举报电话：4000-115-888，举报邮箱：problem@wanfangdata.com.cn，<a href="https://www.12377.cn/"
+                                                                                          target="_blank">举报专区</a></p>
+        </div>
+    </div>
+</div>
+<!--回到顶部-->
+<div class="Medtoolbar">
+    <a href="https://aigc.med.wanfangdata.com.cn/" target="_blank" id=""><span class="newbox">new</span><span class="med-dborder special"><span>医文AI</span></span> <i class="IconFont toolbar-aigc"></i></a>
+    <a href="https://med.wanfangdata.com.cn/Translate/Index" id=""><span
+            class="med-dborder special"><span>翻译</span></span> <i class="IconFont Translate"></i></a>
+    <a href="https://tran.med.wanfangdata.com.cn/ChargeCard/Charge" id=""><span class="med-dborder special"><span>充值</span></span> <i
+            class="IconFont Recharge"></i></a>
+    <a href="https://info.med.wanfangdata.com.cn/Home/SubIndex" id=""><span class="med-dborder special"><span>订阅</span></span> <i
+            class="IconFont subscription"></i></a>
+    <a href="https://med.wanfangdata.com.cn/Favourite?Category=Search" id=""><span class="med-dborder special"><span>收藏</span></span> <i
+            class="IconFont Favorites"></i></a>
+    <a href="#" id=""><span class="med-dborder special"><span>移动端</span></span> <i class="IconFont Mobile"></i>
+        <div class="imgList">
+            <p>
+                <i class="WFQRCodeMobile"></i>
+                <span>官方微信</span>
+            </p>
+            <p>
+                <i class="WFMEDXCX"></i>
+                <span>万方医学小程序</span>
+            </p>
+        </div>
+    </a>
+    <a href="https://med.wanfangdata.com.cn/Home/FAQ?type=helpdocument" id=""><span class="med-dborder specials">使用<br>帮助</span> <i
+            class="IconFont Help"></i></a>
+    <a href="#" id="btnGoTop" style="display:none;"><span class="med-dborder specials">回到<br>顶部</span> <i
+            class="IconFont UpTop"></i></a>
+</div>
+<div id="bar_hide" class="papericon"></div>
+<div class="warp_alert_questionnaire">
+    <div class="close-questionnaire-left"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/questionnaire-default-left.png" alt="Alternate Text" /></div>
+    <div class="questionnaire-item">
+        <a href="https://wanfang.wjx.cn/vm/QnrGdjW.aspx"><img src="https://cdn.med.wanfangdata.com.cn/Content/Images/questionnaireLeft.png" alt="调查问卷" /></a>
+    </div>
+</div>
+<script src="https://med.wanfangdata.com.cn/Config/Domain"></script>
+<script src="https://cdn.med.wanfangdata.com.cn/Content/js/newHome/bar.js"></script>
+<script type="text/javascript">
+$(function () {
+        /* 回到顶部 */
+        $('#btnGoTop').click(function (e) {
+            e.preventDefault();
+            $('body, html').animate({
+                scrollTop: 0
+            }, 'fast');
+        });
+        $(window).scroll(function () {
+            var $this = $(this);
+            var winTop = $this.scrollTop();
+            var winHeight = $this.height();
+            if (winTop > $(window).height()) {
+                $('#btnGoTop').fadeIn();
+            } else {
+                $('#btnGoTop').fadeOut();
+            };
+        });
+
+    });
+   $(".warp_alert_questionnaire").click(function () {
+        $(this).remove();
+    })
+ var resizeWidth = function () {
+        if (window.innerWidth < 640) {
+            $(".warp_alert_questionnaire").hide();
+        } else {
+            $(".warp_alert_questionnaire").show();
+        }
+    }
+ var questionnaireTime = "2023-09-11 23:59:59";
+if ((new Date()).getTime() < (new Date(questionnaireTime)).getTime()) {
+        $(".warp_alert_questionnaire").show();
+        resizeWidth();
+        window.addEventListener('resize', resizeWidth)
+    }
+
+    //百度统计
+    var _bdhmProtocol = (("https:" == document.location.protocol) ? " https://" : " http://");
+    document.write(unescape("%3Cscript src='" + _bdhmProtocol + "hm.baidu.com/h.js%3Faf200f4e2bd61323503aebc2689d62cb' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//www.wanfangdata.com.cn/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '5']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+    
+    <script src="https://cdn.med.wanfangdata.com.cn/Scripts/jquery.watermark-3.1.3.min.js?v=639132654789851136" type="text/javascript"></script>
+    <script src="https://cdn.med.wanfangdata.com.cn/Content/js/global.js?v=639132654789851136" type="text/javascript"></script>
+    
+    <script src="https://cdn.med.wanfangdata.com.cn/Share/Scripts/Lib/jquery-ui-1.11.4.custom.js?v=639132654789851136" type="text/javascript"></script>
+    <script src="https://cdn.med.wanfangdata.com.cn/Share/Scripts/customDialog-1.0.min.js?v=639132654789851136" type="text/javascript"></script>
+	<script src="https://cdn.med.wanfangdata.com.cn/Scripts/favourite-1.5.min.js?v=639132654789851136" type="text/javascript"></script>
+	<script>
+	    $(function () {
+			
+	        $.fn.InitFavoriteOrSub({
+			    category: 'Periodical',
+				hasLogined: 'False' === 'True',
+	            loginUrl: 'https://login.med.wanfangdata.com.cn/Account/LogOn?ReturnUrl=' + encodeURIComponent(window.location.href),
+	            dialogObj: $('#dialogInfo')
+			});
+			
+			InitInnerSearch();
+		});
+		
+		function InitInnerSearch() {
+			var $searchInput = $('#innerQuery');
+			$('#innerSearchForm').submit(function() {
+				var query = $.trim($searchInput.val());
+				if (!query) {
+					$searchInput.focus();
+					alert("请输入搜索关键词");
+					return false;
+				};
+				return true;
+			});
+		};
+        
+        $('.topic .factor .principal-factors').hover(function () {
+            $(this).find('.principal-factors-box').toggle();
+		})
+	</script>
+	
+
+    <script>
+        $(function () {
+            function setMinHeight() {
+                if ($("body").height() >= $(window).height()) return
+                var _minHeight = $(window).height() - $("#med_header").height() - $("#MedFooter").height()
+                if (_minHeight > 0) {
+                    $(".main").css("min-height", _minHeight)
+                }
+            }
+
+            setMinHeight()
+            $(window).on("resize", setMinHeight);
+        })
+
+    </script>
+</body>
+
+</html>

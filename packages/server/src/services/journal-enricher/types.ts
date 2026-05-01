@@ -169,6 +169,8 @@ export interface EnrichOptions {
   skipFenqubiao?: boolean;
   /** 跳过 Scimago + 期刊官网 stealth 抓取（B.2.1.B；现 dormant，仅作 fallback flag 保留） */
   skipStealth?: boolean;
+  /** 跳过万方期刊详情（B.4-2；调试或 100 条灰度未放量时强制 skip） */
+  skipWanfang?: boolean;
   /** dry-run：算结果但不 UPDATE DB（仅 orchestrator 直调时用） */
   dryRun?: boolean;
 }
