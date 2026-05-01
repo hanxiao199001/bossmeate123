@@ -50,7 +50,12 @@ export type EditableField =
   | "discipline" | "partition" | "impactFactor" | "acceptanceRate"
   | "reviewCycle" | "publisher" | "website" | "annualVolume" | "apcFee";
 
-export type PatchPayload = Partial<Pick<AdminJournal, EditableField>>;
+// Day 4 PR-1：admin v2 扩展，3 jsonb 字段也走同一 PATCH 接口（backend zod 已校验）
+export type JsonbEditableField = "ifHistory" | "publicationCosts" | "scopeDetails";
+
+export type PatchPayload =
+  & Partial<Pick<AdminJournal, EditableField>>
+  & Partial<Record<JsonbEditableField, unknown>>;
 
 export function useJournalsAdmin() {
   const [items, setItems] = useState<AdminJournal[]>([]);

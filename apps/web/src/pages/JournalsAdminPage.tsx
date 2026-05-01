@@ -12,6 +12,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useJournalsAdmin, type AdminJournal, type PatchPayload } from "../hooks/useJournalsAdmin";
+import { JsonbTableEditor } from "../components/admin/JsonbTableEditor";
+import { JsonbObjectEditor, type JsonbObjectField } from "../components/admin/JsonbObjectEditor";
+import { JsonbDiffPreview } from "../components/admin/JsonbDiffPreview";
 
 // 8 个 enrichment 产生的 jsonb 字段，admin 页用来观察覆盖率
 const COVERAGE_FIELDS = [
@@ -236,6 +239,198 @@ function EditForm({ j, onSave }: { j: AdminJournal; onSave: (p: PatchPayload) =>
           {saving ? "保存中..." : "保存"}
         </button>
       </div>
+      <div className="md:col-span-3 mt-4 space-y-3">
+        <JsonbPanel title="IF 历史" jsonbKey="ifHistory" original={(j as any).ifHistory ?? null} onSave={onSave}>
+          {(value, setValue) => <IfHistoryForm value={value} onChange={setValue} />}
+        </JsonbPanel>
+        <JsonbPanel title="版面费" jsonbKey="publicationCosts" original={(j as any).publicationCosts ?? null} onSave={onSave}>
+          {(value, setValue) => <PublicationCostsForm value={value} onChange={setValue} />}
+        </JsonbPanel>
+        <JsonbPanel title="收稿范围" jsonbKey="scopeDetails" original={(j as any).scopeDetails ?? null} onSave={onSave}>
+          {(value, setValue) => <ScopeDetailsForm value={value} onChange={setValue} />}
+        </JsonbPanel>
+      </div>
+    </div>
+  );
+}
+
+// ============ Day 4 PR-1: 3 jsonb form 实例 ============
+
+const IF_HISTORY_COLUMNS = [
+  { key: "year", label: "年份", type: "number" as const, step: 1, min: 1900, max: 2100, width: "30%" },
+  { key: "if", label: "影响因子", type: "number" as const, step: 0.01, min: 0, max: 200, width: "30%" },
+];
+
+const PUB_COSTS_SCHEMA: ReadonlyArray<JsonbObjectField> = [
+  { key: "apc", label: "APC（金额）", type: "number", step: 50, min: 0 },
+  { key: "currency", label: "币种", type: "enum", options: ["USD", "CNY", "EUR", "GBP", "JPY"] },
+  { key: "openAccess", label: "开放获取（OA）", type: "bool" },
+  { key: "fastTrack", label: "快速通道", type: "bool" },
+  { key: "source", label: "来源", type: "enum", options: ["doaj", "openalex", "journal_apc_field", "journal_website_llm"] },
+];
+
+const SCOPE_DETAILS_SCALAR: ReadonlyArray<JsonbObjectField> = [
+  { key: "submissionNote", label: "投稿说明", type: "string", placeholder: "如：仅接受英文综述" },
+  { key: "source", label: "来源", type: "enum", options: ["journal_website_llm", "openalex"] },
+];
+
+const SCOPE_CATEGORY_COLUMNS = [
+  { key: "title", label: "分类", type: "string" as const, width: "30%", placeholder: "如：临床研究" },
+  { key: "description", label: "描述", type: "string" as const, placeholder: "可选" },
+];
+
+const SUBJECT_DIST_COLUMNS = [
+  { key: "subject", label: "学科", type: "string" as const, width: "60%" },
+  { key: "percent", label: "占比 %", type: "number" as const, step: 0.1, min: 0, max: 100, width: "30%" },
+];
+
+function nowIso() { return new Date().toISOString(); }
+
+function ensureLastUpdated<T extends Record<string, unknown> | null>(v: T): T {
+  if (v && typeof v === "object") return { ...v, lastUpdatedAt: nowIso() } as T;
+  return v;
+}
+
+function IfHistoryForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  // predicted 子对象由 B.4-1 enricher 写入，admin 不手填（保留原值，diff 预览可见）
+  const v = value ?? { data: [], lastUpdatedAt: nowIso() };
+  return (
+    <JsonbTableEditor
+      columns={IF_HISTORY_COLUMNS}
+      rows={v.data ?? []}
+      onChange={(next) => onChange(ensureLastUpdated({ ...v, data: next }))}
+      newRowDefaults={{ year: new Date().getFullYear(), if: null }}
+    />
+  );
+}
+
+function PublicationCostsForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { lastUpdatedAt: nowIso() };
+  return (
+    <JsonbObjectEditor
+      schema={PUB_COSTS_SCHEMA}
+      value={v}
+      onChange={(next) => onChange(ensureLastUpdated(next))}
+    />
+  );
+}
+
+function ScopeDetailsForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { lastUpdatedAt: nowIso() };
+  const setField = (next: any) => onChange(ensureLastUpdated(next));
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">分类</div>
+        <JsonbTableEditor
+          columns={SCOPE_CATEGORY_COLUMNS}
+          rows={v.categories ?? []}
+          onChange={(next) => setField({ ...v, categories: next })}
+          newRowDefaults={{ title: "", description: "" }}
+        />
+      </div>
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">学科分布（%）</div>
+        <JsonbTableEditor
+          columns={SUBJECT_DIST_COLUMNS}
+          rows={v.subjectDistribution ?? []}
+          onChange={(next) => setField({ ...v, subjectDistribution: next })}
+          newRowDefaults={{ subject: "", percent: null }}
+        />
+      </div>
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">文章类型（逗号分隔）</div>
+        <input
+          type="text"
+          value={Array.isArray(v.articleTypes) ? v.articleTypes.join(", ") : ""}
+          onChange={(e) => setField({
+            ...v,
+            articleTypes: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+          })}
+          placeholder="如：综述, 原始研究, 病例报告"
+          className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+        />
+      </div>
+      <JsonbObjectEditor schema={SCOPE_DETAILS_SCALAR} value={v} onChange={setField} />
+    </div>
+  );
+}
+
+/**
+ * 通用 jsonb 编辑面板：折叠 + 编辑 + diff 预览 + 单独保存。
+ * 单独保存（不混入 simple 9 字段）—— 结构化字段独立提交，错误回滚不影响 simple 字段。
+ */
+function JsonbPanel({
+  title,
+  jsonbKey,
+  original,
+  onSave,
+  children,
+}: {
+  title: string;
+  jsonbKey: "ifHistory" | "publicationCosts" | "scopeDetails";
+  original: any;
+  onSave: (p: PatchPayload) => Promise<boolean>;
+  children: (value: any, setValue: (v: any) => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<any>(original);
+  const [saving, setSaving] = useState(false);
+  const handleSave = async () => {
+    setSaving(true);
+    const ok = await onSave({ [jsonbKey]: draft } as PatchPayload);
+    setSaving(false);
+    if (ok) setOpen(false);
+  };
+  const handleClear = async () => {
+    if (!confirm(`清空 ${title}？此操作不可逆`)) return;
+    setSaving(true);
+    const ok = await onSave({ [jsonbKey]: null } as PatchPayload);
+    setSaving(false);
+    if (ok) { setDraft(null); setOpen(false); }
+  };
+  const filled = original != null && (Array.isArray(original) ? original.length > 0 : Object.keys(original).length > 0);
+  return (
+    <div className="border border-gray-200 rounded bg-white">
+      <button
+        type="button"
+        onClick={() => setOpen((x) => !x)}
+        className="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-gray-50"
+      >
+        <span className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${filled ? "bg-green-500" : "bg-gray-300"}`} />
+          <span className="font-medium text-gray-700">{title}</span>
+          <span className="text-xs text-gray-400">{filled ? "已填" : "空"}</span>
+        </span>
+        <span className="text-xs text-gray-400">{open ? "收起" : "展开"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-gray-200 p-4 space-y-3 bg-gray-50">
+          {children(draft, setDraft)}
+          <div>
+            <div className="text-xs font-medium text-gray-600 mb-1">变更预览</div>
+            <JsonbDiffPreview before={original} after={draft} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleClear}
+              disabled={saving || !filled}
+              className={`px-3 py-1.5 text-xs rounded ${saving || !filled ? "bg-gray-100 text-gray-400" : "bg-red-50 text-red-700 hover:bg-red-100"}`}
+            >
+              清空字段
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className={`px-3 py-1.5 text-xs rounded ${saving ? "bg-gray-200 text-gray-400" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+            >
+              {saving ? "保存中..." : "保存"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
