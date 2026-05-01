@@ -11,6 +11,10 @@ build/
 .env
 .env.local
 .env.production
+# task #1 root cause fix（2026-05-01）：.env 备份/影子文件证据
+.env.backup*
+.env.*.backup
+*.backup-shadow-*
 
 # IDE
 .vscode/
