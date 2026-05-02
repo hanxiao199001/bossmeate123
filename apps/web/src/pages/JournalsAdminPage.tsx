@@ -11,7 +11,7 @@
  */
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useJournalsAdmin, type AdminJournal, type PatchPayload } from "../hooks/useJournalsAdmin";
+import { useJournalsAdmin, type AdminJournal, type PatchPayload, type JsonbEditableField } from "../hooks/useJournalsAdmin";
 import { JsonbTableEditor } from "../components/admin/JsonbTableEditor";
 import { JsonbObjectEditor, type JsonbObjectField } from "../components/admin/JsonbObjectEditor";
 import { JsonbDiffPreview } from "../components/admin/JsonbDiffPreview";
@@ -249,6 +249,18 @@ function EditForm({ j, onSave }: { j: AdminJournal; onSave: (p: PatchPayload) =>
         <JsonbPanel title="收稿范围" jsonbKey="scopeDetails" original={(j as any).scopeDetails ?? null} onSave={onSave}>
           {(value, setValue) => <ScopeDetailsForm value={value} onChange={setValue} />}
         </JsonbPanel>
+        <JsonbPanel title="JCR 完整分区" jsonbKey="jcrFull" original={(j as any).jcrFull ?? null} onSave={onSave}>
+          {(value, setValue) => <JcrFullForm value={value} onChange={setValue} />}
+        </JsonbPanel>
+        <JsonbPanel title="发文统计" jsonbKey="publicationStats" original={(j as any).publicationStats ?? null} onSave={onSave}>
+          {(value, setValue) => <PublicationStatsForm value={value} onChange={setValue} />}
+        </JsonbPanel>
+        <JsonbPanel title="引用 Top10" jsonbKey="citingJournalsTop10" original={(j as any).citingJournalsTop10 ?? null} onSave={onSave}>
+          {(value, setValue) => <CitingJournalsTop10Form value={value} onChange={setValue} />}
+        </JsonbPanel>
+        <JsonbPanel title="CAR 指数" jsonbKey="carIndexHistory" original={(j as any).carIndexHistory ?? null} onSave={onSave}>
+          {(value, setValue) => <CarIndexHistoryForm value={value} onChange={setValue} />}
+        </JsonbPanel>
       </div>
     </div>
   );
@@ -368,7 +380,7 @@ function JsonbPanel({
   children,
 }: {
   title: string;
-  jsonbKey: "ifHistory" | "publicationCosts" | "scopeDetails";
+  jsonbKey: JsonbEditableField;
   original: any;
   onSave: (p: PatchPayload) => Promise<boolean>;
   children: (value: any, setValue: (v: any) => void) => React.ReactNode;
@@ -483,5 +495,153 @@ function SelectField({ label, value, onChange, options }: {
         {options.map((o) => <option key={o} value={o}>{o || "（不限）"}</option>)}
       </select>
     </label>
+  );
+}
+
+// ============ Day 4 PR-2: 4 复杂 jsonb form 实例 ============
+
+const JCR_SUBJECT_COLUMNS = [
+  { key: "subject", label: "学科", type: "string" as const, width: "40%" },
+  { key: "zone", label: "分区", type: "string" as const, width: "15%", placeholder: "Q1" },
+  { key: "rank", label: "Rank", type: "string" as const, width: "20%", placeholder: "6/98" },
+  { key: "database", label: "DB", type: "string" as const, width: "15%", placeholder: "SCIE" },
+];
+
+const JCR_FULL_SCALAR: ReadonlyArray<JsonbObjectField> = [
+  { key: "wosLevel", label: "WOS 等级", type: "enum", options: ["SCIE", "SSCI", "SCI", "ESCI"] },
+  { key: "isTopJournal", label: "顶级期刊", type: "bool" },
+  { key: "isReviewJournal", label: "综述期刊", type: "bool" },
+];
+
+const ANNUAL_VOLUME_COLUMNS = [
+  { key: "year", label: "年份", type: "number" as const, step: 1, min: 1900, max: 2100, width: "30%" },
+  { key: "count", label: "发文量", type: "number" as const, step: 1, min: 0, width: "30%" },
+];
+
+const TOP_INSTITUTIONS_COLUMNS = [
+  { key: "name", label: "机构", type: "string" as const, width: "40%" },
+  { key: "paperCount", label: "发文", type: "number" as const, step: 1, min: 0, width: "15%" },
+  { key: "percentile", label: "百分位", type: "number" as const, step: 0.1, min: 0, max: 100, width: "15%" },
+  { key: "country", label: "国家", type: "string" as const, width: "20%", placeholder: "CN" },
+];
+
+const PUB_STATS_SCALAR: ReadonlyArray<JsonbObjectField> = [
+  { key: "frequency", label: "刊期", type: "enum", options: ["月刊", "双月刊", "季刊", "半年刊", "年刊", "周刊", "旬刊"] },
+];
+
+const CITING_JOURNALS_COLUMNS = [
+  { key: "name", label: "引用方期刊", type: "string" as const, width: "45%" },
+  { key: "count", label: "引用次数", type: "number" as const, step: 1, min: 0, width: "15%" },
+  { key: "percent", label: "占比 %", type: "number" as const, step: 0.1, min: 0, max: 100, width: "15%" },
+  { key: "openAlexId", label: "OpenAlex ID", type: "string" as const, width: "20%" },
+];
+
+const CITING_SCALAR: ReadonlyArray<JsonbObjectField> = [
+  { key: "selfCitationRate", label: "自引率（0-1）", type: "number", step: 0.01, min: 0, max: 1 },
+  { key: "selfCitationConfidence", label: "置信度", type: "enum", options: ["low", "medium", "high"] },
+  { key: "totalCitations", label: "总引用数", type: "number", step: 1, min: 0 },
+];
+
+const CAR_DATA_COLUMNS = [
+  { key: "year", label: "年份", type: "number" as const, step: 1, min: 1900, max: 2100, width: "30%" },
+  { key: "carIndex", label: "CAR（0-1）", type: "number" as const, step: 0.01, min: 0, max: 1, width: "30%" },
+];
+
+const CAR_SCALAR: ReadonlyArray<JsonbObjectField> = [
+  { key: "riskLevel", label: "风险等级", type: "enum", options: ["low", "mid", "high"] },
+  { key: "isWarningListed", label: "中科院预警名单", type: "bool" },
+];
+
+function JcrFullForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { lastUpdatedAt: nowIso() };
+  const set = (next: any) => onChange(ensureLastUpdated(next));
+  return (
+    <div className="space-y-4">
+      <JsonbObjectEditor schema={JCR_FULL_SCALAR} value={v} onChange={set} />
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">JIF Subjects</div>
+        <JsonbTableEditor
+          columns={JCR_SUBJECT_COLUMNS}
+          rows={v.jifSubjects ?? []}
+          onChange={(next) => set({ ...v, jifSubjects: next })}
+          newRowDefaults={{ subject: "" }}
+        />
+      </div>
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">JCI Subjects</div>
+        <JsonbTableEditor
+          columns={JCR_SUBJECT_COLUMNS}
+          rows={v.jciSubjects ?? []}
+          onChange={(next) => set({ ...v, jciSubjects: next })}
+          newRowDefaults={{ subject: "" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PublicationStatsForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { lastUpdatedAt: nowIso() };
+  const set = (next: any) => onChange(ensureLastUpdated(next));
+  return (
+    <div className="space-y-4">
+      <JsonbObjectEditor schema={PUB_STATS_SCALAR} value={v} onChange={set} />
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">年发文量历史</div>
+        <JsonbTableEditor
+          columns={ANNUAL_VOLUME_COLUMNS}
+          rows={v.annualVolumeHistory ?? []}
+          onChange={(next) => set({ ...v, annualVolumeHistory: next })}
+          newRowDefaults={{ year: new Date().getFullYear(), count: null }}
+        />
+      </div>
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">活跃机构（Scimago Top 5）</div>
+        <JsonbTableEditor
+          columns={TOP_INSTITUTIONS_COLUMNS}
+          rows={v.topInstitutions ?? []}
+          onChange={(next) => set({ ...v, topInstitutions: next })}
+          newRowDefaults={{ name: "" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CitingJournalsTop10Form({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { topJournals: [], lastUpdatedAt: nowIso() };
+  const set = (next: any) => onChange(ensureLastUpdated(next));
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">引用 Top 期刊</div>
+        <JsonbTableEditor
+          columns={CITING_JOURNALS_COLUMNS}
+          rows={v.topJournals ?? []}
+          onChange={(next) => set({ ...v, topJournals: next })}
+          newRowDefaults={{ name: "", count: 0 }}
+        />
+      </div>
+      <JsonbObjectEditor schema={CITING_SCALAR} value={v} onChange={set} />
+    </div>
+  );
+}
+
+function CarIndexHistoryForm({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value ?? { data: [], riskLevel: "low", lastUpdatedAt: nowIso() };
+  const set = (next: any) => onChange(ensureLastUpdated(next));
+  return (
+    <div className="space-y-4">
+      <JsonbObjectEditor schema={CAR_SCALAR} value={v} onChange={set} />
+      <div>
+        <div className="text-xs font-medium text-gray-600 mb-1">CAR 历史</div>
+        <JsonbTableEditor
+          columns={CAR_DATA_COLUMNS}
+          rows={v.data ?? []}
+          onChange={(next) => set({ ...v, data: next })}
+          newRowDefaults={{ year: new Date().getFullYear(), carIndex: null }}
+        />
+      </div>
+    </div>
   );
 }

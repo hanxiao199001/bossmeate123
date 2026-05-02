@@ -66,6 +66,69 @@ const scopeDetailsSchema = z.object({
   lastUpdatedAt: z.string().min(1).max(40),
 }).strict();
 
+/**
+ * Day 4 PR-2（admin v2 complete）：剩余 4 复杂 jsonb 字段 zod 校验。
+ * 全 .strict() + array.max(50) DoS 防御 + 数值/枚举 range 守护，与 PR-1 一致。
+ */
+
+// jcrFull: WOS + JIF/JCI 多 subjects + 标记位
+const jcrSubjectEntrySchema = z.object({
+  subject: z.string().min(1).max(200),
+  zone: z.enum(["Q1", "Q2", "Q3", "Q4"]).optional(),
+  rank: z.string().max(50).optional(),
+  database: z.string().max(50).optional(),
+}).strict();
+
+const jcrFullSchema = z.object({
+  wosLevel: z.enum(["SCIE", "SSCI", "SCI", "ESCI"]).optional(),
+  jifSubjects: z.array(jcrSubjectEntrySchema).max(50).optional(),
+  jciSubjects: z.array(jcrSubjectEntrySchema).max(50).optional(),
+  isTopJournal: z.boolean().optional(),
+  isReviewJournal: z.boolean().optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
+// publicationStats: frequency + 双 table（年发文 + 活跃机构）
+const publicationStatsSchema = z.object({
+  frequency: z.string().max(50).optional(),
+  annualVolumeHistory: z.array(z.object({
+    year: z.number().int().min(1900).max(2100),
+    count: z.number().int().min(0).max(1_000_000),
+  }).strict()).max(50).optional(),
+  topInstitutions: z.array(z.object({
+    name: z.string().min(1).max(200),
+    paperCount: z.number().int().min(0).max(1_000_000).optional(),
+    percentile: z.number().min(0).max(100).optional(),
+    country: z.string().max(100).optional(),
+  }).strict()).max(50).optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
+// citingJournalsTop10: 引用方 table + 自引率 scalar
+const citingJournalsTop10Schema = z.object({
+  topJournals: z.array(z.object({
+    name: z.string().min(1).max(200),
+    count: z.number().int().min(0).max(10_000_000),
+    percent: z.number().min(0).max(100).optional(),
+    openAlexId: z.string().max(100).optional(),
+  }).strict()).max(50),
+  selfCitationRate: z.number().min(0).max(1).optional(),
+  selfCitationConfidence: z.enum(["low", "medium", "high"]).optional(),
+  totalCitations: z.number().int().min(0).max(1_000_000_000).optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
+// carIndexHistory: data table + riskLevel + isWarningListed
+const carIndexHistorySchema = z.object({
+  data: z.array(z.object({
+    year: z.number().int().min(1900).max(2100),
+    carIndex: z.number().min(0).max(1),
+  }).strict()).max(50),
+  riskLevel: z.enum(["low", "mid", "high"]),
+  isWarningListed: z.boolean().optional(),
+  lastUpdatedAt: z.string().min(1).max(40),
+}).strict();
+
 const journalPatchSchema = z.object({
   discipline: z.string().min(1).max(100).optional().nullable(),
   partition: z.enum(["Q1", "Q2", "Q3", "Q4"]).optional().nullable(),
@@ -80,7 +143,21 @@ const journalPatchSchema = z.object({
   ifHistory: ifHistorySchema.nullable().optional(),
   publicationCosts: publicationCostsSchema.nullable().optional(),
   scopeDetails: scopeDetailsSchema.nullable().optional(),
+  // Day 4 PR-2：剩余 4 复杂 jsonb 字段
+  jcrFull: jcrFullSchema.nullable().optional(),
+  publicationStats: publicationStatsSchema.nullable().optional(),
+  citingJournalsTop10: citingJournalsTop10Schema.nullable().optional(),
+  carIndexHistory: carIndexHistorySchema.nullable().optional(),
 }).strict(); // strict: 拦截未知字段（防止 jsonb 越权写入，比如 metadata.wanfang）
+
+// PR-2 单测可访问 — 暴露用于 schema validation 测试
+export const __testSchemas = {
+  jcrFullSchema,
+  publicationStatsSchema,
+  citingJournalsTop10Schema,
+  carIndexHistorySchema,
+  journalPatchSchema,
+};
 
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
