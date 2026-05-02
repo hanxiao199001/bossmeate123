@@ -187,6 +187,22 @@ ${summary}
     return null;
   }
 
+  /**
+   * Track A.2 公共入口：由 journalId 直接生成视频脚本（无需用户输入）。
+   * 给 auto-video-bridge 用 —— article 生成成功后自动驱动。
+   * 内部走 V7 LLM 真数据 → 失败 fallback 6 场景确定性。
+   */
+  async generateForJournal(journalId: string, tenantId: string): Promise<SkillResult | null> {
+    const [row] = await db
+      .select(JOURNAL_SELECT)
+      .from(journals)
+      .where(and(eq(journals.id, journalId), eq(journals.tenantId, tenantId)))
+      .limit(1);
+    if (!row) return null;
+    const v7Scenes = this.hasEnricherData(row) ? await this.tryGenerateV7Scenes(row) : null;
+    return this.buildJournalVideoResult(row, v7Scenes ?? undefined);
+  }
+
   /** V7：8 enricher 字段任一非空 → 真数据驱动 */
   private hasEnricherData(j: JournalRow): boolean {
     return !!(j.ifHistory || j.jcrFull || j.publicationStats || j.scopeDetails ||

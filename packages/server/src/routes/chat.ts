@@ -12,6 +12,7 @@ import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
 import { SkillRegistry } from "../services/skills/index.js";
 import { publishToAccounts } from "../services/publisher/index.js";
+import { triggerVideoFromArticle } from "../services/skills/auto-video-bridge.js";
 
 const createConversationSchema = z.object({
   title: z.string().optional(),
@@ -227,6 +228,21 @@ export async function chatRoutes(app: FastifyInstance) {
                 status: "draft",
                 metadata: result.artifact.metadata || {},
               }).returning();
+
+              // Track A.2：article 入库后自动触发 video script 同 journalId（fire-and-forget，不阻塞返回）
+              if (contentRow && result.artifact.type === "article") {
+                const journalId = (result.artifact.metadata as Record<string, unknown> | undefined)?.journalId;
+                if (typeof journalId === "string") {
+                  void triggerVideoFromArticle({
+                    provider, db,
+                    journalId,
+                    tenantId: request.tenantId,
+                    userId: request.user.userId,
+                    articleContentId: contentRow.id,
+                    conversationId: id,
+                  });
+                }
+              }
 
               // T4-1c-1 commit 4: 多版本 chat 路径持久化（仅对 article 类型；
               // 与 content-worker.handleArticleWrite 行为一致，让 GET /:id siblings 能从 chat 触发的多版本里查到）
