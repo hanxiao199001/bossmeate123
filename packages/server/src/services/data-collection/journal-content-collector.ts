@@ -93,6 +93,74 @@ export interface JournalInfo {
   id?: string;                               // DB journal.id（用于缓存写回）
   coverUrlHd?: string | null;                // 高清封面 URL（Springer CDN 缓存）
   springerJournalId?: string | null;         // Springer Link journal ID
+  // V13（task #11）：8 enricher jsonb 字段，喂给 article-skill prompt 做深度分析。
+  // 注意：这是 V7 prompt 形态（统一过的），不是 V12 enricher 原 shape。
+  // collector 用 toPromptFormat 单向适配（V12 → V7），其他用 V7 形态的代码（template
+  // 渲染等）保持不变 —— schema 双形态分裂留 task #realignment 后续统一。
+  promptIfHistory?: Array<{ year: number; value: number }>;     // 统一后 IF 历史
+  promptIfPredicted?: { year: number; value: number; source?: string } | null;
+  promptJcrFull?: {
+    wosLevel?: string;
+    jifSubjects?: Array<{ subject: string; zone?: string; rank?: string; database?: string }>;
+    jciSubjects?: Array<{ subject: string; zone?: string; rank?: string; database?: string }>;
+    isTopJournal?: boolean;
+    isReviewJournal?: boolean;
+  };
+  promptPublicationStats?: {
+    frequency?: string;
+    annualVolumeHistory?: Array<{ year: number; count: number }>;
+    topInstitutions?: Array<{ name: string; paperCount?: number; percentile?: number; country?: string }>;
+  };
+  promptScopeDetails?: {
+    categories?: Array<{ title: string; description?: string }>;
+    articleTypes?: string[];
+    submissionNote?: string;
+    subjectDistribution?: Array<{ subject: string; percent: number }>;
+  };
+  promptPublicationCosts?: {
+    apc?: number;
+    currency?: string;
+    openAccess?: boolean;
+    fastTrack?: boolean;
+  };
+  promptCitingTop10?: {
+    topJournals?: Array<{ name: string; count: number; percent?: number }>;
+    selfCitationRate?: number;
+    selfCitationConfidence?: "low" | "medium" | "high";
+    totalCitations?: number;
+  };
+  promptCarIndex?: {
+    data?: Array<{ year: number; carIndex: number }>;
+    riskLevel?: "low" | "mid" | "high";
+    isWarningListed?: boolean;
+  };
+}
+
+/**
+ * V12 enricher → V7 prompt 形态单向适配。
+ *
+ * V12 jsonb shape：`{ data: [{year, if}], predicted, lastUpdatedAt }`（admin v2 / enricher 写）
+ * V7 prompt shape：`[{year, value}]`（journal-template / article-skill 消费）
+ *
+ * 历史遗留 schema 不一致 — 严格只在这一处适配，不改 schema / 不改 enricher / 不改 admin 表单。
+ */
+export function toPromptIfHistory(
+  raw: unknown,
+): { history: Array<{ year: number; value: number }>; predicted: { year: number; value: number; source?: string } | null } {
+  if (!raw) return { history: [], predicted: null };
+  // V12 enricher：含 data + predicted
+  if (typeof raw === "object" && raw !== null && "data" in raw) {
+    const v12 = raw as { data?: Array<{ year: number; if: number }>; predicted?: { year: number; if: number; source?: string } };
+    return {
+      history: Array.isArray(v12.data) ? v12.data.map((d) => ({ year: d.year, value: d.if })) : [],
+      predicted: v12.predicted ? { year: v12.predicted.year, value: v12.predicted.if, source: v12.predicted.source } : null,
+    };
+  }
+  // V7 LetPub：直接 array
+  if (Array.isArray(raw)) {
+    return { history: raw as Array<{ year: number; value: number }>, predicted: null };
+  }
+  return { history: [], predicted: null };
 }
 
 export interface CollectionResult {
@@ -431,6 +499,21 @@ export async function collectJournalContent(params: {
       coreSubjects: coreSubjects.length > 0 ? coreSubjects : undefined,
       organizerName,
       supervisorName,
+      // V13: 8 enricher jsonb → prompt 形态映射（V12 enricher → V7 单向，sparse 字段保留 undefined）
+      ...(() => {
+        const j = journal as Record<string, unknown>;
+        const ifConverted = toPromptIfHistory(j.ifHistory);
+        return {
+          promptIfHistory: ifConverted.history.length > 0 ? ifConverted.history : undefined,
+          promptIfPredicted: ifConverted.predicted,
+          promptJcrFull: (j.jcrFull as JournalInfo["promptJcrFull"]) || undefined,
+          promptPublicationStats: (j.publicationStats as JournalInfo["promptPublicationStats"]) || undefined,
+          promptScopeDetails: (j.scopeDetails as JournalInfo["promptScopeDetails"]) || undefined,
+          promptPublicationCosts: (j.publicationCosts as JournalInfo["promptPublicationCosts"]) || undefined,
+          promptCitingTop10: (j.citingJournalsTop10 as JournalInfo["promptCitingTop10"]) || undefined,
+          promptCarIndex: (j.carIndexHistory as JournalInfo["promptCarIndex"]) || undefined,
+        };
+      })(),
     });
   }
 

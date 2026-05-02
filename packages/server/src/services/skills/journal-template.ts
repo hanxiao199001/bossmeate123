@@ -140,6 +140,14 @@ export interface AIGeneratedContent {
   rating?: number;          // 推荐星级 1-5
   editorComment?: string;   // 小编点评（口语化一句话）
   highlightTip?: string;    // 划重点提示
+  // V7（task #11）：4 个深度分析章节，由 8 enricher 字段真数据驱动 LLM 生成。
+  // 4 字段独立（不合并），与 T4-2-2/T4-2-3 section-level AI 改段对齐 —— 局部更新
+  // 不需要走 LCS diff 整段。sparse 数据下某字段缺失则 prompt 不传 → LLM 输出
+  // 也降级（短句通用描述）；validator 防幻觉守护引用真数据。
+  ifHistoryAnalysis?: string;     // 章 1：IF 历史趋势深度分析（HTML，200-400 字）
+  carRiskAnalysis?: string;       // 章 2：CAR 趋势 + 国内学者投稿风险（HTML，200-400 字）
+  scopeAndCitations?: string;     // 章 3：收稿范围 + 引用生态（HTML，200-400 字）
+  submissionAdvice?: string;      // 章 4：投稿建议 - APC + 录用率 + 同类对比（HTML，300-500 字）
 }
 
 // ============ 叙事风格定义 ============

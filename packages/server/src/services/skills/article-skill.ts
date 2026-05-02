@@ -950,6 +950,51 @@ export class ArticleSkill implements ISkill {
     }
     if (disciplineHint) disciplineHint = `\n学科领域定制要求：${disciplineHint}`;
 
+    // V7（task #11）：sparse null-skip 单字段拼装。某字段缺数据时不出现在 prompt
+    // 里 —— 不要给 LLM "我没数据"的明示，避免它根据缺失暗示编造。
+    const enrichmentLines: string[] = [];
+    if (journal.promptIfHistory && journal.promptIfHistory.length > 0) {
+      enrichmentLines.push(`- 近 10 年 IF 历史：${JSON.stringify(journal.promptIfHistory)}`);
+      if (journal.promptIfPredicted) {
+        enrichmentLines.push(`- IF 预测：${JSON.stringify(journal.promptIfPredicted)}`);
+      }
+    }
+    if (journal.promptCarIndex?.data && journal.promptCarIndex.data.length > 0) {
+      enrichmentLines.push(`- 近 5 年 CAR 指数（中国学者占比）：${JSON.stringify(journal.promptCarIndex.data)}，风险等级：${journal.promptCarIndex.riskLevel || "未知"}${journal.promptCarIndex.isWarningListed ? "，⚠️ 中科院预警名单" : ""}`);
+    }
+    if (journal.promptCitingTop10?.topJournals && journal.promptCitingTop10.topJournals.length > 0) {
+      enrichmentLines.push(`- 引用前 10 期刊：${JSON.stringify(journal.promptCitingTop10.topJournals)}${journal.promptCitingTop10.selfCitationRate != null ? `，自引率：${(journal.promptCitingTop10.selfCitationRate * 100).toFixed(1)}%` : ""}`);
+    }
+    if (journal.promptScopeDetails) {
+      const sd = journal.promptScopeDetails;
+      if (sd.categories && sd.categories.length > 0) enrichmentLines.push(`- 收稿分类：${JSON.stringify(sd.categories)}`);
+      if (sd.articleTypes && sd.articleTypes.length > 0) enrichmentLines.push(`- 接受文章类型：${sd.articleTypes.join("、")}`);
+      if (sd.subjectDistribution && sd.subjectDistribution.length > 0) enrichmentLines.push(`- 学科分布：${JSON.stringify(sd.subjectDistribution)}`);
+    }
+    if (journal.promptPublicationCosts?.apc != null || journal.promptPublicationCosts?.openAccess != null) {
+      const pc = journal.promptPublicationCosts;
+      enrichmentLines.push(`- 版面费：${pc.apc != null ? `${pc.apc} ${pc.currency || "USD"}` : "未公开"}${pc.openAccess ? "（开放获取）" : ""}${pc.fastTrack ? "（快速通道）" : ""}`);
+    }
+    if (journal.promptJcrFull) {
+      const jc = journal.promptJcrFull;
+      const jcrParts: string[] = [];
+      if (jc.wosLevel) jcrParts.push(`WOS：${jc.wosLevel}`);
+      if (jc.jifSubjects && jc.jifSubjects.length > 0) jcrParts.push(`JIF：${JSON.stringify(jc.jifSubjects)}`);
+      if (jc.jciSubjects && jc.jciSubjects.length > 0) jcrParts.push(`JCI：${JSON.stringify(jc.jciSubjects)}`);
+      if (jc.isTopJournal) jcrParts.push("顶级期刊");
+      if (jc.isReviewJournal) jcrParts.push("综述期刊");
+      if (jcrParts.length > 0) enrichmentLines.push(`- JCR 详细：${jcrParts.join("，")}`);
+    }
+    if (journal.promptPublicationStats) {
+      const ps = journal.promptPublicationStats;
+      if (ps.frequency) enrichmentLines.push(`- 刊期：${ps.frequency}`);
+      if (ps.annualVolumeHistory && ps.annualVolumeHistory.length > 0) enrichmentLines.push(`- 年发文量历史：${JSON.stringify(ps.annualVolumeHistory)}`);
+      if (ps.topInstitutions && ps.topInstitutions.length > 0) enrichmentLines.push(`- 活跃机构：${JSON.stringify(ps.topInstitutions)}`);
+    }
+    const enrichmentBlock = enrichmentLines.length > 0
+      ? `\n【真实补充数据 — 深度分析必须基于此】\n${enrichmentLines.join("\n")}\n`
+      : "";
+
     const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
 
 期刊信息：
@@ -962,7 +1007,7 @@ ${journal.casPartitionNew ? `- 新锐分区：${journal.casPartitionNew}` : ""}
 - 审稿周期：${journal.reviewCycle || "未知"}
 - 出版商：${journal.publisher || "未知"}
 ${journal.isWarningList ? "- ⚠️ 在预警名单中" : "- 不在预警名单中"}
-
+${enrichmentBlock}
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
@@ -975,6 +1020,13 @@ ${disciplineHint}
 - scopeDescription 要专业但不枯燥，适当加入「热门方向」「近年趋势」等吸引读者的表述
 - editorComment 要极口语化，像和朋友聊天（"说实话这本刊..."、"赶毕业投这个！"）
 
+【深度分析章节】（V7 task #11，4 个独立 HTML 字段）
+🚫 严格禁止基于上方未提及的字段编造数据。如某章节缺关键数据，章节内容降级为 1-2 句通用描述（不要虚构具体数字 / 年份 / 机构名）。
+- ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。无 IF 历史数据时降级为 1-2 句基于当前 IF 的中性描述。
+- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。无 CAR 数据时降级为 1-2 句基于预警名单状态的判断。
+- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊 / 自引率"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet（12.5%）、NEJM（8.3%）引用"）。无引用数据时降级仅描述收稿范围。
+- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。
+
 请输出纯 JSON（不要 markdown）：
 {
   "title": "按照上面指定的标题风格生成的标题",
@@ -983,17 +1035,22 @@ ${disciplineHint}
   "editorComment": "一句话小编点评（15-30字），极口语化、接地气，像朋友间推荐，如'说实话审稿快到离谱，赶毕业的同学冲！'",
   "highlightTip": "一个划重点提示（20-40字），提炼最核心的投稿建议或数据亮点",
   "ifPrediction": "影响因子走势预测的简短描述，如'预测今年涨至15分'，如果无法预测就返回null",
-  "rating": 推荐星级1-5的数字
+  "rating": 推荐星级1-5的数字,
+  "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
+  "carRiskAnalysis": "章 2 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
+  "scopeAndCitations": "章 3 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
+  "submissionAdvice": "章 4 — HTML，引用真实数据。"
 }`;
 
     try {
       const result = await this.provider.chat({
         messages: [
-          { role: "system", content: "你是学术期刊分析专家，输出严格JSON格式。" },
+          { role: "system", content: "你是学术期刊分析专家，输出严格JSON格式。基于真实数据深度分析，禁止编造数字。" },
           { role: "user", content: prompt },
         ],
         temperature: 0.6,
-        maxTokens: 2048,
+        // V7：原 2048 不够装 7 短字段 + 4 新章节（每章 200-500 字 ≈ 4000+ tokens 输出）
+        maxTokens: 6000,
       });
 
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
@@ -1007,6 +1064,11 @@ ${disciplineHint}
           rating: typeof parsed.rating === "number" ? Math.min(5, Math.max(1, parsed.rating)) : 4,
           editorComment: parsed.editorComment || undefined,
           highlightTip: parsed.highlightTip || undefined,
+          // V7：4 新独立章节字段（不合并）。LLM 缺数据时返回 1-2 句通用描述，不阻断流程。
+          ifHistoryAnalysis: typeof parsed.ifHistoryAnalysis === "string" ? parsed.ifHistoryAnalysis : undefined,
+          carRiskAnalysis: typeof parsed.carRiskAnalysis === "string" ? parsed.carRiskAnalysis : undefined,
+          scopeAndCitations: typeof parsed.scopeAndCitations === "string" ? parsed.scopeAndCitations : undefined,
+          submissionAdvice: typeof parsed.submissionAdvice === "string" ? parsed.submissionAdvice : undefined,
         };
       }
     } catch (err) {
