@@ -13,6 +13,7 @@ import { journals } from "../../models/schema.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { toPromptIfHistory } from "../data-collection/journal-content-collector.js";
+import type { ChartType } from "../video/chart-renderer.js";
 
 interface SceneOutline {
   sceneNumber: number;
@@ -21,6 +22,8 @@ interface SceneOutline {
   voiceoverText: string;
   visualElements: string[];
   sceneType?: string;
+  /** #58.2: chart 类型 — 由 LLM 按 narration 内容选 / 缺失则按 data 场景序号 normalization 兜底 */
+  chartType?: ChartType;
 }
 
 interface VideoScriptOutline {
@@ -257,12 +260,13 @@ ${enrichmentLines.join("\n")}
 - 3 场景独立，每场必须引用 1 个上方真实数据点（数字 / 期刊名 / 百分比）
 - 每场 6-8 秒，voiceoverText 30-60 字，口语化，适合配音
 - 场景类型从 [opening / data / cta] 选
+- 【#58.2】sceneType="data" 场景必须再标 chartType ∈ [if|car|volume|top10]，根据本场景旁白主讲数据维度选择：讲影响因子/IF 趋势 → if；讲自引率/CAR 风险 → car；讲发文量/期刊频次 → volume；讲引用源/Top10 期刊 → top10。非 data 场景不要带 chartType。
 
 请输出纯 JSON（不要 markdown）：
 {
   "scenes": [
     {"sceneNumber":1,"duration":7,"sceneType":"opening","description":"开场 + 1 真数据钩子","voiceoverText":"30-60 字","keywords":["关键词 1","关键词 2"]},
-    {"sceneNumber":2,"duration":8,"sceneType":"data","description":"核心数据深度（IF 趋势 / CAR / 引用生态 任选）","voiceoverText":"30-60 字","keywords":[]},
+    {"sceneNumber":2,"duration":8,"sceneType":"data","chartType":"if","description":"核心数据深度（IF 趋势 / CAR / 引用生态 任选）","voiceoverText":"30-60 字","keywords":[]},
     {"sceneNumber":3,"duration":7,"sceneType":"cta","description":"投稿建议 + 关注引导","voiceoverText":"30-60 字","keywords":[]}
   ]
 }`;
@@ -280,14 +284,25 @@ ${enrichmentLines.join("\n")}
       if (!m) return null;
       const parsed = JSON.parse(m[0]) as { scenes?: unknown };
       if (!Array.isArray(parsed.scenes) || parsed.scenes.length < 1) return null;
-      return parsed.scenes.map((s: any, i: number) => ({
+      const VALID_CT: readonly ChartType[] = ["if", "car", "volume", "top10"];
+      const out: SceneOutline[] = parsed.scenes.map((s: any, i: number) => ({
         sceneNumber: typeof s.sceneNumber === "number" ? s.sceneNumber : i + 1,
         duration: typeof s.duration === "number" ? Math.min(15, Math.max(3, s.duration)) : 7,
         description: String(s.description ?? ""),
         voiceoverText: String(s.voiceoverText ?? ""),
         visualElements: Array.isArray(s.keywords) ? s.keywords.map(String).slice(0, 5) : [],
         sceneType: typeof s.sceneType === "string" ? s.sceneType : undefined,
+        chartType: VALID_CT.includes(s.chartType) ? s.chartType as ChartType : undefined,
       }));
+      // #58.2: data 场景缺 chartType → 按 data 场景序号兜底（1st→if, 2nd→car, 3rd→volume, 4+→top10）
+      const ORDINAL: ChartType[] = ["if", "car", "volume", "top10"];
+      let dataIdx = 0;
+      for (const sc of out) {
+        if (sc.sceneType !== "data") continue;
+        if (!sc.chartType) sc.chartType = ORDINAL[Math.min(dataIdx, ORDINAL.length - 1)];
+        dataIdx++;
+      }
+      return out;
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, journalId: j.id }, "VideoSkill V7 LLM 失败，fallback 到确定性模板");
       return null;
@@ -394,6 +409,7 @@ ${enrichmentLines.join("\n")}
         sceneNumber: s.sceneNumber,
         duration: s.duration,
         sceneType: s.sceneType,
+        chartType: s.chartType, // #58.2
         description: s.description,
         voiceoverText: s.voiceoverText,
         keywords: s.visualElements,
