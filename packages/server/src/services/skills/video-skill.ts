@@ -12,6 +12,7 @@ import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
+import { toPromptIfHistory } from "../data-collection/journal-content-collector.js";
 
 interface SceneOutline {
   sceneNumber: number;
@@ -54,6 +55,14 @@ interface JournalRow {
   scopeDescription: string | null;
   discipline: string | null;
   publisher: string | null;
+  // V7 enricher 8 字段（PR #53 admin v2 落库），用于 LLM 真数据引用
+  ifHistory: unknown | null;
+  jcrFull: unknown | null;
+  publicationStats: unknown | null;
+  scopeDetails: unknown | null;
+  publicationCosts: unknown | null;
+  citingJournalsTop10: unknown | null;
+  carIndexHistory: unknown | null;
 }
 
 export class VideoSkill implements ISkill {
@@ -80,6 +89,12 @@ export class VideoSkill implements ISkill {
 
       if (journal) {
         logger.info({ journalId: journal.id, name: journal.name }, "VideoSkill: 走期刊科普模板");
+        // V7（task #11+ Track A.1）：8 enricher 字段任一非空则走 LLM 真数据驱动 3 场景剧本；
+        // LLM 失败 / 无 enricher 数据 → fallback 到确定性 6 场景模板（保留旧行为）。
+        if (this.hasEnricherData(journal)) {
+          const v7Scenes = await this.tryGenerateV7Scenes(journal);
+          if (v7Scenes) return this.buildJournalVideoResult(journal, v7Scenes);
+        }
         return this.buildJournalVideoResult(journal);
       }
 
@@ -172,8 +187,99 @@ ${summary}
     return null;
   }
 
-  /** 基于期刊数据构建确定性 6 场景脚本（V2：卡片式科普） */
-  private buildJournalVideoResult(journal: JournalRow): SkillResult {
+  /** V7：8 enricher 字段任一非空 → 真数据驱动 */
+  private hasEnricherData(j: JournalRow): boolean {
+    return !!(j.ifHistory || j.jcrFull || j.publicationStats || j.scopeDetails ||
+      j.publicationCosts || j.citingJournalsTop10 || j.carIndexHistory);
+  }
+
+  /**
+   * V7（Track A.1）：sparse null-skip 拼装 prompt → LLM 出 3 场景剧本（每场引用 1 个真数据点）。
+   * 复用 PR #53 toPromptIfHistory 适配器统一 V12→V7 形态。LLM 失败返 null，caller fallback 到
+   * 确定性 6 场景模板。
+   */
+  private async tryGenerateV7Scenes(j: JournalRow): Promise<SceneOutline[] | null> {
+    const enrichmentLines: string[] = [];
+    const ifConv = toPromptIfHistory(j.ifHistory);
+    if (ifConv.history.length > 0) {
+      enrichmentLines.push(`- 近 10 年 IF：${JSON.stringify(ifConv.history)}`);
+      if (ifConv.predicted) enrichmentLines.push(`- IF 预测：${JSON.stringify(ifConv.predicted)}`);
+    }
+    const car = j.carIndexHistory as { data?: unknown[]; riskLevel?: string; isWarningListed?: boolean } | null;
+    if (car?.data && Array.isArray(car.data) && car.data.length > 0) {
+      enrichmentLines.push(`- 近 5 年 CAR：${JSON.stringify(car.data)}，风险：${car.riskLevel || "?"}${car.isWarningListed ? "，⚠️ 预警名单" : ""}`);
+    }
+    const citing = j.citingJournalsTop10 as { topJournals?: unknown[]; selfCitationRate?: number } | null;
+    if (citing?.topJournals && citing.topJournals.length > 0) {
+      enrichmentLines.push(`- 引用 Top10：${JSON.stringify(citing.topJournals)}${citing.selfCitationRate != null ? `，自引率 ${(citing.selfCitationRate * 100).toFixed(1)}%` : ""}`);
+    }
+    const sd = j.scopeDetails as { categories?: unknown[]; subjectDistribution?: unknown[] } | null;
+    if (sd?.categories || sd?.subjectDistribution) {
+      enrichmentLines.push(`- 收稿范围：${JSON.stringify({ categories: sd.categories, subjectDistribution: sd.subjectDistribution })}`);
+    }
+    const pc = j.publicationCosts as { apc?: number; currency?: string; openAccess?: boolean } | null;
+    if (pc?.apc != null) enrichmentLines.push(`- 版面费：${pc.apc} ${pc.currency || "USD"}${pc.openAccess ? "（OA）" : ""}`);
+    const jcr = j.jcrFull as { wosLevel?: string; isTopJournal?: boolean; jifSubjects?: unknown[] } | null;
+    if (jcr?.wosLevel || jcr?.isTopJournal) {
+      enrichmentLines.push(`- JCR：${jcr.wosLevel || ""}${jcr.isTopJournal ? "，Top 期刊" : ""}${jcr.jifSubjects ? `，${JSON.stringify(jcr.jifSubjects)}` : ""}`);
+    }
+    const ps = j.publicationStats as { frequency?: string; annualVolumeHistory?: unknown[] } | null;
+    if (ps?.frequency || ps?.annualVolumeHistory) {
+      enrichmentLines.push(`- 发文：${ps.frequency || ""}${ps.annualVolumeHistory ? `，年发文量 ${JSON.stringify(ps.annualVolumeHistory)}` : ""}`);
+    }
+    if (enrichmentLines.length === 0) return null;
+
+    const displayName = j.nameEn || j.name;
+    const prompt = `你是短视频编导。根据期刊真实数据，生成一支 3 场景科普短视频脚本（共 18-25 秒）。
+
+期刊：${displayName}（${j.discipline || "学术"}领域）
+${enrichmentLines.join("\n")}
+
+【硬规则】
+🚫 严格禁止编造未在上方"真实数据"出现的具体数字 / 年份 / 机构名。如某场景缺关键数据，
+  voiceoverText 降级为基于 IF/分区的通用描述（不虚构数字）。
+- 3 场景独立，每场必须引用 1 个上方真实数据点（数字 / 期刊名 / 百分比）
+- 每场 6-8 秒，voiceoverText 30-60 字，口语化，适合配音
+- 场景类型从 [opening / data / cta] 选
+
+请输出纯 JSON（不要 markdown）：
+{
+  "scenes": [
+    {"sceneNumber":1,"duration":7,"sceneType":"opening","description":"开场 + 1 真数据钩子","voiceoverText":"30-60 字","keywords":["关键词 1","关键词 2"]},
+    {"sceneNumber":2,"duration":8,"sceneType":"data","description":"核心数据深度（IF 趋势 / CAR / 引用生态 任选）","voiceoverText":"30-60 字","keywords":[]},
+    {"sceneNumber":3,"duration":7,"sceneType":"cta","description":"投稿建议 + 关注引导","voiceoverText":"30-60 字","keywords":[]}
+  ]
+}`;
+
+    try {
+      const result = await this.provider.chat({
+        messages: [
+          { role: "system", content: "你是短视频脚本专家，输出严格 JSON，基于真实数据，禁止编造数字。" },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.5,
+        maxTokens: 2000, // V6 模板纯确定性 0 token；V7 input ~600 + output ~400 = ~1000 留 100% buffer
+      });
+      const m = result.content.match(/\{[\s\S]*\}/);
+      if (!m) return null;
+      const parsed = JSON.parse(m[0]) as { scenes?: unknown };
+      if (!Array.isArray(parsed.scenes) || parsed.scenes.length < 1) return null;
+      return parsed.scenes.map((s: any, i: number) => ({
+        sceneNumber: typeof s.sceneNumber === "number" ? s.sceneNumber : i + 1,
+        duration: typeof s.duration === "number" ? Math.min(15, Math.max(3, s.duration)) : 7,
+        description: String(s.description ?? ""),
+        voiceoverText: String(s.voiceoverText ?? ""),
+        visualElements: Array.isArray(s.keywords) ? s.keywords.map(String).slice(0, 5) : [],
+        sceneType: typeof s.sceneType === "string" ? s.sceneType : undefined,
+      }));
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, journalId: j.id }, "VideoSkill V7 LLM 失败，fallback 到确定性模板");
+      return null;
+    }
+  }
+
+  /** 基于期刊数据构建科普视频脚本。V7 LLM scenes 优先，无则降级到确定性 6 场景。 */
+  private buildJournalVideoResult(journal: JournalRow, v7Scenes?: SceneOutline[]): SkillResult {
     const displayName = journal.name;
     const ifStr = journal.impactFactor != null ? journal.impactFactor.toFixed(3) : null;
     const partitionStr = journal.casPartition || journal.partition || null;
@@ -181,10 +287,11 @@ ${summary}
     const acceptance = formatAcceptancePct(journal.acceptanceRate);
     const discipline = journal.discipline || "学术";
 
-    // 6 个场景：封面介绍 → 核心数据 → 审稿效率 → 研究方向 → 投稿技巧 → 关注引导
-    const scenes: SceneOutline[] = [];
-    let seq = 1;
+    // V7 LLM 真数据 3 场景优先；无则降级 6 个确定性场景
+    const scenes: SceneOutline[] = v7Scenes ? [...v7Scenes] : [];
+    let seq = scenes.length + 1;
 
+    if (!v7Scenes) {
     // Scene 1: opening
     scenes.push({
       sceneNumber: seq++,
@@ -258,6 +365,7 @@ ${summary}
       voiceoverText: `想了解更多期刊分析，关注主页，私信可咨询具体投稿方案。`,
       visualElements: ["follow", "subscribe"],
     });
+    } // end if (!v7Scenes)
 
     const totalDuration = scenes.reduce((s, x) => s + x.duration, 0);
     const title = `${displayName} 期刊速览${ifStr ? ` · IF ${ifStr}` : ""}`;
@@ -464,6 +572,14 @@ const JOURNAL_SELECT = {
   scopeDescription: journals.scopeDescription,
   discipline: journals.discipline,
   publisher: journals.publisher,
+  // V7：8 enricher jsonb 字段，喂给 LLM 写"真数据引用"3 场景剧本
+  ifHistory: journals.ifHistory,
+  jcrFull: journals.jcrFull,
+  publicationStats: journals.publicationStats,
+  scopeDetails: journals.scopeDetails,
+  publicationCosts: journals.publicationCosts,
+  citingJournalsTop10: journals.citingJournalsTop10,
+  carIndexHistory: journals.carIndexHistory,
 } as const;
 
 function formatAcceptancePct(rate: number | null | undefined): string | null {
