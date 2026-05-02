@@ -353,7 +353,8 @@ export function computeTrendLabel(
 
   // 趋势标签
   let trend: TrendLabel["trend"] = "stable";
-  if (firstSeenDaysAgo <= 3 && history.length <= 3) {
+  // 守护：空 history 应是 "stable"（无数据=中性），不能因 firstSeenDaysAgo=0 默认 ≤3 误判 "new"
+  if (history.length > 0 && firstSeenDaysAgo <= 3 && history.length <= 3) {
     trend = "new";
   } else if (score7d >= 200) {
     trend = "exploding";

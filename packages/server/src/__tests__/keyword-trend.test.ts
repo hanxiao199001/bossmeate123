@@ -1,25 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
-import { computeTrendLabel, type TrendLabel } from "../services/agents/keyword-trend.js";
 
-// Mock the database and logger
-vi.mock("../../models/db.js", () => ({
-  db: {},
+// Mock 路径相对测试文件 src/__tests__/* —— 应是 ../config/* 不是 ../../config/*；
+// 旧路径不匹配，mock 不生效，env.ts 真加载 throw "no .env"，全 file collect fail。
+vi.mock("../models/db.js", () => ({ db: {} }));
+vi.mock("../config/logger.js", () => ({
+  logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
-
-vi.mock("../../config/logger.js", () => ({
-  logger: {
-    info: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-  },
-}));
-
-vi.mock("../../config/env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
-    LOG_LEVEL: "error",
-    NODE_ENV: "test",
+    JWT_SECRET: "x".repeat(32), CREDENTIALS_KEY: "k", LOG_LEVEL: "error",
+    NODE_ENV: "test", PORT: 3000, API_PREFIX: "/api", ALLOWED_ORIGINS: "http://localhost:3000",
+    DATABASE_URL: "postgres://test/test",
   },
 }));
+
+const { computeTrendLabel } = await import("../services/agents/keyword-trend.js");
+
+// 工具：按"距今 N 天"生成 ISO 日期串（YYYY-MM-DD）。
+// 静态 "2024-03-XX" 是写测试时偷懒 —— impl 用 new Date() 算 day7Ago 是产品意图，
+// 所以测试要相对 now 计日期才稳定（参考 case 6 已示范）。
+function dateDaysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split("T")[0];
+}
 
 describe("Keyword Trend Analysis", () => {
   describe("computeTrendLabel", () => {
@@ -38,17 +42,17 @@ describe("Keyword Trend Analysis", () => {
     it("should classify keyword as exploding with >200% change in 7 days", () => {
       const keyword = "rocket-trending";
 
-      // Simulate old data (7+ days ago)
+      // 旧数据：8-12 天前（落入 older 桶）
       const oldHistory = Array.from({ length: 5 }, (_, i) => ({
-        date: `2024-03-0${i + 1}`,
+        date: dateDaysAgo(8 + i),
         heatScore: 100,
         compositeScore: 100,
         platforms: ["twitter"],
       }));
 
-      // Simulate recent data (last 7 days) with huge jump
+      // 近 7 天数据：0-2 天前，分数暴涨 5x（→ exploding）
       const recentHistory = Array.from({ length: 3 }, (_, i) => ({
-        date: `2024-03-${10 + i}`,
+        date: dateDaysAgo(2 - i),
         heatScore: 500,
         compositeScore: 500,
         platforms: ["twitter", "weibo"],
@@ -65,14 +69,14 @@ describe("Keyword Trend Analysis", () => {
       const keyword = "rising-trend";
 
       const oldHistory = Array.from({ length: 5 }, (_, i) => ({
-        date: `2024-03-0${i + 1}`,
+        date: dateDaysAgo(8 + i),
         heatScore: 100,
         compositeScore: 100,
         platforms: ["twitter"],
       }));
 
       const recentHistory = Array.from({ length: 3 }, (_, i) => ({
-        date: `2024-03-${10 + i}`,
+        date: dateDaysAgo(2 - i),
         heatScore: 180,
         compositeScore: 180,
         platforms: ["twitter"],
@@ -89,12 +93,20 @@ describe("Keyword Trend Analysis", () => {
     it("should classify keyword as stable when change is within 50% and -30%", () => {
       const keyword = "stable-keyword";
 
-      const history = Array.from({ length: 10 }, (_, i) => ({
-        date: `2024-03-${i + 1}`,
-        heatScore: 100 + Math.random() * 20,
-        compositeScore: 100 + Math.random() * 20,
+      // 5 天 older（≈100）+ 5 天 recent（≈100）→ avgOlder ≈ avgRecent，score7d ≈ 0 落入 stable
+      const oldHistory = Array.from({ length: 5 }, (_, i) => ({
+        date: dateDaysAgo(10 + i),
+        heatScore: 100,
+        compositeScore: 100,
         platforms: ["twitter"],
       }));
+      const recentHistory = Array.from({ length: 5 }, (_, i) => ({
+        date: dateDaysAgo(4 - i),
+        heatScore: 105,
+        compositeScore: 105,
+        platforms: ["twitter"],
+      }));
+      const history = [...oldHistory, ...recentHistory];
 
       const trend = computeTrendLabel(keyword, history);
 
@@ -221,19 +233,10 @@ describe("Keyword Trend Analysis", () => {
       const keyword = "multi-platform-keyword";
       const platforms = ["twitter", "weibo", "tiktok"];
 
+      // 一条 older（10 天前）+ 一条 recent7d（今天，多平台）
       const history = [
-        {
-          date: "2024-03-01",
-          heatScore: 100,
-          compositeScore: 100,
-          platforms: ["twitter"],
-        },
-        {
-          date: "2024-03-10",
-          heatScore: 150,
-          compositeScore: 150,
-          platforms,
-        },
+        { date: dateDaysAgo(10), heatScore: 100, compositeScore: 100, platforms: ["twitter"] },
+        { date: dateDaysAgo(0), heatScore: 150, compositeScore: 150, platforms },
       ];
 
       const trend = computeTrendLabel(keyword, history);
