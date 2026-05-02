@@ -50,8 +50,10 @@ export type EditableField =
   | "discipline" | "partition" | "impactFactor" | "acceptanceRate"
   | "reviewCycle" | "publisher" | "website" | "annualVolume" | "apcFee";
 
-// Day 4 PR-1：admin v2 扩展，3 jsonb 字段也走同一 PATCH 接口（backend zod 已校验）
-export type JsonbEditableField = "ifHistory" | "publicationCosts" | "scopeDetails";
+// Day 4 PR-1 + PR-2：admin v2 扩展，7 jsonb 字段走同一 PATCH 接口（backend zod 已校验）
+export type JsonbEditableField =
+  | "ifHistory" | "publicationCosts" | "scopeDetails"
+  | "jcrFull" | "publicationStats" | "citingJournalsTop10" | "carIndexHistory";
 
 export type PatchPayload =
   & Partial<Pick<AdminJournal, EditableField>>
