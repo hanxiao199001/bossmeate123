@@ -126,7 +126,7 @@ export async function getTemplatePreferences(
 }
 
 export interface SelectVariantTemplatesOptions {
-  /** 主版本固定模板（默认 = getDefaultTemplateId()，'data-card'）。 */
+  /** 主版本固定模板（默认 = getDefaultTemplateId()，'shunshi-style' as of task #11；之前 'data-card'）。 */
   defaultId?: string;
   /** 注入随机源用于测试，签名 () => [0,1)。默认 Math.random。 */
   random?: () => number;

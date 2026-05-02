@@ -127,9 +127,11 @@ describe("getTemplatePreferences", () => {
 });
 
 describe("selectVariantTemplates", () => {
+  // task #11 V7：默认从 'data-card' 切到 'shunshi-style'。下面 variants 测试的 ids[0]
+  // 期望同步更新；非默认候选池现在包含 data-card / storytelling / listicle 三者。
   it("variants=1 returns [defaultId]", async () => {
     const ids = await selectVariantTemplates("tenant-X", 1);
-    expect(ids).toEqual(["data-card"]);
+    expect(ids).toEqual(["shunshi-style"]);
   });
 
   it("variants=2 with empty preferences returns [defaultId, oneOfNonDefault]", async () => {
@@ -137,9 +139,9 @@ describe("selectVariantTemplates", () => {
     const ids = await selectVariantTemplates("tenant-empty", 2, {
       random: () => 0, // pick first remaining candidate
     });
-    expect(ids[0]).toBe("data-card");
-    expect(ids[1]).not.toBe("data-card");
-    expect(["storytelling", "listicle"]).toContain(ids[1]);
+    expect(ids[0]).toBe("shunshi-style");
+    expect(ids[1]).not.toBe("shunshi-style");
+    expect(["data-card", "storytelling", "listicle"]).toContain(ids[1]);
   });
 
   it("variants=3 returns 3 distinct ids: default + two non-default", async () => {
@@ -147,17 +149,22 @@ describe("selectVariantTemplates", () => {
     const ids = await selectVariantTemplates("tenant-empty-3", 3, {
       random: () => 0,
     });
-    expect(ids[0]).toBe("data-card");
+    expect(ids[0]).toBe("shunshi-style");
     expect(new Set(ids).size).toBe(3);
-    expect(ids.slice(1).sort()).toEqual(["listicle", "storytelling"]);
+    // 非默认池含 3 个，random=0 会按 sort 顺序取前 2 个
+    ids.slice(1).forEach((id) => expect(["data-card", "storytelling", "listicle"]).toContain(id));
   });
 
-  it("concentrated preference (storytelling weight=1.0) → r=0.0 picks storytelling", async () => {
+  it("concentrated preference (storytelling weight=1.0) → picks storytelling", async () => {
     dbCallSeq = [[{ tid: "storytelling", cnt: 10 }], []];
+    // r=0.5 走过 data-card (weight=0) 落在 storytelling (weight=1.0) 段；
+    // 旧 r=0 用例依赖默认非 data-card 在 index 0，task #11 default → shunshi-style
+    // 后非默认池含 data-card 在前，r=0 + weight=0 边界让 r 不递减直接选中 data-card，
+    // 不再测得到 weighted-pick 语义。改 0.5 重新对齐测试意图。
     const ids = await selectVariantTemplates("tenant-pref", 2, {
-      random: () => 0, // r=0 lands on first weighted candidate
+      random: () => 0.5,
     });
-    expect(ids[0]).toBe("data-card");
+    expect(ids[0]).toBe("shunshi-style");
     expect(ids[1]).toBe("storytelling");
   });
 
@@ -173,17 +180,17 @@ describe("selectVariantTemplates", () => {
 
   it("variants > available non-default+1 → fills remainder with defaultId", async () => {
     dbCallSeq = [[], []];
-    // 4 templates registered (data-card default + 3 non-defaults). variants=6
-    // → [default, nd1, nd2, nd3, default, default]
+    // 4 templates registered (shunshi-style default + 3 non-defaults: data-card / storytelling / listicle).
+    // variants=6 → [default, nd1, nd2, nd3, default, default]
     const ids = await selectVariantTemplates("tenant-overflow", 6, {
       random: () => 0,
     });
     expect(ids.length).toBe(6);
-    expect(ids[0]).toBe("data-card");
+    expect(ids[0]).toBe("shunshi-style");
     // 3 non-default picks all distinct
     expect(new Set(ids.slice(1, 4)).size).toBe(3);
     // remaining slots filled by defaultId
-    expect(ids[4]).toBe("data-card");
-    expect(ids[5]).toBe("data-card");
+    expect(ids[4]).toBe("shunshi-style");
+    expect(ids[5]).toBe("shunshi-style");
   });
 });

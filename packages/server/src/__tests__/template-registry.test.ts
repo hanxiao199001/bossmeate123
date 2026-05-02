@@ -37,15 +37,17 @@ const {
 } = await import("../services/skills/template-registry.js");
 
 describe("template-registry", () => {
-  it("DEFAULT_TEMPLATE_ID is 'data-card'", () => {
-    expect(DEFAULT_TEMPLATE_ID).toBe("data-card");
-    expect(getDefaultTemplateId()).toBe("data-card");
+  // task #11 V7：默认从 'data-card' 切到 'shunshi-style'（唯一渲染 4 章节深度分析的模板）
+  it("DEFAULT_TEMPLATE_ID is 'shunshi-style'", () => {
+    expect(DEFAULT_TEMPLATE_ID).toBe("shunshi-style");
+    expect(getDefaultTemplateId()).toBe("shunshi-style");
   });
 
-  it("listTemplates returns at least the built-in 'data-card'", () => {
+  it("listTemplates returns at least the built-in 'data-card' (向后兼容仍可显式选用)", () => {
     const all = listTemplates();
     const ids = all.map((t) => t.id);
     expect(ids).toContain("data-card");
+    expect(ids).toContain("shunshi-style");
   });
 
   it("getTemplate('data-card') returns the built-in registration with name/description/icon/htmlGenerator", () => {
