@@ -648,6 +648,31 @@ function renderRecommendationScoreBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
+// ============ 区块 15a-15d: V7 深度分析 4 章（AI 真数据驱动） ============
+// 4 字段独立渲染（不合并）。LLM 缺数据时返回 1-2 句通用描述，不阻断流程。
+// 字段为空（undefined / 空串）时整段 <section> 不输出（P3 隐藏，与区块 7/12/14 风格一致）。
+function renderDeepAnalysisSection(title: string, html: string | undefined): string {
+  if (!html || !html.trim()) return "";
+  return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
+    `<p style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">${esc(title)}</p>` +
+    `<div style="margin:0;font-size:14px;line-height:1.8;color:${TEXT};">${html}</div>` +
+    `</section>`;
+}
+
+function renderIfHistoryAnalysis(ai: AIGeneratedContent): string {
+  return renderDeepAnalysisSection("📈 IF 趋势深度分析", ai.ifHistoryAnalysis);
+}
+function renderCarRiskAnalysis(ai: AIGeneratedContent): string {
+  return renderDeepAnalysisSection("🇨🇳 国内学者投稿现状", ai.carRiskAnalysis);
+}
+function renderScopeAndCitations(ai: AIGeneratedContent): string {
+  return renderDeepAnalysisSection("🔍 收稿范围 & 引用生态", ai.scopeAndCitations);
+}
+function renderAiSubmissionAdvice(ai: AIGeneratedContent): string {
+  // 注意：与区块 17 renderSubmissionAdviceBlock（rule-based 简短）区分
+  return renderDeepAnalysisSection("💡 投稿建议（AI 综合分析）", ai.submissionAdvice);
+}
+
 // ============ 区块 16: 综合点评（aiContent.recommendation 摘要） ============
 function renderSummaryBlock(aiContent: AIGeneratedContent): string {
   const reco = aiContent.recommendation
@@ -894,6 +919,11 @@ export async function generateShunshiStyleHtml(
   sections.push(renderCitingJournalsPie(journal));                    // 13 🆕
   sections.push(renderSelfCitationBadge(journal));                    // 14 🆕 (P3)
   sections.push(renderRecommendationScoreBlock(journal));             // 15 🆕
+  // V7（task #11）：4 个深度分析章节，由 8 enricher 字段真数据驱动 LLM 生成
+  sections.push(renderIfHistoryAnalysis(aiContent));                  // 15a 🆕 V7
+  sections.push(renderCarRiskAnalysis(aiContent));                    // 15b 🆕 V7
+  sections.push(renderScopeAndCitations(aiContent));                  // 15c 🆕 V7
+  sections.push(renderAiSubmissionAdvice(aiContent));                 // 15d 🆕 V7
   sections.push(renderSummaryBlock(aiContent));                       // 16
   sections.push(renderSubmissionAdviceBlock(journal));                // 17
   sections.push(renderAdvantagesBlock(journal, aiContent));           // 18

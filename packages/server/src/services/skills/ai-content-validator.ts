@@ -84,6 +84,22 @@ export function validateAIContent(
     validateNumbersInText(corrected, "highlightTip", corrected.highlightTip, journal, issues);
   }
 
+  // ---- 5a-5d. V7 task #11：4 个深度分析章节防幻觉（IF / 录用率 / APC 数值交叉校验）----
+  // 注：sparse 字段下 prompt 已 null-skip，LLM 收不到该数据，理论上不会输出具体数字；
+  // 仍走完整 validateNumbersInText 兜底，万一 LLM 编造数字（违反 prompt 指令）就修正回去。
+  if (corrected.ifHistoryAnalysis) {
+    validateNumbersInText(corrected, "ifHistoryAnalysis", corrected.ifHistoryAnalysis, journal, issues);
+  }
+  if (corrected.carRiskAnalysis) {
+    validateNumbersInText(corrected, "carRiskAnalysis", corrected.carRiskAnalysis, journal, issues);
+  }
+  if (corrected.scopeAndCitations) {
+    validateNumbersInText(corrected, "scopeAndCitations", corrected.scopeAndCitations, journal, issues);
+  }
+  if (corrected.submissionAdvice) {
+    validateNumbersInText(corrected, "submissionAdvice", corrected.submissionAdvice, journal, issues);
+  }
+
   // ---- 6. 分区标签一致性 ----
   validatePartitionClaims(corrected, journal, issues);
 
