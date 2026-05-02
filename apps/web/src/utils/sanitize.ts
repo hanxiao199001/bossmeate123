@@ -30,8 +30,20 @@ export function isSafeUrl(url: string): boolean {
   }
 }
 
+// SVG 标签白名单（PR #55，task #12 sprint C 视觉投资修复）
+// shunshi-style 4 个图表（IF / CAR 折线 + 年发文柱状 + 引用饼图）用 inline SVG 渲染，
+// 不在 ALLOWED_TAGS 白名单的话 sanitizer 会全部剥光 → 用户前端看不到图表。
+// 严格不收 foreignObject（嵌入 HTML 注入风险）/ a / script / use（xlink:href 注入）。
+const SVG_TAGS = [
+  "svg", "g", "defs",
+  "polyline", "line", "rect", "circle", "ellipse", "path", "polygon",
+  "text", "tspan",
+  "linearGradient", "radialGradient", "stop",
+  "title", "desc",
+] as const;
+
 // 允许渲染的标签白名单
-const ALLOWED_TAGS = new Set([
+const ALLOWED_TAGS = new Set<string>([
   "a",
   "b",
   "blockquote",
@@ -66,7 +78,24 @@ const ALLOWED_TAGS = new Set([
   "thead",
   "tr",
   "ul",
+  ...SVG_TAGS,
 ]);
+
+const SVG_TAG_SET = new Set<string>(SVG_TAGS);
+
+// SVG 元素专属属性白名单（严格：不放 ALLOWED_ATTRS["*"] 避免 HTML 元素也能携带；
+// 不收 href / xlink:href / xlink:show / xlink:actuate / target —— SVG 链接注入风险）。
+const SVG_ATTRS = [
+  "viewbox", "xmlns", "width", "height", "preserveaspectratio",
+  "x", "y", "cx", "cy", "r", "rx", "ry",
+  "x1", "y1", "x2", "y2",
+  "d", "points",
+  "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+  "fill-opacity", "stroke-opacity", "opacity",
+  "text-anchor", "font-size", "font-weight", "font-family", "dy", "dx",
+  "offset", "stop-color", "stop-opacity",
+  "transform",
+];
 
 // 每个标签允许保留的属性白名单（style 只在少量场景下保留，避免 expression/behavior/url()）
 const ALLOWED_ATTRS: Record<string, string[]> = {
@@ -85,6 +114,8 @@ function sanitizeStyle(value: string): string {
 function isAllowedAttr(tagName: string, attrName: string): boolean {
   const tagAttrs = ALLOWED_ATTRS[tagName] || [];
   const globalAttrs = ALLOWED_ATTRS["*"] || [];
+  // SVG 标签额外允许 SVG_ATTRS（严格 scope，不污染 HTML 元素）
+  if (SVG_TAG_SET.has(tagName) && SVG_ATTRS.includes(attrName)) return true;
   return tagAttrs.includes(attrName) || globalAttrs.includes(attrName);
 }
 
