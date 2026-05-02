@@ -17,6 +17,7 @@ import sharp from "sharp";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
+import { renderChartFrame, type ChartSceneData } from "./chart-renderer.js";
 
 /** 单路径解析 + 存在检查；存在返回绝对路径，否则 null */
 async function tryResolve(p: string | undefined | null): Promise<string | null> {
@@ -319,17 +320,32 @@ export class VideoComposer {
         const scene = req.scenes[i];
         const outPath = path.join(workDir, `prep${i}.png`);
 
-        if (!scene.imageSource) {
-          // remotePath 为空：生成带标题文字的深色占位图，跳过 sharp
-          logger.warn({ sceneIndex: i, title: scene.title }, "场景图片路径为空，生成占位图");
-          await this.generateScenePlaceholder(outPath, scene.title, resW * 2, resH * 2, fontPath);
-        } else {
-          const srcPath = await this.materialize(scene.imageSource, workDir, `raw${i}`);
-          await sharp(srcPath)
-            .rotate() // EXIF 校正
-            .resize(resW * 2, resH * 2, { fit: "cover", withoutEnlargement: false })
-            .png()
-            .toFile(outPath);
+        // Track A.3: data 场景且带 chartFrame → 渲染图表 PNG；失败 → 跳过、走原 imageSource fallback
+        let chartHandled = false;
+        if (scene.sceneType === "data" && scene.chartFrame) {
+          const chartBuf = await renderChartFrame({ ...scene.chartFrame, width: resW * 2, height: resH * 2 });
+          if (chartBuf) {
+            await writeFile(outPath, chartBuf);
+            chartHandled = true;
+            logger.info({ sceneIndex: i, chartType: scene.chartFrame.type }, "video.chart.frame.ok");
+          } else {
+            logger.warn({ sceneIndex: i, chartType: scene.chartFrame.type }, "video.chart.frame.skip: 渲染失败 → fallback");
+          }
+        }
+
+        if (!chartHandled) {
+          if (!scene.imageSource) {
+            // remotePath 为空：生成带标题文字的深色占位图，跳过 sharp
+            logger.warn({ sceneIndex: i, title: scene.title }, "场景图片路径为空，生成占位图");
+            await this.generateScenePlaceholder(outPath, scene.title, resW * 2, resH * 2, fontPath);
+          } else {
+            const srcPath = await this.materialize(scene.imageSource, workDir, `raw${i}`);
+            await sharp(srcPath)
+              .rotate() // EXIF 校正
+              .resize(resW * 2, resH * 2, { fit: "cover", withoutEnlargement: false })
+              .png()
+              .toFile(outPath);
+          }
         }
 
         preparedImages.push(outPath);
@@ -547,6 +563,10 @@ export interface SlideshowScene {
   title?: string;
   subtitle?: string;
   animation?: "kenburns_in" | "kenburns_out" | "pan_left" | "pan_right" | "static";
+  /** Track A.3：V7 输出的场景类型（"data" 时 composeSlideshow 会尝试用 chartFrame 渲染图表替换 imageSource） */
+  sceneType?: string;
+  /** Track A.3：当 sceneType === "data" 时优先用此对象渲染 chart PNG；失败 / 空则 fallback 到 imageSource */
+  chartFrame?: ChartSceneData;
 }
 
 export interface SlideshowRequest {
