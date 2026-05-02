@@ -14,6 +14,7 @@ import type { SceneAsset, JournalAssetInput } from "./asset-manager.js";
 import { ttsService } from "./tts-service.js";
 import { videoComposer } from "./composer.js";
 import type { ComposeResult, ComposerScene, JournalInfoCard } from "./composer.js";
+import { renderChartFrame, type ChartType } from "./chart-renderer.js";
 import { generateCard } from "./html-renderer.js";
 import type { SceneType, JournalCardData } from "./html-renderer.js";
 import { logger } from "../../config/logger.js";
@@ -28,6 +29,8 @@ export interface ProduceSceneInput {
   subtitle?: string;
   /** V2: 场景类型，存在时生成对应信息卡底图，跳过封面/Pexels逻辑 */
   sceneType?: SceneType;
+  /** #58.1：sceneType=data 时优先用真实图表 PNG 覆盖 V2 卡片 */
+  chartType?: ChartType;
 }
 
 export interface ProduceVideoInput {
@@ -74,6 +77,10 @@ export async function produceVideo(
           scopeDescription: journals.scopeDescription,
           discipline: journals.discipline,
           publisher: journals.publisher,
+          ifHistory: journals.ifHistory,
+          carIndexHistory: journals.carIndexHistory,
+          publicationStats: journals.publicationStats,
+          citingJournalsTop10: journals.citingJournalsTop10,
         })
         .from(journals)
         .where(and(eq(journals.id, input.journalId), eq(journals.tenantId, tenantId)))
@@ -99,7 +106,11 @@ export async function produceVideo(
           scopeDescription: row.scopeDescription,
           discipline: row.discipline,
           publisher: row.publisher,
-        };
+          ifHistory: row.ifHistory,
+          carIndexHistory: row.carIndexHistory,
+          publicationStats: row.publicationStats,
+          citingJournalsTop10: row.citingJournalsTop10,
+        } as JournalAssetInput & JournalInfoCard & JournalCardData;
       } else {
         logger.warn({ journalId: input.journalId, tenantId }, "未找到期刊，将使用关键词兜底素材");
       }
@@ -206,6 +217,18 @@ export async function produceVideo(
       imageUrl = asset.url;
     }
 
+    // #58.1: data 场景 + chart 数据齐 → chart PNG 覆盖 V2 卡片；任何失败 → 保持原 imageUrl
+    if (s.sceneType === "data" && s.chartType && journal) {
+      const cd = pickChartData(journal, s.chartType);
+      if (cd) try {
+        const buf = await renderChartFrame({ type: s.chartType, data: cd });
+        if (buf) imageUrl = await storage.upload(buf, `assets/${tenantId}/charts/${(journal as { id?: string }).id}-${s.chartType}-${Date.now()}.png`, "image/png");
+        if (buf) logger.info({ chartType: s.chartType }, "video.chart.injected");
+      } catch (err) {
+        logger.warn({ err: err instanceof Error ? err.message : err, chartType: s.chartType }, "video.chart.inject_failed");
+      }
+    }
+
     composerScenes.push({
       imageSource: imageUrl,
       voiceoverSource: tts.url,
@@ -230,6 +253,14 @@ export async function produceVideo(
     scenesCount: composerScenes.length,
     missingAssetsCount: missing,
   };
+}
+
+// #58.1: chart 数据完整性检查 + 取数；任一字段缺/数组空 → null（caller 走 V2 卡片兜底）
+export function pickChartData(j: unknown, t: ChartType): unknown | null {
+  const o = j as Record<string, unknown> | null; if (!o) return null;
+  const m: Record<ChartType, [string, string]> = { if: ["ifHistory", "data"], car: ["carIndexHistory", "data"], volume: ["publicationStats", "annualVolumeHistory"], top10: ["citingJournalsTop10", "topJournals"] };
+  const [f, k] = m[t] ?? []; const v = o[f] as Record<string, unknown> | null | undefined;
+  return Array.isArray(v?.[k]) && (v![k] as unknown[]).length > 0 ? v : null;
 }
 
 // ============ 图片转视频 ============

@@ -378,6 +378,7 @@ export async function chatRoutes(app: FastifyInstance) {
                           durationMs: (s.duration || 5) * 1000,
                           subtitle: s.voiceoverText || s.description || "",
                           sceneType: s.sceneType,
+                          chartType: s.chartType, // PR #58.1: pass-through to enable chart PNG injection in produceVideo
                         };
                       }),
                     });
