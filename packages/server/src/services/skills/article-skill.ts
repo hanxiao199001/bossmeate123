@@ -208,7 +208,7 @@ export class ArticleSkill implements ISkill {
 
     // T4-1b: 从 metadata 读 variants 参数（默认 1，向后兼容）
     const variants = (context.metadata?.variants as number | undefined) ?? 1;
-    // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='data-card'，向后兼容）
+    // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='shunshi-style' as of task #11；向后兼容）
     const explicitTemplateId =
       (context.metadata?.templateId as string | undefined) ?? getDefaultTemplateId();
 

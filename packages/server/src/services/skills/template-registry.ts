@@ -6,7 +6,9 @@
  * 关键决策：
  * - htmlGenerator 是契约的核心 — 接收 (journal, aiContent, abstracts)，返回完整 HTML 字符串
  * - aiPromptHints 留给后续模板（T4-3-2/3）：不同模板可能需要不同风格的 AI 文案（如对比型需要表格、故事型需要场景）
- * - DEFAULT_TEMPLATE_ID = 'data-card' 保持改造前行为（无 templateId 调用方完全等同）
+ * - DEFAULT_TEMPLATE_ID = 'shunshi-style'（task #11 V7 e2e 验证后切换；之前 'data-card'）：
+ *   shunshi-style 是唯一渲染 V7 4 个深度分析章节的模板，让 prompt 升级在所有新文章默认生效。
+ *   data-card / storytelling / listicle 仍可显式 templateId 选用，向后兼容不破坏。
  *
  * 不在本 PR 范围：
  * - 模板 B/C 的实现 → T4-3-2 / T4-3-3
@@ -64,7 +66,7 @@ export function listTemplates(): TemplateDefinition[] {
   return Array.from(registry.values());
 }
 
-export const DEFAULT_TEMPLATE_ID = "data-card";
+export const DEFAULT_TEMPLATE_ID = "shunshi-style";
 
 export function getDefaultTemplateId(): string {
   return DEFAULT_TEMPLATE_ID;
