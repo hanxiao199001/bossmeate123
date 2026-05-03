@@ -26,6 +26,7 @@ import type {
 import type { AgentResult, AgentTask } from "../agents/base/types.js";
 import type { BusEvent } from "../event-bus/types.js";
 import { hardGuardCheck, CANNED_REPLY } from "./hard-guard.js";
+import { evaluateStageTransition } from "./stage-transitions.js";
 
 interface LeadCollectedPayload {
   leadId: string;
@@ -218,31 +219,32 @@ export class ConversationAgent extends BaseAgent {
       metadata: { correlationId },
     });
 
-    // 7. evaluateStageTransition：AI 失败不推 stage（保留 B.1 行为）
+    // 7. evaluateStageTransition (B.4)：AI 失败不推 stage（保留 B.1 行为）
     if (!llmFailed) {
-      let newStage = lead.stage;
-      if (intentScore >= 70) newStage = "qualified";
-      else if (lead.stage === "new") newStage = "contacted";
+      const inboundTurnCount = history.filter((m) => m.direction === "inbound").length;
+      const transition = evaluateStageTransition({
+        currentStage: lead.stage,
+        intentScore,
+        inboundTurnCount,
+        latestInbound,
+      });
+      if (transition.changed || intentScore !== (lead.intentScore ?? 0)) {
+        await db.update(leads).set({
+          stage: transition.newStage,
+          intentScore,
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(leads.id, lead.id));
 
-      if (newStage !== lead.stage || intentScore !== (lead.intentScore ?? 0)) {
-        await db
-          .update(leads)
-          .set({
-            stage: newStage,
-            intentScore,
-            lastMessageAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(leads.id, lead.id));
-
-        if (newStage !== lead.stage) {
+        if (transition.changed) {
           await eventBus.publish({
             type: "lead.stage_changed",
             tenantId: lead.tenantId,
             source: this.name,
             correlationId,
-            payload: { leadId: lead.id, from: lead.stage, to: newStage, intentScore },
+            payload: { leadId: lead.id, from: lead.stage, to: transition.newStage, intentScore, reason: transition.reason },
           });
+          this.log("info", "stage 推进", { leadId, from: lead.stage, to: transition.newStage, reason: transition.reason });
         }
       }
     }
