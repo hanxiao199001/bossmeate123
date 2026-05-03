@@ -135,6 +135,9 @@ const envSchema = z.object({
   WECHAT_WORK_TOKEN: z.string().optional(),
   WECHAT_WORK_AES_KEY: z.string().optional(),
 
+  // B.1: 公众号入站 webhook 校验 token（公众号管理后台「开发-基本配置」 token）
+  WECHAT_VERIFY_TOKEN: z.string().default("ai_butler_token_2026"),
+
   // 质量检查
   QUALITY_MIN_SCORE: z.coerce.number().default(70),
 
