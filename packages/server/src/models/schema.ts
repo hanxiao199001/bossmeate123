@@ -412,6 +412,18 @@ export const dedupMsgs = pgTable("dedup_msgs", {
   index("idx_dedup_msgs_created_at").on(table.createdAt),
 ]);
 
+// B.2: 企业微信配置表 — encodingAESKey 用现有 credentialsKey 加密机制存（参考 wechatConfigs.appSecret）
+export const workWechatConfigs = pgTable("work_wechat_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id).notNull().unique(),
+  corpId: varchar("corp_id", { length: 100 }).notNull(),
+  agentId: varchar("agent_id", { length: 50 }).notNull(),
+  token: varchar("token", { length: 100 }).notNull(),
+  encodingAesKeyEnc: text("encoding_aes_key_enc").notNull(), // 密文存储（credentialsKey AES）
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ============ 关键词热度历史（每日快照）============
 export const keywordHistory = pgTable(
   "keyword_history",
