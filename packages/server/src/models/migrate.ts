@@ -255,6 +255,18 @@ BEGIN
   END IF;
 END $$;
 
+-- B.1 backfill：account_type 列（service / subscription，影响 reply 通道）
+ALTER TABLE wechat_configs ADD COLUMN IF NOT EXISTS account_type VARCHAR(20) DEFAULT 'service';
+
+-- B.1: 公众号 webhook 幂等表
+CREATE TABLE IF NOT EXISTS dedup_msgs (
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  msg_id VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  PRIMARY KEY (tenant_id, msg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dedup_msgs_created_at ON dedup_msgs(created_at);
+
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
