@@ -424,6 +424,14 @@ export const workWechatConfigs = pgTable("work_wechat_configs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// B.3: hard guard 白名单 — 命中 pattern 则跳过 4 类硬规则（让正常 LLM 路径走）
+export const hardGuardWhitelist = pgTable("hard_guard_whitelist", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  pattern: text("pattern").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ============ 关键词热度历史（每日快照）============
 export const keywordHistory = pgTable(
   "keyword_history",
