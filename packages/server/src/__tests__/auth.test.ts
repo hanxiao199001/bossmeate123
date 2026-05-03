@@ -126,10 +126,7 @@ describe("Auth Module", () => {
         role: "owner",
       };
 
-      const isValid =
-        validPayload.userId &&
-        validPayload.tenantId &&
-        validPayload.role;
+      const isValid = !!(validPayload.userId && validPayload.tenantId && validPayload.role);
 
       expect(isValid).toBe(true);
     });
