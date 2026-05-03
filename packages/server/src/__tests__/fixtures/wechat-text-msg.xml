@@ -1,0 +1,8 @@
+<xml>
+  <ToUserName><![CDATA[gh_test_pubacc_001]]></ToUserName>
+  <FromUserName><![CDATA[oFakeOpenIdABCDEF1234]]></FromUserName>
+  <CreateTime>1714694400</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[请问 The Lancet 多久能审完？]]></Content>
+  <MsgId>10000000000000001</MsgId>
+</xml>

@@ -11,6 +11,7 @@ import {
   date,
   real,
   uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 // ============ 租户表 ============
@@ -395,9 +396,21 @@ export const wechatConfigs = pgTable("wechat_configs", {
   accountName: varchar("account_name", { length: 100 }), // 公众号名称
   isVerified: boolean("is_verified").default(false),     // 是否已验证可用
   thumbMediaId: text("thumb_media_id"),                  // 默认封面图的media_id（缓存）
+  // B.1: 服务号 vs 订阅号（影响 reply 通道选择，B.3 hard guard 罐头消息走客服接口需服务号）
+  accountType: varchar("account_type", { length: 20 }).default("service"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// B.1: 公众号 webhook 幂等表 — (tenant_id, msg_id) 复合主键，TTL 7 day（cron 清理 — B.5 内）
+export const dedupMsgs = pgTable("dedup_msgs", {
+  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  msgId: varchar("msg_id", { length: 100 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.msgId] }),
+  index("idx_dedup_msgs_created_at").on(table.createdAt),
+]);
 
 // ============ 关键词热度历史（每日快照）============
 export const keywordHistory = pgTable(
