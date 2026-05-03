@@ -432,6 +432,16 @@ export const hardGuardWhitelist = pgTable("hard_guard_whitelist", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// B.5: tenant 级 feature flag — 新租户默认 false（白名单制，合规护城河）
+export const tenantFeatureFlags = pgTable("tenant_feature_flags", {
+  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  flagName: varchar("flag_name", { length: 60 }).notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.flagName] }),
+]);
+
 // ============ 关键词热度历史（每日快照）============
 export const keywordHistory = pgTable(
   "keyword_history",
