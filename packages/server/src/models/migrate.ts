@@ -267,6 +267,18 @@ CREATE TABLE IF NOT EXISTS dedup_msgs (
 );
 CREATE INDEX IF NOT EXISTS idx_dedup_msgs_created_at ON dedup_msgs(created_at);
 
+-- B.2: 企业微信配置表（corp_id + agent_id + token + encoding_aes_key）
+CREATE TABLE IF NOT EXISTS work_wechat_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) UNIQUE,
+  corp_id VARCHAR(100) NOT NULL,
+  agent_id VARCHAR(50) NOT NULL,
+  token VARCHAR(100) NOT NULL,
+  encoding_aes_key_enc TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

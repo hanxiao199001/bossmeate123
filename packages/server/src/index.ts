@@ -20,6 +20,7 @@ import { topicRoutes } from "./routes/topic.js";
 import { workflowRoutes } from "./routes/workflow.js";
 import { wechatRoutes } from "./routes/wechat.js";
 import { wechatCallbackRoutes } from "./routes/wechat-callback.js";
+import { workWechatCallbackRoutes } from "./routes/work-wechat-callback.js";
 import { accountRoutes } from "./routes/accounts.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
@@ -122,6 +123,8 @@ async function bootstrap() {
   await app.register(apiDocsRoutes, { prefix: `${env.API_PREFIX}/docs` });
   // B.1: 公众号 inbound webhook（公开路径，无 JWT；签名校验在路由内做）
   await app.register(wechatCallbackRoutes, { prefix: env.API_PREFIX });
+  // B.2: 企业微信 inbound webhook（公开路径，AES + msg_signature 在路由内做）
+  await app.register(workWechatCallbackRoutes, { prefix: env.API_PREFIX });
   await app.register(async (authApp) => {
     await authApp.register(rateLimit, { max: 10, timeWindow: "1 minute" });
     await authApp.register(authRoutes, { prefix: `${env.API_PREFIX}/auth` });

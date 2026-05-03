@@ -1,0 +1,9 @@
+<xml>
+  <ToUserName><![CDATA[wx_test_corp_001]]></ToUserName>
+  <FromUserName><![CDATA[wm_external_test_user_001]]></FromUserName>
+  <CreateTime>1714694500</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[请问 Nature 的录用率多少？]]></Content>
+  <MsgId>9999000000000001</MsgId>
+  <AgentID>1000002</AgentID>
+</xml>
