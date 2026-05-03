@@ -279,6 +279,14 @@ CREATE TABLE IF NOT EXISTS work_wechat_configs (
   updated_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 
+-- B.3: ConversationAgent hard guard 白名单（命中 pattern 跳过 4 类硬规则）
+CREATE TABLE IF NOT EXISTS hard_guard_whitelist (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  pattern TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

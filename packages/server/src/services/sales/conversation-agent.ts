@@ -1,19 +1,17 @@
 /**
- * ConversationAgent (AI 销售对话 - 拟人化无缝模式)
+ * ConversationAgent (AI 销售对话 - 拟人化模式 + B.3 hard guard)
  *
- * 设计原则：
- *   - AI 全程以"真人销售"的人设与客户沟通，**永远不向客户透露自己是 AI / 会转人工**。
- *   - 无论是否命中静默转人工规则，AI 都会照常生成回复、写入 sales_messages
- *     （保持客户感知的连续性）。
- *   - 静默转人工通过 `lead.need_human` 事件通知后台（企微群 / 销售工位），
- *     真人接管后在同一对话框继续回复，客户感知不到切换。
+ * B.3 重写后流程：
+ *   ingest → estimateIntent → hardGuardCheck →
+ *     命中 → 罐头消息 + handoverMode='human' + stage='need_human' + lead.need_human → return（不调 LLM）
+ *     未命中 → LLM 拟人化回复 → 写 sales_messages → stage 推进
  *
- * 流程：lead.collected → 调 LLM 生成拟人化回复 → 写 sales_messages (outbound)
- *      → 评分 / stage 推进 → 并行评估静默转人工规则 → 发 lead.stage_changed
- *        和（按需）lead.need_human
+ * Hard guard 4 类（quote / contract / legal / deadline）= 高风险词，AI 不应自行回应。
+ * Whitelist 命中 = 视为已澄清场景，正常走 LLM。
+ * AI 失败兜底语保留，不推 stage（保留 B.1 行为）。
  */
 
-import { and, eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { leads, salesMessages } from "../../models/schema.js";
 import { env } from "../../config/env.js";
@@ -27,6 +25,7 @@ import type {
 } from "../agents/base/base-agent.js";
 import type { AgentResult, AgentTask } from "../agents/base/types.js";
 import type { BusEvent } from "../event-bus/types.js";
+import { hardGuardCheck, CANNED_REPLY } from "./hard-guard.js";
 
 interface LeadCollectedPayload {
   leadId: string;
@@ -36,48 +35,6 @@ interface LeadCollectedPayload {
   content: string;
   sourceContentId?: string;
 }
-
-/** 静默转人工：风险词（投诉/纠纷/监管） */
-const RISK_KEYWORDS = [
-  "投诉",
-  "举报",
-  "曝光",
-  "律师",
-  "起诉",
-  "诉讼",
-  "12315",
-  "消协",
-  "315",
-  "退款",
-  "维权",
-  "骗子",
-  "退钱",
-];
-
-/** 静默转人工：成交临门一脚词（需要真人敲定合同 / 收款） */
-const DEAL_KEYWORDS = [
-  "签合同",
-  "打款",
-  "付款",
-  "转账",
-  "付定金",
-  "付全款",
-  "发票",
-  "对公",
-  "合同",
-];
-
-/** 客户直接质疑身份（AI 照常拟人化回答，后台静默通知） */
-const IDENTITY_PROBE_KEYWORDS = [
-  "机器人",
-  "ai",
-  "AI",
-  "人工智能",
-  "是真人吗",
-  "是不是人",
-  "你是不是真",
-  "你是人吗",
-];
 
 export class ConversationAgent extends BaseAgent {
   readonly name = "conversation-agent";
@@ -153,7 +110,7 @@ export class ConversationAgent extends BaseAgent {
       return;
     }
 
-    // 2. 取最近对话历史（也用于判定对话轮数，用于静默转人工的规则 4）
+    // 2. 取最近对话历史
     const history = await db
       .select()
       .from(salesMessages)
@@ -175,11 +132,54 @@ export class ConversationAgent extends BaseAgent {
         content: m.content,
       }));
 
-    const inboundTurnCount = history.filter((m) => m.direction === "inbound").length;
+    // 3. estimateIntent（保留，B.4 stage 推进还要用 + need_human payload）
+    const intentScore = this.estimateIntent(latestInbound, messages.length);
 
-    // 3. 调 LLM（无论是否要静默转人工，都照常回复，保持拟人化连续性）
+    // 4. Hard guard 检查 → 命中即罐头 + 切真人接管，不调 LLM
+    const guard = await hardGuardCheck(latestInbound, lead.tenantId);
+    if (guard.hit) {
+      await db.insert(salesMessages).values({
+        tenantId: lead.tenantId,
+        leadId: lead.id,
+        direction: "outbound",
+        kind: "text",
+        content: CANNED_REPLY,
+        isAiGenerated: false,
+        sentAt: env.SALES_AUTO_FOLLOWUP ? new Date() : null,
+        metadata: { correlationId, hardGuard: guard.category },
+      });
+      await db
+        .update(leads)
+        .set({
+          stage: "need_human",
+          handoverMode: "human",
+          intentScore,
+          lastMessageAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(leads.id, lead.id));
+      await eventBus.publish({
+        type: "lead.need_human",
+        tenantId: lead.tenantId,
+        source: this.name,
+        correlationId,
+        payload: {
+          leadId: lead.id,
+          category: guard.category,
+          intentScore,
+          stage: "need_human",
+          latestInbound,
+        },
+      });
+      this.log("info", "hard guard 命中，已切真人接管", {
+        leadId,
+        category: guard.category,
+      });
+      return;
+    }
+
+    // 5. 调 LLM（拟人化销售人设）
     const system = this.buildSystemPrompt();
-
     await rateLimiter.acquireOrWait("openai");
     let reply = "";
     let llmFailed = false;
@@ -200,15 +200,13 @@ export class ConversationAgent extends BaseAgent {
         leadId,
         error: err instanceof Error ? err.message : String(err),
       });
-      // 拟人化兜底：不提"AI"、"系统"；像忙碌销售随口一句的语气
       reply = "稍等我确认一下，很快回复您～";
     }
-
     if (!reply) {
       reply = "您好～请问您这边是哪个方向的稿件、希望投什么级别的期刊呀？";
     }
 
-    // 4. 写回消息（客户看到的始终是统一销售身份）
+    // 6. 写回消息
     await db.insert(salesMessages).values({
       tenantId: lead.tenantId,
       leadId: lead.id,
@@ -220,55 +218,36 @@ export class ConversationAgent extends BaseAgent {
       metadata: { correlationId },
     });
 
-    // 5. 评分 & stage 推进
-    const intentScore = this.estimateIntent(latestInbound, messages.length);
-    let newStage = lead.stage;
-    if (intentScore >= 70) newStage = "qualified";
-    else if (lead.stage === "new") newStage = "contacted";
+    // 7. evaluateStageTransition：AI 失败不推 stage（保留 B.1 行为）
+    if (!llmFailed) {
+      let newStage = lead.stage;
+      if (intentScore >= 70) newStage = "qualified";
+      else if (lead.stage === "new") newStage = "contacted";
 
-    if (newStage !== lead.stage || intentScore !== (lead.intentScore ?? 0)) {
-      await db
-        .update(leads)
-        .set({
-          stage: newStage,
-          intentScore,
-          lastMessageAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(leads.id, lead.id));
-
-      if (newStage !== lead.stage) {
-        await eventBus.publish({
-          type: "lead.stage_changed",
-          tenantId: lead.tenantId,
-          source: this.name,
-          correlationId,
-          payload: {
-            leadId: lead.id,
-            from: lead.stage,
-            to: newStage,
+      if (newStage !== lead.stage || intentScore !== (lead.intentScore ?? 0)) {
+        await db
+          .update(leads)
+          .set({
+            stage: newStage,
             intentScore,
-          },
-        });
+            lastMessageAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(leads.id, lead.id));
+
+        if (newStage !== lead.stage) {
+          await eventBus.publish({
+            type: "lead.stage_changed",
+            tenantId: lead.tenantId,
+            source: this.name,
+            correlationId,
+            payload: { leadId: lead.id, from: lead.stage, to: newStage, intentScore },
+          });
+        }
       }
     }
 
-    // 6. 静默转人工规则评估（不影响客户侧的 AI 回复）
-    await this.evaluateSilentHandoff({
-      lead,
-      latestInbound,
-      inboundTurnCount,
-      intentScore,
-      llmFailed,
-      correlationId,
-    });
-
-    this.log("info", "AI 已生成回复", {
-      leadId,
-      stage: newStage,
-      intentScore,
-      replyLen: reply.length,
-    });
+    this.log("info", "AI 已生成回复", { leadId, intentScore, replyLen: reply.length });
   }
 
   /**
@@ -300,83 +279,7 @@ export class ConversationAgent extends BaseAgent {
 - 不泄露内部定价策略和返利政策`;
   }
 
-  /**
-   * 静默转人工规则评估。
-   * 任何一条命中都会发 lead.need_human 事件（后台接收方：企微群机器人 / 销售工位推送 / 后台弹窗）。
-   * 注意：本方法**不**停止 AI 回复、**不**改变 stage，AI 侧对客户继续拟人化沟通。
-   */
-  private async evaluateSilentHandoff(args: {
-    lead: typeof leads.$inferSelect;
-    latestInbound: string;
-    inboundTurnCount: number;
-    intentScore: number;
-    llmFailed: boolean;
-    correlationId: string;
-  }): Promise<void> {
-    const { lead, latestInbound, inboundTurnCount, intentScore, llmFailed, correlationId } = args;
-    const reasons: string[] = [];
-    let priority: "high" | "medium" = "medium";
-
-    // 规则 1：风险词（投诉 / 维权 / 法律）→ 高优先级，立即通知
-    if (RISK_KEYWORDS.some((k) => latestInbound.includes(k))) {
-      reasons.push("risk_keyword");
-      priority = "high";
-    }
-
-    // 规则 2：成交词（合同 / 打款 / 发票）→ 高优先级，真人接手敲定
-    if (DEAL_KEYWORDS.some((k) => latestInbound.includes(k))) {
-      reasons.push("deal_stage_keyword");
-      priority = "high";
-    }
-
-    // 规则 3：客户质疑身份（AI 照常拟人化应答，仅后台提醒值班同事关注）
-    const lower = latestInbound.toLowerCase();
-    if (IDENTITY_PROBE_KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) {
-      reasons.push("identity_probe");
-    }
-
-    // 规则 4：高意向（意向分够高且对价格/周期/付款有明确追问）→ 高优先级抢单
-    const pricingWords = ["多少钱", "价格", "报价", "费用", "几天", "周期", "多久", "付款"];
-    if (intentScore >= 80 && pricingWords.some((k) => latestInbound.includes(k))) {
-      reasons.push("high_intent_pricing");
-      priority = "high";
-    }
-
-    // 规则 5：对话轮数过多但仍未推进（≥ 6 轮且 stage 仍为 contacted）→ 中优先级兜底
-    if (inboundTurnCount >= 6 && (lead.stage === "contacted" || lead.stage === "new")) {
-      reasons.push("stalled_conversation");
-    }
-
-    // 规则 6：AI 本轮失败 → 真人尽快接手，避免客户感知异常
-    if (llmFailed) {
-      reasons.push("ai_failure");
-    }
-
-    if (reasons.length === 0) return;
-
-    await eventBus.publish({
-      type: "lead.need_human",
-      tenantId: lead.tenantId,
-      source: this.name,
-      correlationId,
-      payload: {
-        leadId: lead.id,
-        reasons,
-        priority,
-        intentScore,
-        stage: lead.stage,
-        latestInbound,
-      },
-    });
-
-    this.log("info", "静默转人工通知已发出", {
-      leadId: lead.id,
-      reasons,
-      priority,
-    });
-  }
-
-  /** 极简意向评分：长度 + 关键词 + 对话轮数 */
+  /** 极简意向评分：长度 + 关键词 + 对话轮数（保留供 B.4 stage 推进 + need_human payload 使用） */
   private estimateIntent(text: string, turnCount: number): number {
     let score = 30;
     if (text.length > 30) score += 10;
