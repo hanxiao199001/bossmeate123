@@ -11,12 +11,13 @@ const chatFn = vi.fn();
 vi.mock("../services/ai/chat-service.js", () => ({ chat: chatFn }));
 vi.mock("../services/rate-limiter/index.js", () => ({ rateLimiter: { acquireOrWait: vi.fn(async () => {}) } }));
 
-const fakeLead = { id: "lead-1", tenantId: "t-1", stage: "new", intentScore: 0, assignedUserId: null, handoverMode: "ai" };
+let fakeLead: any = { id: "lead-1", tenantId: "t-1", stage: "new", intentScore: 0, assignedUserId: null, handoverMode: "ai" };
+let historyRows: any[] = [];
 const inserts: any[] = [];
 const updates: any[] = [];
 vi.mock("../models/db.js", () => ({
   db: {
-    select: () => ({ from: () => ({ where: () => ({ limit: async () => [fakeLead], orderBy: () => ({ limit: async () => [] }) }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [fakeLead], orderBy: () => ({ limit: async () => historyRows }) }) }) }),
     insert: () => ({ values: async (v: any) => { inserts.push(v); } }),
     update: () => ({ set: (s: any) => ({ where: async () => { updates.push(s); } }) }),
   },
@@ -34,6 +35,8 @@ describe("ConversationAgent × hard guard 集成", () => {
   let agent: any;
   beforeEach(() => {
     inserts.length = 0; updates.length = 0;
+    historyRows = [];
+    fakeLead = { id: "lead-1", tenantId: "t-1", stage: "new", intentScore: 0, assignedUserId: null, handoverMode: "ai" };
     eventBusPub.mockClear(); chatFn.mockClear(); guardFn.mockClear();
     agent = new ConversationAgent();
   });
@@ -62,5 +65,18 @@ describe("ConversationAgent × hard guard 集成", () => {
     expect(updates.some((u) => u.stage === "contacted")).toBe(true);
     // 不应触发 lead.need_human
     expect(eventBusPub.mock.calls.every((c: any[]) => c[0]?.type !== "lead.need_human")).toBe(true);
+  });
+
+  it("B.4 stage 推进：contacted + 3 轮 inbound + 高 intent → qualified", async () => {
+    fakeLead.stage = "contacted";
+    historyRows = [
+      { direction: "inbound", content: "想投稿" }, { direction: "inbound", content: "推荐期刊" }, { direction: "inbound", content: "价格如何" },
+    ];
+    guardFn.mockResolvedValue({ hit: false, whitelisted: false });
+    chatFn.mockResolvedValue({ content: "已为您准备推荐方案" });
+    await agent.respondToLead("lead-1", "想投稿 推荐 价格 多少钱 周期 多久", "corr-q");
+    expect(updates.some((u) => u.stage === "qualified")).toBe(true);
+    const stageEvt = eventBusPub.mock.calls.find((c: any[]) => c[0]?.type === "lead.stage_changed") as any[] | undefined;
+    expect(stageEvt?.[0]?.payload).toMatchObject({ from: "contacted", to: "qualified", reason: "qualified_threshold" });
   });
 });
