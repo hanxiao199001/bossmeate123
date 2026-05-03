@@ -17,7 +17,7 @@ import { db } from "../../models/db.js";
 import { leads, salesMessages } from "../../models/schema.js";
 import { eventBus } from "../event-bus/index.js";
 import { logger } from "../../config/logger.js";
-import { env } from "../../config/env.js";
+import { isSalesAgentEnabled } from "../feature-flags.js";
 
 export interface InboundMessage {
   tenantId: string;
@@ -116,10 +116,10 @@ export class LeadCollector {
         { leadId, channel: msg.channel },
         "lead 处于接管模式，已跳过 AI 响应"
       );
-    } else if (!env.SALES_AGENT_ENABLED) {
+    } else if (!(await isSalesAgentEnabled(msg.tenantId))) {
       logger.info(
-        { leadId, channel: msg.channel },
-        "SALES_AGENT_ENABLED=false，已入库但不触发 AI 响应"
+        { leadId, channel: msg.channel, tenantId: msg.tenantId },
+        "sales_agent_enabled=false（env 总闸 || tenant flag 未开），已入库但不触发 AI 响应"
       );
     } else {
       // 发事件 → ConversationAgent 会处理

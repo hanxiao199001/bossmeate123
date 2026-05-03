@@ -287,6 +287,15 @@ CREATE TABLE IF NOT EXISTS hard_guard_whitelist (
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 
+-- B.5: tenant 级 feature flag 表（复合主键 tenant_id + flag_name）
+CREATE TABLE IF NOT EXISTS tenant_feature_flags (
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  flag_name VARCHAR(60) NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  PRIMARY KEY (tenant_id, flag_name)
+);
+
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
