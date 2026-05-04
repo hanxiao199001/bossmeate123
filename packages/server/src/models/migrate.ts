@@ -776,6 +776,12 @@ BEGIN
   END IF;
 END $$;
 
+-- ============ PR B.12: journals 改全局共享 reference data ============
+-- tenant_id NULL = 全局元数据（所有 tenant 共享）；非 NULL = 该 tenant 自定义期刊。
+-- 旧 NOT NULL 约束 drop（idempotent）；46 条 你好集团 enriched 期刊 → tenant_id NULL。
+ALTER TABLE journals ALTER COLUMN tenant_id DROP NOT NULL;
+UPDATE journals SET tenant_id = NULL WHERE tenant_id = '4c03a3d0-cad4-4286-b14d-d6b12b6422bd';
+
 -- ============ task #35 seed: BossMate 默认 tenant placeholder（admin UI 5-13 后由老板自维护）============
 -- 仅为 contact_meta IS NULL 的 BossMate 租户写入；已有值的不覆盖（idempotent）。
 UPDATE tenants
