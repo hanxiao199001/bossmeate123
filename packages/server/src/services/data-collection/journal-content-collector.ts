@@ -134,6 +134,18 @@ export interface JournalInfo {
     riskLevel?: "low" | "mid" | "high";
     isWarningListed?: boolean;
   };
+  // PR B.10：8 V12 jsonb raw 透传给模板渲染层（shunshi-style 4 SVG chart 槽位）。
+  // V12 enricher 写 jsonb 用 `{data:[{year,if}]}` 等 shape；prompt* 是单向 V7 适配（喂 LLM）；
+  // 这 8 个 raw 字段是 DB jsonb 原样透传，给 template type guard 直接消费。
+  // ifHistory 已被 LetPub V7 占用 → 用 ifHistoryRaw 区分；其他 7 字段无冲突沿用 DB 列名。
+  ifHistoryRaw?: unknown;
+  carIndexHistory?: unknown;
+  publicationStats?: unknown;
+  citingJournalsTop10?: unknown;
+  publicationCosts?: unknown;
+  jcrFull?: unknown;
+  scopeDetails?: unknown;
+  recommendationScore?: unknown;
 }
 
 /**
@@ -503,6 +515,13 @@ export async function collectJournalContent(params: {
       ...(() => {
         const j = journal as Record<string, unknown>;
         const ifConverted = toPromptIfHistory(j.ifHistory);
+        // PR B.10：ifHistoryRaw 优先 DB V12，DB null 时把 LetPub V7 array 包成 V12 shape，
+        // 让 shunshi-style template 的 isIfHistory({data:Array}) guard 能命中。
+        const ifHistoryRaw = j.ifHistory != null
+          ? j.ifHistory
+          : (ifHistory && ifHistory.length > 0
+              ? { data: ifHistory.map((d) => ({ year: d.year, if: d.value })) }
+              : undefined);
         return {
           promptIfHistory: ifConverted.history.length > 0 ? ifConverted.history : undefined,
           promptIfPredicted: ifConverted.predicted,
@@ -512,6 +531,15 @@ export async function collectJournalContent(params: {
           promptPublicationCosts: (j.publicationCosts as JournalInfo["promptPublicationCosts"]) || undefined,
           promptCitingTop10: (j.citingJournalsTop10 as JournalInfo["promptCitingTop10"]) || undefined,
           promptCarIndex: (j.carIndexHistory as JournalInfo["promptCarIndex"]) || undefined,
+          // PR B.10：8 V12 raw 透传给 template（4 SVG chart 槽位 + JCR 全表 + 收稿范围 + 出版费 + 推荐分）
+          ifHistoryRaw,
+          carIndexHistory: j.carIndexHistory ?? undefined,
+          publicationStats: j.publicationStats ?? undefined,
+          citingJournalsTop10: j.citingJournalsTop10 ?? undefined,
+          publicationCosts: j.publicationCosts ?? undefined,
+          jcrFull: j.jcrFull ?? undefined,
+          scopeDetails: j.scopeDetails ?? undefined,
+          recommendationScore: j.recommendationScore ?? undefined,
         };
       })(),
     });

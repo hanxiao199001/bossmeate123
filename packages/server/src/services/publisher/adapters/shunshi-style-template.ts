@@ -279,7 +279,8 @@ function renderJcrQuartileBlock(journal: JournalInfo): string {
 
 // ============ 区块 4: IF 历史折线图（C 阶段：SVG 渲染） ============
 function renderIfHistoryChart(journal: JournalInfo): string {
-  const raw = (journal as any).ifHistory;
+  // PR B.10：读 ifHistoryRaw（V12 raw from DB / LetPub V7 包装），不读 ifHistory（V7 LetPub array）
+  const raw = (journal as any).ifHistoryRaw;
   if (!isIfHistory(raw)) {
     return renderP1Placeholder({
       title: "近 10 年影响因子",
@@ -320,9 +321,9 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
       `</section>`;
   }
 
-  // 同比：从 if_history 推算
+  // 同比：从 if_history 推算（PR B.10：用 ifHistoryRaw 与 chart 槽位对齐）
   let yoy = "";
-  const raw = (journal as any).ifHistory;
+  const raw = (journal as any).ifHistoryRaw;
   if (isIfHistory(raw) && raw.data.length >= 2) {
     const sorted = [...raw.data].sort((a, b) => a.year - b.year);
     const latest = sorted[sorted.length - 1];
