@@ -130,6 +130,13 @@ async function bootstrap() {
     await authApp.register(authRoutes, { prefix: `${env.API_PREFIX}/auth` });
   });
 
+  // B.9: 匿名公开 onboarding 路由（无 JWT / 无 tenant，独立 rate-limit 10/IP/min）
+  await app.register(async (publicApp) => {
+    await publicApp.register(rateLimit, { max: 10, timeWindow: "1 minute" });
+    const { publicRoutes } = await import("./routes/public.js");
+    await publicApp.register(publicRoutes, { prefix: `${env.API_PREFIX}/public` });
+  });
+
   // 需认证路由
   await app.register(async (protectedApp) => {
     protectedApp.addHook("onRequest", authMiddleware);
