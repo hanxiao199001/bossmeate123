@@ -296,6 +296,9 @@ CREATE TABLE IF NOT EXISTS tenant_feature_flags (
   PRIMARY KEY (tenant_id, flag_name)
 );
 
+-- B.6: tenants 平台 URL 列（罐头双轨用，硬编码 fallback 'https://bossmate.app/try'）
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS bossmate_platform_url VARCHAR(200) DEFAULT 'https://bossmate.app/try';
+
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

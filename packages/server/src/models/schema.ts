@@ -28,6 +28,8 @@ export const tenants = pgTable("tenants", {
    * null → 模板走 hardcoded fallback 文案。
    */
   contactMeta: jsonb("contact_meta"),
+  /** B.6: 罐头消息双轨注入的自服务平台 URL（hard guard 命中时引导客户进站） */
+  bossmatePlatformUrl: varchar("bossmate_platform_url", { length: 200 }).default("https://bossmate.app/try"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
