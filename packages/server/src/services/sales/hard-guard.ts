@@ -23,8 +23,16 @@ export const HARD_GUARD_PATTERNS: Record<HardGuardCategory, RegExp> = {
   deadline: /(几天|多久|什么时候).{0,15}(出刊|发表|录用|拿到)/,
 };
 
-export const CANNED_REPLY =
-  "您好，我是 BossMate 客服小王，您的问题已转给负责的老师，请稍候联系您";
+/**
+ * B.6 双轨罐头：hard guard 命中时既切真人接管，又同步推 BossMate 平台 URL（自服务漏斗入口）。
+ * URL 占位符在 caller 层用 tenants.bossmate_platform_url 替换；fallback 在 conversation-agent 内做。
+ */
+export const CANNED_REPLY_TEMPLATE =
+  "您好我是 BossMate 客服小王 ☕ 您稍等，我马上让对接老师联系您。\n同时您可以打开我们 BossMate 平台 {bossmate_url}，AI 3 秒匹配 5 本最对口期刊，免费试用~";
+
+export function buildCannedReply(bossmateUrl: string): string {
+  return CANNED_REPLY_TEMPLATE.replace("{bossmate_url}", bossmateUrl);
+}
 
 export interface HardGuardResult {
   hit: boolean;

@@ -13,7 +13,7 @@
 
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { leads, salesMessages } from "../../models/schema.js";
+import { leads, salesMessages, tenants } from "../../models/schema.js";
 import { env } from "../../config/env.js";
 import { eventBus } from "../event-bus/index.js";
 import { chat } from "../ai/chat-service.js";
@@ -25,8 +25,10 @@ import type {
 } from "../agents/base/base-agent.js";
 import type { AgentResult, AgentTask } from "../agents/base/types.js";
 import type { BusEvent } from "../event-bus/types.js";
-import { hardGuardCheck, CANNED_REPLY } from "./hard-guard.js";
+import { hardGuardCheck, buildCannedReply } from "./hard-guard.js";
 import { evaluateStageTransition } from "./stage-transitions.js";
+
+const DEFAULT_BOSSMATE_URL = "https://bossmate.app/try";
 
 interface LeadCollectedPayload {
   leadId: string;
@@ -135,20 +137,23 @@ export class ConversationAgent extends BaseAgent {
 
     // 3. estimateIntent（保留，B.4 stage 推进还要用 + need_human payload）
     const intentScore = this.estimateIntent(latestInbound, messages.length);
+    const bossmateUrl = await this.loadBossmateUrl(lead.tenantId);
 
-    // 4. Hard guard 检查 → 命中即罐头 + 切真人接管，不调 LLM
+    // 4. Hard guard 检查 → 命中即双轨罐头（接管 + BossMate URL）+ 切真人，不调 LLM
     const guard = await hardGuardCheck(latestInbound, lead.tenantId);
     if (guard.hit) {
+      const cannedContent = buildCannedReply(bossmateUrl);
       await db.insert(salesMessages).values({
         tenantId: lead.tenantId,
         leadId: lead.id,
         direction: "outbound",
         kind: "text",
-        content: CANNED_REPLY,
+        content: cannedContent,
         isAiGenerated: false,
         sentAt: env.SALES_AUTO_FOLLOWUP ? new Date() : null,
         metadata: { correlationId, hardGuard: guard.category },
       });
+      this.log("info", "[sales.platform_url.injected]", { leadId, category: guard.category, url: bossmateUrl });
       await db
         .update(leads)
         .set({
@@ -179,8 +184,8 @@ export class ConversationAgent extends BaseAgent {
       return;
     }
 
-    // 5. 调 LLM（拟人化销售人设）
-    const system = this.buildSystemPrompt();
+    // 5. 调 LLM（拟人化销售人设 + B.6 8 few-shot + 时段问候）
+    const system = this.buildSystemPrompt(bossmateUrl, new Date());
     await rateLimiter.acquireOrWait("openai");
     let reply = "";
     let llmFailed = false;
@@ -252,33 +257,50 @@ export class ConversationAgent extends BaseAgent {
     this.log("info", "AI 已生成回复", { leadId, intentScore, replyLen: reply.length });
   }
 
+  /** B.6: 时段问候 — 5-12 上午好 / 12-14 中午好 / 14-18 下午好 / 18-23 晚上好（深夜 0-5 默认晚上好）。 */
+  private timeGreeting(d: Date): string {
+    const h = d.getHours();
+    if (h >= 5 && h < 12) return "上午好";
+    if (h >= 12 && h < 14) return "中午好";
+    if (h >= 14 && h < 18) return "下午好";
+    return "晚上好";
+  }
+
+  /** B.6: 拉 tenant 的 BossMate 平台 URL，无配置 fallback 默认值。 */
+  private async loadBossmateUrl(tenantId: string): Promise<string> {
+    const [t] = await db.select({ url: tenants.bossmatePlatformUrl }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+    return t?.url ?? DEFAULT_BOSSMATE_URL;
+  }
+
   /**
-   * 拟人化销售人设 system prompt。
-   * 核心硬规则：永远不透露 AI 身份、永远不说"转人工/转接"。
+   * B.6 重写：小王老师人设（17 客服截图蒸馏）+ 8 few-shot + 时段问候 + 双轨自服务引导。
+   * 永远不透露 AI 身份、永远不说"转人工"、绝不复述代发承诺话术（合规红线）。
    */
-  private buildSystemPrompt(): string {
-    return `你是"小王老师"，一名在学术期刊发表领域工作 5 年的资深发表顾问，代表公司与客户沟通。
-【身份扮演 - 最高级硬规则，违反即视为严重错误】
-- 你就是真人顾问本人。无论客户怎么问，都不得承认自己是 AI、机器人、模型、程序、助手、客服系统。
-- 禁止说出以下词：AI、人工智能、机器人、模型、自动回复、系统、智能助手、转人工、转接、转同事、转接客服。
-- 若客户质疑"你是不是机器人/AI/真人"，用自然口吻化解，例如："哈哈我是小王老师本人哦，在帮 XX 老师团队对接发表的～请问您是想了解哪块？"，然后继续聊业务。
-- 遇到情绪化 / 投诉 / 退款 / 纠纷类话术，不要说"已转接"，而是以真人销售的方式共情 + 承诺跟进，例如："这个情况我非常重视，我这边马上查一下您的单子详情，稍后同步给您最新进展。" —— 实际后台会静默通知真人同事接手。
-
-【业务目标】
-- 理解客户的投稿需求（学科方向、稿件状态、预算、期望期刊级别、时间节点）
-- 基于需求推荐合适期刊 / 会议 / 增值服务
-- 引导客户提供联系方式或进一步细节，推进到成交
-- 涉及报价、合同、付款等临门一脚的动作时，用"我这边再帮您核一下最新政策"等方式自然衔接，不要自己给死报价
-
-【风格】
-- 像真人微信聊天：短句、偶尔带"～""哦""嗯嗯"；单条不超过 120 字；不要用书面体"您好，感谢您的咨询"开头。
-- 专业但不端着，热情但不谄媚；必要时可承认"这个我得查一下"以显得真实。
-- 不使用 Markdown 格式（不要 **粗体** 不要列表符号），就是纯文本聊天。
-
-【硬禁止】
-- 不承诺"保证录用 / 100% 过 / 包录"
-- 不编造期刊影响因子、分区、审稿周期等数据；不确定时说"我这边查下最新版给您"
-- 不泄露内部定价策略和返利政策`;
+  private buildSystemPrompt(bossmateUrl: string, now: Date): string {
+    const greeting = this.timeGreeting(now);
+    return `你是"小王老师"，BossMate 平台资深期刊发表顾问。
+【身份扮演 - 最高级硬规则】不得承认自己是 AI / 机器人 / 模型 / 系统；不说"转人工 / 转接"。
+【风格锚点（17 张真实客服截图蒸馏）】
+- 称客户"老师"（不带姓），自称"我这里 / 我们这边 / 咱们"混用
+- 句末助词偶用：呢 / 哈 / 哦 / 嗯嗯
+- 时段问候永远先打招呼，当前时段："${greeting}"
+- 短句设问偏好："是需要发表论文吗？" / "文章写完了吗" / "发什么期刊，SCI 吗？"
+- 表情节制：偶尔 ☕ 🍵，绝不滥用
+- 客户忙 → "好的老师，您忙完看~"；早上 → "🍵 老师早上好"
+【合规红线 - 绝对禁止】
+- 不说"基本都能录用 / 关系稿 / 通过率有保障 / 包版面 / 全包"等代发承诺话术
+- 不承诺"100% 录用 / 包过 / 担保赔偿 / 退款"
+- 不编造影响因子 / 分区 / 周期数据，不确定时说"我这边查最新版给您"
+【风格】短句、不用 Markdown、单条 ≤ 120 字、不用书面体开头。
+【8 个 few-shot（按客户场景对照生成回复）】
+[1] U: 你好 / A: ${greeting}老师，是需要发表论文吗？
+[2] U: 你们能投 Chinese Medical Journal 吗？ / A: 可以哦老师 ☕ Chinese Medical Journal 影响因子 6.1，中科院医学 3 区，平均审稿 4 个月。具体您稿件方向是什么呢？
+[3] U: 这本多少钱？ / A: 代发的费用要根据您稿件方向 / 目标分区 / 预算评估，我马上让对接老师联系您 ☕\n同时您可以打开 BossMate 平台 ${bossmateUrl}，AI 3 秒帮您匹配 5 本最对口期刊，免费试用看看~
+[4] U: 录用率怎么样？ / A: 录用率要看具体期刊和您稿件质量呢。BossMate 对每本期刊有近 5 年录用数据 + 自引率风险 + 审稿周期分析，您输入论文摘要 3 秒就能拿推荐。具体录用承诺老师会根据您的稿件评估~
+[5] U: 能开发票吗？ / A: 开票流程老师跟您对接 ☕ 您稍等。\n同时您可以先在 BossMate 平台 ${bossmateUrl} 体验 AI 期刊匹配，免费的~
+[6] U: 在上课，等会儿 / A: 好的老师，您忙完看~
+[7] U: 推荐几本 SCI 三区医学的 / A: 三区医学有不少哦老师，看您方向是什么。您打开 BossMate ${bossmateUrl}，输入摘要 3 秒就能拿到 5 本最对口的，带影响因子 / 录用率 / 出版费 / 审稿周期，免费试用~
+[8] U: 你们和别家有啥区别？ / A: BossMate 用 AI 直接看您论文摘要做期刊匹配，跟期刊数据库实时对接，能看到影响因子曲线 / 自引率风险 / 出版费 / 审稿周期。您可以先免费试用看看效果再决定～`;
   }
 
   /** 极简意向评分：长度 + 关键词 + 对话轮数（保留供 B.4 stage 推进 + need_human payload 使用） */

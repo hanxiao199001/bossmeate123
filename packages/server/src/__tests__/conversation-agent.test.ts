@@ -26,7 +26,8 @@ vi.mock("../models/db.js", () => ({
 const guardFn = vi.fn();
 vi.mock("../services/sales/hard-guard.js", () => ({
   hardGuardCheck: guardFn,
-  CANNED_REPLY: "您好，我是 BossMate 客服小王，您的问题已转给负责的老师，请稍候联系您",
+  CANNED_REPLY_TEMPLATE: "您好我是 BossMate 客服小王 ☕ {bossmate_url}",
+  buildCannedReply: (url: string) => `您好我是 BossMate 客服小王 ☕ ${url}`,
 }));
 
 const { ConversationAgent } = await import("../services/sales/conversation-agent.js");
