@@ -20,6 +20,7 @@ import { db } from "../models/db.js";
 import { dedupMsgs } from "../models/schema.js";
 import { leadCollector } from "../services/sales/lead-collector.js";
 import { parseWechatXml, buildInboundMessage, buildFallbackReply } from "../services/wechat/inbound-parser.js";
+import { loadBossmateUrl, buildPassiveReplyContent, buildPassiveReplyXml } from "../services/wechat/passive-reply.js";
 
 /** 计算公众号签名：sort([token, timestamp, nonce]).join('') → sha1。 */
 export function computeSignature(token: string, timestamp: string, nonce: string): string {
@@ -101,7 +102,20 @@ export async function wechatCallbackRoutes(app: FastifyInstance) {
       return reply.code(200).send("");
     }
 
-    // 第 6 道：fire-and-forget leadCollector，立即 200（避免 5s timeout）
+    // 第 6 道：accountType 路由分支
+    //   subscription：同步 lead upsert + return XML 兜底（订阅号客服接口不开放，outbound 仅 5s 同步 XML）
+    //   service / 其他：fire-and-forget（保留 B.1 行为）
+    const accountType = (inbound.metadata?.accountType as string) ?? "service";
+    if (accountType === "subscription") {
+      try {
+        await leadCollector.collect(inbound);
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err, msgId: parsed.msgId }, "leadCollector.collect 失败（subscription path）");
+      }
+      const url = await loadBossmateUrl(inbound.tenantId);
+      const xml = buildPassiveReplyXml({ fromUser: parsed.fromUser, toUser: parsed.toUser, content: buildPassiveReplyContent(url) });
+      return reply.code(200).type("text/xml").send(xml);
+    }
     void leadCollector.collect(inbound).catch((err) => {
       logger.error({ err: err instanceof Error ? err.message : err, msgId: parsed.msgId }, "leadCollector.collect 失败");
     });

@@ -121,6 +121,16 @@ export class LeadCollector {
         { leadId, channel: msg.channel, tenantId: msg.tenantId },
         "sales_agent_enabled=false（env 总闸 || tenant flag 未开），已入库但不触发 AI 响应"
       );
+    } else if (msg.metadata?.accountType === "subscription") {
+      // 订阅号 outbound 通道仅同步 XML（B.7-A），AI 客服后续 outbound 无法发回 → 跳过 lead.collected，直接 lead.need_human 通知真人
+      await eventBus.publish({
+        type: "lead.need_human",
+        tenantId: msg.tenantId,
+        source: "lead-collector",
+        correlationId: `lead-${leadId}-${Date.now()}`,
+        payload: { leadId, category: "subscription_oa", intentScore: 0, stage: "need_human", latestInbound: msg.content },
+      });
+      logger.info({ leadId, channel: msg.channel }, "订阅号 inbound：已发 lead.need_human，跳过 AI 客服（outbound 通道仅 sync XML）");
     } else {
       // 发事件 → ConversationAgent 会处理
       await eventBus.publish({
