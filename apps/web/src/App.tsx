@@ -20,6 +20,7 @@ import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
 import VideoCreationPage from "./pages/VideoCreationPage";
 import JournalsAdminPage from "./pages/JournalsAdminPage";
+import TryPage from "./pages/TryPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -36,6 +37,7 @@ export default function App() {
       {/* 公开页面 */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/try" element={<TryPage />} />  {/* B.9 onboarding —公众号罐头 URL 落地 */}
 
       {/* 需要登录的页面 */}
       <Route
