@@ -225,24 +225,37 @@ export async function collectJournalContent(params: {
   const allKeywords = [...new Set([topic, ...hotKeywords, ...(params.keywords || [])])];
 
   // B: 匹配 journals 表中的期刊（优先有封面图的）
+  // PR B.11：多 token + ISSN 路由（chat parser 把"The Lancet" 包成"The Lancet（柳叶刀）"，
+  // 整串 ILIKE 永远命不中 DB 里 name="柳叶刀" / nameEn="The Lancet" → 全部走 AI 合成。
+  // 命中优先级：ISSN 完全匹配 > 完整 topic > 去括号 topic > 每个 token 子串 > hotKeywords 学科）。
+  const issnMatch = topic.match(/\b\d{4}-\d{3}[\dxX]\b/);
+  const cleanedTopic = topic.replace(/\([^)]*\)|（[^）]*）/g, "").trim();
+  const tokens = cleanedTopic.split(/\s+/).filter((t) => t.length >= 2);
+  const journalConds: any[] = [];
+  if (issnMatch) journalConds.push(ilike(journals.issn, issnMatch[0]));
+  journalConds.push(ilike(journals.discipline, `%${topic}%`));
+  journalConds.push(ilike(journals.name, `%${topic}%`));
+  journalConds.push(ilike(journals.nameEn, `%${topic}%`));
+  if (cleanedTopic && cleanedTopic !== topic) {
+    journalConds.push(ilike(journals.name, `%${cleanedTopic}%`));
+    journalConds.push(ilike(journals.nameEn, `%${cleanedTopic}%`));
+  }
+  for (const tok of tokens) {
+    if (tok === cleanedTopic) continue; // 整串已加，单 token 等于整串时跳过
+    journalConds.push(ilike(journals.name, `%${tok}%`));
+    journalConds.push(ilike(journals.nameEn, `%${tok}%`));
+  }
+  if (hotKeywords.length > 0) journalConds.push(ilike(journals.discipline, `%${hotKeywords[0]}%`));
   const matchedJournals = await db
     .select()
     .from(journals)
-    .where(
-      and(
-        eq(journals.tenantId, tenantId),
-        or(
-          ilike(journals.discipline, `%${topic}%`),
-          ilike(journals.name, `%${topic}%`),       // 中文刊名匹配
-          ilike(journals.nameEn, `%${topic}%`),     // 英文名匹配
-          ...(hotKeywords.length > 0
-            ? [ilike(journals.discipline, `%${hotKeywords[0]}%`)]
-            : [])
-        )
-      )
-    )
+    .where(and(eq(journals.tenantId, tenantId), or(...journalConds)))
     .orderBy(
-      // 有封面图的排前面
+      // ISSN 命中排最前（PR B.11）
+      issnMatch
+        ? sql`CASE WHEN ${journals.issn} = ${issnMatch[0]} THEN 0 ELSE 1 END`
+        : sql`0`,
+      // 有封面图的次之
       sql`CASE WHEN ${journals.coverImageUrl} IS NOT NULL THEN 0 ELSE 1 END`,
       // 国际期刊按 IF 排序，国内期刊按 core_level 排序（核心 > 来源 > 其他）
       sql`CASE WHEN ${journals.impactFactor} IS NOT NULL THEN 0 ELSE 1 END`,
