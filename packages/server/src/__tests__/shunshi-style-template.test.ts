@@ -50,6 +50,7 @@ const baseJournal = {
   dataCardUri: "",
   // B 阶段 8 字段全 NULL（默认）
   ifHistory: null,
+  ifHistoryRaw: null,
   carIndexHistory: null,
   publicationStats: null,
   jcrFull: null,
@@ -238,7 +239,7 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
   it("renders if_history yoy delta when ≥2 data points", async () => {
     const j = {
       ...baseJournal,
-      ifHistory: {
+      ifHistoryRaw: {
         data: [
           { year: 2022, if: 3.5 },
           { year: 2023, if: 4.7 },

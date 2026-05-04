@@ -318,6 +318,9 @@ export class ArticleSkill implements ISkill {
           totalVariants,
           // T4-3-4: 主版本所用模板（content-worker 写 contents.metadata 时透传）
           templateId: templateIds[0],
+          // PR B.10：journalId 透传给 routes/chat.ts:236 的 auto-video-bridge 触发条件
+          // （此前 metadata 缺该字段 → typeof journalId === "string" 永远 false → bridge 死代码）
+          journalId: collectionResult?.journals[0]?.id,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
