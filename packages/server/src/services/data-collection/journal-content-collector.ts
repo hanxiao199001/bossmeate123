@@ -12,7 +12,7 @@
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
-import { eq, and, desc, or, ilike, sql } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql, isNull } from "drizzle-orm";
 import { createEntry } from "../knowledge/knowledge-service.js";
 import {
   fetchJournalCoverMultiSource,
@@ -246,10 +246,13 @@ export async function collectJournalContent(params: {
     journalConds.push(ilike(journals.nameEn, `%${tok}%`));
   }
   if (hotKeywords.length > 0) journalConds.push(ilike(journals.discipline, `%${hotKeywords[0]}%`));
+  // PR B.12：journals 改全局共享 reference data。
+  // tenant_id NULL = 全局期刊（46 enriched，所有 tenant 共享）；非 NULL = 该 tenant 自定义。
+  // 这个 OR 让当前 tenant 既能看自己的 custom，又能用全局 enriched 元数据。
   const matchedJournals = await db
     .select()
     .from(journals)
-    .where(and(eq(journals.tenantId, tenantId), or(...journalConds)))
+    .where(and(or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)), or(...journalConds)))
     .orderBy(
       // ISSN 命中排最前（PR B.11）
       issnMatch

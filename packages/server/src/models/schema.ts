@@ -196,9 +196,9 @@ export const journals = pgTable(
   "journals",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
-      .notNull(),
+    // PR B.12：tenant_id NULL = 全局共享 reference data（46 enriched 期刊，所有 tenant 共享）；
+    // 非 NULL = 该 tenant 的自定义期刊。collector 用 OR(isNull, eq) 同时拉两类。
+    tenantId: uuid("tenant_id").references(() => tenants.id),
     name: varchar("name", { length: 300 }).notNull(), // 期刊名称
     nameEn: varchar("name_en", { length: 300 }), // 英文名
     issn: varchar("issn", { length: 20 }),
