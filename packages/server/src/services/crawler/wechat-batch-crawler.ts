@@ -10,7 +10,17 @@
  * 3. 验证码命中（response 含 "verify" 关键字 / 302 redirect 到 antispider）→ log warn 跳过
  * 4. scrapling fallback：若服务器装了 scrapling 则可二级 stealth fetch（5-6 早 user 拍是否 pip install）
  */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { logger } from "../../config/logger.js";
+
+const execFileAsync = promisify(execFile);
+const SCRAPLING_SCRIPT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../scripts/wechat_fetch.py",
+);
 
 const UA_POOL = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -39,6 +49,22 @@ function pickUA(): string {
   return UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
 }
 
+/** PR Q.1.1: scrapling stealth fetch fallback（突破 sogou 跳转层反爬）。*/
+async function fetchHtmlScrapling(url: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("python3", [SCRAPLING_SCRIPT, url], {
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    if (!stdout || stdout.length < 200) return null;
+    if (stdout.includes("antispider") || stdout.includes("/verify?")) return null;
+    return stdout;
+  } catch (err) {
+    logger.warn({ url, err: err instanceof Error ? err.message : err }, "wechat-batch: scrapling fallback failed");
+    return null;
+  }
+}
+
 async function fetchHtml(url: string, timeoutMs: number): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -49,18 +75,18 @@ async function fetchHtml(url: string, timeoutMs: number): Promise<string | null>
       redirect: "follow",
     });
     if (!res.ok) {
-      logger.warn({ url, status: res.status }, "wechat-batch: fetch non-OK");
-      return null;
+      logger.warn({ url, status: res.status }, "wechat-batch: fetch non-OK，转 scrapling");
+      return fetchHtmlScrapling(url);
     }
     const text = await res.text();
     if (text.includes("antispider") || text.includes("/verify?") || text.length < 200) {
-      logger.warn({ url, len: text.length }, "wechat-batch: 疑似反爬响应");
-      return null;
+      logger.warn({ url, len: text.length }, "wechat-batch: 疑似反爬响应，转 scrapling");
+      return fetchHtmlScrapling(url);
     }
     return text;
   } catch (err) {
-    logger.warn({ url, err: err instanceof Error ? err.message : err }, "wechat-batch: fetch failed");
-    return null;
+    logger.warn({ url, err: err instanceof Error ? err.message : err }, "wechat-batch: 标准 fetch 失败，转 scrapling");
+    return fetchHtmlScrapling(url);
   } finally {
     clearTimeout(timer);
   }
