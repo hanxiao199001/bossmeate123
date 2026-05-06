@@ -146,6 +146,22 @@ export default function ChatPage() {
     return null;
   }
 
+  // PR Q.3：article skill 的模板选择（4 套 A/B/C/E，启动时拉一次）
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string; displayName: string; styleTag: string; sectionCount: number; isDefault: boolean }>>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>();
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  useEffect(() => {
+    if (skillType !== "article") return;
+    api.get<typeof templates>("/content-templates").then((r) => {
+      const list = r.data ?? [];
+      setTemplates(list);
+      if (!selectedTemplateId) {
+        const def = list.find((t) => t.isDefault) ?? list[0];
+        if (def) setSelectedTemplateId(def.id);
+      }
+    }).catch(() => { /* swallow，模板加载失败时走 server 端默认 */ });
+  }, [skillType]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // 发送消息核心逻辑（handleSend 和 autoMessage 共用）
   async function sendMessage(userContent: string, convId: string) {
     setLoading(true);
@@ -163,7 +179,11 @@ export default function ChatPage() {
       const res = await api.post<{
         userMessage: Message;
         aiMessage: Message;
-      }>(`/chat/conversations/${convId}/send`, { content: userContent });
+      }>(`/chat/conversations/${convId}/send`, {
+        content: userContent,
+        // PR Q.3: article skill 时附带选中的模板 id（4 套 A/B/C/E）
+        ...(skillType === "article" && selectedTemplateId ? { templateId: selectedTemplateId } : {}),
+      });
 
       if (res.data) {
         // 如果是 pipeline 类型，延迟1秒让用户看到进度条走完
@@ -454,6 +474,43 @@ export default function ChatPage() {
             <Link to="/content" className="text-sm text-blue-600 hover:underline">
               查看详情 →
             </Link>
+          </div>
+        )}
+
+        {/* PR Q.3：article skill 时显示当前选中模板 + 切换按钮 */}
+        {skillType === "article" && templates.length > 0 && (
+          <div className="bg-blue-50 border-t border-blue-100 px-4 py-2 flex items-center justify-center gap-3 text-sm">
+            <span className="text-gray-600">当前模板：</span>
+            <span className="font-medium">
+              {templates.find((t) => t.id === selectedTemplateId)?.displayName ?? "默认"}
+              <span className="text-xs text-gray-500 ml-1">
+                ({templates.find((t) => t.id === selectedTemplateId)?.sectionCount} 区块)
+              </span>
+            </span>
+            <button onClick={() => setShowTemplatePicker(true)} className="text-blue-600 hover:underline">切换</button>
+          </div>
+        )}
+
+        {/* PR Q.3：模板选择 modal（4 套 A/B/C/E）*/}
+        {showTemplatePicker && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowTemplatePicker(false)}>
+            <div className="bg-white rounded-lg p-6 max-w-2xl w-full m-4" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-bold mb-3">选择文章模板</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {templates.map((t) => (
+                  <button key={t.id}
+                    onClick={() => { setSelectedTemplateId(t.id); setShowTemplatePicker(false); }}
+                    className={`text-left p-3 rounded-lg border-2 transition ${selectedTemplateId === t.id ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{t.displayName}</span>
+                      {t.isDefault && <span className="text-xs text-green-600">⭐ 默认</span>}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">{t.styleTag} · {t.sectionCount} 区块</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setShowTemplatePicker(false)} className="mt-4 px-4 py-2 text-sm rounded bg-gray-100 text-gray-700 w-full">关闭</button>
+            </div>
           </div>
         )}
 

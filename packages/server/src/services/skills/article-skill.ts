@@ -21,6 +21,7 @@ import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGenerate
 import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
+import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
 import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
@@ -804,7 +805,16 @@ export class ArticleSkill implements ISkill {
     }
 
     // 2. AI 生成：标题 + 收稿范围 + 推荐语
-    const aiContentRaw = await this.generateJournalAIContent(journal);
+    // PR Q.3：根据 selected template 注入 prompt_overrides + few-shot 行业样板
+    const templateAware = await buildTemplateAwarePromptSuffix({
+      templateId,
+      tenantId: tenantId ?? "",
+      query: requirement.topic,
+    });
+    if (templateAware.templateName) {
+      logger.info({ variantId, templateName: templateAware.templateName, styleTag: templateAware.styleTag, suffixLen: templateAware.suffix.length }, "Q.3 template-aware prompt 已注入");
+    }
+    const aiContentRaw = await this.generateJournalAIContent(journal, templateAware.suffix);
 
     // 2.5 数据校验：AI 输出 vs 真实数据交叉验证
     const validation = validateAIContent(aiContentRaw, journal);
@@ -918,8 +928,10 @@ export class ArticleSkill implements ISkill {
 
   /**
    * AI 生成期刊推荐文章的三个关键部分：标题、收稿范围、推荐总结
+   * PR Q.3: q3PromptSuffix 由 generateJournalRecommendation 算好后传入
+   * （含 prompt_overrides 风格约束 + few-shot 行业样板）。
    */
-  async generateJournalAIContent(journal: JournalInfo): Promise<AIGeneratedContent> {
+  async generateJournalAIContent(journal: JournalInfo, q3PromptSuffix: string = ""): Promise<AIGeneratedContent> {
     const ifText = journal.impactFactor != null ? journal.impactFactor.toFixed(1) : "N/A";
     const journalName = journal.nameEn || journal.name;
 
@@ -1048,10 +1060,13 @@ ${disciplineHint}
   "submissionAdvice": "章 4 — HTML，引用真实数据。"
 }`;
 
+    const baseSystemPrompt = "你是学术期刊分析专家，输出严格JSON格式。基于真实数据深度分析，禁止编造数字。";
+    const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
+
     try {
       const result = await this.provider.chat({
         messages: [
-          { role: "system", content: "你是学术期刊分析专家，输出严格JSON格式。基于真实数据深度分析，禁止编造数字。" },
+          { role: "system", content: finalSystemPrompt },
           { role: "user", content: prompt },
         ],
         temperature: 0.6,

@@ -25,6 +25,8 @@ const sendMessageSchema = z.object({
   content: z.string().min(1, "消息不能为空"),
   // T4-1c-1: 多版本生成参数（默认 1，向后兼容）
   variants: z.number().int().min(1).max(3).optional(),
+  // PR Q.3: 用户在 ChatPage 选模板（4 套 A/B/C/E），默认 null = is_default 那行
+  templateId: z.string().uuid().optional(),
 });
 
 // 发布指令关键词
@@ -215,6 +217,8 @@ export async function chatRoutes(app: FastifyInstance) {
               metadata: {
                 // T4-1c-1: 把 body.variants 透传给 ArticleSkill（默认 1）
                 variants: body.variants ?? 1,
+                // PR Q.3: 用户选的模板 id 透传给 ArticleSkill（=> generateJournalRecommendation）
+                templateId: body.templateId,
               },
             });
 
