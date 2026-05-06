@@ -16,9 +16,13 @@ interface ContentTemplate {
   name: string;
   displayName: string;
   styleTag: string;
-  cssTheme: string | null;
-  registryId: string | null;
-  promptOverrides: Record<string, unknown>;
+  sectionCount: number;
+  structureJson: { sections?: string[]; hook_style?: string; cta_style?: string };
+  promptOverrides: { tone?: string; sentence_length?: string; emoji_use?: string; number_emphasis?: string };
+  chartConfig: { types?: string[]; count?: number; colors?: string; size?: string };
+  cssTheme: { font_family?: string; palette?: { primary?: string; accent?: string; bg?: string }; spacing?: string };
+  imageStrategy: { hero_source?: string; section_icons?: string; ai_generation?: boolean };
+  isDefault: boolean;
   createdAt: string;
 }
 
@@ -30,11 +34,9 @@ interface PlatformAccount {
 }
 
 const STYLE_LABELS: Record<string, { label: string; color: string }> = {
-  shunshi_default: { label: "顺仕美途默认", color: "bg-green-100 text-green-700" },
-  "shunshi-default": { label: "顺仕美途默认", color: "bg-green-100 text-green-700" },
-  popular_science: { label: "科普风", color: "bg-cyan-100 text-cyan-700" },
-  academic_deep: { label: "学术严谨", color: "bg-blue-100 text-blue-700" },
-  marketing: { label: "营销破圈", color: "bg-orange-100 text-orange-700" },
+  academic: { label: "学术权威", color: "bg-blue-100 text-blue-700" },
+  marketing: { label: "营销转化", color: "bg-orange-100 text-orange-700" },
+  popular: { label: "科普轻松", color: "bg-cyan-100 text-cyan-700" },
   vertical: { label: "行业垂直", color: "bg-purple-100 text-purple-700" },
 };
 
@@ -94,21 +96,32 @@ export default function TemplatesPage() {
             const style = STYLE_LABELS[t.styleTag] || { label: t.styleTag, color: "bg-gray-100 text-gray-700" };
             const isGlobal = t.tenantId === null;
             const boundCount = accounts.filter((a) => a.templateId === t.id).length;
+            const primary = t.cssTheme?.palette?.primary || "#9CA3AF";
             return (
-              <div key={t.id} className="bg-white rounded-lg border border-gray-200 p-4 flex flex-col gap-2">
+              <div key={t.id} className="bg-white rounded-lg border border-gray-200 p-4 flex flex-col gap-2"
+                style={{ borderLeft: `4px solid ${primary}` }}>
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-base">{t.displayName}</h3>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${style.color}`}>{style.label}</span>
                 </div>
                 <div className="text-xs text-gray-500 flex flex-wrap gap-2">
-                  <span>name: <code className="bg-gray-100 px-1 rounded">{t.name}</code></span>
-                  <span>主题: <code className="bg-gray-100 px-1 rounded">{t.cssTheme || "default"}</code></span>
-                  {isGlobal && <span className="text-blue-600">🌐 全局内置</span>}
-                  {boundCount > 0 && <span className="text-green-600">已绑定 {boundCount} 个账号</span>}
+                  <span>📑 {t.sectionCount} 区块</span>
+                  <span>📊 {t.chartConfig?.count ?? "?"} 图表</span>
+                  {t.promptOverrides?.emoji_use && <span>😀 {t.promptOverrides.emoji_use}</span>}
+                  {isGlobal && <span className="text-blue-600">🌐 系统</span>}
+                  {t.isDefault && <span className="text-green-600 font-medium">⭐ 默认</span>}
+                  {boundCount > 0 && <span className="text-green-600">已绑 {boundCount}</span>}
+                </div>
+                <div className="text-xs text-gray-400">
+                  <code className="bg-gray-100 px-1 rounded">{t.name}</code>
+                </div>
+                {/* PR Q.2 D1：缩略图占位（D3 渲染真预览）*/}
+                <div className="h-16 rounded bg-gray-50 flex items-center justify-center text-xs text-gray-400">
+                  预览缩略图（D3 渲染）
                 </div>
                 <button
                   onClick={() => setBindingTemplate(t)}
-                  className="mt-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                  className="mt-1 px-3 py-1.5 text-sm font-medium rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                 >
                   应用到账号
                 </button>

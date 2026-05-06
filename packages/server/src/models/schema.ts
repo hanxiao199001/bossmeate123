@@ -763,19 +763,23 @@ export const platformAccounts = pgTable(
   ]
 );
 
-// ============ PR Q.2: content_templates 模板库（全局内置 + 租户自定义）============
-// tenant_id NULL = 全局内置（所有 tenant 共享）；非 NULL = 该 tenant 自定义。
-// registry_id 关联 services/skills/template-registry.ts 的硬编码模板（D1 简化版）；
-// D2 会改 template-registry 完全 DB-driven，本表的 css_theme + prompt_overrides 才生效。
+// ============ PR Q.2: content_templates 4 系统模板（user 5-5 拍板：A+B+C+E）============
+// 4 套：shunshi-style 学术权威 / marketing-conversion 营销转化 / popular-science 科普轻松 /
+// industry-vertical 行业垂直。D 学术深度推 5-14 后。
+// jsonb 字段在 D2/D3/D4/D5 接到对应消费层后真生效；本 PR 仅 schema + admin UI list。
 export const contentTemplates = pgTable("content_templates", {
   id: uuid("id").primaryKey().defaultRandom(),
-  tenantId: uuid("tenant_id").references(() => tenants.id),
-  name: varchar("name", { length: 100 }).notNull(),
-  displayName: varchar("display_name", { length: 200 }).notNull(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
+  displayName: varchar("display_name", { length: 100 }).notNull(),
   styleTag: varchar("style_tag", { length: 50 }).notNull(),
-  cssTheme: varchar("css_theme", { length: 50 }).default("default"),
-  promptOverrides: jsonb("prompt_overrides").default({}).notNull(),
-  registryId: varchar("registry_id", { length: 100 }),
+  sectionCount: integer("section_count").notNull(),
+  structureJson: jsonb("structure_json").notNull(),
+  promptOverrides: jsonb("prompt_overrides").notNull(),
+  chartConfig: jsonb("chart_config").notNull(),
+  cssTheme: jsonb("css_theme").notNull(),
+  imageStrategy: jsonb("image_strategy").notNull(),
+  tenantId: uuid("tenant_id").references(() => tenants.id),
+  isDefault: boolean("is_default").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

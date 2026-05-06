@@ -793,43 +793,76 @@ SET contact_meta = '{
 }'::jsonb
 WHERE name = 'BossMate' AND contact_meta IS NULL;
 
--- ============ PR Q.2: content_templates 表 + 3 全局模板 + platform_accounts.template_id ============
--- tenant_id NULL = 全局内置模板（所有 tenant 共享）；非 NULL = 该 tenant 自定义。
--- style_tag = 'popular_science' | 'academic_deep' | 'marketing' | 'vertical' | 'shunshi-default'。
+-- ============ PR Q.2: content_templates 表 + 4 系统模板 + platform_accounts.template_id ============
+-- 4 套（user 5-5 拍板锁定）：A 学术权威 / B 营销转化 / C 科普轻松 / E 行业垂直；D 学术深度推 5-14 后。
+-- tenant_id NULL = 系统模板（所有 tenant 共享）；非 NULL = 该 tenant 自定义（5-31 后开放）。
 CREATE TABLE IF NOT EXISTS content_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id UUID REFERENCES tenants(id),
-  name VARCHAR(100) NOT NULL,
-  display_name VARCHAR(200) NOT NULL,
+  name VARCHAR(100) UNIQUE NOT NULL,
+  display_name VARCHAR(100) NOT NULL,
   style_tag VARCHAR(50) NOT NULL,
-  css_theme VARCHAR(50) DEFAULT 'default',
-  prompt_overrides JSONB DEFAULT '{}'::jsonb NOT NULL,
-  registry_id VARCHAR(100),
+  section_count INTEGER NOT NULL,
+  structure_json JSONB NOT NULL,
+  prompt_overrides JSONB NOT NULL,
+  chart_config JSONB NOT NULL,
+  css_theme JSONB NOT NULL,
+  image_strategy JSONB NOT NULL,
+  tenant_id UUID REFERENCES tenants(id),
+  is_default BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_content_templates_tenant ON content_templates(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(style_tag);
 
--- platform_accounts 加 template_id 列（NULL = 用全局默认）
+-- platform_accounts 加 template_id 列（NULL = 用全局默认 = is_default=true 那行）
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='platform_accounts' AND column_name='template_id') THEN
     ALTER TABLE platform_accounts ADD COLUMN template_id UUID REFERENCES content_templates(id);
   END IF;
 END $$;
 
--- Seed 3 全局内置模板（idempotent，name 唯一）
-INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
-SELECT NULL, 'shunshi-default', '顺仕美途默认', 'shunshi-default', 'green-white', 'shunshi-style', '{}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='shunshi-default');
-INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
-SELECT NULL, 'academic-rigor', '学术严谨型', 'academic_deep', 'blue-gray', 'shunshi-style',
-  '{"toneHint":"学术严谨，无 emoji，长段落，数据引用密集"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='academic-rigor');
-INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
-SELECT NULL, 'marketing-breakthrough', '营销破圈型', 'marketing', 'orange-red', 'shunshi-style',
-  '{"toneHint":"标题党 + emoji + 短段落 + 对比数据卡片大字号"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='marketing-breakthrough');
+-- Seed 4 系统模板（idempotent by name）。jsonb 字段在 D2/D3/D4/D5 接到对应消费层后真生效；
+-- 本 PR 仅 schema + admin UI list 显示。chart_config.types 名称对齐 publisher/svg-charts/。
+INSERT INTO content_templates (name, display_name, style_tag, section_count, structure_json, prompt_overrides, chart_config, css_theme, image_strategy, is_default)
+SELECT 'shunshi-style', '学术权威', 'academic', 23,
+  '{"sections":["hero","journal_meta","if_chart","car_chart","volume_chart","top10_chart","scope","review_cycle","apc","cas","jcr","top_inst","abstracts","cta","contact"],"hook_style":"data_first","cta_style":"sales_assistant"}'::jsonb,
+  '{"tone":"学术严谨","sentence_length":"long","emoji_use":"none","number_emphasis":"high"}'::jsonb,
+  '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie"],"count":4,"colors":"blue-gray","size":"large"}'::jsonb,
+  '{"font_family":"Source Han Serif","palette":{"primary":"#2C5F8D","accent":"#5A7FA8","bg":"#F5F7FA"},"spacing":"loose","decorations":"minimal"}'::jsonb,
+  '{"hero_source":"journal_cover","section_icons":"lucide-medical-cross","ai_generation":false}'::jsonb,
+  true
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='shunshi-style');
+
+INSERT INTO content_templates (name, display_name, style_tag, section_count, structure_json, prompt_overrides, chart_config, css_theme, image_strategy, is_default)
+SELECT 'marketing-conversion', '营销转化', 'marketing', 15,
+  '{"sections":["hero","hook_data","if_chart","compare_table","top10_chart","review_cycle","cta_urgent"],"hook_style":"shocking_number","cta_style":"limited_offer"}'::jsonb,
+  '{"tone":"营销破圈","sentence_length":"short","emoji_use":"heavy","number_emphasis":"extreme"}'::jsonb,
+  '{"types":["if-history-line","annual-volume-bar","citing-pie"],"count":3,"colors":"orange-red","size":"large"}'::jsonb,
+  '{"font_family":"Source Han Sans","palette":{"primary":"#FF6B35","accent":"#F7B538","bg":"#FFF8F0"},"spacing":"tight","decorations":"badges"}'::jsonb,
+  '{"hero_source":"journal_cover","section_icons":"lucide-trending-up","ai_generation":false}'::jsonb,
+  false
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='marketing-conversion');
+
+INSERT INTO content_templates (name, display_name, style_tag, section_count, structure_json, prompt_overrides, chart_config, css_theme, image_strategy, is_default)
+SELECT 'popular-science', '科普轻松', 'popular', 18,
+  '{"sections":["hero","story_hook","journal_meta","if_chart","car_chart","scope_simple","abstracts_simple","cta_friendly"],"hook_style":"story","cta_style":"friendly_chat"}'::jsonb,
+  '{"tone":"科普轻松","sentence_length":"medium","emoji_use":"moderate","number_emphasis":"medium"}'::jsonb,
+  '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie"],"count":4,"colors":"cyan-mint","size":"medium"}'::jsonb,
+  '{"font_family":"Source Han Sans Rounded","palette":{"primary":"#00B4D8","accent":"#90E0EF","bg":"#F0FBFF"},"spacing":"normal","decorations":"emoji-svg"}'::jsonb,
+  '{"hero_source":"journal_cover","section_icons":"emoji-svg","ai_generation":false}'::jsonb,
+  false
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='popular-science');
+
+INSERT INTO content_templates (name, display_name, style_tag, section_count, structure_json, prompt_overrides, chart_config, css_theme, image_strategy, is_default)
+SELECT 'industry-vertical', '行业垂直', 'vertical', 25,
+  '{"sections":["hero","journal_meta","if_chart","car_chart","volume_chart","top10_chart","jcr_zone","scope_full","review_cycle","apc","subject_dist","top_inst","compare_journals","abstracts","cta_pro"],"hook_style":"industry_insight","cta_style":"expert_consult"}'::jsonb,
+  '{"tone":"行业垂直","sentence_length":"medium","emoji_use":"sparse","number_emphasis":"high"}'::jsonb,
+  '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie","subject-distribution"],"count":5,"colors":"purple-indigo","size":"large"}'::jsonb,
+  '{"font_family":"Source Han Sans","palette":{"primary":"#6B46C1","accent":"#9F7AEA","bg":"#F8F5FF"},"spacing":"normal","decorations":"checklist-bullets"}'::jsonb,
+  '{"hero_source":"journal_cover","section_icons":"lucide-list-checks","ai_generation":false}'::jsonb,
+  false
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='industry-vertical');
 `;
 
 async function migrate() {
