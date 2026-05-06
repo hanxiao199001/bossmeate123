@@ -20,6 +20,7 @@ export const VECTOR_CATEGORIES = [
   "insight",           // 8. 洞察策略库（8类洞察）
   "hot_event",         // 9. 热点事件库（V4新增）
   "domain_knowledge",  // 10. 领域知识库（V4新增）
+  "industry_sample",   // 11. 行业样板库（PR Q.1，外部公众号文章 → few-shot 注入 article-skill）
 ] as const;
 
 export type VectorCategory = (typeof VECTOR_CATEGORIES)[number];
