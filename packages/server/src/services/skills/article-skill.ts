@@ -177,6 +177,9 @@ export class ArticleSkill implements ISkill {
         tenantId: context.tenantId,
         topic: parsed.topic,
         keywords: parsed.keyPoints,
+        // PR B.13：原始用户输入也透传（防 LLM understandRequirement 把"The Lancet" /
+        // "新英格兰医学杂志" 等精确刊名 normalize 成"医学顶刊"等模糊词后丢失字面）
+        rawUserPrompt: userInput,
       });
       logger.info({
         journals: collectionResult.journals.length,

@@ -203,9 +203,13 @@ export async function collectJournalContent(params: {
   tenantId: string;
   topic: string;
   keywords?: string[];
+  /** PR B.13：原始用户输入。LLM understandRequirement 把"The Lancet" 精确刊名
+   * normalize 成"医学顶刊"等模糊词后 ILIKE 命中不到，所以原 prompt 也喂进
+   * journalConds（同 PR B.11 五层 fallback：ISSN / 完整 / 去括号 / token / 学科）。 */
+  rawUserPrompt?: string;
 }): Promise<CollectionResult> {
   const { tenantId, topic } = params;
-  logger.info({ tenantId, topic }, "期刊内容采集开始");
+  logger.info({ tenantId, topic, rawUserPrompt: params.rawUserPrompt }, "期刊内容采集开始");
 
   // A: 从 keywords 表查找相关热词
   const hotKeywordRows = await db
@@ -246,6 +250,25 @@ export async function collectJournalContent(params: {
     journalConds.push(ilike(journals.nameEn, `%${tok}%`));
   }
   if (hotKeywords.length > 0) journalConds.push(ilike(journals.discipline, `%${hotKeywords[0]}%`));
+  // PR B.13：原始用户输入也作为候选（与 topic 相同时跳过避免重复）。同 PR B.11 的 5 层 fallback。
+  const rawPrompt = params.rawUserPrompt;
+  if (rawPrompt && rawPrompt !== topic) {
+    const rawIssn = rawPrompt.match(/\b\d{4}-\d{3}[\dxX]\b/);
+    if (rawIssn && !issnMatch) journalConds.push(ilike(journals.issn, rawIssn[0]));
+    journalConds.push(ilike(journals.name, `%${rawPrompt}%`));
+    journalConds.push(ilike(journals.nameEn, `%${rawPrompt}%`));
+    const rawCleaned = rawPrompt.replace(/\([^)]*\)|（[^）]*）/g, "").trim();
+    if (rawCleaned && rawCleaned !== rawPrompt) {
+      journalConds.push(ilike(journals.name, `%${rawCleaned}%`));
+      journalConds.push(ilike(journals.nameEn, `%${rawCleaned}%`));
+    }
+    const rawTokens = rawCleaned.split(/\s+/).filter((t) => t.length >= 2);
+    for (const tok of rawTokens) {
+      if (tok === rawCleaned) continue;
+      journalConds.push(ilike(journals.name, `%${tok}%`));
+      journalConds.push(ilike(journals.nameEn, `%${tok}%`));
+    }
+  }
   // PR B.12：journals 改全局共享 reference data。
   // tenant_id NULL = 全局期刊（46 enriched，所有 tenant 共享）；非 NULL = 该 tenant 自定义。
   // 这个 OR 让当前 tenant 既能看自己的 custom，又能用全局 enriched 元数据。
