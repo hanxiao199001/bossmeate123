@@ -873,12 +873,17 @@ export class ArticleSkill implements ISkill {
       tenantInfo,
     );
 
+    // PR Q.4 D3：根据 selected template 的 styleTag 包裹 CSS class，前端 4 CSS 主题生效
+    const wrappedBody = templateAware.styleTag
+      ? `<article class="bm-template-${templateAware.styleTag}">${articleBody}</article>`
+      : articleBody;
+
     const article: GeneratedArticle = {
       title: aiContent.title,
-      body: articleBody,
+      body: wrappedBody,
       summary: `期刊推荐：${journal.nameEn || journal.name}，IF ${journal.impactFactor || "N/A"}，${journal.casPartition || journal.partition || ""}`,
       tags: ["期刊推荐", journal.discipline || "学术", journal.partition || ""].filter(Boolean),
-      wordCount: ArticleSkill.stripHtmlAndCount(articleBody),
+      wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
     };
 
     // 质检（包含 AI 内容校验结果）

@@ -1,0 +1,63 @@
+/* PR Q.4 D3：A 学术权威 (academic) — Source Han Serif / 蓝灰 / line-height 1.7 / 章节序号 */
+.bm-template-academic {
+  --bm-primary: #2C5F8D;
+  --bm-accent: #5A7FA8;
+  --bm-bg: #F5F7FA;
+  --bm-text: #1F2937;
+  --bm-muted: #6B7280;
+  --bm-border: #D1D9E0;
+  font-family: "Source Han Serif SC", "Noto Serif SC", Georgia, serif;
+  line-height: 1.7;
+  color: var(--bm-text);
+  background: #fff;
+  counter-reset: bm-section;
+}
+.bm-template-academic h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--bm-primary);
+  border-bottom: 2px solid var(--bm-primary);
+  padding-bottom: 0.5rem;
+  margin: 1.5rem 0 1rem;
+}
+.bm-template-academic h2 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--bm-primary);
+  margin: 1.5rem 0 0.75rem;
+  counter-increment: bm-section;
+}
+.bm-template-academic h2::before {
+  content: counter(bm-section, decimal-leading-zero) "  ";
+  color: var(--bm-accent);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.bm-template-academic h3 {
+  font-size: 1.1rem;
+  color: var(--bm-accent);
+  margin: 1rem 0 0.5rem;
+}
+.bm-template-academic p { margin: 0.75rem 0; }
+.bm-template-academic strong { color: var(--bm-primary); font-weight: 600; }
+.bm-template-academic blockquote {
+  border-left: 4px solid var(--bm-accent);
+  background: var(--bm-bg);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  color: var(--bm-muted);
+  font-style: italic;
+}
+.bm-template-academic table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+.bm-template-academic th, .bm-template-academic td {
+  border: 1px solid var(--bm-border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.bm-template-academic th { background: var(--bm-bg); color: var(--bm-primary); }
+.bm-template-academic em { color: var(--bm-accent); font-style: normal; font-weight: 500; }
