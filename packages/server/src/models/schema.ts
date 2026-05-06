@@ -749,6 +749,8 @@ export const platformAccounts = pgTable(
     // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
     capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
+    // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
+    templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息
     lastPublishedAt: timestamp("last_published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -760,6 +762,27 @@ export const platformAccounts = pgTable(
     index("idx_pa_group").on(table.groupName),
   ]
 );
+
+// ============ PR Q.2: content_templates 4 系统模板（user 5-5 拍板：A+B+C+E）============
+// 4 套：shunshi-style 学术权威 / marketing-conversion 营销转化 / popular-science 科普轻松 /
+// industry-vertical 行业垂直。D 学术深度推 5-14 后。
+// jsonb 字段在 D2/D3/D4/D5 接到对应消费层后真生效；本 PR 仅 schema + admin UI list。
+export const contentTemplates = pgTable("content_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
+  displayName: varchar("display_name", { length: 100 }).notNull(),
+  styleTag: varchar("style_tag", { length: 50 }).notNull(),
+  sectionCount: integer("section_count").notNull(),
+  structureJson: jsonb("structure_json").notNull(),
+  promptOverrides: jsonb("prompt_overrides").notNull(),
+  chartConfig: jsonb("chart_config").notNull(),
+  cssTheme: jsonb("css_theme").notNull(),
+  imageStrategy: jsonb("image_strategy").notNull(),
+  tenantId: uuid("tenant_id").references(() => tenants.id),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 // ============ 每日选题推荐 ============
 export const dailyRecommendations = pgTable(
