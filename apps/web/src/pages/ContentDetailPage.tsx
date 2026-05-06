@@ -232,7 +232,7 @@ export default function ContentDetailPage() {
     if (!content || content.type !== "article") return;
     setVideoGenStatus("generating");
     try {
-      await api.post(`/articles/${content.id}/generate-video`);
+      await api.post(`/articles/${content.id}/generate-video`, {});
     } catch (err) {
       toast.error("视频生成触发失败：" + (err instanceof Error ? err.message : "未知"));
       setVideoGenStatus("failed");
