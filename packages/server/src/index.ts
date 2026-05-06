@@ -11,6 +11,7 @@ import { logger } from "./config/logger.js";
 import { authRoutes } from "./routes/auth.js";
 import { tenantRoutes } from "./routes/tenant.js";
 import { chatRoutes } from "./routes/chat.js";
+import { articlesRoutes } from "./routes/articles.js";
 import { contentRoutes } from "./routes/content.js";
 import { healthRoutes } from "./routes/health.js";
 import { keywordRoutes } from "./routes/keywords.js";
@@ -147,6 +148,7 @@ async function bootstrap() {
       await chatApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });
     });
     await protectedApp.register(contentRoutes, { prefix: `${env.API_PREFIX}/content` });
+    await protectedApp.register(articlesRoutes, { prefix: `${env.API_PREFIX}/articles` });
     await protectedApp.register(keywordRoutes, { prefix: `${env.API_PREFIX}/keywords` });
     await protectedApp.register(journalRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(topicRoutes, { prefix: `${env.API_PREFIX}` });

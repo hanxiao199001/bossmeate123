@@ -444,6 +444,19 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {/* PR Q.0：图文/视频 pipeline 完成后底部 CTA — 引导用户去 ContentDetailPage 决定下一步 */}
+        {(skillType === "article" || skillType === "video") &&
+          messages.length > 0 &&
+          messages[messages.length - 1].role === "assistant" &&
+          !loading && (
+          <div className="bg-green-50 border-t border-green-100 px-4 py-2 flex items-center justify-center gap-3">
+            <span className="text-sm text-green-700">✓ 已保存到内容库</span>
+            <Link to="/content" className="text-sm text-blue-600 hover:underline">
+              查看详情 →
+            </Link>
+          </div>
+        )}
+
         {/* 输入区域 */}
         <div className="bg-white border-t border-gray-200 p-3">
           <div className="max-w-3xl mx-auto flex gap-2">

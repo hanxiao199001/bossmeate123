@@ -159,6 +159,10 @@ export default function ContentDetailPage() {
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
 
+  // PR Q.0：手动触发视频生成 + 5s 轮询直到 video_script 出现（最多 12 次 = 1 min）
+  const [videoGenStatus, setVideoGenStatus] = useState<"idle" | "generating" | "ready" | "failed">("idle");
+  const [videoContentId, setVideoContentId] = useState<string | null>(null);
+
   // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
   const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
   useEffect(() => {
@@ -222,6 +226,35 @@ export default function ContentDetailPage() {
     const bodyChanged = editBody !== (content.body || "");
     setHasChanges(titleChanged || bodyChanged);
   }, [editTitle, editBody, content]);
+
+  // PR Q.0：手动触发视频生成 + 5s 轮询（最多 12 次 ≈ 60s）
+  const handleGenerateVideo = useCallback(async () => {
+    if (!content || content.type !== "article") return;
+    setVideoGenStatus("generating");
+    try {
+      await api.post(`/articles/${content.id}/generate-video`);
+    } catch (err) {
+      toast.error("视频生成触发失败：" + (err instanceof Error ? err.message : "未知"));
+      setVideoGenStatus("failed");
+      return;
+    }
+    let attempt = 0;
+    const tick = async () => {
+      attempt += 1;
+      try {
+        const res = await api.get<{ items: ContentItem[] }>(
+          "/content?type=video_script&pageSize=50",
+        );
+        const found = res.data?.items?.find(
+          (it) => (it.metadata as { sourceArticleId?: string } | null)?.sourceArticleId === content.id,
+        );
+        if (found) { setVideoContentId(found.id); setVideoGenStatus("ready"); return; }
+      } catch { /* swallow & continue polling */ }
+      if (attempt >= 12) { setVideoGenStatus("failed"); return; }
+      setTimeout(tick, 5000);
+    };
+    setTimeout(tick, 5000);
+  }, [content]);
 
   // 保存
   const handleSave = async () => {
@@ -570,6 +603,45 @@ export default function ContentDetailPage() {
           </button>
         </div>
       </nav>
+
+      {/* PR Q.0：图文 article 的 3 按钮快捷操作（拆按钮：编辑 / 生成视频 / 发布） */}
+      {content.type === "article" && (
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-100 px-6 py-3 shrink-0">
+          <div className="max-w-6xl mx-auto flex items-center gap-3 flex-wrap">
+            <span className="text-xs text-gray-500 mr-2">下一步：</span>
+            <button
+              onClick={() => setShowRewriteModal(true)}
+              disabled={!canEdit || !/^##\s+/m.test(editBody)}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              ✏️ 编辑此文
+            </button>
+            <button
+              onClick={handleGenerateVideo}
+              disabled={videoGenStatus === "generating" || videoGenStatus === "ready"}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-pink-600 text-white hover:bg-pink-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              title="基于当前文章 journalId 生成 21 秒视频脚本（5-10 多模板 sprint 后支持选模板）"
+            >
+              {videoGenStatus === "generating" ? "🎬 生成中..."
+                : videoGenStatus === "ready" ? "🎬 视频已生成 ✓"
+                : videoGenStatus === "failed" ? "🎬 重试生成视频"
+                : "🎬 生成视频"}
+            </button>
+            <button
+              onClick={() => setShowPublishPanel(true)}
+              disabled={!canPublish}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              📤 发布到公众号
+            </button>
+            {videoGenStatus === "ready" && videoContentId && (
+              <Link to={`/content/${videoContentId}`} className="text-sm text-blue-600 hover:underline ml-auto">
+                查看视频脚本 →
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 发布面板 */}
       {showPublishPanel && canPublish && (
