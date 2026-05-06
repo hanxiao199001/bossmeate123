@@ -277,13 +277,10 @@ export async function collectJournalContent(params: {
     .from(journals)
     .where(and(or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)), or(...journalConds)))
     .orderBy(
-      // ISSN 命中排最前（PR B.11）
-      issnMatch
-        ? sql`CASE WHEN ${journals.issn} = ${issnMatch[0]} THEN 0 ELSE 1 END`
-        : sql`0`,
-      // 有封面图的次之
+      // PR B.14：动态拼 orderBy（无 issnMatch 时跳过该子句）。
+      // 旧 `sql\`0\`` PG 视为 position 0（select list 从 1 起）→ "ORDER BY position 0 is not in select list"。
+      ...(issnMatch ? [sql`CASE WHEN ${journals.issn} = ${issnMatch[0]} THEN 0 ELSE 1 END`] : []),
       sql`CASE WHEN ${journals.coverImageUrl} IS NOT NULL THEN 0 ELSE 1 END`,
-      // 国际期刊按 IF 排序，国内期刊按 core_level 排序（核心 > 来源 > 其他）
       sql`CASE WHEN ${journals.impactFactor} IS NOT NULL THEN 0 ELSE 1 END`,
       desc(journals.impactFactor)
     )
