@@ -749,6 +749,8 @@ export const platformAccounts = pgTable(
     // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
     capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
+    // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
+    templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息
     lastPublishedAt: timestamp("last_published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -760,6 +762,23 @@ export const platformAccounts = pgTable(
     index("idx_pa_group").on(table.groupName),
   ]
 );
+
+// ============ PR Q.2: content_templates 模板库（全局内置 + 租户自定义）============
+// tenant_id NULL = 全局内置（所有 tenant 共享）；非 NULL = 该 tenant 自定义。
+// registry_id 关联 services/skills/template-registry.ts 的硬编码模板（D1 简化版）；
+// D2 会改 template-registry 完全 DB-driven，本表的 css_theme + prompt_overrides 才生效。
+export const contentTemplates = pgTable("content_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id),
+  name: varchar("name", { length: 100 }).notNull(),
+  displayName: varchar("display_name", { length: 200 }).notNull(),
+  styleTag: varchar("style_tag", { length: 50 }).notNull(),
+  cssTheme: varchar("css_theme", { length: 50 }).default("default"),
+  promptOverrides: jsonb("prompt_overrides").default({}).notNull(),
+  registryId: varchar("registry_id", { length: 100 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 // ============ 每日选题推荐 ============
 export const dailyRecommendations = pgTable(

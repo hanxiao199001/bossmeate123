@@ -792,6 +792,44 @@ SET contact_meta = '{
   "lastUpdatedAt": "2026-04-30T00:00:00.000Z"
 }'::jsonb
 WHERE name = 'BossMate' AND contact_meta IS NULL;
+
+-- ============ PR Q.2: content_templates 表 + 3 全局模板 + platform_accounts.template_id ============
+-- tenant_id NULL = 全局内置模板（所有 tenant 共享）；非 NULL = 该 tenant 自定义。
+-- style_tag = 'popular_science' | 'academic_deep' | 'marketing' | 'vertical' | 'shunshi-default'。
+CREATE TABLE IF NOT EXISTS content_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID REFERENCES tenants(id),
+  name VARCHAR(100) NOT NULL,
+  display_name VARCHAR(200) NOT NULL,
+  style_tag VARCHAR(50) NOT NULL,
+  css_theme VARCHAR(50) DEFAULT 'default',
+  prompt_overrides JSONB DEFAULT '{}'::jsonb NOT NULL,
+  registry_id VARCHAR(100),
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_content_templates_tenant ON content_templates(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(style_tag);
+
+-- platform_accounts 加 template_id 列（NULL = 用全局默认）
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='platform_accounts' AND column_name='template_id') THEN
+    ALTER TABLE platform_accounts ADD COLUMN template_id UUID REFERENCES content_templates(id);
+  END IF;
+END $$;
+
+-- Seed 3 全局内置模板（idempotent，name 唯一）
+INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
+SELECT NULL, 'shunshi-default', '顺仕美途默认', 'shunshi-default', 'green-white', 'shunshi-style', '{}'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='shunshi-default');
+INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
+SELECT NULL, 'academic-rigor', '学术严谨型', 'academic_deep', 'blue-gray', 'shunshi-style',
+  '{"toneHint":"学术严谨，无 emoji，长段落，数据引用密集"}'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='academic-rigor');
+INSERT INTO content_templates (tenant_id, name, display_name, style_tag, css_theme, registry_id, prompt_overrides)
+SELECT NULL, 'marketing-breakthrough', '营销破圈型', 'marketing', 'orange-red', 'shunshi-style',
+  '{"toneHint":"标题党 + emoji + 短段落 + 对比数据卡片大字号"}'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='marketing-breakthrough');
 `;
 
 async function migrate() {

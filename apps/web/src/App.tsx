@@ -15,6 +15,7 @@ import KeywordsPage from "./pages/KeywordsPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
+import TemplatesPage from "./pages/TemplatesPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
@@ -105,6 +106,16 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DataDashboardPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* PR Q.2: 内容模板管理 admin UI */}
+      <Route
+        path="/templates"
+        element={
+          <ProtectedRoute>
+            <TemplatesPage />
           </ProtectedRoute>
         }
       />

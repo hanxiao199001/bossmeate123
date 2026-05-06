@@ -32,6 +32,7 @@ const updateAccountSchema = z.object({
   groupName: z.string().nullable().optional(),
   status: z.enum(["active", "disabled"]).optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
+  templateId: z.string().uuid().nullable().optional(), // PR Q.2: 绑定模板（NULL=用全局默认）
 });
 
 const publishSchema = z.object({
@@ -203,6 +204,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.groupName !== undefined) updateData.groupName = body.groupName;
       if (body.status) updateData.status = body.status;
       if (body.capability) updateData.capability = body.capability;
+      if (body.templateId !== undefined) updateData.templateId = body.templateId;
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {
