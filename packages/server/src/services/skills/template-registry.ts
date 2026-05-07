@@ -46,6 +46,8 @@ export interface TemplateDefinition {
     tenant?: { contactMeta?: unknown } | null,
     /** PR Q.5 D4：chart_config jsonb（types[] + colors）控制渲染哪些 chart + 主题色。 */
     chartConfig?: unknown,
+    /** PR Q.6 D5：section_count 控制 4 套区块数差异化（A=23 / B=15 / C=18 / E=25）。 */
+    sectionCount?: number,
   ) => Promise<string>;
   /** 给 AI 生成 title/scope/recommendation 时附加的风格提示（可选，后续模板使用） */
   aiPromptHints?: string;

@@ -19,8 +19,9 @@ const PAD_L = 50;
 const PAD_R = 30;
 const PAD_T = 30;
 const PAD_B = 40;
-const STROKE = "#1976D2"; // 蓝（CAR 主色，与 IF 区分）
-const POINT = "#1976D2";
+// PR Q.6 D5：palette 占位，4 套主色注入
+const STROKE = "{{PRIMARY}}";
+const POINT = "{{PRIMARY}}";
 const GRID = "#E0E0E0";
 const TEXT_COLOR = "#333";
 const MUTED = "#999";

@@ -903,6 +903,19 @@ UPDATE content_templates SET css_theme = jsonb_set(jsonb_set(jsonb_set(jsonb_set
   '{palette,borderColor}', '"#DDD6FE"'::jsonb), '{palette,textPrimary}', '"#1A202C"'::jsonb),
   '{palette,textSecondary}', '"#6B7280"'::jsonb)
 WHERE name='industry-vertical' AND tenant_id IS NULL;
+
+-- ============ PR Q.6 D5：B 营销 / E 行业 chart_config.types 含 4 新 chart 类型 ============
+-- B 营销 3 chart：if-history-line + accept-rate-bar + fee-pie（强调录用率 / 性价比）
+-- E 行业 5 chart：A 4 chart + subject-distribution（学科分布饼图）
+UPDATE content_templates
+SET chart_config = '{"types":["if-history-line","accept-rate-bar","fee-pie"],"count":3,"colors":"orange-red","size":"large"}'::jsonb,
+    updated_at = NOW()
+WHERE name='marketing-conversion' AND tenant_id IS NULL;
+
+UPDATE content_templates
+SET chart_config = '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie","subject-distribution"],"count":5,"colors":"purple-indigo","size":"large"}'::jsonb,
+    updated_at = NOW()
+WHERE name='industry-vertical' AND tenant_id IS NULL;
 `;
 
 async function migrate() {

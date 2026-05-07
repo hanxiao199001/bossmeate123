@@ -13,6 +13,11 @@ export const KNOWN_CHART_TYPES = new Set([
   "car-history-line",
   "annual-volume-bar",
   "citing-pie",
+  // PR Q.6 D5：4 新 chart 类型（B 营销 + E 行业差异化）
+  "accept-rate-bar",
+  "fee-pie",
+  "subject-distribution",
+  "review-cycle-bar",
 ]);
 
 export interface ChartColorPalette {
