@@ -876,6 +876,33 @@ UPDATE content_templates
 SET chart_config = '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie"],"count":4,"colors":"purple-indigo","size":"large"}'::jsonb,
     updated_at = NOW()
 WHERE name='industry-vertical' AND tenant_id IS NULL;
+
+-- ============ PR Q.7.2：4 套 css_theme.palette 扩展 7 字段（5-7 D4 验收发现 shunshi inline CSS 主色调单调）============
+-- 修前 palette 只有 primary/accent/bg；现加 primaryBg / cardBg / borderColor / textPrimary / textSecondary，
+-- 让 article body 卡片底 / 标签底 / 信息面板都跟主调走（A 浅蓝灰 / B 浅橙 / C 浅黄 / E 浅紫）。
+UPDATE content_templates SET css_theme = jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(css_theme,
+  '{palette,primaryBg}', '"#E3F2FD"'::jsonb), '{palette,cardBg}', '"#F5F7FA"'::jsonb),
+  '{palette,borderColor}', '"#D1D9E0"'::jsonb), '{palette,textPrimary}', '"#1F2937"'::jsonb),
+  '{palette,textSecondary}', '"#6B7280"'::jsonb)
+WHERE name='shunshi-style' AND tenant_id IS NULL;
+
+UPDATE content_templates SET css_theme = jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(css_theme,
+  '{palette,primary}', '"#DC143C"'::jsonb), '{palette,primaryBg}', '"#FFF0F0"'::jsonb),
+  '{palette,cardBg}', '"#FFF8F0"'::jsonb), '{palette,borderColor}', '"#FFD9C9"'::jsonb),
+  '{palette,textPrimary}', '"#1F2937"'::jsonb), '{palette,textSecondary}', '"#6B7280"'::jsonb)
+WHERE name='marketing-conversion' AND tenant_id IS NULL;
+
+UPDATE content_templates SET css_theme = jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(css_theme,
+  '{palette,primary}', '"#F39C12"'::jsonb), '{palette,primaryBg}', '"#FFF8DC"'::jsonb),
+  '{palette,cardBg}', '"#FFF8E1"'::jsonb), '{palette,borderColor}', '"#FFE0A8"'::jsonb),
+  '{palette,textPrimary}', '"#2D3748"'::jsonb), '{palette,textSecondary}', '"#6B7280"'::jsonb)
+WHERE name='popular-science' AND tenant_id IS NULL;
+
+UPDATE content_templates SET css_theme = jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(css_theme,
+  '{palette,primaryBg}', '"#F5F3FF"'::jsonb), '{palette,cardBg}', '"#F8F5FF"'::jsonb),
+  '{palette,borderColor}', '"#DDD6FE"'::jsonb), '{palette,textPrimary}', '"#1A202C"'::jsonb),
+  '{palette,textSecondary}', '"#6B7280"'::jsonb)
+WHERE name='industry-vertical' AND tenant_id IS NULL;
 `;
 
 async function migrate() {
