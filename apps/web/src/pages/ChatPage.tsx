@@ -216,11 +216,11 @@ export default function ChatPage() {
   }
 
   // 发送按钮/Enter 触发
+  // PR Q.7 (Q.3.1)：article skill 时 handleSend 强制弹 modal 让用户确认/选模板再发送。
+  // 不再"被动等用户点切换"——按 user 5-7 验收期望每次 send 前看到 4 套选项。
   async function handleSend() {
     if (!input.trim() || loading) return;
-
     const userContent = input.trim();
-    setInput("");
 
     let convId = currentConvId;
     if (!convId) {
@@ -228,7 +228,55 @@ export default function ChatPage() {
       if (!convId) return;
     }
 
+    // article skill + 模板已加载 → 弹 modal 让用户选，缓存待发送 args
+    if (skillType === "article" && templates.length > 0) {
+      setPendingSendArgs({ content: userContent, convId });
+      setShowTemplatePicker(true);
+      setInput("");
+      return;
+    }
+
+    setInput("");
     await sendMessage(userContent, convId);
+  }
+
+  // PR Q.7 (Q.3.1)：缓存 article skill 等待模板选择的 send args
+  const [pendingSendArgs, setPendingSendArgs] = useState<{ content: string; convId: string } | null>(null);
+  // 用户在 modal 选完模板后立即发送（不需要再点【发送】）
+  async function pickTemplateAndSend(templateId: string) {
+    setSelectedTemplateId(templateId);
+    setShowTemplatePicker(false);
+    if (pendingSendArgs) {
+      const args = pendingSendArgs;
+      setPendingSendArgs(null);
+      // selectedTemplateId state 还没刷新（React batching），用 templateId 直接传 sendMessage
+      await sendMessageWithTemplate(args.content, args.convId, templateId);
+    }
+  }
+  async function sendMessageWithTemplate(userContent: string, convId: string, templateId: string) {
+    setLoading(true);
+    const tempUserMsg: Message = { id: "temp-user-" + Date.now(), role: "user", content: userContent, createdAt: new Date().toISOString() };
+    setMessages((prev) => [...prev, tempUserMsg]);
+    setTimeout(scrollToBottom, 50);
+    try {
+      const res = await api.post<{ userMessage: Message; aiMessage: Message }>(
+        `/chat/conversations/${convId}/send`,
+        { content: userContent, templateId },
+      );
+      if (res.data) {
+        setTimeout(() => {
+          setMessages((prev) => [...prev.filter((m) => m.id !== tempUserMsg.id), res.data!.userMessage, res.data!.aiMessage]);
+          setLoading(false);
+          setTimeout(scrollToBottom, 100);
+        }, 1000);
+        return;
+      }
+    } catch (err: any) {
+      setMessages((prev) => [...prev, { id: "error-" + Date.now(), role: "assistant", content: `发送失败: ${err.message || "网络错误"}`, createdAt: new Date().toISOString() }]);
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
   }
 
   // 加载更多消息（向上分页）
@@ -499,7 +547,11 @@ export default function ChatPage() {
               <div className="grid grid-cols-2 gap-3">
                 {templates.map((t) => (
                   <button key={t.id}
-                    onClick={() => { setSelectedTemplateId(t.id); setShowTemplatePicker(false); }}
+                    onClick={() => {
+                      // PR Q.7 (Q.3.1)：选完立即发送（pendingSendArgs 有则直接进流水线）
+                      if (pendingSendArgs) pickTemplateAndSend(t.id);
+                      else { setSelectedTemplateId(t.id); setShowTemplatePicker(false); }
+                    }}
                     className={`text-left p-3 rounded-lg border-2 transition ${selectedTemplateId === t.id ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}>
                     <div className="flex items-center justify-between">
                       <span className="font-medium">{t.displayName}</span>
@@ -509,7 +561,10 @@ export default function ChatPage() {
                   </button>
                 ))}
               </div>
-              <button onClick={() => setShowTemplatePicker(false)} className="mt-4 px-4 py-2 text-sm rounded bg-gray-100 text-gray-700 w-full">关闭</button>
+              <button onClick={() => {
+                setShowTemplatePicker(false);
+                if (pendingSendArgs) { setInput(pendingSendArgs.content); setPendingSendArgs(null); }
+              }} className="mt-4 px-4 py-2 text-sm rounded bg-gray-100 text-gray-700 w-full">取消</button>
             </div>
           </div>
         )}

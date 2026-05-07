@@ -51,8 +51,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* 1️⃣ 指挥中心：一键启动 + 今日进度（老板第一眼看的） */}
-        <FactoryHero />
+        {/* PR Q.7 B 方案（5-7 user 拍板）：AI 内容工厂 widget 隐藏，V3 batch agent 默认关闭。
+            FactoryHero 组件保留代码（不删），后续如需重启 V3 batch 可解注释 + 设 V3_BATCH_AGENT_ENABLED=true。 */}
+        {/* <FactoryHero /> */}
 
         {/* 2️⃣ 待审核队列（老板的核心操作） */}
         <PendingReviewQueue />
