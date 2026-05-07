@@ -56,6 +56,16 @@ export async function loadTemplate(templateId: string): Promise<typeof contentTe
   }
 }
 
+/** PR Q.5 task #54 数字幻觉硬约束（无条件加，4 套都有）。
+ * marketing extreme 强调让 LLM 引用 ifHistory 历史峰值（如 IF 202 = 柳叶刀某年峰值）作 title。
+ * 现强制：标题与正文中的"当前 IF / 录用率 / 审稿周期"必须用 metadata 提供的当前值。 */
+const NUMBER_CONSTRAINT_SUFFIX =
+  `\n\n## 数字真实性硬约束（task #54）\n`
+  + `- 标题与正文中的"当前 IF"必须使用 metadata.impactFactor 当前值（如 The Lancet 应用 98.4），\n`
+  + `  禁止引用 ifHistory 数组中的历史峰值（如 202、44 等）作为标题或正文宣传重点；\n`
+  + `- 历史趋势仅可在 ifHistoryAnalysis 章节内说明（"近 X 年从 X 涨到 Y"），不可作 hook；\n`
+  + `- 录用率 / 审稿周期 / APC 同理：只用 metadata 当前值，不夸大、不引未来预测。`;
+
 /** 把 prompt_overrides + structure_json 转为 LLM system prompt 后缀文本。 */
 export function buildPromptOverrideSuffix(template: { promptOverrides: unknown; structureJson: unknown; styleTag: string; displayName: string }): string {
   const po = (template.promptOverrides ?? {}) as PromptOverrides;
@@ -67,7 +77,7 @@ export function buildPromptOverrideSuffix(template: { promptOverrides: unknown; 
   if (po.number_emphasis) lines.push(`- 数据强调：${EMPHASIS_DESC[po.number_emphasis] ?? po.number_emphasis}`);
   if (sj.hook_style) lines.push(`- 开头风格（hook）：${sj.hook_style}`);
   if (sj.cta_style) lines.push(`- 结尾召唤（CTA）：${sj.cta_style}`);
-  return lines.join("\n");
+  return lines.join("\n") + NUMBER_CONSTRAINT_SUFFIX;
 }
 
 /**
@@ -78,11 +88,11 @@ export async function buildTemplateAwarePromptSuffix(args: {
   templateId: string | null | undefined;
   tenantId: string;
   query: string;
-}): Promise<{ suffix: string; styleTag: SampleStyleTag | null; templateName: string | null }> {
+}): Promise<{ suffix: string; styleTag: SampleStyleTag | null; templateName: string | null; chartConfig: unknown }> {
   const { templateId, tenantId, query } = args;
-  if (!templateId) return { suffix: "", styleTag: null, templateName: null };
+  if (!templateId) return { suffix: "", styleTag: null, templateName: null, chartConfig: null };
   const tpl = await loadTemplate(templateId);
-  if (!tpl) return { suffix: "", styleTag: null, templateName: null };
+  if (!tpl) return { suffix: "", styleTag: null, templateName: null, chartConfig: null };
 
   const styleTag = tpl.styleTag as SampleStyleTag;
   const overrideSuffix = buildPromptOverrideSuffix(tpl);
@@ -93,5 +103,7 @@ export async function buildTemplateAwarePromptSuffix(args: {
     suffix: `${overrideSuffix}${fewShotSuffix}`,
     styleTag,
     templateName: tpl.name,
+    // PR Q.5 D4：chart_config jsonb 透传给 article-skill → htmlGenerator
+    chartConfig: tpl.chartConfig,
   };
 }

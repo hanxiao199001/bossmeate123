@@ -902,22 +902,26 @@ export async function generateShunshiStyleHtml(
   aiContent: AIGeneratedContent,
   _abstracts?: Abstracts,
   tenant?: TenantInfo | null,
+  chartConfig?: unknown,
 ): Promise<string> {
   const sections: string[] = [];
+  // PR Q.5 D4：根据 chartConfig.types[] 决定哪些 chart 渲染（4 套模板差异化数量）
+  const { resolveChartConfig } = await import("../../skills/chart-config-resolver.js");
+  const { typesSet } = resolveChartConfig(chartConfig);
 
   sections.push(renderHeroBlock(journal));                            //  1
   sections.push(renderBasicInfoBlock(journal));                       //  2
   sections.push(renderJcrQuartileBlock(journal));                     //  3
-  sections.push(renderIfHistoryChart(journal));                       //  4 🆕
+  if (typesSet.has("if-history-line")) sections.push(renderIfHistoryChart(journal)); //  4 🆕
   sections.push(renderImpactFactorBlock(journal));                    //  5 🔄
-  sections.push(renderCarHistoryBlock(journal));                      //  6 🆕
+  if (typesSet.has("car-history-line")) sections.push(renderCarHistoryBlock(journal)); //  6 🆕
   sections.push(renderJcrFullPanel(journal));                         //  7 🆕 (P3)
   sections.push(renderScopeDetailsBlock(journal));                    //  8 🆕
   sections.push(renderPublicationCostsBlock(journal));                //  9 🆕
   sections.push(renderFrequencyBlock(journal));                       // 10 🔄
-  sections.push(renderAnnualVolumeChart(journal));                    // 11 🆕
+  if (typesSet.has("annual-volume-bar")) sections.push(renderAnnualVolumeChart(journal)); // 11 🆕
   sections.push(renderTopInstitutionsBlock(journal));                 // 12 🆕 (P3)
-  sections.push(renderCitingJournalsPie(journal));                    // 13 🆕
+  if (typesSet.has("citing-pie")) sections.push(renderCitingJournalsPie(journal)); // 13 🆕
   sections.push(renderSelfCitationBadge(journal));                    // 14 🆕 (P3)
   sections.push(renderRecommendationScoreBlock(journal));             // 15 🆕
   // V7（task #11）：4 个深度分析章节，由 8 enricher 字段真数据驱动 LLM 生成

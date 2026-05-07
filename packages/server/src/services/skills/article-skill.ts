@@ -866,11 +866,14 @@ export class ArticleSkill implements ISkill {
         logger.warn({ err, tenantId }, "tenant contactMeta lookup failed; using template fallback");
       }
     }
+    // PR Q.5 D4：拉模板的 chart_config 给 htmlGenerator（4 套差异化 chart 数量 + colors）
+    const chartConfig = templateAware.chartConfig;
     const articleBody = await template!.htmlGenerator(
       journal,
       aiContent,
       journalData.abstracts,
       tenantInfo,
+      chartConfig,
     );
 
     // PR Q.4 D3：根据 selected template 的 styleTag 包裹 CSS class，前端 4 CSS 主题生效
