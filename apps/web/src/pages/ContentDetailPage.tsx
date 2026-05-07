@@ -391,7 +391,10 @@ export default function ContentDetailPage() {
 
     // 后端期刊推荐模板等场景返回的是 HTML；用白名单 sanitizer 清洗后渲染，
     // script/iframe/on*/javascript: 等危险内容会被剥离。
-    if (trimmed.startsWith("<div") || trimmed.startsWith("<section") || trimmed.startsWith("<!")) {
+    // PR Q.8 hotfix：article body 现在以 <article class="bm-template-{styleTag}"> 开头（PR Q.4
+    // CSS 主题包裹）。原识别只 <div/<section/<!，<article 走错 markdown 分支被 escapeHtml 转义
+    // → 浏览器渲染 raw 字符（5-7 user 验收预览 tab 看到 raw HTML）。加 <article 识别。
+    if (trimmed.startsWith("<div") || trimmed.startsWith("<section") || trimmed.startsWith("<article") || trimmed.startsWith("<!")) {
       return sanitizeHtml(trimmed);
     }
 
@@ -1052,7 +1055,10 @@ export default function ContentDetailPage() {
                     </div>
                   ) : (
                     <div
-                      className="flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto prose-sm"
+                      // PR Q.8 hotfix：去 prose-sm（Tailwind typography 覆盖 4 套模板 inline CSS），
+                      // 加 bossmate-article-preview wrapper（global.css 内重置 box-sizing 防干扰）。
+                      // 4 套主题靠内层 <article class="bm-template-{styleTag}"> CSS 命中。
+                      className="bossmate-article-preview flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto"
                       dangerouslySetInnerHTML={{
                         __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
                       }}

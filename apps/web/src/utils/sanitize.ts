@@ -45,6 +45,9 @@ const SVG_TAGS = [
 // 允许渲染的标签白名单
 const ALLOWED_TAGS = new Set<string>([
   "a",
+  // PR Q.8 hotfix：PR Q.4 article body 用 <article class="bm-template-{styleTag}"> 包裹
+  // 4 套 CSS 主题命中；sanitize 必须保留 article 标签否则外层 class 被 strip → 主题失效。
+  "article",
   "b",
   "blockquote",
   "br",
