@@ -1,3 +1,10 @@
+/* PR Q.6.3: C 科普 web font CDN — Noto Sans SC + 大字距松散圆体感 + 24px H1 weight 500 */
+.bm-template-popular, .bm-template-popular * {
+  font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif !important;
+  letter-spacing: 0.5px !important;
+}
+.bm-template-popular h1 { font-size: 24px !important; font-weight: 500 !important; line-height: 1.7 !important; }
+.bm-template-popular p { line-height: 2 !important; }
 /* PR Q.6.2: C 科普轻松 — 圆体字 / 暖橙黄 / 大间距 / 圆角卡片 / emoji 装饰（!important）*/
 .bm-template-popular {
   --bm-primary: #F39C12;

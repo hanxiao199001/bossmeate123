@@ -1,3 +1,11 @@
+/* PR Q.6.3: B 营销 web font CDN — Inter Black（粗体）+ 负字距紧凑 + 28px H1 weight 900 */
+.bm-template-marketing, .bm-template-marketing * {
+  font-family: "Inter", "PingFang SC", "Helvetica Neue", -apple-system, sans-serif !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.3px !important;
+}
+.bm-template-marketing h1, .bm-template-marketing strong, .bm-template-marketing em { font-weight: 900 !important; }
+.bm-template-marketing h1 { font-size: 28px !important; }
 /* PR Q.6.2: B 营销转化 — 无衬线粗体 / 红橙渐变 / 大字数字 / CTA 按钮（!important 压 inline）*/
 .bm-template-marketing {
   --bm-primary: #DC143C;

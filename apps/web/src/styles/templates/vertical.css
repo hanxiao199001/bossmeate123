@@ -1,3 +1,11 @@
+/* PR Q.6.3: E 行业 web font — PingFang + 0 字距 + tabular-nums 商务感 + 22px H1 weight 400 */
+.bm-template-vertical, .bm-template-vertical * {
+  font-family: "PingFang SC", "Helvetica Neue", "Helvetica", "Noto Sans SC", sans-serif !important;
+  letter-spacing: 0 !important;
+  font-feature-settings: "tnum" 1 !important;
+}
+.bm-template-vertical h1 { font-size: 22px !important; font-weight: 400 !important; }
+.bm-template-vertical em, .bm-template-vertical strong { font-feature-settings: "tnum" 1 !important; }
 /* PR Q.6.2: E 行业垂直 — PingFang / 紫靛商务 / 表格密集 / 数据黄高亮 / 侧边箭头（!important）*/
 .bm-template-vertical {
   --bm-primary: #6B46C1;

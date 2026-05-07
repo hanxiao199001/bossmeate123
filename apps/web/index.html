@@ -20,6 +20,12 @@
 
     <title>BossMate - AI超级员工</title>
 
+    <!-- PR Q.6.3：4 套模板 web font CDN（国内镜像 font.im 稳）。5-8 user 验收 4 套字体一样，
+         root cause: Mac 默认无 Source Han Serif / Inter。Noto Serif SC = A 学术衬线；
+         Inter Black = B 营销粗体；Noto Sans SC = C/E 无衬线。-->
+    <link rel="preconnect" href="https://fonts.font.im" crossorigin />
+    <link href="https://fonts.font.im/css2?family=Noto+Serif+SC:wght@600;700&family=Inter:wght@400;700;900&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+
     <style>
       /* iOS safe area 适配 */
       :root {
