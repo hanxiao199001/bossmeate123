@@ -19,8 +19,9 @@ const PAD_L = 50;
 const PAD_R = 30;
 const PAD_T = 30;
 const PAD_B = 40;
-const STROKE = "#DC143C"; // 期刊推荐红
-const POINT = "#DC143C";
+// PR Q.6 D5：palette 占位，shunshi 末尾 replaceAll 注入 4 套真色（A 学术 accent #1976D2 / B 营销 #FF6B35 / ...）
+const STROKE = "{{ACCENT}}";
+const POINT = "{{ACCENT}}";
 const GRID = "#E0E0E0";
 const TEXT_COLOR = "#333";
 const MUTED = "#999";

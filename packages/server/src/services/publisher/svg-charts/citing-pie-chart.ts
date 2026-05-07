@@ -20,8 +20,8 @@ const CX = 150;
 const CY = 160;
 const R = 120;
 
-// 6 色 palette（top 1-5 + 其他 + 自引）— BossMate 蓝/绿/橙/紫/红/灰/棕
-const PALETTE = ["#1976D2", "#388E3C", "#F57C00", "#7B1FA2", "#D32F2F", "#9E9E9E", "#5D4037"] as const;
+// PR Q.6 D5：top 1 用 palette.primary 占位（4 套真主色），其他保留语义色（绿推荐 / 橙注意 / 紫 / 红警告 / 灰）
+const PALETTE = ["{{PRIMARY}}", "#388E3C", "#F57C00", "#7B1FA2", "#D32F2F", "#9E9E9E", "#5D4037"] as const;
 
 const LEGEND_X = 290;
 const LEGEND_Y = 50;

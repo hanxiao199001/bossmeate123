@@ -58,6 +58,11 @@ import {
   renderAnnualVolumeBarChart,
   renderCarHistoryLineChart,
   renderCitingPieChart,
+  // PR Q.6 D5
+  renderAcceptRateBarChart,
+  renderFeePieChart,
+  renderSubjectDistributionChart,
+  renderReviewCycleBarChart,
 } from "../svg-charts/index.js";
 
 type Abstracts = CollectionResult["abstracts"];
@@ -831,7 +836,8 @@ function renderCautionsBlock(journal: JournalInfo, aiContent: AIGeneratedContent
 // ============ 区块 20: 营销文案 CTA ============
 function renderMarketingCtaBlock(journal: JournalInfo): string {
   const journalName = esc(journal.nameEn || journal.name);
-  return `<section style="margin:0 0 22px 0;padding:16px 18px;background:linear-gradient(135deg,#1976D2,#42A5F5);border-radius:8px;text-align:center;">` +
+  // PR Q.6 D5：CTA block 渐变背景改 palette 占位（原硬编码 #1976D2 → 4 套主色 / 辅色注入）
+  return `<section style="margin:0 0 22px 0;padding:16px 18px;background:linear-gradient(135deg,{{PRIMARY}},{{ACCENT}});border-radius:8px;text-align:center;">` +
     `<p style="margin:0 0 6px 0;font-size:16px;font-weight:bold;color:#fff;line-height:1.5;">需要投稿协助？</p>` +
     `<p style="margin:0;font-size:14px;color:#E3F2FD;line-height:1.7;">${journalName} 投稿格式审核 / 选题契合度评估 / 同行案例查询，扫码联系小助手</p>` +
     `</section>`;
@@ -906,6 +912,9 @@ export async function generateShunshiStyleHtml(
   _abstracts?: Abstracts,
   tenant?: TenantInfo | null,
   chartConfig?: unknown,
+  // PR Q.6 D5：section_count 控制 4 套 region 数差异化（A=23 / B=15 / C=18 / E=25→23）。
+  // E=25 实际只渲 23（shunshi 固定 23 区块上限），E 多出靠 chart 数补（D5 chart_config 5 个 chart）。
+  sectionCount?: number,
 ): Promise<string> {
   const sections: string[] = [];
   // PR Q.5 D4：根据 chartConfig.types[] 决定哪些 chart 渲染（4 套模板差异化数量）
@@ -926,6 +935,14 @@ export async function generateShunshiStyleHtml(
   if (typesSet.has("annual-volume-bar")) sections.push(renderAnnualVolumeChart(journal)); // 11 🆕
   sections.push(renderTopInstitutionsBlock(journal));                 // 12 🆕 (P3)
   if (typesSet.has("citing-pie")) sections.push(renderCitingJournalsPie(journal)); // 13 🆕
+  // PR Q.6 D5：4 新 chart 类型（typesSet 命中才渲）。section wrap 简化（margin / padding 同 shunshi 风格）
+  const wrapChart = (svg: string) => svg ? `<section style="margin:0 0 18px 0;padding:8px 0;">${svg}</section>` : "";
+  if (typesSet.has("accept-rate-bar")) sections.push(wrapChart(renderAcceptRateBarChart(journal.acceptanceRate ?? null)));
+  if (typesSet.has("fee-pie")) sections.push(wrapChart(renderFeePieChart(journal.apcFee ?? null)));
+  if (typesSet.has("subject-distribution")) sections.push(wrapChart(renderSubjectDistributionChart(
+    (journal.promptScopeDetails?.subjectDistribution as Array<{ subject: string; percent: number }>) ?? [],
+  )));
+  if (typesSet.has("review-cycle-bar")) sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
   sections.push(renderSelfCitationBadge(journal));                    // 14 🆕 (P3)
   sections.push(renderRecommendationScoreBlock(journal));             // 15 🆕
   // V7（task #11）：4 个深度分析章节，由 8 enricher 字段真数据驱动 LLM 生成
@@ -943,8 +960,12 @@ export async function generateShunshiStyleHtml(
   sections.push(renderFooterBlock(journal));                          // 23
 
   // PR Q.7.2：runtime palette 注入。占位字符串 → palette 实色（4 套主色调真差异化）。
-  // #FAFAFA / #F5F5F5 等中性卡片底色额外替换：让 4 套卡片底也跟主调走（A 浅蓝灰 / B 浅橙 / C 浅黄 / E 浅紫）。
-  const html = sections.filter((s) => s.length > 0).join("\n");
+  // PR Q.6 D5：sectionCount 控制 4 套区块数差异化（A=23 默认 / B=15 / C=18 / E=23 上限）。
+  const visible = sections.filter((s) => s.length > 0);
+  const trimmed = sectionCount && sectionCount < visible.length
+    ? visible.slice(0, sectionCount)
+    : visible;
+  const html = trimmed.join("\n");
   return html
     .replaceAll("{{PRIMARY}}", palette.primary)
     .replaceAll("{{ACCENT}}", palette.accent)

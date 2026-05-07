@@ -33,11 +33,13 @@ const TONE_DESC: Record<string, string> = {
   short: "段落极短，每段 1-3 句，强冲击",
   medium: "段落适中，每段 40-80 字",
 };
+// PR Q.6 D5：emoji 强约束（5-7 D4 验收 4 套都 14 emoji 来源 shunshi 模板，但 LLM 输出
+// 字段（title / scopeDescription / recommendation 等）不严格遵守。加强 mandatory 措辞。
 const EMOJI_DESC: Record<string, string> = {
-  none: "全文不使用任何 emoji 或装饰符号",
-  heavy: "标题与段首大量使用 emoji（每段至少 1 个）",
-  moderate: "适度使用 emoji（标题可 1-2 个，正文偶尔点缀）",
-  sparse: "仅在关键数据点旁使用 emoji 强调（最多 3 处）",
+  none: "🚫 【严禁】使用任何 emoji / 表情符号 / 图标字符。LLM 输出含 emoji 视为格式错误必须重写",
+  heavy: "✅ 【必须】≥8 个 emoji（标题至少 1-2 个 / 每段段首至少 1 个 / 数据强调处加 emoji），少于 8 个视为不达标",
+  moderate: "🟡 【适度】3-5 个 emoji（标题 1-2 个 / 正文偶尔 2-3 个，超过 5 视为过度）",
+  sparse: "⚠️ 【严控】0-1 个 emoji（仅关键数据点旁可加 1 处，多于 1 视为过度）",
 };
 const EMPHASIS_DESC: Record<string, string> = {
   low: "数据用普通字号，不加粗",
@@ -88,11 +90,11 @@ export async function buildTemplateAwarePromptSuffix(args: {
   templateId: string | null | undefined;
   tenantId: string;
   query: string;
-}): Promise<{ suffix: string; styleTag: SampleStyleTag | null; templateName: string | null; chartConfig: unknown }> {
+}): Promise<{ suffix: string; styleTag: SampleStyleTag | null; templateName: string | null; chartConfig: unknown; sectionCount: number | null }> {
   const { templateId, tenantId, query } = args;
-  if (!templateId) return { suffix: "", styleTag: null, templateName: null, chartConfig: null };
+  if (!templateId) return { suffix: "", styleTag: null, templateName: null, chartConfig: null, sectionCount: null };
   const tpl = await loadTemplate(templateId);
-  if (!tpl) return { suffix: "", styleTag: null, templateName: null, chartConfig: null };
+  if (!tpl) return { suffix: "", styleTag: null, templateName: null, chartConfig: null, sectionCount: null };
 
   const styleTag = tpl.styleTag as SampleStyleTag;
   const overrideSuffix = buildPromptOverrideSuffix(tpl);
@@ -105,5 +107,7 @@ export async function buildTemplateAwarePromptSuffix(args: {
     templateName: tpl.name,
     // PR Q.5 D4：chart_config jsonb 透传给 article-skill → htmlGenerator
     chartConfig: tpl.chartConfig,
+    // PR Q.6 D5：section_count 控制 4 套区块数差异化
+    sectionCount: tpl.sectionCount,
   };
 }

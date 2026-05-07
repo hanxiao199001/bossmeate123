@@ -19,7 +19,8 @@ const PAD_L = 50;
 const PAD_R = 30;
 const PAD_T = 30;
 const PAD_B = 40;
-const BAR_FILL = "#1976D2"; // 期刊推荐蓝
+// PR Q.6 D5：palette 占位，4 套主色注入
+const BAR_FILL = "{{PRIMARY}}";
 const GRID = "#E0E0E0";
 const TEXT_COLOR = "#333";
 const MUTED = "#999";

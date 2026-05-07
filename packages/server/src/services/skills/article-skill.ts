@@ -867,6 +867,7 @@ export class ArticleSkill implements ISkill {
       }
     }
     // PR Q.5 D4：拉模板的 chart_config 给 htmlGenerator（4 套差异化 chart 数量 + colors）
+    // PR Q.6 D5：拉 sectionCount（A=23 / B=15 / C=18 / E=25）控制区块数差异
     const chartConfig = templateAware.chartConfig;
     const articleBody = await template!.htmlGenerator(
       journal,
@@ -874,6 +875,7 @@ export class ArticleSkill implements ISkill {
       journalData.abstracts,
       tenantInfo,
       chartConfig,
+      templateAware.sectionCount ?? undefined,
     );
 
     // PR Q.4 D3：根据 selected template 的 styleTag 包裹 CSS class，前端 4 CSS 主题生效
