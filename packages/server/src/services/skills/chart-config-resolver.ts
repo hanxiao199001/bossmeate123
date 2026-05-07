@@ -16,18 +16,26 @@ export const KNOWN_CHART_TYPES = new Set([
 ]);
 
 export interface ChartColorPalette {
-  primary: string;     // 主色（折线 / 饼图主块 / 柱状）
-  accent: string;      // 辅色（次要数据点 / 阴影）
-  warn: string;        // 警告色（CAR high risk / 异常值）
-  bg: string;          // 浅底色
+  primary: string;        // 主色（章节标题 / 链接 / 主图表）
+  accent: string;         // 强调色（数据高亮 / 红色警告 — 4 套差异化）
+  warn: string;           // 警告语义色（CAR high risk / 异常值）
+  bg: string;             // chart SVG 背景
+  // PR Q.7.2：shunshi-style 模板 palette 化补充字段
+  primaryBg: string;      // 主色浅底（信息卡片背景，原 #E3F2FD）
+  cardBg: string;         // 卡片浅灰底（原 #FAFAFA）
+  borderColor: string;    // 边框 / 标签底（原 #F5F5F5）
 }
 
-/** 4 套 colors 主题（与 css_theme.palette 对齐）。chart SVG 直接吃 fill/stroke。 */
+/** 4 套 colors 主题（与 css_theme.palette 对齐）。 */
 const PALETTES: Record<string, ChartColorPalette> = {
-  "blue-gray":       { primary: "#2C5F8D", accent: "#5A7FA8", warn: "#E63946", bg: "#F5F7FA" }, // A 学术
-  "orange-red":      { primary: "#FF6B35", accent: "#F7B538", warn: "#E63946", bg: "#FFF8F0" }, // B 营销
-  "cyan-mint":       { primary: "#00B4D8", accent: "#FFC857", warn: "#E76F51", bg: "#F0FBFF" }, // C 科普
-  "purple-indigo":   { primary: "#6B46C1", accent: "#9F7AEA", warn: "#DD6B20", bg: "#F8F5FF" }, // E 行业
+  "blue-gray":     { primary: "#2C5F8D", accent: "#1976D2", warn: "#E63946", bg: "#F5F7FA",
+                     primaryBg: "#E3F2FD", cardBg: "#F5F7FA", borderColor: "#D1D9E0" }, // A 学术
+  "orange-red":    { primary: "#DC143C", accent: "#FF6B35", warn: "#E63946", bg: "#FFF8F0",
+                     primaryBg: "#FFF0F0", cardBg: "#FFF8F0", borderColor: "#FFD9C9" }, // B 营销
+  "cyan-mint":     { primary: "#F39C12", accent: "#00B4D8", warn: "#E76F51", bg: "#FFF8DC",
+                     primaryBg: "#FFF8DC", cardBg: "#FFF8E1", borderColor: "#FFE0A8" }, // C 科普
+  "purple-indigo": { primary: "#6B46C1", accent: "#8B5CF6", warn: "#DD6B20", bg: "#F8F5FF",
+                     primaryBg: "#F5F3FF", cardBg: "#F8F5FF", borderColor: "#DDD6FE" }, // E 行业
 };
 
 export interface ResolvedChartConfig {

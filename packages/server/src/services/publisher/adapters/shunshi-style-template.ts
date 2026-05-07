@@ -62,12 +62,15 @@ import {
 
 type Abstracts = CollectionResult["abstracts"];
 
-// ============ 配色 ============
-const RED = "#DC143C";
-const BLUE = "#1976D2";
+// ============ 配色（PR Q.7.2：palette 占位，generateShunshiStyleHtml 末尾 replaceAll 注入实色）============
+// 4 套模板 palette.primary/.accent 不同；BLUE/RED 现为占位字符串，运行时根据 selected
+// template 的 cssTheme.palette 真值替换，让 4 套主色调真差异化（user 5-7 D4 验收发现）。
+// 语义色（推荐绿 #388E3C / 警告红 #D32F2F / 注意橙 #F57C00 / 异常红 #C62828）保留不变。
+const RED = "{{ACCENT}}";
+const BLUE = "{{PRIMARY}}";
 const TEXT = "#333";
 const MUTED = "#999";
-const PLACEHOLDER_BG = "linear-gradient(135deg,#E3F2FD,#F5FAFF)";
+const PLACEHOLDER_BG = "linear-gradient(135deg,{{PRIMARY_BG}},#F5FAFF)";
 const PLACEHOLDER_BORDER = "#90CAF9";
 
 // ============ B 阶段 jsonb 字段类型 + type guard ============
@@ -906,8 +909,9 @@ export async function generateShunshiStyleHtml(
 ): Promise<string> {
   const sections: string[] = [];
   // PR Q.5 D4：根据 chartConfig.types[] 决定哪些 chart 渲染（4 套模板差异化数量）
+  // PR Q.7.2：从 chartConfig.colors 解 palette，末尾 .replaceAll 注入 4 套真色调（user 5-7 D4 验收 root cause：inline CSS hardcoded 覆盖 class CSS）
   const { resolveChartConfig } = await import("../../skills/chart-config-resolver.js");
-  const { typesSet } = resolveChartConfig(chartConfig);
+  const { typesSet, palette } = resolveChartConfig(chartConfig);
 
   sections.push(renderHeroBlock(journal));                            //  1
   sections.push(renderBasicInfoBlock(journal));                       //  2
@@ -938,5 +942,13 @@ export async function generateShunshiStyleHtml(
   sections.push(renderDisclaimerBlock());                             // 22
   sections.push(renderFooterBlock(journal));                          // 23
 
-  return sections.filter((s) => s.length > 0).join("\n");
+  // PR Q.7.2：runtime palette 注入。占位字符串 → palette 实色（4 套主色调真差异化）。
+  // #FAFAFA / #F5F5F5 等中性卡片底色额外替换：让 4 套卡片底也跟主调走（A 浅蓝灰 / B 浅橙 / C 浅黄 / E 浅紫）。
+  const html = sections.filter((s) => s.length > 0).join("\n");
+  return html
+    .replaceAll("{{PRIMARY}}", palette.primary)
+    .replaceAll("{{ACCENT}}", palette.accent)
+    .replaceAll("{{PRIMARY_BG}}", palette.primaryBg)
+    .replaceAll("#FAFAFA", palette.cardBg)
+    .replaceAll("#F5F5F5", palette.borderColor);
 }
