@@ -1,4 +1,4 @@
-/* PR Q.4 D3：A 学术权威 (academic) — Source Han Serif / 蓝灰 / line-height 1.7 / 章节序号 */
+/* PR Q.6.2: A 学术权威 — 衬线字 / 蓝灰 / 章节序号 / 引用 box（!important 压 inline style）*/
 .bm-template-academic {
   --bm-primary: #2C5F8D;
   --bm-accent: #5A7FA8;
@@ -6,58 +6,32 @@
   --bm-text: #1F2937;
   --bm-muted: #6B7280;
   --bm-border: #D1D9E0;
-  font-family: "Source Han Serif SC", "Noto Serif SC", Georgia, serif;
-  line-height: 1.7;
-  color: var(--bm-text);
-  background: #fff;
+  font-family: "Source Han Serif SC", "Noto Serif SC", "STSong", Georgia, serif !important;
+  line-height: 1.85 !important;
+  color: var(--bm-text) !important;
+  background: #fff !important;
   counter-reset: bm-section;
+  letter-spacing: 0.02em;
 }
-.bm-template-academic h1 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--bm-primary);
-  border-bottom: 2px solid var(--bm-primary);
-  padding-bottom: 0.5rem;
-  margin: 1.5rem 0 1rem;
+.bm-template-academic h1, .bm-template-academic h2, .bm-template-academic h3,
+.bm-template-academic p, .bm-template-academic li, .bm-template-academic span,
+.bm-template-academic strong, .bm-template-academic em, .bm-template-academic td, .bm-template-academic th {
+  font-family: inherit !important;
 }
+.bm-template-academic section { padding: 1.25rem 1.5rem !important; margin: 0 0 1.5rem !important; border-left: 3px solid var(--bm-primary) !important; background: #fff !important; }
+.bm-template-academic h1 { font-size: 1.85rem !important; color: var(--bm-primary) !important; border-bottom: 3px double var(--bm-primary); padding-bottom: 0.5rem; }
 .bm-template-academic h2 {
-  font-size: 1.35rem;
-  font-weight: 600;
-  color: var(--bm-primary);
-  margin: 1.5rem 0 0.75rem;
-  counter-increment: bm-section;
+  font-size: 1.4rem !important; color: var(--bm-primary) !important;
+  counter-increment: bm-section; padding-left: 0.5rem;
 }
 .bm-template-academic h2::before {
-  content: counter(bm-section, decimal-leading-zero) "  ";
-  color: var(--bm-accent);
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  content: "§ " counter(bm-section, decimal-leading-zero) "  ";
+  color: var(--bm-accent); font-weight: 700; letter-spacing: 0.1em; font-size: 0.85em;
 }
-.bm-template-academic h3 {
-  font-size: 1.1rem;
-  color: var(--bm-accent);
-  margin: 1rem 0 0.5rem;
-}
-.bm-template-academic p { margin: 0.75rem 0; }
-.bm-template-academic strong { color: var(--bm-primary); font-weight: 600; }
-.bm-template-academic blockquote {
-  border-left: 4px solid var(--bm-accent);
-  background: var(--bm-bg);
-  padding: 0.75rem 1rem;
-  margin: 1rem 0;
-  color: var(--bm-muted);
-  font-style: italic;
-}
-.bm-template-academic table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 1rem 0;
-  font-size: 0.9rem;
-}
-.bm-template-academic th, .bm-template-academic td {
-  border: 1px solid var(--bm-border);
-  padding: 0.5rem 0.75rem;
-  text-align: left;
-}
-.bm-template-academic th { background: var(--bm-bg); color: var(--bm-primary); }
-.bm-template-academic em { color: var(--bm-accent); font-style: normal; font-weight: 500; }
+.bm-template-academic strong { color: var(--bm-primary) !important; font-weight: 600 !important; }
+.bm-template-academic em { color: var(--bm-accent) !important; font-style: italic !important; font-weight: 500; }
+.bm-template-academic blockquote { border-left: 4px solid var(--bm-accent) !important; background: var(--bm-bg) !important; padding: 1rem 1.25rem !important; font-style: italic; color: var(--bm-muted); position: relative; }
+.bm-template-academic blockquote::before { content: "❝"; position: absolute; left: 0.5rem; top: 0.25rem; color: var(--bm-accent); font-size: 1.5rem; opacity: 0.3; }
+.bm-template-academic table { width: 100% !important; border-collapse: collapse !important; }
+.bm-template-academic th, .bm-template-academic td { border: 1px solid var(--bm-border) !important; padding: 0.6rem 0.85rem !important; }
+.bm-template-academic th { background: var(--bm-bg) !important; color: var(--bm-primary) !important; font-weight: 600; }

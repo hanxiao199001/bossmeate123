@@ -1,70 +1,60 @@
-/* PR Q.4 D3：C 科普轻松 (popular) — Source Han Rounded / 暖橙黄 / 大间距 1.9 / 圆角卡片 / emoji 装饰 */
+/* PR Q.6.2: C 科普轻松 — 圆体字 / 暖橙黄 / 大间距 / 圆角卡片 / emoji 装饰（!important）*/
 .bm-template-popular {
-  --bm-primary: #00B4D8;
-  --bm-accent: #FFC857;
-  --bm-bg: #F0FBFF;
+  --bm-primary: #F39C12;
+  --bm-accent: #00B4D8;
+  --bm-bg: #FFF8DC;
   --bm-warm: #FFF4D9;
   --bm-text: #2D3748;
-  font-family: "Source Han Sans Rounded SC", "Noto Sans SC", "PingFang SC", sans-serif;
-  line-height: 1.9;
-  color: var(--bm-text);
-  background: #fff;
+  font-family: "Source Han Sans Rounded SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif !important;
+  line-height: 2 !important;
+  color: var(--bm-text) !important;
+  background: #fff !important;
+  font-weight: 400 !important;
+}
+.bm-template-popular h1, .bm-template-popular h2, .bm-template-popular h3,
+.bm-template-popular p, .bm-template-popular li, .bm-template-popular span,
+.bm-template-popular strong, .bm-template-popular em, .bm-template-popular td, .bm-template-popular th {
+  font-family: inherit !important;
+}
+.bm-template-popular section {
+  padding: 1.5rem 1.5rem !important; margin: 0 0 1.5rem !important;
+  background: var(--bm-warm) !important; border-radius: 18px !important;
+  box-shadow: 0 2px 12px rgba(243, 156, 18, 0.08) !important;
 }
 .bm-template-popular h1 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--bm-primary);
-  text-align: center;
-  margin: 2rem 0 1.5rem;
+  font-size: 1.8rem !important; font-weight: 700 !important; color: var(--bm-primary) !important;
+  text-align: center !important; margin: 2rem 0 1.5rem !important;
 }
 .bm-template-popular h1::before { content: "✨ "; }
 .bm-template-popular h1::after { content: " ✨"; }
 .bm-template-popular h2 {
-  font-size: 1.3rem;
-  font-weight: 600;
-  color: var(--bm-primary);
-  background: var(--bm-bg);
-  padding: 0.6rem 1rem;
-  border-radius: 14px;
-  margin: 1.5rem 0 1rem;
+  font-size: 1.35rem !important; font-weight: 600 !important; color: var(--bm-primary) !important;
+  background: #fff !important; padding: 0.75rem 1.25rem !important;
+  border-radius: 14px !important; margin: 1.5rem 0 1rem !important;
+  box-shadow: 0 1px 4px rgba(243, 156, 18, 0.15);
 }
-.bm-template-popular h3 {
-  font-size: 1.1rem;
-  color: #E76F51;
-  margin: 1.25rem 0 0.6rem;
-}
-.bm-template-popular p { margin: 1rem 0; }
+.bm-template-popular h2::before { content: "🌟 "; }
+.bm-template-popular h3 { font-size: 1.15rem !important; color: #E76F51 !important; margin: 1.25rem 0 0.6rem !important; }
+.bm-template-popular h3::before { content: "💡 "; }
+.bm-template-popular p { margin: 1rem 0 !important; }
 .bm-template-popular strong {
-  color: #E76F51;
-  font-weight: 600;
-  padding: 0 0.2rem;
-  background: var(--bm-warm);
-  border-radius: 4px;
+  color: #E76F51 !important; font-weight: 700 !important;
+  padding: 0.1rem 0.35rem !important; background: #fff !important; border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(231, 111, 81, 0.2);
 }
+.bm-template-popular em { color: var(--bm-accent) !important; font-style: normal !important; font-weight: 600; }
 .bm-template-popular blockquote {
-  background: var(--bm-warm);
-  border-radius: 16px;
-  padding: 1rem 1.25rem;
-  margin: 1.25rem 0;
-  border: none;
-  position: relative;
+  background: #fff !important; border-radius: 16px !important;
+  padding: 1.25rem 1.5rem !important; margin: 1.25rem 0 !important; border: none !important;
+  position: relative; box-shadow: 0 2px 12px rgba(0, 180, 216, 0.1);
 }
 .bm-template-popular blockquote::before {
-  content: "💡";
-  position: absolute;
-  top: -10px;
-  left: 16px;
-  background: #fff;
-  padding: 0 6px;
-  font-size: 1.2rem;
+  content: "💡"; position: absolute; top: -12px; left: 20px;
+  background: #fff; padding: 0 8px; font-size: 1.4rem;
 }
 .bm-template-popular table {
-  border-collapse: separate;
-  border-spacing: 0;
-  border-radius: 12px;
-  overflow: hidden;
-  margin: 1.25rem 0;
-  width: 100%;
+  border-collapse: separate !important; border-spacing: 0 !important;
+  border-radius: 14px !important; overflow: hidden !important; width: 100% !important;
 }
-.bm-template-popular th { background: var(--bm-primary); color: #fff; padding: 0.6rem; }
-.bm-template-popular td { background: var(--bm-bg); padding: 0.6rem; border-top: 1px solid #fff; }
+.bm-template-popular th { background: var(--bm-primary) !important; color: #fff !important; padding: 0.75rem !important; }
+.bm-template-popular td { background: var(--bm-warm) !important; padding: 0.75rem !important; border-top: 2px solid #fff !important; }
