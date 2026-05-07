@@ -44,6 +44,8 @@ export interface TemplateDefinition {
     aiContent: AIGeneratedContent,
     abstracts?: CollectionResult["abstracts"],
     tenant?: { contactMeta?: unknown } | null,
+    /** PR Q.5 D4：chart_config jsonb（types[] + colors）控制渲染哪些 chart + 主题色。 */
+    chartConfig?: unknown,
   ) => Promise<string>;
   /** 给 AI 生成 title/scope/recommendation 时附加的风格提示（可选，后续模板使用） */
   aiPromptHints?: string;

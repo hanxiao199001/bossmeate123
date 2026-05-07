@@ -863,6 +863,19 @@ SELECT 'industry-vertical', '行业垂直', 'vertical', 25,
   '{"hero_source":"journal_cover","section_icons":"lucide-list-checks","ai_generation":false}'::jsonb,
   false
 WHERE NOT EXISTS (SELECT 1 FROM content_templates WHERE name='industry-vertical');
+
+-- ============ PR Q.5 D4：chart_config.types 修订到现有 4 chart 子集 ============
+-- B/E seed 原 types 含 D5 才实现的 accept-rate-bar / fee-pie / subject-distribution，
+-- D4 用现有 4 chart 子集，新 chart 类型留 D5 单独 PR。idempotent UPDATE 全 tenant 系统模板。
+UPDATE content_templates
+SET chart_config = '{"types":["if-history-line","annual-volume-bar","citing-pie"],"count":3,"colors":"orange-red","size":"large"}'::jsonb,
+    updated_at = NOW()
+WHERE name='marketing-conversion' AND tenant_id IS NULL;
+
+UPDATE content_templates
+SET chart_config = '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie"],"count":4,"colors":"purple-indigo","size":"large"}'::jsonb,
+    updated_at = NOW()
+WHERE name='industry-vertical' AND tenant_id IS NULL;
 `;
 
 async function migrate() {
