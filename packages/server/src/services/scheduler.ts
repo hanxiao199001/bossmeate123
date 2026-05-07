@@ -9,6 +9,7 @@
  */
 
 import { Worker, Queue } from "bullmq";
+import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { crawlAll, crawlByTrack, crawlPlatform } from "./crawler/index.js";
 import { analyzeKeywords } from "./agents/keyword-analyzer.js";
@@ -212,6 +213,11 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
     case "knowledge-engine":
     case "midday-knowledge":
     case "evening-knowledge": {
+      // PR Q.7 B 方案：knowledge-engine 也归 V3 batch，统一总闸控制。
+      if (!env.V3_BATCH_AGENT_ENABLED) {
+        logger.info({ type }, "knowledge-engine scheduled job skipped (V3_BATCH_AGENT_ENABLED=false)");
+        return { skipped: true, reason: "V3_BATCH_AGENT_ENABLED=false" };
+      }
       const { agentRegistry } = await import("./agents/base/registry.js");
       const activeTenants = tenantId
         ? [{ id: tenantId }]
@@ -237,6 +243,12 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
     }
 
     case "orchestrator": {
+      // PR Q.7 B 方案：V3 batch agent 总开关（默认 false）。关闭时立即返回，
+      // 避免 50 条新内容批量累积污染老板 Dashboard 的"待审核队列"。
+      if (!env.V3_BATCH_AGENT_ENABLED) {
+        logger.info("orchestrator scheduled job skipped (V3_BATCH_AGENT_ENABLED=false)");
+        return { skipped: true, reason: "V3_BATCH_AGENT_ENABLED=false" };
+      }
       const { agentRegistry: registry } = await import("./agents/base/registry.js");
       const activeTenants = tenantId
         ? [{ id: tenantId }]

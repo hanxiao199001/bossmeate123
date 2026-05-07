@@ -162,6 +162,13 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
+  // PR Q.7 B 方案：V3 batch agent 总开关（5-7 user 拍板默认关闭）
+  // orchestrator + knowledge-engine + content-director 三个定时调度依此判断是否触发
+  V3_BATCH_AGENT_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   // OpenAlex polite-pool email（B.2.1.B.2）。配置后请求带 ?mailto=<email>
   // 享受 10K req/day 免费 quota；不配置走 anonymous pool（更低额度）。
   OPENALEX_MAILTO: z.string().email().optional(),
