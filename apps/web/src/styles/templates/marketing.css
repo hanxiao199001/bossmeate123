@@ -1,0 +1,70 @@
+/* PR Q.4 D3：B 营销转化 (marketing) — Inter Bold / 红橙 / 紧凑 1.5 / CTA 风边框 / 大字数字 */
+.bm-template-marketing {
+  --bm-primary: #FF6B35;
+  --bm-accent: #F7B538;
+  --bm-bg: #FFF8F0;
+  --bm-text: #1F2937;
+  --bm-cta: #E63946;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  color: var(--bm-text);
+  background: #fff;
+  font-weight: 500;
+}
+.bm-template-marketing h1 {
+  font-size: 2rem;
+  font-weight: 900;
+  color: var(--bm-primary);
+  background: linear-gradient(90deg, var(--bm-primary), var(--bm-accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 1.25rem 0 0.75rem;
+}
+.bm-template-marketing h2 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--bm-primary);
+  border-left: 6px solid var(--bm-primary);
+  padding-left: 0.75rem;
+  margin: 1.25rem 0 0.5rem;
+}
+.bm-template-marketing h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--bm-cta);
+  margin: 0.75rem 0 0.5rem;
+}
+.bm-template-marketing p { margin: 0.5rem 0; font-size: 0.95rem; }
+.bm-template-marketing strong {
+  color: var(--bm-cta);
+  font-weight: 800;
+  background: linear-gradient(transparent 60%, rgba(247, 181, 56, 0.4) 60%);
+}
+.bm-template-marketing em {
+  font-style: normal;
+  font-size: 1.6em;
+  font-weight: 900;
+  color: var(--bm-primary);
+  display: inline-block;
+  vertical-align: baseline;
+}
+.bm-template-marketing blockquote {
+  background: var(--bm-bg);
+  border: 2px dashed var(--bm-accent);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  font-weight: 600;
+}
+.bm-template-marketing a, .bm-template-marketing .cta {
+  display: inline-block;
+  background: var(--bm-cta);
+  color: #fff !important;
+  padding: 0.6rem 1.5rem;
+  border-radius: 999px;
+  font-weight: 700;
+  text-decoration: none;
+  margin: 0.5rem 0;
+  box-shadow: 0 4px 12px rgba(230, 57, 70, 0.3);
+}
