@@ -66,7 +66,12 @@ const NUMBER_CONSTRAINT_SUFFIX =
   + `- 标题与正文中的"当前 IF"必须使用 metadata.impactFactor 当前值（如 The Lancet 应用 98.4），\n`
   + `  禁止引用 ifHistory 数组中的历史峰值（如 202、44 等）作为标题或正文宣传重点；\n`
   + `- 历史趋势仅可在 ifHistoryAnalysis 章节内说明（"近 X 年从 X 涨到 Y"），不可作 hook；\n`
-  + `- 录用率 / 审稿周期 / APC 同理：只用 metadata 当前值，不夸大、不引未来预测。`;
+  + `- 录用率 / 审稿周期 / APC 同理：只用 metadata 当前值，不夸大、不引未来预测。\n\n`
+  + `### ❌ 标题反例（PR Q.6.1，5-8 D5 C 套实测违反）\n`
+  + `- ❌ "IF从44飙升到98.4" / "IF 从 X 涨到 Y"（历史峰值作 hook）\n`
+  + `- ❌ "近10年涨5倍" / "增长 X%"（推算历史增幅作 hook）\n`
+  + `- ❌ "从未来跌到 Y" / "预计涨至 Z"（预测值作 hook）\n`
+  + `- ✅ "IF 98.4 的医学顶刊" / "影响因子 98.4 + 录用率 5%"（仅当前值）`;
 
 /** 把 prompt_overrides + structure_json 转为 LLM system prompt 后缀文本。 */
 export function buildPromptOverrideSuffix(template: { promptOverrides: unknown; structureJson: unknown; styleTag: string; displayName: string }): string {

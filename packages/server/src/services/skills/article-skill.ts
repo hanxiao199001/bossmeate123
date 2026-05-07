@@ -1074,7 +1074,7 @@ ${disciplineHint}
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
 
     try {
-      const result = await this.provider.chat({
+      let result = await this.provider.chat({
         messages: [
           { role: "system", content: finalSystemPrompt },
           { role: "user", content: prompt },
@@ -1083,6 +1083,25 @@ ${disciplineHint}
         // V7：原 2048 不够装 7 短字段 + 4 新章节（每章 200-500 字 ≈ 4000+ tokens 输出）
         maxTokens: 6000,
       });
+
+      // PR Q.6.1：检测 title 历史峰值幻觉，命中 → 加更强约束 + LLM 重生 1 次（最多 1 次重试）。
+      // 5-8 D5 C 套实测违反："IF从44飙升到98.4" — NUMBER_CONSTRAINT 在 prompt 中但 LLM 偶发不严格遵守。
+      const peakMatch = result.content.match(/从\s*\d+(\.\d+)?\s*[飙涨升]+\s*[到至]\s*\d+/);
+      if (peakMatch) {
+        logger.warn({ journalName, badTitleSnippet: peakMatch[0] }, "Q.6.1 title 历史峰值幻觉，LLM 重生 1 次");
+        const reinforced = finalSystemPrompt
+          + `\n\n### ⚠️ 重生约束（你上次输出含历史峰值表述「${peakMatch[0]}」违反 task #54）\n`
+          + `本次必须避免任何"从 X 飙到 Y / 涨到 / 升至"等历史 → 当前的对比表述作 title。\n`
+          + `title 仅描述当前 IF 数值（如"IF 98.4 的医学顶刊"），历史趋势放 ifHistoryAnalysis 章节。`;
+        result = await this.provider.chat({
+          messages: [
+            { role: "system", content: reinforced },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.4,  // 降 temperature 让 LLM 更严格遵守
+          maxTokens: 6000,
+        });
+      }
 
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
