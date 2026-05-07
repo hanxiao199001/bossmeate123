@@ -1,3 +1,10 @@
+/* PR Q.6.3: A 学术 web font CDN 强化 — Noto Serif SC（衬线）+ 紧字距 + 26px H1 */
+.bm-template-academic, .bm-template-academic * {
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "Times New Roman", serif !important;
+  letter-spacing: 0.3px !important;
+}
+.bm-template-academic h1 { font-size: 26px !important; font-weight: 700 !important; }
+.bm-template-academic h2 { font-weight: 600 !important; }
 /* PR Q.6.2: A 学术权威 — 衬线字 / 蓝灰 / 章节序号 / 引用 box（!important 压 inline style）*/
 .bm-template-academic {
   --bm-primary: #2C5F8D;
