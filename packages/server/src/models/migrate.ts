@@ -916,6 +916,12 @@ UPDATE content_templates
 SET chart_config = '{"types":["if-history-line","car-history-line","annual-volume-bar","citing-pie","subject-distribution"],"count":5,"colors":"purple-indigo","size":"large"}'::jsonb,
     updated_at = NOW()
 WHERE name='industry-vertical' AND tenant_id IS NULL;
+
+-- ============ PR Q.6.1：The Lancet APC 数据补 ============
+-- 5-8 D5 验收 B 营销 fee-pie 缺数据 (apc_fee=NULL) → svg=2 而非期望 3。
+-- 柳叶刀 OA 公开 APC ~$5500/article，仅当 NULL 时填充（idempotent）。
+UPDATE journals SET apc_fee = 5500
+WHERE id = 'cd850ce5-d30e-489a-8f31-aac4ef18faa2' AND apc_fee IS NULL;
 `;
 
 async function migrate() {
