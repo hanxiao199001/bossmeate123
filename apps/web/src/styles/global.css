@@ -34,3 +34,16 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
 }
+
+/* PR Q.8 hotfix：article 预览容器（4 套 CSS 主题真生效的 root）。
+   ContentDetailPage 预览 tab 内层 <article class="bm-template-{styleTag}"> 主导样式；
+   wrapper 仅做基础重置（解除 Tailwind preflight 对 article tag 的 display:block 之外的清扫）。 */
+.bossmate-article-preview > article {
+  display: block;
+  max-width: 100%;
+}
+.bossmate-article-preview img,
+.bossmate-article-preview svg {
+  max-width: 100%;
+  height: auto;
+}
