@@ -69,6 +69,10 @@ cd "$REMOTE_PATH"
 ${PULL_BLOCK}
 pnpm install --frozen-lockfile 2>&1 | tail -3
 pnpm --filter @bossmate/server build 2>&1 | tail -3
+# PR Q.7.1: deploy:smart 漏 build 前端（5-7 user 验收暴露：dist 5-4 mtime stale，
+# PR Q.0/Q.2/Q.3/Q.4/Q.7 前端改动从未自动 deploy 到服务器）。nginx serve
+# /home/projects/bossmate/apps/web/dist；build 后新 hash 文件自动 serve，浏览器硬刷可见。
+pnpm --filter @bossmate/web build 2>&1 | tail -3
 pm2 restart bossmate-server --update-env
 EOF
 
