@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-PR Q.1.1：scrapling stealth fetcher，用于 wechat-batch-crawler 反爬 fallback。
-sogou 跳转 url 用标准 fetch 命中"antispider"短响应（5742B），改用 scrapling
-StealthyFetcher 突破。
+PR Q.1.2: 改用 scrapling.Fetcher（curl_cffi TLS 指纹伪装）替代 StealthyFetcher。
+
+5-7 实测 StealthyFetcher 需 playwright + chromium（系统库 + 下载 ~300MB）；
+Fetcher 仅用 curl_cffi 即可突破 sogou TLS 指纹反爬。sogou 微信搜索结果是
+HTML + 302 redirect 跳转，不需要 JS 渲染层，curl_cffi 已够。
 
 用法：python3 wechat_fetch.py <url>
 stdout：html_content（失败为空）
-stderr：log
+exit code：0 成功 / 2 状态非 200 / 3 异常
 """
 import sys
 
@@ -16,13 +18,12 @@ def main():
         sys.exit(1)
     url = sys.argv[1]
     try:
-        from scrapling.fetchers import StealthyFetcher
-        fetcher = StealthyFetcher(auto_match=False)
-        res = fetcher.fetch(url, headless=True, network_idle=True, timeout=20000)
+        from scrapling.fetchers import Fetcher
+        res = Fetcher.get(url, timeout=20, stealthy_headers=True, follow_redirects=True)
         if res and res.status == 200:
             sys.stdout.write(res.html_content or "")
             sys.exit(0)
-        sys.stderr.write(f"scrapling failed status={res.status if res else 'none'}\n")
+        sys.stderr.write(f"scrapling Fetcher failed status={res.status if res else 'none'}\n")
         sys.exit(2)
     except Exception as e:
         sys.stderr.write(f"scrapling error: {e}\n")
