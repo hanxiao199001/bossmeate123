@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 
@@ -10,7 +10,11 @@ interface ContentItem {
   title: string | null;
   body: string | null;
   status: string;
-  platforms: Array<{ platform: string; status?: string; publishedAt?: string }>;
+  // P0-B：失败原因（截断 500 字）
+  errorMessage?: string | null;
+  // P0-B：状态机变更时间（spinner / 卡死提示用）
+  statusUpdatedAt?: string | null;
+  platforms: Array<{ platform: string; status?: string; publishedAt?: string; mediaId?: string }>;
   tokensTotal: number;
   metadata?: Record<string, any>;
   createdAt: string;
@@ -23,19 +27,31 @@ interface ContentStats {
   byType: Record<string, number>;
 }
 
-// ===== 常量 =====
+// ===== P0-B 6 状态全集（spec 删 reviewing/approved 中间态）=====
+const STATUS_TABS = ["draft", "generating", "failed", "generated", "published"] as const;
+type StatusTab = (typeof STATUS_TABS)[number];
+
 const STATUS_LABELS: Record<string, string> = {
   draft: "草稿",
-  reviewing: "审核中",
-  approved: "已通过",
+  generating: "生成中",
+  failed: "失败",
+  generated: "已生成",
   published: "已发布",
+  archived: "归档",
+  // P0 迁移期兼容：旧 enum 显示标签
+  reviewing: "审核中（旧）",
+  approved: "已通过（旧）",
 };
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-600",
+  generating: "bg-blue-100 text-blue-700",
+  failed: "bg-red-100 text-red-700",
+  generated: "bg-green-100 text-green-700",
+  published: "bg-sky-100 text-sky-700",
+  archived: "bg-gray-100 text-gray-500",
   reviewing: "bg-yellow-100 text-yellow-700",
   approved: "bg-green-100 text-green-700",
-  published: "bg-blue-100 text-blue-700",
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -66,9 +82,19 @@ export default function ContentPage() {
   // 统计
   const [stats, setStats] = useState<ContentStats | null>(null);
 
-  // 筛选
+  // 筛选 — P0-B：filterStatus 用 URL ?status= 持久化（刷新保留）
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filterType, setFilterType] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
+  const filterStatus = searchParams.get("status") || "";
+  const setFilterStatus = useCallback(
+    (s: string) => {
+      const next = new URLSearchParams(searchParams);
+      if (s) next.set("status", s);
+      else next.delete("status");
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
   // 多版本：默认隐藏被弃用版本
   const [showRejected, setShowRejected] = useState(false);
 
@@ -137,6 +163,38 @@ export default function ContentPage() {
     fetchStats();
   }, [fetchStats]);
 
+  // P0-B：当前在"生成中"tab 或列表含 generating 行时，每 5s polling 一次
+  // 用户离开页面（visibilitychange hidden）停止 polling，避免后台滥发
+  useEffect(() => {
+    const hasGenerating = filterStatus === "generating" || items.some((it) => it.status === "generating");
+    if (!hasGenerating) return;
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const startPolling = () => {
+      if (timer || document.hidden) return;
+      timer = setInterval(() => {
+        fetchContents();
+        fetchStats();
+      }, 5000);
+    };
+    const stopPolling = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) stopPolling();
+      else startPolling();
+    };
+    startPolling();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [filterStatus, items, fetchContents, fetchStats]);
+
   // 删除内容
   const handleDelete = async (id: string) => {
     try {
@@ -204,19 +262,21 @@ export default function ContentPage() {
       </nav>
 
       <div className="max-w-7xl mx-auto py-6 px-6">
-        {/* 统计卡片 */}
+        {/* P0-B：6 tabs（全部 + 5 状态，archived 默认不显示）*/}
         {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-4 mb-6">
             <div
               className={`bg-white rounded-xl border border-gray-200 p-4 text-center cursor-pointer transition-all ${
                 !filterStatus ? "ring-2 ring-blue-400" : "hover:shadow-md"
               }`}
               onClick={() => { setFilterStatus(""); setPage(1); }}
             >
-              <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {stats.total - (stats.byStatus["archived"] || 0)}
+              </div>
               <div className="text-xs text-gray-500">全部内容</div>
             </div>
-            {(["draft", "reviewing", "approved", "published"] as const).map((s) => (
+            {STATUS_TABS.map((s: StatusTab) => (
               <div
                 key={s}
                 className={`bg-white rounded-xl border border-gray-200 p-4 text-center cursor-pointer transition-all ${
@@ -227,7 +287,12 @@ export default function ContentPage() {
                 <div className="text-2xl font-bold text-gray-900">
                   {stats.byStatus[s] || 0}
                 </div>
-                <div className="text-xs text-gray-500">{STATUS_LABELS[s]}</div>
+                <div className="text-xs text-gray-500 flex items-center justify-center gap-1">
+                  {s === "generating" && (
+                    <span className="inline-block w-2 h-2 border border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  )}
+                  {STATUS_LABELS[s]}
+                </div>
               </div>
             ))}
           </div>
@@ -349,15 +414,40 @@ export default function ContentPage() {
                     </span>
                   </div>
 
-                  {/* 状态 */}
+                  {/* P0-B：状态特殊渲染（generating spinner / failed 错误+重试 / published 公众号链接）*/}
                   <div className="col-span-2 text-center">
                     <span
-                      className={`inline-block text-xs px-2.5 py-1 rounded-full font-medium ${
+                      className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium ${
                         STATUS_COLORS[item.status] || "bg-gray-100 text-gray-600"
                       }`}
                     >
+                      {item.status === "generating" && (
+                        <span className="inline-block w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      )}
                       {STATUS_LABELS[item.status] || item.status}
+                      {item.status === "generating" && <span className="text-[10px]">AI 生成中...</span>}
                     </span>
+                    {item.status === "failed" && item.errorMessage && (
+                      <div
+                        className="text-[10px] text-red-600 mt-1 line-clamp-2 cursor-help"
+                        title={item.errorMessage}
+                      >
+                        {item.errorMessage.slice(0, 100)}
+                      </div>
+                    )}
+                    {item.status === "published" &&
+                      item.platforms?.find((p) => p.platform === "wechat" && p.mediaId) && (
+                        <div className="text-[10px] mt-1">
+                          <a
+                            href="https://mp.weixin.qq.com/cgi-bin/draftbox?t=draftbox/list"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sky-600 hover:underline"
+                          >
+                            在公众号查看
+                          </a>
+                        </div>
+                      )}
                   </div>
 
                   {/* 时间 */}
@@ -374,29 +464,31 @@ export default function ContentPage() {
                       编辑
                     </button>
 
-                    {/* 状态流转按钮 */}
-                    {item.status === "draft" && (
+                    {/* P0-B：6 状态流转按钮 */}
+                    {item.status === "failed" && (
                       <button
-                        onClick={() => handleStatusChange(item.id, "reviewing")}
-                        className="text-xs text-yellow-600 hover:text-yellow-700 px-2 py-1 rounded hover:bg-yellow-50"
+                        onClick={() => handleStatusChange(item.id, "generating")}
+                        className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+                        title="重新生成（failed → generating）"
                       >
-                        提审
+                        🔄 重试
                       </button>
                     )}
-                    {item.status === "reviewing" && (
-                      <button
-                        onClick={() => handleStatusChange(item.id, "approved")}
-                        className="text-xs text-green-600 hover:text-green-700 px-2 py-1 rounded hover:bg-green-50"
-                      >
-                        通过
-                      </button>
-                    )}
-                    {item.status === "approved" && (
+                    {item.status === "generated" && (
                       <button
                         onClick={() => navigate(`/content/${item.id}?action=publish`)}
                         className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
                       >
-                        发布
+                        📤 发布
+                      </button>
+                    )}
+                    {/* 旧 enum 兼容：reviewing/approved 行视为 generated 显示发布按钮 */}
+                    {(item.status === "reviewing" || item.status === "approved") && (
+                      <button
+                        onClick={() => navigate(`/content/${item.id}?action=publish`)}
+                        className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
+                      >
+                        📤 发布
                       </button>
                     )}
 
