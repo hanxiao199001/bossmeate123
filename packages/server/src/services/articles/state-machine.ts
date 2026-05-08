@@ -16,6 +16,9 @@ import { db } from "../../models/db.js";
 import { contents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 
+/** P0-A2 user 强约束：error_message 不超过 500 字符（防超长 stacktrace 撑爆 DB / UI）。 */
+export const MAX_ERROR_MESSAGE_LENGTH = 500;
+
 export type ArticleStatus =
   | "draft"
   | "generating"
@@ -93,7 +96,12 @@ export async function transitionStatus(
   }
 
   const now = new Date();
-  const errorMessage = toStatus === "failed" ? (opts.errorMessage ?? null) : null;
+  // 进入 failed 截断到 500 字符；其他成功转移清空（避免旧错误残留）
+  const rawError = toStatus === "failed" ? (opts.errorMessage ?? null) : null;
+  const errorMessage =
+    rawError && rawError.length > MAX_ERROR_MESSAGE_LENGTH
+      ? rawError.slice(0, MAX_ERROR_MESSAGE_LENGTH)
+      : rawError;
 
   const updated = await db
     .update(contents)
@@ -119,4 +127,51 @@ export async function transitionStatus(
     { articleId, fromStatus, toStatus, hasError: errorMessage !== null },
     "P0 state machine: transit OK",
   );
+}
+
+/**
+ * P0-A2 caller 友好辅助：先 SELECT 当前 status，再调 transitionStatus。
+ *
+ * 同状态自转（current === to）做 idempotent touch（仅刷 status_updated_at），
+ * 避免 caller 多次调用同一目标状态时被 disallowed 抛错（spec 转移表严格不含自转）。
+ *
+ * @throws InvalidTransitionError 转移不合法（current ≠ fromStatus 任一）/ id 不存在
+ */
+export async function transitionToStatus(
+  articleId: string,
+  toStatus: ArticleStatus,
+  opts: TransitionOptions = {},
+): Promise<void> {
+  const [row] = await db
+    .select({ status: contents.status })
+    .from(contents)
+    .where(eq(contents.id, articleId))
+    .limit(1);
+
+  if (!row) {
+    throw new InvalidTransitionError("draft", toStatus, articleId, "not_found");
+  }
+
+  const current = row.status as ArticleStatus;
+  if (current === toStatus) {
+    // idempotent touch：仅刷新 status_updated_at（spec INDEX 排序需要新数据）
+    await db
+      .update(contents)
+      .set({ statusUpdatedAt: new Date(), updatedAt: new Date() })
+      .where(eq(contents.id, articleId));
+    return;
+  }
+
+  await transitionStatus(articleId, current, toStatus, opts);
+}
+
+/**
+ * P0-A2 INSERT 路径辅助：返回新建 article 的 status 字段集合。
+ * 默认 'draft'（spec：createDraft → status='draft'）；caller 可覆盖（如内容直创建为 'generated'）。
+ */
+export function initialStatusFields(status: ArticleStatus = "draft"): {
+  status: ArticleStatus;
+  statusUpdatedAt: Date;
+} {
+  return { status, statusUpdatedAt: new Date() };
 }

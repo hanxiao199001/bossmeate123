@@ -13,6 +13,7 @@ import { db } from "../models/db.js";
 import { wechatConfigs, contents } from "../models/schema.js";
 import { eq } from "drizzle-orm";
 import { logger } from "../config/logger.js";
+import { initialStatusFields } from "../services/articles/state-machine.js";
 import {
   verifyConfig,
   addDraft,
@@ -231,7 +232,8 @@ export async function wechatRoutes(app: FastifyInstance) {
             type: "article",
             title,
             body: content,
-            status: "draft",
+            // P0-A2：已上传公众号草稿 = AI 生成 + 已存草稿但未群发 → 'generated'
+            ...initialStatusFields("generated"),
             platforms: [{ platform: "wechat", mediaId: result.mediaId, status: "draft", createdAt: new Date().toISOString() }],
             metadata: { wechatMediaId: result.mediaId },
           });

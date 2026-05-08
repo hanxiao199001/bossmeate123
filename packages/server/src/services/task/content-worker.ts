@@ -9,6 +9,24 @@ import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { logger } from "../../config/logger.js";
 import { sinkGeneratedContent } from "../data-collection/crawl-data-sink.js";
+import {
+  initialStatusFields,
+  transitionToStatus,
+  InvalidTransitionError,
+} from "../articles/state-machine.js";
+
+/** P0-A2 helper：异步 worker 接入状态机时容错（lifecycle 完整性留 P0 verify，业务流程不阻塞）。 */
+async function safeTransitToGenerated(contentId: string): Promise<void> {
+  try {
+    await transitionToStatus(contentId, "generated");
+  } catch (err) {
+    if (err instanceof InvalidTransitionError) {
+      logger.warn({ contentId, err: err.message }, "P0 worker→generated 转移失败（非阻塞）");
+    } else {
+      throw err;
+    }
+  }
+}
 
 interface ContentJobData {
   taskId: string;
@@ -117,7 +135,8 @@ async function handleDefaultContent(job: Job<ContentJobData>) {
       type: result.artifact.type,
       title: result.artifact.title,
       body: result.artifact.body,
-      status: "draft",
+      // P0-A2：异步 worker 路径同 chat.ts，AI 已生成 → 'generated'
+      ...initialStatusFields(result.artifact.type === "article" ? "generated" : "draft"),
       metadata: result.artifact.metadata || {},
     });
   }
@@ -186,7 +205,8 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
       type: result.artifact.type,
       title: result.artifact.title,
       body: result.artifact.body,
-      status: "draft",
+      // P0-A2：agent worker 路径，AI 已生成 → 'generated'
+      ...initialStatusFields(result.artifact.type === "article" ? "generated" : "draft"),
       metadata: {
         ...(result.artifact.metadata || {}),
         agentGenerated: true,
@@ -236,7 +256,8 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
             type: extra.type,
             title: extra.title,
             body: extra.body,
-            status: "draft",
+            // P0-A2：agent 副版本同样 onGenerateSuccess
+            ...initialStatusFields(extra.type === "article" ? "generated" : "draft"),
             metadata: {
               ...(extra.metadata || {}),
               agentGenerated: true,
@@ -299,8 +320,8 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
           accountId: agentMeta?.accountId || "default",
           scheduledAt: agentMeta?.scheduledPublishAt || new Date(Date.now() + 10 * 60 * 1000).toISOString(),
         });
-        // Mark content as approved
-        await db.update(contents).set({ status: "approved", updatedAt: new Date() }).where(eq(contents.id, contentId));
+        // P0-A2：approve 映射 → 'generated'（spec 删 approved 中间态）
+        await safeTransitToGenerated(contentId);
         break;
 
       case "semi_auto":
@@ -312,17 +333,17 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
             accountId: agentMeta?.accountId || "default",
             scheduledAt: agentMeta?.scheduledPublishAt || new Date(Date.now() + 30 * 60 * 1000).toISOString(),
           });
-          await db.update(contents).set({ status: "approved", updatedAt: new Date() }).where(eq(contents.id, contentId));
+          await safeTransitToGenerated(contentId);
         } else {
-          // Needs boss review
-          await db.update(contents).set({ status: "reviewing", updatedAt: new Date() }).where(eq(contents.id, contentId));
+          // Needs boss review → 'generated'（spec 删 reviewing；boss 审核状态用 metadata 记，不占状态机槽位）
+          await safeTransitToGenerated(contentId);
         }
         break;
 
       case "learning":
       default:
-        // Always pending review
-        await db.update(contents).set({ status: "reviewing", updatedAt: new Date() }).where(eq(contents.id, contentId));
+        // Always pending review → 'generated'（同上，原 reviewing 映射 generated）
+        await safeTransitToGenerated(contentId);
         break;
     }
   }

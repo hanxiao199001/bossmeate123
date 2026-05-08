@@ -14,6 +14,7 @@ import { dailyContentPlans, tenants, contents, users, journals } from "../../mod
 import { eq, and, gte, sql, ilike } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { contentQueue } from "../task/queue.js";
+import { initialStatusFields } from "../articles/state-machine.js";
 import { logAgentAction, updateAgentLog } from "./base/agent-logger.js";
 import { agentRegistry } from "./base/registry.js";
 import { emitProgress, emitDone } from "./base/progress-emitter.js";
@@ -390,7 +391,8 @@ export class Orchestrator implements IAgent {
                 type: "video",
                 title: topicCapture,
                 body: videoResult.url,
-                status: "draft",
+                // P0-A2：video 不在 article 状态机范围，但 statusUpdatedAt 必须有
+                ...initialStatusFields("draft"),
                 metadata: {
                   videoUrl: videoResult.url,
                   durationMs: videoResult.durationMs,

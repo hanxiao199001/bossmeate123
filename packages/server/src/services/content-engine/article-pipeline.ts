@@ -15,6 +15,7 @@ import { retrieveForArticleV2 } from "../knowledge/rag-retriever-v2.js";
 import { qualityCheckV2 } from "./quality-check-v2.js";
 import { db } from "../../models/db.js";
 import { contents, productionRecords } from "../../models/schema.js";
+import { initialStatusFields } from "../articles/state-machine.js";
 
 // ============ 类型定义 ============
 
@@ -125,7 +126,8 @@ async function runSingleArticleVariant(
     type: "article",
     title: finalArticle.title,
     body: finalArticle.body,
-    status: finalQuality.overallPassed ? "reviewing" : "draft",
+    // P0-A2：质检通过 → 'generated'（旧 reviewing 映射），未过 → 'draft'
+    ...initialStatusFields(finalQuality.overallPassed ? "generated" : "draft"),
     metadata: {
       outline: outline.sections.map((s) => s.heading),
       qualityScore: finalQuality.totalScore,

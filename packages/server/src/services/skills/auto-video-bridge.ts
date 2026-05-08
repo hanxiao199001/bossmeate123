@@ -8,6 +8,7 @@ import { contents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import type { AIProvider } from "../ai/providers/base.js";
 import { VideoSkill } from "./video-skill.js";
+import { initialStatusFields } from "../articles/state-machine.js";
 
 export interface AutoVideoBridgeOptions {
   provider: AIProvider;
@@ -57,7 +58,8 @@ export async function triggerVideoFromArticle(opts: AutoVideoBridgeOptions): Pro
       type: result.artifact.type,
       title: result.artifact.title,
       body: result.artifact.body,
-      status: "draft",
+      // P0-A2：auto-video-bridge → video，statusUpdatedAt 必须有
+      ...initialStatusFields("draft"),
       metadata: {
         ...(result.artifact.metadata || {}),
         sourceArticleId: articleContentId,

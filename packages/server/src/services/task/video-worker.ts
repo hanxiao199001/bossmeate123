@@ -17,6 +17,7 @@ import { db } from "../../models/db.js";
 import { contents } from "../../models/schema.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { initialStatusFields } from "../articles/state-machine.js";
 
 export interface VideoJobData {
   tenantId: string;
@@ -56,7 +57,8 @@ export function startVideoWorker(): Worker<VideoJobData, VideoJobResult> {
             type: "video",
             title,
             body: result.url,
-            status: "published",
+            // P0-A2：video 已合成发布 → 'published'（spec 状态机不强制 video，但 INDEX 数据要有）
+            ...initialStatusFields("published"),
             metadata: {
               videoUrl: result.url,
               coverUrl: result.coverUrl,
