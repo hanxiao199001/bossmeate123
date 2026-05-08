@@ -535,6 +535,25 @@ export default function ContentDetailPage() {
             templateId={content.metadata?.templateId as string | undefined}
             templates={templates}
           />
+          {/* PR D6 sprint B: aiScore + 4 维度 hardMetrics 浮窗展示（5-13 demo 老板信任感）*/}
+          {typeof content.metadata?.aiScore === "number" && (
+            <div className="flex items-center gap-1.5 ml-2 text-xs">
+              <span className={`px-2 py-1 rounded-md font-bold ${
+                (content.metadata.aiScore as number) >= 85 ? "bg-green-100 text-green-700"
+                : (content.metadata.aiScore as number) >= 70 ? "bg-blue-100 text-blue-700"
+                : "bg-orange-100 text-orange-700"
+              }`} title="AI 综合评分（85+ 优秀 / 70-84 良好 / <70 待优化）">
+                AI {Math.round(content.metadata.aiScore as number)}/100
+              </span>
+              {content.metadata.hardMetrics && (
+                <span className="text-xs text-gray-500" title="硬指标：字数偏差 / 段落数 / 关键点覆盖">
+                  字 {Math.round((content.metadata.hardMetrics as any)?.wordDeviationScore ?? 0)}
+                  · 段 {Math.round((content.metadata.hardMetrics as any)?.paragraphScore ?? 0)}
+                  · 关键 {Math.round((content.metadata.hardMetrics as any)?.keyPointScore ?? 0)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
