@@ -99,7 +99,7 @@ export async function apiDocsRoutes(app: FastifyInstance) {
               type: { type: "string", enum: ["article", "video_script", "reply"] },
               title: { type: "string" },
               body: { type: "string" },
-              status: { type: "string", enum: ["draft", "reviewing", "approved", "published"] },
+              status: { type: "string", enum: ["draft", "generating", "failed", "generated", "published", "archived"] },
               createdAt: { type: "string", format: "date-time" },
               updatedAt: { type: "string", format: "date-time" },
             },
@@ -462,7 +462,7 @@ export async function apiDocsRoutes(app: FastifyInstance) {
                     properties: {
                       title: { type: "string" },
                       body: { type: "string" },
-                      status: { type: "string", enum: ["draft", "reviewing", "approved", "published"] },
+                      status: { type: "string", enum: ["draft", "generating", "failed", "generated", "published", "archived"] },
                     },
                   },
                 },

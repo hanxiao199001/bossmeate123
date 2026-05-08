@@ -9,6 +9,7 @@ import { db } from "../../models/db.js";
 import { platformAccounts, contents, distributionRecords } from "../../models/schema.js";
 import { eq, and } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
+import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
 import { WechatAdapter } from "./adapters/wechat.js";
 import { BaijiahaoAdapter } from "./adapters/baijiahao.js";
 import { ToutiaoAdapter } from "./adapters/toutiao.js";
@@ -303,10 +304,16 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   // draft_only 模式下内容只在微信草稿箱，真正发没发还没定，保留原状态。
   const hasFullPublish = results.some((r) => r.success && r.mode === "full");
   if (hasFullPublish) {
-    await db
-      .update(contents)
-      .set({ status: "published", updatedAt: new Date() })
-      .where(eq(contents.id, contentId));
+    // P0-A2：publishToWechat（实际群发成功路径）→ transitionToStatus(generated → published)
+    try {
+      await transitionToStatus(contentId, "published");
+    } catch (err) {
+      if (err instanceof InvalidTransitionError) {
+        logger.warn({ contentId, err: err.message }, "P0 publish 状态转移失败（非阻塞，群发已成功）");
+      } else {
+        throw err;
+      }
+    }
   }
 
   return results;

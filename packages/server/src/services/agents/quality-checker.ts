@@ -16,6 +16,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents } from "../../models/schema.js";
+import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
 import { env } from "../../config/env.js";
 import { eventBus } from "../event-bus/index.js";
 import { qualityCheckV2 } from "../content-engine/quality-check-v2.js";
@@ -165,16 +166,19 @@ export class QualityCheckerAgent extends BaseAgent {
 
     const decision = this.decide(qc);
 
-    // 写回 contents
+    // P0-A2：状态机决策（approved/reviewing 都映射 'generated'，rejected → 'draft'）
+    const targetStatus = decision === "rejected" ? "draft" : "generated";
+    try {
+      await transitionToStatus(contentId, targetStatus);
+    } catch (err) {
+      if (!(err instanceof InvalidTransitionError)) {
+        throw err;
+      }
+      // InvalidTransitionError 仅记录（异步 agent 路径，状态机 race 不阻塞 metadata 写回）
+    }
     await db
       .update(contents)
       .set({
-        status:
-          decision === "approved"
-            ? "approved"
-            : decision === "rejected"
-            ? "draft"
-            : "reviewing",
         metadata: {
           ...(typeof row.metadata === "object" && row.metadata ? row.metadata : {}),
           qualityCheck: {

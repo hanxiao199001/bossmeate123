@@ -13,6 +13,7 @@ import { logger } from "../config/logger.js";
 import { agentRegistry } from "../services/agents/base/registry.js";
 import { createRun, getRunState } from "../services/agents/base/progress-emitter.js";
 import { db } from "../models/db.js";
+import { transitionToStatus, InvalidTransitionError } from "../services/articles/state-machine.js";
 import {
   dailyContentPlans,
   agentLogs,
@@ -272,9 +273,15 @@ export async function agentRoutes(app: FastifyInstance) {
         return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
       }
 
-      await db.update(contents)
-        .set({ status: "approved", updatedAt: new Date() })
-        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+      // P0-A2：approve = 标记 generated（spec 删 approved 中间态）
+      try {
+        await transitionToStatus(id, "generated");
+      } catch (err) {
+        if (err instanceof InvalidTransitionError) {
+          return reply.code(400).send({ code: "INVALID_TRANSITION", message: err.message });
+        }
+        throw err;
+      }
 
       await db.insert(bossEdits).values({
         id: nanoid(16),
@@ -321,10 +328,22 @@ export async function agentRoutes(app: FastifyInstance) {
         return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
       }
 
-      const updates: Record<string, unknown> = { status: "approved", updatedAt: new Date() };
+      // P0-A2：edit = 改字段后转 generated（status 走状态机，body/title 直接 set）
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (title) updates.title = title;
       if (body) updates.body = body;
-      await db.update(contents).set(updates).where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+      if (Object.keys(updates).length > 1) {
+        await db.update(contents).set(updates).where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+      }
+      try {
+        await transitionToStatus(id, "generated");
+      } catch (err) {
+        if (err instanceof InvalidTransitionError) {
+          logger.warn({ id, err: err.message }, "P0 edit→generated 转移失败（非阻塞）");
+        } else {
+          throw err;
+        }
+      }
 
       const editDistance = calculateEditDistance(original.body || "", body || original.body || "");
       await db.insert(bossEdits).values({
@@ -362,9 +381,15 @@ export async function agentRoutes(app: FastifyInstance) {
         return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
       }
 
-      await db.update(contents)
-        .set({ status: "draft", updatedAt: new Date() })
-        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)));
+      // P0-A2：reject = 回退到 draft（spec：generated → draft 合法）
+      try {
+        await transitionToStatus(id, "draft");
+      } catch (err) {
+        if (err instanceof InvalidTransitionError) {
+          return reply.code(400).send({ code: "INVALID_TRANSITION", message: err.message });
+        }
+        throw err;
+      }
 
       await db.insert(bossEdits).values({
         id: nanoid(16),

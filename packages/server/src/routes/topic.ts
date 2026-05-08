@@ -10,6 +10,7 @@ import { journals, contents } from "../models/schema.js";
 import { eq, and } from "drizzle-orm";
 import { findHooks, generateTitles, generateArticle } from "../services/skills/topic-skill.js";
 import { logger } from "../config/logger.js";
+import { initialStatusFields } from "../services/articles/state-machine.js";
 
 export async function topicRoutes(app: FastifyInstance) {
   // ============ Step 2: 为选定期刊找噱头 ============
@@ -170,7 +171,8 @@ export async function topicRoutes(app: FastifyInstance) {
         type: "article",
         title: article.title,
         body: article.content,
-        status: "draft",
+        // P0-A2：一键生成 article → 'generated'
+        ...initialStatusFields("generated"),
         metadata: {
           journalId: journal.id,
           journalName: journal.name,

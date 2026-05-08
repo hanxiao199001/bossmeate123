@@ -5,6 +5,13 @@ import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
 import { contents, productionRecords, bossEdits } from "../models/schema.js";
 import { logger } from "../config/logger.js";
+import {
+  ARTICLE_STATUSES,
+  type ArticleStatus,
+  initialStatusFields,
+  transitionToStatus,
+  InvalidTransitionError,
+} from "../services/articles/state-machine.js";
 
 const createContentSchema = z.object({
   type: z.enum(["article", "video_script", "reply"]),
@@ -13,10 +20,11 @@ const createContentSchema = z.object({
   conversationId: z.string().uuid().optional(),
 });
 
+// P0-A2：6 状态全集（旧 reviewing/approved 已 migration 回填为 generated）
 const updateContentSchema = z.object({
   title: z.string().optional(),
   body: z.string().optional(),
-  status: z.enum(["draft", "reviewing", "approved", "published"]).optional(),
+  status: z.enum(ARTICLE_STATUSES as unknown as [ArticleStatus, ...ArticleStatus[]]).optional(),
 });
 
 export async function contentRoutes(app: FastifyInstance) {
@@ -58,8 +66,12 @@ export async function contentRoutes(app: FastifyInstance) {
         conditions.push(eq(contents.type, query.type));
       }
 
-      if (query.status && ["draft", "reviewing", "approved", "published"].includes(query.status)) {
-        conditions.push(eq(contents.status, query.status));
+      // P0-A2：6 状态全集（保留旧 reviewing/approved 兼容前端调用）
+      if (query.status && [...ARTICLE_STATUSES, "reviewing", "approved"].includes(query.status as ArticleStatus)) {
+        // 旧 enum 别名映射（迁移期前端可能仍传 reviewing/approved）
+        const aliasMap: Record<string, string> = { reviewing: "generated", approved: "generated" };
+        const filterStatus = aliasMap[query.status] ?? query.status;
+        conditions.push(eq(contents.status, filterStatus));
       }
 
       const whereClause = and(...conditions);
@@ -147,6 +159,8 @@ export async function contentRoutes(app: FastifyInstance) {
           type: body.type,
           title: body.title,
           body: body.body,
+          ...initialStatusFields("draft"), // P0-A2：createDraft → status=draft + statusUpdatedAt
+
           conversationId: body.conversationId,
         })
         .returning();
@@ -362,7 +376,7 @@ export async function contentRoutes(app: FastifyInstance) {
 
       const now = new Date();
 
-      // 5. 选中版：status=reviewing + metadata.userSelected=true
+      // 5. 选中版：status=generated（spec 删除 reviewing 中间态）+ metadata.userSelected=true
       const selectedMeta = {
         ...((selected.metadata as Record<string, unknown>) || {}),
         userSelected: true,
@@ -370,8 +384,18 @@ export async function contentRoutes(app: FastifyInstance) {
       };
       await db
         .update(contents)
-        .set({ status: "reviewing", metadata: selectedMeta, updatedAt: now })
+        .set({ metadata: selectedMeta, updatedAt: now })
         .where(eq(contents.id, id));
+      // P0-A2：状态机转移到 generated（idempotent self-touch 若已是 generated）
+      try {
+        await transitionToStatus(id, "generated");
+      } catch (err) {
+        if (err instanceof InvalidTransitionError) {
+          logger.warn({ id, err: err.message }, "P0 选中版状态转移失败（非阻塞）");
+        } else {
+          throw err;
+        }
+      }
 
       // 6. 未选版：metadata.userRejected=true（status 不强改）
       const updatedOthers = [];
@@ -443,7 +467,7 @@ export async function contentRoutes(app: FastifyInstance) {
       return {
         code: "OK",
         data: {
-          selected: { ...selected, status: "reviewing", metadata: selectedMeta },
+          selected: { ...selected, status: "generated", metadata: selectedMeta },
           siblings: updatedOthers.map((o) => {
             const meta = (o.metadata as Record<string, unknown>) || {};
             return {
@@ -502,10 +526,22 @@ export async function contentRoutes(app: FastifyInstance) {
         });
       }
 
+      // P0-A2：body.status 走状态机；其他字段直接 set
+      const { status: bodyStatus, ...restBody } = body;
+      if (bodyStatus) {
+        try {
+          await transitionToStatus(id, bodyStatus as ArticleStatus);
+        } catch (err) {
+          if (err instanceof InvalidTransitionError) {
+            return reply.code(400).send({ code: "INVALID_TRANSITION", message: err.message });
+          }
+          throw err;
+        }
+      }
       const [updated] = await db
         .update(contents)
         .set({
-          ...body,
+          ...restBody,
           updatedAt: new Date(),
         })
         .where(eq(contents.id, id))

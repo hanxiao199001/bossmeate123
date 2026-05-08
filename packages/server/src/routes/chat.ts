@@ -12,6 +12,11 @@ import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
 import { SkillRegistry } from "../services/skills/index.js";
 import { publishToAccounts } from "../services/publisher/index.js";
+import {
+  initialStatusFields,
+  transitionToStatus,
+  InvalidTransitionError,
+} from "../services/articles/state-machine.js";
 // PR Q.0：article→video 自动桥接已下线，改为用户在 ContentDetailPage 手动点
 // "🎬 生成视频" 按钮触发（POST /api/v1/articles/:id/generate-video）。
 // auto-video-bridge.ts 模块保留作为 opt-in 工具函数（routes/articles.ts 调用同样路径）。
@@ -231,7 +236,8 @@ export async function chatRoutes(app: FastifyInstance) {
                 type: result.artifact.type,
                 title: result.artifact.title,
                 body: result.artifact.body,
-                status: "draft",
+                // P0-A2：AI 已生成成功 → 'generated'（spec：onGenerateSuccess hook 点）
+                ...initialStatusFields(result.artifact.type === "article" ? "generated" : "draft"),
                 metadata: result.artifact.metadata || {},
               }).returning();
 
@@ -286,7 +292,8 @@ export async function chatRoutes(app: FastifyInstance) {
                           type: extra.type,
                           title: extra.title,
                           body: extra.body,
-                          status: "draft",
+                          // P0-A2：AI 副版本同样是 onGenerateSuccess 产物
+                          ...initialStatusFields(extra.type === "article" ? "generated" : "draft"),
                           metadata: {
                             ...(extra.metadata || {}),
                             variantOf: primaryContentId,
@@ -383,7 +390,8 @@ export async function chatRoutes(app: FastifyInstance) {
                       type: "video",
                       title: scriptData.title || artifactTitle || "视频",
                       body: videoResult.url,
-                      status: "draft",
+                      // P0-A2：视频 type 不在 article 状态机范围，但仍写 statusUpdatedAt 保持 INDEX
+                      ...initialStatusFields("draft"),
                       metadata: {
                         videoUrl: videoResult.url,
                         durationMs: videoResult.durationMs,
@@ -677,8 +685,16 @@ async function handlePublishCommand(
       accountIds: accounts.map((a) => a.id),
     });
 
-    await db.update(contents).set({ status: "published", updatedAt: new Date() })
-      .where(and(eq(contents.id, latestContent.id), eq(contents.tenantId, tenantId)));
+    // P0-A2：publishToWechat → transitionToStatus(generated → published)
+    try {
+      await transitionToStatus(latestContent.id, "published");
+    } catch (err) {
+      if (err instanceof InvalidTransitionError) {
+        logger.warn({ id: latestContent.id, err: err.message }, "P0 publish 状态转移失败（非阻塞，发布已实际完成）");
+      } else {
+        throw err;
+      }
+    }
 
     const successList = results.filter((r) => r.success);
     const failList = results.filter((r) => !r.success);

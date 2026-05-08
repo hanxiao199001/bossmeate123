@@ -13,6 +13,7 @@
 
 import { logger } from "../../config/logger.js";
 import { chat } from "../ai/chat-service.js";
+import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
 import { db } from "../../models/db.js";
 import { contents } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
@@ -122,10 +123,19 @@ export async function batchQualityCheck(
             qualityCheckedAt: new Date().toISOString(),
             topIssues: report.topIssues,
           },
-          status: report.passed ? "reviewing" : "draft",
           updatedAt: new Date(),
         })
         .where(eq(contents.id, content.id));
+      // P0-A2：质检通过 → 'generated'（旧 reviewing 映射）；不通过 → 'draft'
+      try {
+        await transitionToStatus(content.id, report.passed ? "generated" : "draft");
+      } catch (err) {
+        if (err instanceof InvalidTransitionError) {
+          logger.warn({ id: content.id, err: err.message }, "P0 quality-check 状态转移失败（非阻塞）");
+        } else {
+          throw err;
+        }
+      }
     } catch (err) {
       logger.warn({ err, contentId: content.id }, "单篇质检失败");
     }
