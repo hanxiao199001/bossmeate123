@@ -71,7 +71,19 @@ const NUMBER_CONSTRAINT_SUFFIX =
   + `- ❌ "IF从44飙升到98.4" / "IF 从 X 涨到 Y"（历史峰值作 hook）\n`
   + `- ❌ "近10年涨5倍" / "增长 X%"（推算历史增幅作 hook）\n`
   + `- ❌ "从未来跌到 Y" / "预计涨至 Z"（预测值作 hook）\n`
-  + `- ✅ "IF 98.4 的医学顶刊" / "影响因子 98.4 + 录用率 5%"（仅当前值）`;
+  + `- ✅ "IF 98.4 的医学顶刊" / "影响因子 98.4 + 录用率 5%"（仅当前值）\n\n`
+  + `## 深度分析章节格式（PR Q.10.1，5-9 公众号草稿验收）\n`
+  + `ifHistoryAnalysis / carRiskAnalysis / scopeAndCitations / submissionAdvice 4 章节必须：\n`
+  + `1. 每段 ≤ 80 字（约 2-3 句），按句号或逻辑断段，禁止 500+ 字单段堆砌\n`
+  + `2. 关键数字 / 趋势结论必须用 <strong>...</strong> 包裹：影响因子（<strong>98.4</strong>）/\n`
+  + `   年份（<strong>2021 年</strong>）/ 百分比（<strong>5%</strong>）/ 区间（<strong>85-100</strong>）\n`
+  + `3. 每段独立 <p>...</p>，禁止整章节合并到一个 <p>\n`
+  + `4. 列表用 <li>...</li>，不合并到一段\n`
+  + `### ✅ 正确：\n`
+  + `<p>The Lancet 近 10 年 IF 呈剧烈波动。</p>\n`
+  + `<p>从 <strong>2015 年 44.002</strong> 增至 <strong>2019 年 60.392</strong>。</p>\n`
+  + `<p><strong>2021 年峰值 98.4</strong>（COVID 论文引用驱动）。</p>\n`
+  + `<p><strong>趋势：未来 IF 维持 85-100 区间</strong>，除非重大公共卫生事件。</p>`;
 
 /** 把 prompt_overrides + structure_json 转为 LLM system prompt 后缀文本。 */
 export function buildPromptOverrideSuffix(template: { promptOverrides: unknown; structureJson: unknown; styleTag: string; displayName: string }): string {
