@@ -28,6 +28,10 @@ import { eq } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { fetchLetpubDetail } from "./fetchers/letpub-adapter.js";
 import { fetchDoajByIssn } from "./fetchers/doaj-fetcher.js";
+// PR #107（5-9 治理 PR 3）：crossref + scimago 加入 4 源治理（spec 第 3 段公式）
+import { fetchCrossrefByIssn } from "./fetchers/crossref-fetcher.js";
+import { fetchScimagoByIssn } from "./fetchers/scimago-fetcher.js";
+import { computeTrust } from "./trust-score.js";
 import {
   fetchOpenAlexJournal,
   fetchOpenAlexTopInstitutions,
@@ -94,7 +98,8 @@ export async function enrichJournal(
   // B.2.2: + fenqubiao 预警名单（redis cache 24h，多刊批量首调一次）
   // B.4-2: + 万方期刊详情（仅当 metadata.wanfang.perioId admin 预填时触发）
   const wanfangPerioId = ((journal.metadata as Record<string, any> | null)?.wanfang?.perioId ?? null) as string | null;
-  const [letpubResult, doajResult, openalexSourceResult, warningListResult, wanfangResult] = await Promise.allSettled([
+  // PR #107：spec 4 源治理 = crossref + doaj + scimago + letpub（all parallel allSettled）
+  const [letpubResult, doajResult, openalexSourceResult, warningListResult, wanfangResult, crossrefResult, scimagoResult] = await Promise.allSettled([
     options?.skipLetpub
       ? Promise.resolve(null)
       : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
@@ -110,6 +115,10 @@ export async function enrichJournal(
     options?.skipWanfang || !wanfangPerioId
       ? Promise.resolve(null)
       : fetchWanfangPeriodical({ perioId: wanfangPerioId, issn: journal.issn, nameZh: journal.name }),
+    // PR #107 第 1 源：Crossref 公开 API（ISSN 校验 + publisher）
+    fetchCrossrefByIssn(journal.issn),
+    // PR #107 第 3 源：Scimago HTML（SJR / Q 分区，stealth fetcher）
+    fetchScimagoByIssn({ issn: journal.issn }),
   ]);
 
   const letpub = letpubResult.status === "fulfilled" ? letpubResult.value : null;
@@ -117,6 +126,8 @@ export async function enrichJournal(
   const openalex = openalexSourceResult.status === "fulfilled" ? openalexSourceResult.value : null;
   const warningList = warningListResult.status === "fulfilled" ? warningListResult.value : null;
   const wanfangRaw = wanfangResult.status === "fulfilled" ? wanfangResult.value : null;
+  const crossref = crossrefResult.status === "fulfilled" ? crossrefResult.value : null;
+  const scimagoHtml = scimagoResult.status === "fulfilled" ? scimagoResult.value : null;
 
   if (letpubResult.status === "rejected") {
     errors["_letpub_fetch"] = String(letpubResult.reason);
@@ -286,6 +297,23 @@ export async function enrichJournal(
     errors,
   };
 
+  // PR #107：trust 计算（confidence + dataSource + fieldProvenance）
+  const trust = computeTrust({
+    crossref: !!crossref,
+    doaj: !!doaj,
+    scimago: !!scimagoHtml,
+    letpub: !!letpub,
+  });
+  // sourceUrl 优先级：letpub detail 页 > scimago search > crossref API
+  const trustSourceUrl =
+    letpub && (letpub as { sourceUrl?: string }).sourceUrl
+      ? (letpub as { sourceUrl?: string }).sourceUrl
+      : scimagoHtml && journal.issn
+        ? `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(journal.issn)}`
+        : crossref && journal.issn
+          ? `https://api.crossref.org/journals/${journal.issn}`
+          : null;
+
   if (!options?.dryRun) {
     // 合并 metadata.enrichmentLog（最近 3 条），不破坏其他 metadata 键
     const existingMeta = (journal.metadata as Record<string, unknown>) || {};
@@ -301,8 +329,17 @@ export async function enrichJournal(
       ...(wanfangData ? { wanfang: { ...existingWanfang, ...wanfangData } } : {}),
     };
 
+    // PR #107：trust 5 列写入（仅当至少 1 源命中才覆盖 dataSource，避免破坏 manual_seed_2024）
+    const trustUpdate: Partial<typeof journals.$inferInsert> = {
+      confidence: trust.confidence,
+      lastVerifiedAt: new Date(),
+      ...(trust.dataSource ? { dataSource: trust.dataSource } : {}),
+      ...(trustSourceUrl ? { sourceUrl: trustSourceUrl } : {}),
+      ...(Object.keys(trust.fieldProvenance).length > 0 ? { fieldProvenance: trust.fieldProvenance } : {}),
+    };
+
     await db.update(journals)
-      .set({ ...updates, metadata: newMeta, updatedAt: new Date() })
+      .set({ ...updates, ...trustUpdate, metadata: newMeta, updatedAt: new Date() })
       .where(eq(journals.id, journalId));
 
     logger.info(
