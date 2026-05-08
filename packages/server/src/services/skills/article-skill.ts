@@ -26,7 +26,7 @@ import { validateAIContent, type ValidationIssue } from "./ai-content-validator.
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
-import { platformAccounts, tenants } from "../../models/schema.js";
+import { platformAccounts, tenants, journals } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
@@ -555,6 +555,11 @@ export class ArticleSkill implements ISkill {
       if (aiJournal) {
         logger.info({ journal: aiJournal.nameEn || aiJournal.name }, "V6 AI 推荐期刊成功");
         aiJournal.synthetic = true; // 标记为 AI 合成数据
+        // PR 1（5-8 P0++）：持久化 AI 编造期刊到 journals 表，让 audit 页可见
+        // 去重：name 已存在则仅刷 last_verified_at；不存在则 INSERT 标 ai_fabricated confidence=30
+        await this.persistAIJournal(aiJournal, tenantId).catch((err) =>
+          logger.warn({ err, journal: aiJournal!.name }, "PR1 AI journal persist 失败（非阻塞）"),
+        );
         finalJournalData = {
           hotKeywords: requirement.keyPoints || [],
           journals: [aiJournal],
@@ -716,6 +721,52 @@ export class ArticleSkill implements ISkill {
       logger.warn({ err, topic }, "AI 创建期刊数据失败");
       return null;
     }
+  }
+
+  /**
+   * PR 1（5-8 P0++）：把 AI 编造的期刊持久化到 journals 表，标 data_source='ai_fabricated' confidence=30。
+   * 让 /admin/journals/audit 页能 SELECT 到这些低可信 row（PR 2 实施 audit）。
+   *
+   * 去重：按 (tenantId, name) 查存在则仅刷 last_verified_at（不重复 INSERT）；
+   * 不存在则 INSERT 完整 row。tenantId 缺时跳过（公开 /try 路径无 tenant）。
+   */
+  async persistAIJournal(aiJournal: JournalInfo, tenantId?: string): Promise<void> {
+    if (!tenantId) return; // 公开匿名路径无 tenant，不持久化
+    const { eq, and } = await import("drizzle-orm");
+    const [existing] = await db
+      .select({ id: journals.id })
+      .from(journals)
+      .where(and(eq(journals.tenantId, tenantId), eq(journals.name, aiJournal.name)))
+      .limit(1);
+
+    if (existing) {
+      await db
+        .update(journals)
+        .set({ lastVerifiedAt: new Date(), updatedAt: new Date() })
+        .where(eq(journals.id, existing.id));
+      return;
+    }
+
+    await db.insert(journals).values({
+      tenantId,
+      name: aiJournal.name,
+      nameEn: aiJournal.nameEn ?? null,
+      issn: aiJournal.issn ?? null,
+      publisher: aiJournal.publisher ?? null,
+      discipline: aiJournal.discipline ?? null,
+      partition: aiJournal.partition ?? null,
+      impactFactor: aiJournal.impactFactor ?? null,
+      acceptanceRate: aiJournal.acceptanceRate ?? null,
+      reviewCycle: aiJournal.reviewCycle ?? null,
+      annualVolume: aiJournal.annualVolume ?? null,
+      isWarningList: aiJournal.isWarningList ?? false,
+      warningYear: aiJournal.warningYear ?? null,
+      // PR 1 治理标记
+      dataSource: "ai_fabricated",
+      confidence: 30,
+      lastVerifiedAt: new Date(),
+      fieldProvenance: { all: "ai_fabricated" },
+    });
   }
 
   // ============ V6: 期刊推荐文章生成（顺仕美途风格）============

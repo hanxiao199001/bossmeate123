@@ -129,6 +129,8 @@ export default function ContentDetailPage() {
   const [content, setContent] = useState<ContentItem | null>(null);
   // 多版本对比：副版本完整内容（并行 GET 拿 body）
   const [secondaries, setSecondaries] = useState<ContentItem[]>([]);
+  // PR 1：期刊数据可信度（用于 AI 警告横幅）
+  const [journalDataSource, setJournalDataSource] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -188,6 +190,15 @@ export default function ContentDetailPage() {
         setContent(res.data);
         setEditTitle(res.data.title || "");
         setEditBody(res.data.body || "");
+
+        // PR 1：拿 article.metadata.journalId 后查 /journals/:id 看 data_source
+        const journalId = (res.data.metadata as Record<string, unknown> | undefined)?.journalId;
+        if (typeof journalId === "string" && journalId) {
+          api
+            .get<{ dataSource?: string | null }>(`/journals/${journalId}`)
+            .then((jr) => setJournalDataSource(jr.data?.dataSource ?? null))
+            .catch(() => setJournalDataSource(null));
+        }
 
         // 多版本：并行 GET 每个 sibling 拿 body 用于双栏对比
         if (res.data.siblings && res.data.siblings.length > 0) {
@@ -625,6 +636,19 @@ export default function ContentDetailPage() {
           </button>
         </div>
       </nav>
+
+      {/* PR 1：AI 编造期刊警告横幅（data_source='ai_fabricated' 时） */}
+      {journalDataSource === "ai_fabricated" && (
+        <div className="bg-yellow-50 border-b-2 border-yellow-300 px-6 py-3 shrink-0">
+          <div className="max-w-6xl mx-auto flex items-start gap-2 text-sm text-yellow-900">
+            <span className="text-lg shrink-0">⚠️</span>
+            <span>
+              <strong>本期刊数据为 AI 推测，未经官方核验</strong>
+              ，请审慎使用。建议在 LetPub / 中科院分区表 / 期刊官网交叉验证后再发布。
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* PR Q.0：图文 article 的 3 按钮快捷操作（拆按钮：编辑 / 生成视频 / 发布） */}
       {content.type === "article" && (
