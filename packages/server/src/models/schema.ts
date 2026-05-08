@@ -122,7 +122,11 @@ export const contents = pgTable(
     type: varchar("type", { length: 20 }).notNull(), // article | video_script | reply
     title: varchar("title", { length: 300 }),
     body: text("body"), // 正文内容（Markdown）
-    status: varchar("status", { length: 20 }).notNull().default("draft"), // draft | reviewing | approved | published
+    // P0 lifecycle: draft | generating | failed | generated | published | archived
+    // 旧 reviewing/approved 已 migration 回填为 generated（详见 migrate.ts 末尾 P0 段）
+    status: varchar("status", { length: 20 }).notNull().default("draft"),
+    errorMessage: text("error_message"), // P0：generating → failed 时记录失败原因
+    statusUpdatedAt: timestamp("status_updated_at", { withTimezone: true }), // P0：状态机变更时间戳
     platforms: jsonb("platforms").default([]), // 发布到的平台 [{platform, publishedAt, url}]
     tokensTotal: integer("tokens_total").default(0), // 生成消耗的Token总量
     metadata: jsonb("metadata").default({}),
@@ -133,6 +137,12 @@ export const contents = pgTable(
     index("idx_content_tenant").on(table.tenantId),
     index("idx_content_user").on(table.userId),
     index("idx_content_type").on(table.type),
+    // P0：主列表查询（按租户 + 状态 + 最近变更倒序）
+    index("idx_content_tenant_status_updated").on(
+      table.tenantId,
+      table.status,
+      table.statusUpdatedAt,
+    ),
   ]
 );
 
