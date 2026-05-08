@@ -16,6 +16,7 @@ import WorkflowPage from "./pages/WorkflowPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
 import TemplatesPage from "./pages/TemplatesPage";
+import AdminJournalsAuditPage from "./pages/AdminJournalsAuditPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
@@ -117,6 +118,16 @@ export default function App() {
           <ProtectedRoute>
             <TemplatesPage />
           </ProtectedRoute>
+        }
+      />
+
+      {/* PR 2 (5-9 早): 期刊数据审计页 (admin only) */}
+      <Route
+        path="/admin/journals/audit"
+        element={
+          <ProtectedAdminRoute>
+            <AdminJournalsAuditPage />
+          </ProtectedAdminRoute>
         }
       />
 
