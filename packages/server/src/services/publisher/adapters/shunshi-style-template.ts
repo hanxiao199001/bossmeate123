@@ -296,7 +296,7 @@ function renderIfHistoryChart(journal: JournalInfo): string {
       title: "近 10 年影响因子",
       icon: "📈",
       message: "数据采集中",
-      submessage: "B.2 阶段批量回填后渲染折线图",
+      submessage: "数据完善中，敬请期待",
     });
   }
   // shape 容忍：data 项可能 { year, if } 或 { year, value }
@@ -310,7 +310,7 @@ function renderIfHistoryChart(journal: JournalInfo): string {
       title: "近 10 年影响因子",
       icon: "📈",
       message: `已收集 ${series.length} 年数据`,
-      submessage: "数据点不足，B.2 阶段补全后渲染折线图",
+      submessage: "数据点较少，更多数据完善中",
     });
   }
   return (
@@ -363,7 +363,7 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
       title: "CAR 指数（中国作者占比）",
       icon: "🎯",
       message: "数据采集中",
-      submessage: "B.2 阶段补真数据",
+      submessage: "数据完善中，敬请期待",
     });
   }
   const risk = raw.riskLevel === "low" ? "低风险" : raw.riskLevel === "high" ? "高风险" : "中等风险";
@@ -445,7 +445,7 @@ function renderScopeDetailsBlock(journal: JournalInfo): string {
       title: "收稿范围与学科分布",
       icon: "🔬",
       message: "数据采集中",
-      submessage: "B.2 阶段补 9 大领域 + 学科占比",
+      submessage: "学科分布数据完善中",
     });
   }
 
@@ -477,7 +477,7 @@ function renderScopeDetailsBlock(journal: JournalInfo): string {
       title: "收稿范围与学科分布",
       icon: "🔬",
       message: "数据采集中",
-      submessage: "B.2 阶段补 9 大领域 + 学科占比",
+      submessage: "学科分布数据完善中",
     });
   }
 
@@ -562,7 +562,7 @@ function renderAnnualVolumeChart(journal: JournalInfo): string {
     title: "近 10 年发文量",
     icon: "📊",
     message: "数据采集中",
-    submessage: "B.2 阶段批量回填后渲染柱状图",
+    submessage: "数据完善中，敬请期待",
   });
 }
 
@@ -598,7 +598,7 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
       title: "引用前 10 种期刊",
       icon: "📊",
       message: "数据采集中",
-      submessage: "B.2 阶段补 Top 10 + 占比",
+      submessage: "Top 期刊排行数据完善中",
     });
   }
   const svg = renderCitingPieChart(
