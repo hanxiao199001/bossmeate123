@@ -88,7 +88,7 @@ async function fetchJsonWithRetry(url: string, label: string): Promise<any | nul
     try {
       const resp = await fetch(url, {
         signal: controller.signal,
-        headers: { Accept: "application/json", "User-Agent": "BossMate-Enricher/0.1 (+https://bossmate.com)" },
+        headers: { Accept: "application/json", "User-Agent": "BossMate-Enricher/0.1 (+https://boss-mates.com)" },
       });
       clearTimeout(timer);
       if (resp.ok) return await resp.json();

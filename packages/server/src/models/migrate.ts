@@ -296,8 +296,11 @@ CREATE TABLE IF NOT EXISTS tenant_feature_flags (
   PRIMARY KEY (tenant_id, flag_name)
 );
 
--- B.6: tenants 平台 URL 列（罐头双轨用，硬编码 fallback 'https://bossmate.app/try'）
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS bossmate_platform_url VARCHAR(200) DEFAULT 'https://bossmate.app/try';
+-- B.6: tenants 平台 URL 列（罐头双轨用，硬编码 fallback；PR #105.5 swap → boss-mates.com）
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS bossmate_platform_url VARCHAR(200) DEFAULT 'https://boss-mates.com/try';
+-- PR #105.5：迁移已存在 row 从旧域名 bossmate.app → boss-mates.com（幂等）
+UPDATE tenants SET bossmate_platform_url = 'https://boss-mates.com/try'
+WHERE bossmate_platform_url = 'https://bossmate.app/try';
 
 -- 关键词热度历史（每日快照）
 CREATE TABLE IF NOT EXISTS keyword_history (

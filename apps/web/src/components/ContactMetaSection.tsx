@@ -110,8 +110,8 @@ export default function ContactMetaSection() {
         <Field label="联系人名称（必填）" value={form.contactName} onChange={(v) => setForm({ ...form, contactName: v })} placeholder="BossMate 期刊小助手" />
         <Field label="微信号" value={form.wechatId ?? ""} onChange={(v) => setForm({ ...form, wechatId: v })} placeholder="bossmate_journal" />
         <Field label="工作时间" value={form.workingHours ?? ""} onChange={(v) => setForm({ ...form, workingHours: v })} placeholder="工作日 9:00-18:00 答疑" />
-        <Field label="二维码 URL（v1：先上传 COS 再粘贴 URL）" value={form.qrCodeUrl ?? ""} onChange={(v) => setForm({ ...form, qrCodeUrl: v })} placeholder="https://cos.bossmate.cn/qr.png" />
-        <Field label="邮箱" value={form.email ?? ""} onChange={(v) => setForm({ ...form, email: v })} placeholder="ops@bossmate.cn" />
+        <Field label="二维码 URL（v1：先上传 COS 再粘贴 URL）" value={form.qrCodeUrl ?? ""} onChange={(v) => setForm({ ...form, qrCodeUrl: v })} placeholder="https://cos.boss-mates.com/qr.png" />
+        <Field label="邮箱" value={form.email ?? ""} onChange={(v) => setForm({ ...form, email: v })} placeholder="ops@boss-mates.com" />
         <Field label="电话" value={form.phone ?? ""} onChange={(v) => setForm({ ...form, phone: v })} placeholder="+86 138-xxxx-xxxx" />
       </div>
 

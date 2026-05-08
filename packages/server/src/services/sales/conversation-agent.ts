@@ -28,7 +28,7 @@ import type { BusEvent } from "../event-bus/types.js";
 import { hardGuardCheck, buildCannedReply } from "./hard-guard.js";
 import { evaluateStageTransition } from "./stage-transitions.js";
 
-const DEFAULT_BOSSMATE_URL = "https://bossmate.app/try";
+const DEFAULT_BOSSMATE_URL = "https://boss-mates.com/try";
 
 interface LeadCollectedPayload {
   leadId: string;
