@@ -14,7 +14,7 @@ import { logger } from "../config/logger.js";
 import { crawlAll, crawlByTrack, crawlPlatform } from "./crawler/index.js";
 import { analyzeKeywords } from "./agents/keyword-analyzer.js";
 import { db } from "../models/db.js";
-import { tenants, contents } from "../models/schema.js";
+import { tenants, contents, journals } from "../models/schema.js";
 import { eq, and, lt, inArray } from "drizzle-orm";
 import { getRedisConnection, crawlerQueue } from "./task/queue.js";
 import type { PlatformName, CrawlerTrack } from "./crawler/types.js";
@@ -38,6 +38,7 @@ export type SchedulerJobType =
   | "journal-catalog-update"   // 月度期刊基础库更新（Springer + LetPub）
   | "heat-journal-match"       // 热度×期刊交叉匹配
   | "journal-cover-prefetch"   // 期刊封面图预抓取
+  | "journal-trust-reverify"   // PR #107 5-9 治理 PR 3：30 天前 / 未验证期刊 batch reverify
   | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
@@ -306,6 +307,25 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenants.length, totalMatches };
     }
 
+    case "journal-trust-reverify": {
+      // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
+      const { sql: drizzleSql, asc: drizzleAsc, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
+      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const candidates = await db
+        .select({ id: journals.id })
+        .from(journals)
+        .where(drizzleOr(drizzleIsNull(journals.lastVerifiedAt), drizzleLt(journals.lastVerifiedAt, cutoff)))
+        .orderBy(drizzleSql`${journals.confidence} ASC NULLS FIRST`, drizzleAsc(journals.id))
+        .limit(100);
+      const { enrichJournal } = await import("./journal-enricher/orchestrator.js");
+      let success = 0; let failed = 0;
+      for (const c of candidates) {
+        try { await enrichJournal(c.id, {}); success++; }
+        catch (err) { logger.warn({ id: c.id, err }, "PR#107 cron reverify 失败（跳过）"); failed++; }
+      }
+      logger.info({ candidates: candidates.length, success, failed }, "PR#107 cron: 期刊治理 reverify 完成");
+      return { success, failed, candidates: candidates.length };
+    }
     case "journal-cover-prefetch": {
       // 期刊封面图预抓取 — 根据今日选题定向抓取
       const { prefetchJournalCovers } = await import("./crawler/journal-cover-prefetch.js");
@@ -542,7 +562,17 @@ async function registerCronJobs() {
     }
   );
 
-  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理）");
+  // PR #107（5-9 治理 PR 3）：每日 03:00 重新验证 30 天前 / 未验证的期刊（batch ≤ 100）
+  await crawlerQueue.upsertJobScheduler(
+    "journal-trust-reverify-schedule",
+    { pattern: "0 3 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "journal-trust-reverify",
+      data: { type: "journal-trust-reverify" as SchedulerJobType },
+    }
+  );
+
+  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理 + 期刊治理 reverify）");
 }
 
 // ============ 手动触发接口 ============

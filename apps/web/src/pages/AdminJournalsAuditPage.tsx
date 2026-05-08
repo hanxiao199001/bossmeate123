@@ -278,13 +278,13 @@ export default function AdminJournalsAuditPage() {
                     >
                       👁️ 查看
                     </Link>
-                    <button
-                      disabled
-                      className="text-xs text-gray-400 cursor-not-allowed px-2 py-1"
-                      title="PR 3 enricher 接入后实现"
-                    >
-                      🔄 重新验证
-                    </button>
+                    <ReverifyButton id={it.id} onDone={() => {
+                      // 重新拉列表 + stats
+                      api.get<{ items: AuditItem[]; total: number }>(`/admin/journals/audit?${queryString}`)
+                        .then((r) => r.data && (setItems(r.data.items), setTotal(r.data.total)));
+                      api.get<AuditStats>("/admin/journals/audit/stats")
+                        .then((r) => r.data && setStats(r.data));
+                    }} />
                   </div>
                 </div>
               );
@@ -313,5 +313,34 @@ function Card({ label, value, color }: { label: string; value: number; color: st
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
       <div className="text-xs text-gray-500 mt-1">{label}</div>
     </div>
+  );
+}
+
+/** PR #107（5-9 治理 PR 3）：单期刊重新验证按钮（接 POST /admin/journals/:id/reverify）。 */
+function ReverifyButton({ id, onDone }: { id: string; onDone: () => void }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const handler = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const r = await api.post<{ confidence: number | null; dataSource: string | null }>(
+        `/admin/journals/${id}/reverify`, {},
+      );
+      if (r.data) onDone();
+    } catch (e) {
+      setErr((e as Error).message || "失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <button
+      onClick={handler}
+      disabled={loading}
+      className={`text-xs px-2 py-1 rounded ${loading ? "text-gray-400" : "text-blue-600 hover:bg-blue-50"}`}
+      title={err || "4 源 enricher 重新验证（同步，可能 30s）"}
+    >
+      {loading ? "⏳ 验证中..." : "🔄 重新验证"}
+    </button>
   );
 }

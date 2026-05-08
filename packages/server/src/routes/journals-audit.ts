@@ -154,4 +154,67 @@ export async function journalsAuditRoutes(app: FastifyInstance) {
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败" });
     }
   });
+
+  /**
+   * PR #107（5-9 治理 PR 3）：手动重新验证单个期刊。
+   *
+   * POST /api/v1/admin/journals/:id/reverify
+   *   - admin only
+   *   - 同步触发 enrichJournal（4 源全跑 + trust 计算 + DB 写回）
+   *   - 返回 { confidence, dataSource, lastVerifiedAt, sourceUrl, successFields, failedFields, durationMs }
+   *
+   * 接入点：PR #105 audit 页 "🔄 重新验证" 按钮（PR 2 已 disabled 占位，本 PR enable）
+   */
+  app.post("/admin/journals/:id/reverify", async (request, reply) => {
+    if (!isAdmin(request.user.role)) {
+      return reply.code(403).send({ code: "FORBIDDEN", message: "需要 admin 角色" });
+    }
+    const { id } = request.params as { id: string };
+    if (!id || typeof id !== "string") {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "missing id" });
+    }
+
+    // 校验期刊归属当前 tenant
+    const [row] = await db
+      .select({ id: journals.id })
+      .from(journals)
+      .where(and(eq(journals.id, id), eq(journals.tenantId, request.tenantId)))
+      .limit(1);
+    if (!row) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "期刊不存在或无访问权限" });
+    }
+
+    try {
+      const { enrichJournal } = await import("../services/journal-enricher/orchestrator.js");
+      const result = await enrichJournal(id, {});
+
+      // 重新读取最新 trust 字段返回前端（enrichJournal 写完后）
+      const [updated] = await db
+        .select({
+          confidence: journals.confidence,
+          dataSource: journals.dataSource,
+          sourceUrl: journals.sourceUrl,
+          lastVerifiedAt: journals.lastVerifiedAt,
+        })
+        .from(journals)
+        .where(eq(journals.id, id))
+        .limit(1);
+
+      return {
+        code: "OK",
+        data: {
+          ...updated,
+          successFields: result.successFields,
+          failedFields: result.failedFields,
+          durationMs: result.durationMs,
+        },
+      };
+    } catch (err) {
+      logger.error({ err, id }, "PR #107: reverify 失败");
+      return reply.code(500).send({
+        code: "ENRICH_ERROR",
+        message: err instanceof Error ? err.message : "enrich 异常",
+      });
+    }
+  });
 }
