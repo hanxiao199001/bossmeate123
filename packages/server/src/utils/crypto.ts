@@ -93,6 +93,14 @@ export function decryptCredentials(encrypted: string, key?: string): string {
 
     return decrypted;
   } catch (error) {
-    throw new Error(`解密凭证失败: ${error instanceof Error ? error.message : "未知错误"}`);
+    // PR Q.9：authTag 验证失败常见原因 = encrypt 时 key ≠ decrypt 时 key（CREDENTIALS_KEY / JWT_SECRET 历史变更）。
+    // 提示 admin 走 scripts/update-wechat-config.ts 重新加密 platform_accounts row。
+    const usingFallback = !env.CREDENTIALS_KEY && !!env.JWT_SECRET;
+    const hint = usingFallback
+      ? "（当前 fallback 用 JWT_SECRET，建议 .env 设独立 CREDENTIALS_KEY 避免 JWT 轮换连带）"
+      : "";
+    throw new Error(
+      `解密凭证失败: ${error instanceof Error ? error.message : "未知错误"}${hint}。修复：用 scripts/update-wechat-config.ts 重新加密 platform_accounts row（user 提供新 app_secret）。`,
+    );
   }
 }
