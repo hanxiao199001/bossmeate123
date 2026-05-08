@@ -29,7 +29,7 @@ export const tenants = pgTable("tenants", {
    */
   contactMeta: jsonb("contact_meta"),
   /** B.6: 罐头消息双轨注入的自服务平台 URL（hard guard 命中时引导客户进站） */
-  bossmatePlatformUrl: varchar("bossmate_platform_url", { length: 200 }).default("https://bossmate.app/try"),
+  bossmatePlatformUrl: varchar("bossmate_platform_url", { length: 200 }).default("https://boss-mates.com/try"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

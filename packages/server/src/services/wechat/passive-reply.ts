@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { tenants } from "../../models/schema.js";
 
-const DEFAULT_BOSSMATE_URL = "https://bossmate.app/try";
+const DEFAULT_BOSSMATE_URL = "https://boss-mates.com/try";
 const PASSIVE_TEMPLATE = "您好我是 BossMate 客服小王 ☕ 收到您的消息，老师马上联系您~\n同时您可以打开 BossMate 平台 {bossmate_url}，AI 3 秒帮您匹配 5 本最对口期刊，免费试用~";
 
 export async function loadBossmateUrl(tenantId: string): Promise<string> {
