@@ -257,7 +257,9 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
   ];
   if (journal.website) {
     const safe = esc(journal.website);
-    lines.push(`<strong>官网：</strong><a href="${safe}" style="color:${BLUE};text-decoration:none;">${safe}</a>`);
+    // PR Q.10：长 URL 显示锚文本（避免微信公众号草稿 URL 占多行破坏布局）。href 不变。
+    const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
+    lines.push(`<strong>官网：</strong><a href="${safe}" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
   } else {
     lines.push(`<strong>官网：</strong>${greyOrValue(null)}`);
   }
@@ -662,9 +664,17 @@ function renderRecommendationScoreBlock(journal: JournalInfo): string {
 // 字段为空（undefined / 空串）时整段 <section> 不输出（P3 隐藏，与区块 7/12/14 风格一致）。
 function renderDeepAnalysisSection(title: string, html: string | undefined): string {
   if (!html || !html.trim()) return "";
-  return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
-    `<p style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">${esc(title)}</p>` +
-    `<div style="margin:0;font-size:14px;line-height:1.8;color:${TEXT};">${html}</div>` +
+  // PR Q.10：5-9 user 反馈深度分析章节文字大且密。修：
+  //   - padding 14→18 / 16→20（卡片更宽松）
+  //   - 段落字号 14→13（mobile 更舒服）+ line-height 1.8→1.95（呼吸感）
+  //   - <p> 标签段间加 12px 空白；<li> 加 6px margin-bottom 防字字相挨
+  const polished = html
+    .replace(/<p\b/g, '<p style="margin:0 0 12px 0;line-height:1.95;"')
+    .replace(/<li\b/g, '<li style="margin:0 0 6px 0;line-height:1.85;"')
+    .replace(/<strong\b/g, '<strong style="margin:0 2px;"');
+  return `<section style="margin:0 0 22px 0;padding:18px 20px;background:#FAFAFA;border-radius:6px;">` +
+    `<p style="margin:0 0 12px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">${esc(title)}</p>` +
+    `<div style="margin:0;font-size:13px;line-height:1.95;color:${TEXT};">${polished}</div>` +
     `</section>`;
 }
 
