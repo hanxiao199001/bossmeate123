@@ -952,6 +952,49 @@ WHERE status_updated_at IS NULL;
 -- 主列表查询索引（tenant + status + 最近变更倒序）
 CREATE INDEX IF NOT EXISTS idx_content_tenant_status_updated
   ON contents(tenant_id, status, status_updated_at DESC);
+
+-- ============ PR 1（5-8 P0++）：期刊数据可信度治理 ============
+-- 5 列加在 journals 表：data_source / source_url / last_verified_at / confidence / field_provenance
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='journals' AND column_name='data_source') THEN
+    ALTER TABLE journals ADD COLUMN data_source TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='journals' AND column_name='source_url') THEN
+    ALTER TABLE journals ADD COLUMN source_url TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='journals' AND column_name='last_verified_at') THEN
+    ALTER TABLE journals ADD COLUMN last_verified_at TIMESTAMPTZ;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='journals' AND column_name='confidence') THEN
+    ALTER TABLE journals ADD COLUMN confidence INTEGER DEFAULT 50;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='journals' AND column_name='field_provenance') THEN
+    ALTER TABLE journals ADD COLUMN field_provenance JSONB;
+  END IF;
+END $$;
+
+-- 历史回填：10 顶刊 manual_seed_2024 confidence=95（DB 已有这些 row 的话）
+UPDATE journals
+SET data_source = 'manual_seed_2024',
+    confidence = 95,
+    last_verified_at = COALESCE(last_verified_at, NOW())
+WHERE data_source IS NULL
+  AND name IN (
+    'The Lancet', 'NEJM', 'Nature', 'JAMA', 'BMJ', 'Cell',
+    'Science', 'Annals of Internal Medicine', 'New England Journal',
+    'PNAS'
+  );
+
+-- 其他既有 row 标 legacy_unknown（confidence NULL = 未评分，audit 页 NULLS FIRST 排前面）
+UPDATE journals
+SET data_source = 'legacy_unknown',
+    confidence = NULL
+WHERE data_source IS NULL;
+
+-- INDEX：审计页主排序（confidence ASC NULLS FIRST）+ data_source 过滤
+CREATE INDEX IF NOT EXISTS idx_journals_confidence ON journals(confidence ASC NULLS FIRST);
+CREATE INDEX IF NOT EXISTS idx_journals_data_source ON journals(data_source);
 `;
 
 async function migrate() {

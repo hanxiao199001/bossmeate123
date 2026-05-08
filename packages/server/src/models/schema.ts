@@ -297,6 +297,18 @@ export const journals = pgTable(
     // { apc, currency, openAccess, fastTrack, extras: [...], lastUpdatedAt }
     publicationCosts: jsonb("publication_costs"),
 
+    // === 期刊数据可信度治理 PR 1（5-8 P0++）===
+    // dataSource：数据来源 ('manual_seed_2024' | 'legacy_match' | 'token_fuzzy' | 'ai_fabricated' | 'multi_source_verified' | 'legacy_unknown')
+    dataSource: text("data_source"),
+    // sourceUrl：原始数据 URL（如 letpub detail 页 / crossref API URL）
+    sourceUrl: text("source_url"),
+    // lastVerifiedAt：最近一次 enricher / 人工审核时间戳
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+    // confidence：可信度分（0-100；NULL=未评分；ai_fabricated=30；多源 verified 最高 95）
+    confidence: integer("confidence").default(50),
+    // fieldProvenance：每个字段的来源映射 JSONB（如 {if: 'jcr_letpub_2024', issn: 'crossref'}）
+    fieldProvenance: jsonb("field_provenance"),
+
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -308,6 +320,9 @@ export const journals = pgTable(
     index("idx_journal_warning").on(table.isWarningList),
     index("idx_journal_catalog_type").on(table.catalogType),
     index("idx_journal_springer_id").on(table.springerJournalId),
+    // PR 1：审计页主排序索引 + data_source 过滤
+    index("idx_journals_confidence").on(table.confidence),
+    index("idx_journals_data_source").on(table.dataSource),
   ]
 );
 

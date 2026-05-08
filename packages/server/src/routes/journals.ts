@@ -510,7 +510,13 @@ export async function journalRoutes(app: FastifyInstance) {
       for (const j of seedJournals) {
         if (existingNames.has(j.name)) continue; // 跳过已存在的
         try {
-          await db.insert(journals).values(j);
+          // PR 1：seed 期刊标 manual_seed_2024 confidence=95（最高可信度，audit 页绿色 ✅）
+          await db.insert(journals).values({
+            ...j,
+            dataSource: "manual_seed_2024",
+            confidence: 95,
+            lastVerifiedAt: new Date(),
+          });
           insertedCount++;
         } catch {
           // 忽略个别插入失败
