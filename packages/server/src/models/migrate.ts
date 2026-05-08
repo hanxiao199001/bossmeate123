@@ -922,6 +922,36 @@ WHERE name='industry-vertical' AND tenant_id IS NULL;
 -- 柳叶刀 OA 公开 APC ~$5500/article，仅当 NULL 时填充（idempotent）。
 UPDATE journals SET apc_fee = 5500
 WHERE id = 'cd850ce5-d30e-489a-8f31-aac4ef18faa2' AND apc_fee IS NULL;
+
+-- ============ P0：article lifecycle state machine（contents 表扩展）============
+-- 新 enum：draft | generating | failed | generated | published | archived
+-- 旧 enum reviewing / approved → generated 回填（DB 现存 reviewing=177 / approved=0）
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='contents' AND column_name='error_message') THEN
+    ALTER TABLE contents ADD COLUMN error_message TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='contents' AND column_name='status_updated_at') THEN
+    ALTER TABLE contents ADD COLUMN status_updated_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
+-- 历史回填：reviewing / approved → generated（仅 type=article + status_updated_at IS NULL，幂等）。
+-- draft / published 保留原状态（spec：draft 含初始 + 编辑中 / published 含已推送）。
+UPDATE contents
+SET status = 'generated', status_updated_at = COALESCE(updated_at, NOW())
+WHERE type='article' AND status IN ('reviewing', 'approved') AND status_updated_at IS NULL;
+
+-- 其他历史行回填 status_updated_at（让 INDEX DESC 有数据，幂等）
+UPDATE contents
+SET status_updated_at = COALESCE(updated_at, created_at, NOW())
+WHERE status_updated_at IS NULL;
+
+-- 主列表查询索引（tenant + status + 最近变更倒序）
+CREATE INDEX IF NOT EXISTS idx_content_tenant_status_updated
+  ON contents(tenant_id, status, status_updated_at DESC);
 `;
 
 async function migrate() {
