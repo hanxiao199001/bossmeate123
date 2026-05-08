@@ -664,14 +664,27 @@ function renderRecommendationScoreBlock(journal: JournalInfo): string {
 // 字段为空（undefined / 空串）时整段 <section> 不输出（P3 隐藏，与区块 7/12/14 风格一致）。
 function renderDeepAnalysisSection(title: string, html: string | undefined): string {
   if (!html || !html.trim()) return "";
-  // PR Q.10：5-9 user 反馈深度分析章节文字大且密。修：
-  //   - padding 14→18 / 16→20（卡片更宽松）
-  //   - 段落字号 14→13（mobile 更舒服）+ line-height 1.8→1.95（呼吸感）
-  //   - <p> 标签段间加 12px 空白；<li> 加 6px margin-bottom 防字字相挨
-  const polished = html
-    .replace(/<p\b/g, '<p style="margin:0 0 12px 0;line-height:1.95;"')
-    .replace(/<li\b/g, '<li style="margin:0 0 6px 0;line-height:1.85;"')
-    .replace(/<strong\b/g, '<strong style="margin:0 2px;"');
+  // PR Q.10.1：LLM 仍偶发输出 1 大段（500+ 字）。后处理兜底：
+  //   - 单 <p> 内 > 150 字 → 按句号 [。！？] 拆为多 <p>（每段 ≤ 100 字）
+  //   - 裸数字 (\d+\.\d{1,3} / \d+% / 4位年份+年) 自动 <strong> 包裹（视觉高亮）
+  let processed = html.replace(/<p\b([^>]*)>([\s\S]*?)<\/p>/g, (_, attrs, inner: string) => {
+    if (inner.length <= 150) return `<p${attrs}>${inner}</p>`;
+    const sentences = inner.split(/(?<=[。！？])/).filter((s) => s.trim());
+    if (sentences.length < 2) return `<p${attrs}>${inner}</p>`;
+    const chunks: string[] = []; let buf = "";
+    for (const s of sentences) { if ((buf + s).length > 100 && buf) { chunks.push(buf); buf = s; } else buf += s; }
+    if (buf) chunks.push(buf);
+    return chunks.map((c) => `<p${attrs}>${c}</p>`).join("");
+  });
+  processed = processed.replace(/(\b\d+\.\d{1,3}\b|\b\d+%|\b\d{4}\s*年\b)/g, (m, _g, off, str: string) => {
+    const before = str.slice(Math.max(0, off - 30), off);
+    return /<strong[^>]*>[^<]*$/.test(before) ? m : `<strong>${m}</strong>`;
+  });
+  // PR Q.10：段间 / 列表；Q.10.1：strong 改色块高亮（palette 占位 shunshi 末尾 replaceAll）
+  const polished = processed
+    .replace(/<p\b(?![^>]*style=)/g, '<p style="margin:0 0 12px 0;line-height:1.95;"')
+    .replace(/<li\b(?![^>]*style=)/g, '<li style="margin:0 0 6px 0;line-height:1.85;"')
+    .replace(/<strong\b(?![^>]*style=)/g, '<strong style="background:{{PRIMARY_BG}};color:{{PRIMARY}};padding:1px 5px;border-radius:3px;font-weight:600;"');
   return `<section style="margin:0 0 22px 0;padding:18px 20px;background:#FAFAFA;border-radius:6px;">` +
     `<p style="margin:0 0 12px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">${esc(title)}</p>` +
     `<div style="margin:0;font-size:13px;line-height:1.95;color:${TEXT};">${polished}</div>` +
