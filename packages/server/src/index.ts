@@ -39,6 +39,7 @@ import { registerTaskWebSocket } from "./services/task/progress-ws.js";
 import { closeQueues } from "./services/task/queue.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { startScheduler, stopScheduler } from "./services/scheduler.js";
+import { startWatchdog, stopWatchdog } from "./services/articles/watchdog.js";
 import { dataCollectionRoutes } from "./routes/data-collection.js";
 import { contentEngineRoutes } from "./routes/content-engine.js";
 import { recommendationRoutes } from "./routes/recommendations.js";
@@ -222,8 +223,12 @@ async function bootstrap() {
   // 启动 BullMQ 调度器（爬虫 + 热点 + 竞品 + 知识采集 + Agent）
   startScheduler();
 
+  // P0-B：article 卡死 watchdog（generating 超 10min → failed，每 1min 检测）
+  startWatchdog();
+
   // Graceful shutdown
   const shutdown = async () => {
+    stopWatchdog();
     await stopScheduler();
     stopPublishWorker();
     await agentRegistry.shutdownAll();
