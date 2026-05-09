@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import RecommendationModal from "../components/RecommendationModal";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -100,6 +101,9 @@ export default function ContentPage() {
 
   // 删除确认
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // PR #116 P3: AI 推荐 modal 状态
+  const [recommendOpen, setRecommendOpen] = useState(false);
 
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
@@ -327,6 +331,14 @@ export default function ContentPage() {
           </div>
 
           <div className="flex gap-2">
+            {/* PR #116（P3 frontend Day 2）：AI 推荐 modal 入口 */}
+            <button
+              onClick={() => setRecommendOpen(true)}
+              className="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors"
+              title="AI 推荐期刊 + 主题（基于用户历史 + 高可信库）"
+            >
+              🤖 AI 推荐
+            </button>
             <Link
               to="/workflow/article"
               className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -341,6 +353,9 @@ export default function ContentPage() {
             </Link>
           </div>
         </div>
+
+        {/* PR #116: AI 推荐 modal */}
+        <RecommendationModal open={recommendOpen} onClose={() => setRecommendOpen(false)} />
 
         {/* 内容列表 */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
