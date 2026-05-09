@@ -154,6 +154,9 @@ async function bootstrap() {
     await protectedApp.register(contentTemplatesRoutes, { prefix: `${env.API_PREFIX}/content-templates` });
     await protectedApp.register(keywordRoutes, { prefix: `${env.API_PREFIX}/keywords` });
     await protectedApp.register(journalRoutes, { prefix: `${env.API_PREFIX}` });
+    // P3 AI 推荐（5-10 backend）
+    const { recommendRoutes } = await import("./routes/recommend.js");
+    await protectedApp.register(recommendRoutes, { prefix: `${env.API_PREFIX}` });
     // PR 2：期刊审计页（admin only）
     const { journalsAuditRoutes } = await import("./routes/journals-audit.js");
     await protectedApp.register(journalsAuditRoutes, { prefix: `${env.API_PREFIX}` });
