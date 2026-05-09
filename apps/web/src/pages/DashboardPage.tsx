@@ -727,6 +727,8 @@ function WorkflowSection() {
 // ============ 5. 工具导航网格 ============
 
 function ToolGrid() {
+  const role = useAuthStore((s) => s.user?.role);
+  const isAdmin = role === "owner" || role === "admin";
   const tools = [
     { to: "/keywords", icon: "&#x1F4CA;", label: "关键词库", desc: "热词趋势" },
     { to: "/content", icon: "&#x1F4C2;", label: "内容管理", desc: "审核发布" },
@@ -736,6 +738,10 @@ function ToolGrid() {
     { to: "/accounts", icon: "&#x1F4F1;", label: "账号管理", desc: "多平台" },
     { to: "/video/create", icon: "&#x1F3AC;", label: "图片转视频", desc: "产品宣传" },
     { to: "/settings", icon: "&#x2699;&#xFE0F;", label: "系统设置", desc: "模型配置" },
+    // PR #111: admin only — 期刊数据审计页（PR 2 5-9 上线）
+    ...(isAdmin
+      ? [{ to: "/admin/journals/audit", icon: "&#x1F4CA;", label: "期刊审计", desc: "数据可信度" }]
+      : []),
   ];
 
   return (
