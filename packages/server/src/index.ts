@@ -34,7 +34,7 @@ import { getProviders } from "./services/ai/provider-factory.js";
 import { initializeSkills } from "./services/skills/index.js";
 import { startContentWorker } from "./services/task/content-worker.js";
 import { startJournalEnrichWorker } from "./services/task/journal-enrich-worker.js";
-import { startPublishWorker, stopPublishWorker } from "./services/task/publish-worker.js";
+// PR P1（5-9 砍定时发布）：publish-worker.ts 已删除（功能迁移到即时发布走 publisher.ts）
 import { registerTaskWebSocket } from "./services/task/progress-ws.js";
 import { closeQueues } from "./services/task/queue.js";
 import { taskRoutes } from "./routes/tasks.js";
@@ -221,7 +221,7 @@ async function bootstrap() {
   const journalEnrichWorker = startJournalEnrichWorker();
 
   // 启动发布 Worker
-  startPublishWorker();
+  // PR P1：startPublishWorker 已删（即时发布走 publisher.publishToAccounts，无定时）
 
   // 启动 BullMQ 调度器（爬虫 + 热点 + 竞品 + 知识采集 + Agent）
   startScheduler();
@@ -233,7 +233,7 @@ async function bootstrap() {
   const shutdown = async () => {
     stopWatchdog();
     await stopScheduler();
-    stopPublishWorker();
+    // PR P1：stopPublishWorker 已删
     await agentRegistry.shutdownAll();
     try {
       const { eventBus } = await import("./services/event-bus/index.js");

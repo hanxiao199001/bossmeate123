@@ -3,7 +3,8 @@ import { getRedisConnection } from "./queue.js";
 import { SkillRegistry } from "../skills/index.js";
 import { getProvider } from "../ai/provider-factory.js";
 import { db } from "../../models/db.js";
-import { tasks, taskLogs, contents, scheduledPublishes, tenants, dailyContentPlans, users, productionRecords } from "../../models/schema.js";
+// PR P1（5-9 砍定时发布）：scheduledPublishes 已删
+import { tasks, taskLogs, contents, tenants, dailyContentPlans, users, productionRecords } from "../../models/schema.js";
 import { and } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -312,27 +313,13 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
   if (contentId) {
     switch (stage) {
       case "full_auto":
-        // Directly schedule publish
-        await schedulePublish({
-          tenantId,
-          contentId,
-          platform: agentMeta?.platform || "wechat",
-          accountId: agentMeta?.accountId || "default",
-          scheduledAt: agentMeta?.scheduledPublishAt || new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-        });
-        // P0-A2：approve 映射 → 'generated'（spec 删 approved 中间态）
+        // PR P1（5-9 砍定时发布）：原 schedulePublish 已删，full_auto 直接转 generated 等用户手动一键发布
         await safeTransitToGenerated(contentId);
         break;
 
       case "semi_auto":
         if (qualityScore >= threshold) {
-          await schedulePublish({
-            tenantId,
-            contentId,
-            platform: agentMeta?.platform || "wechat",
-            accountId: agentMeta?.accountId || "default",
-            scheduledAt: agentMeta?.scheduledPublishAt || new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-          });
+          // PR P1：原 schedulePublish 已删
           await safeTransitToGenerated(contentId);
         } else {
           // Needs boss review → 'generated'（spec 删 reviewing；boss 审核状态用 metadata 记，不占状态机槽位）
@@ -452,29 +439,5 @@ async function updatePlanTaskStatus(
   }
 }
 
-// ============ schedulePublish helper ============
-
-async function schedulePublish(params: {
-  tenantId: string;
-  contentId: string;
-  platform: string;
-  accountId: string;
-  scheduledAt: string;
-}): Promise<void> {
-  const id = nanoid(16);
-  await db.insert(scheduledPublishes).values({
-    id,
-    tenantId: params.tenantId,
-    contentId: params.contentId,
-    platform: params.platform,
-    accountId: params.accountId,
-    scheduledAt: new Date(params.scheduledAt),
-    status: "pending",
-    createdAt: new Date(),
-  });
-
-  logger.info(
-    { id, contentId: params.contentId, platform: params.platform, scheduledAt: params.scheduledAt },
-    "Publish scheduled"
-  );
-}
+// PR P1（5-9 砍定时发布）：schedulePublish helper + scheduledPublishes 表已删除。
+// 用户改为审核通过后手动一键发布（走 publisher.publishToAccounts）。

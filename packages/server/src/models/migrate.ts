@@ -618,20 +618,10 @@ CREATE TABLE IF NOT EXISTS peer_content_crawls (
   UNIQUE(tenant_id, content_hash)
 );
 
--- Agent: 定时发布队列
-CREATE TABLE IF NOT EXISTS scheduled_publishes (
-  id VARCHAR(36) PRIMARY KEY,
-  tenant_id UUID NOT NULL REFERENCES tenants(id),
-  content_id UUID NOT NULL REFERENCES contents(id),
-  platform VARCHAR(30) NOT NULL,
-  account_id VARCHAR(100) NOT NULL,
-  scheduled_at TIMESTAMP NOT NULL,
-  status VARCHAR(20) DEFAULT 'pending',
-  published_at TIMESTAMP,
-  error TEXT,
-  created_at TIMESTAMP DEFAULT NOW() NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sp_pending ON scheduled_publishes(status, scheduled_at);
+-- PR P1（5-9 砍定时发布）：scheduled_publishes 表已弃用（publish-worker.ts 一并删除）。
+-- DROP TABLE IF EXISTS（幂等）+ DROP INDEX 清理 prod 残留。用户改为手动一键发布。
+DROP INDEX IF EXISTS idx_sp_pending;
+DROP TABLE IF EXISTS scheduled_publishes;
 
 -- ============ V3 AI 销售模块 ============
 
