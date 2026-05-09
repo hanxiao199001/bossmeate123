@@ -157,6 +157,9 @@ async function bootstrap() {
     // P3 AI 推荐（5-10 backend）
     const { recommendRoutes } = await import("./routes/recommend.js");
     await protectedApp.register(recommendRoutes, { prefix: `${env.API_PREFIX}` });
+    // P4 批量 csv 导入（5-12 backend Day 1）
+    const { batchRoutes } = await import("./routes/batch.js");
+    await protectedApp.register(batchRoutes, { prefix: `${env.API_PREFIX}` });
     // PR 2：期刊审计页（admin only）
     const { journalsAuditRoutes } = await import("./routes/journals-audit.js");
     await protectedApp.register(journalsAuditRoutes, { prefix: `${env.API_PREFIX}` });
@@ -232,9 +235,14 @@ async function bootstrap() {
   // P0-B：article 卡死 watchdog（generating 超 10min → failed，每 1min 检测）
   startWatchdog();
 
+  // P4 批量 csv worker（5-12 backend）— 并发 5
+  const { startBatchWorker } = await import("./services/batch/batch-worker.js");
+  const batchWorker = startBatchWorker();
+
   // Graceful shutdown
   const shutdown = async () => {
     stopWatchdog();
+    await batchWorker.close().catch(() => {});
     await stopScheduler();
     // PR P1：stopPublishWorker 已删
     await agentRegistry.shutdownAll();

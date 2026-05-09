@@ -1005,3 +1005,52 @@ export const salesMessages = pgTable(
 // PR P1（5-9 砍定时发布）：scheduledPublishes 表 + publish-worker 已删除。
 // migrate.ts 加 DROP TABLE IF EXISTS 清理 prod 残留 row。
 // 用户改为审核通过后手动一键发布（走 publisher.publishToAccounts）。
+
+// ============ PR #118 V2 P4 批量 csv 导入（5-12）============
+// 业务：行业代发场景一次 csv 跑 50-100 个客户期刊。
+// batch 主表 + batch_rows 子表（一行 = 一篇 article 任务）。
+// 状态机接入 P0：每 row 创建 article 走 transitionStatus 完整链路。
+export const batches = pgTable(
+  "batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    userId: uuid("user_id").references(() => users.id).notNull(),
+    filename: varchar("filename", { length: 200 }),
+    total: integer("total").notNull().default(0),
+    completed: integer("completed").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    // status: pending | running | completed | failed | cancelled
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_batches_tenant").on(table.tenantId),
+    index("idx_batches_status").on(table.status),
+  ]
+);
+
+export const batchRows = pgTable(
+  "batch_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    batchId: uuid("batch_id").references(() => batches.id).notNull(),
+    rowIndex: integer("row_index").notNull(), // csv 第几行（从 1 开始）
+    topic: text("topic").notNull(),
+    journalId: uuid("journal_id"), // 选填，缺则 AI 自动推荐
+    template: varchar("template", { length: 30 }), // A/B/C/E（缺 = default）
+    priority: integer("priority").default(3), // 1-5（决定队列顺序）
+    // status: pending | generating | generated | failed
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    articleId: uuid("article_id").references(() => contents.id), // 创建后 FK
+    errorMessage: text("error_message"),
+    retryCount: integer("retry_count").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_batch_rows_batch").on(table.batchId),
+    index("idx_batch_rows_status").on(table.status),
+  ]
+);

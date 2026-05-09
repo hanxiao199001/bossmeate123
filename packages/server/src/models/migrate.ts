@@ -991,6 +991,41 @@ CREATE INDEX IF NOT EXISTS idx_journals_data_source ON journals(data_source);
 
 -- PR #113（5-10 清理日 3）：data_source 'legacy_match' → 'letpub_only' 命名修正（更准确表达单源 LetPub）
 UPDATE journals SET data_source = 'letpub_only' WHERE data_source = 'legacy_match';
+
+-- ============ PR #118 V2 P4 批量 csv 导入（5-12）============
+-- batches 主表 + batch_rows 子表（一行 = 一篇 article 任务）
+CREATE TABLE IF NOT EXISTS batches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  user_id UUID NOT NULL REFERENCES users(id),
+  filename VARCHAR(200),
+  total INTEGER NOT NULL DEFAULT 0,
+  completed INTEGER NOT NULL DEFAULT 0,
+  failed INTEGER NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_batches_tenant ON batches(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_batches_status ON batches(status);
+
+CREATE TABLE IF NOT EXISTS batch_rows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id UUID NOT NULL REFERENCES batches(id),
+  row_index INTEGER NOT NULL,
+  topic TEXT NOT NULL,
+  journal_id UUID,
+  template VARCHAR(30),
+  priority INTEGER DEFAULT 3,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  article_id UUID REFERENCES contents(id),
+  error_message TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_batch_rows_batch ON batch_rows(batch_id);
+CREATE INDEX IF NOT EXISTS idx_batch_rows_status ON batch_rows(status);
 `;
 
 async function migrate() {
