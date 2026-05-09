@@ -89,10 +89,10 @@ describe("B.6 hard guard 双轨 + telemetry log + tenant URL fallback", () => {
     expect(inserts[0]?.content).toContain("BossMate 客服小王");
     expect(logInfo.mock.calls.some((c: any[]) => String(c[1] ?? "").includes("[sales.platform_url.injected]"))).toBe(true);
   });
-  it("tenant 无配置 → fallback 默认 https://bossmate.app/try", async () => {
+  it("tenant 无配置 → fallback 默认 https://boss-mates.com/try", async () => {
     tenantUrl = null;
     (hardGuardCheck as any).mockResolvedValue({ hit: true, category: "legal", whitelisted: false });
     await (conversationAgent as any).respondToLead("lead-1", "包过", "corr-2");
-    expect(inserts[0]?.content).toContain("https://bossmate.app/try");
+    expect(inserts[0]?.content).toContain("https://boss-mates.com/try");
   });
 });

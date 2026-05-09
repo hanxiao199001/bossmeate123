@@ -75,8 +75,8 @@ describe("PR B.10: article-skill metadata.journalId（auto-video-bridge 触发�
     const fs = await import("node:fs/promises");
     const src = await fs.readFile("src/services/skills/article-skill.ts", "utf-8");
     expect(src).toMatch(/journalId:\s*collectionResult\?\.journals\[0\]\?\.id/);
-    // 同时 routes/chat.ts:236 的触发条件还在（防止有人改 metadata 时把 bridge 也改坏）
+    // PR Q.0 后 auto-video-bridge 已下线，chat.ts 仅 video script journalId 透传保留
     const chat = await fs.readFile("src/routes/chat.ts", "utf-8");
-    expect(chat).toMatch(/typeof\s+journalId\s*===\s*["']string["']/);
+    expect(chat).toMatch(/typeof\s+scriptData\.journalId\s*===\s*["']string["']/);
   });
 });

@@ -13,7 +13,7 @@
  *
  * data_source 逻辑：
  *   - 任一非 letpub 命中 + letpub 命中 → 'multi_source_verified'
- *   - 仅 letpub 命中 → 'legacy_match'（保守，因 letpub 已是历史强信号）
+ *   - 仅 letpub 命中 → 'letpub_only'（保守，因 letpub 已是历史强信号）
  *   - 全 4 源都没命中 → 不写（保留原 data_source）
  */
 
@@ -26,7 +26,7 @@ export interface TrustSourceFlags {
 
 export interface TrustComputeResult {
   confidence: number;
-  dataSource: "multi_source_verified" | "legacy_match" | null;
+  dataSource: "multi_source_verified" | "letpub_only" | null;
   fieldProvenance: Record<string, string>;
 }
 
@@ -50,9 +50,9 @@ export function computeTrust(
     return { confidence: 50, dataSource: null, fieldProvenance: {} };
   }
 
-  // 多源命中（≥2 源中至少一非 letpub）= multi_source_verified；单源 letpub = legacy_match
-  const dataSource: "multi_source_verified" | "legacy_match" =
-    totalHits >= 2 || (totalHits === 1 && !flags.letpub) ? "multi_source_verified" : "legacy_match";
+  // 多源命中（≥2 源中至少一非 letpub）= multi_source_verified；单源 letpub = letpub_only
+  const dataSource: "multi_source_verified" | "letpub_only" =
+    totalHits >= 2 || (totalHits === 1 && !flags.letpub) ? "multi_source_verified" : "letpub_only";
 
   const fieldProvenance: Record<string, string> = {};
   // 默认字段 → 来源映射（caller 通过 fieldHints 覆盖）

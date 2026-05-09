@@ -191,7 +191,8 @@ describe("renderCitingPieChart", () => {
     // 6 path 扇区（top 5 + 其他）
     expect(svg.match(/<path /g) || []).toHaveLength(6);
     // legend 用 6 色（top 5 + 其他）
-    expect(svg).toContain("#1976D2"); // top 1 蓝
+    // PR #113（5-10）: top 1 改 palette 占位 {{PRIMARY}}（PR Q.6 D5），run-time replaceAll 套主色
+    expect(svg).toContain("{{PRIMARY}}"); // top 1 占位（4 套主色注入）
     expect(svg).toContain("#9E9E9E"); // 其他 灰
     // legend label：Research Square + 其他
     expect(svg).toContain("Research Square");

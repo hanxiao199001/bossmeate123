@@ -35,6 +35,6 @@ describe("B.7-A passive reply", () => {
 
   it("loadBossmateUrl tenant 无记录 → fallback 默认", async () => {
     tenantUrl = null;
-    expect(await loadBossmateUrl("t-2")).toBe("https://bossmate.app/try");
+    expect(await loadBossmateUrl("t-2")).toBe("https://boss-mates.com/try");
   });
 });

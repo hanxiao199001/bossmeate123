@@ -37,10 +37,10 @@ describe("PR #107: trust-score computeTrust 公式", () => {
     expect(r.fieldProvenance.publisher).toBe("crossref");
   });
 
-  it("仅 letpub → 70 (+20), legacy_match（单源 letpub 保守）", () => {
+  it("仅 letpub → 70 (+20), letpub_only（单源 letpub 保守）", () => {
     const r = computeTrust({ crossref: false, doaj: false, scimago: false, letpub: true });
     expect(r.confidence).toBe(70);
-    expect(r.dataSource).toBe("legacy_match");
+    expect(r.dataSource).toBe("letpub_only");
     expect(r.fieldProvenance.if_history).toBe("letpub");
   });
 
@@ -128,7 +128,7 @@ describe("PR #107: orchestrator 集成 trust + 4 源", () => {
 });
 
 describe("PR #107: reverify route 静态校验", () => {
-  it("journals-audit.ts 含 POST /admin/journals/:id/reverify + admin guard + tenant 校验", async () => {
+  it("journals-audit.ts 含 POST /admin/journals/:id/reverify + admin guard（PR #110 砍 tenant 校验）", async () => {
     const fs = await import("node:fs/promises");
     const src = await fs.readFile(
       new URL("../routes/journals-audit.ts", import.meta.url),
@@ -136,7 +136,8 @@ describe("PR #107: reverify route 静态校验", () => {
     );
     expect(src).toMatch(/post\("\/admin\/journals\/:id\/reverify"/);
     expect(src).toMatch(/isAdmin\(request\.user\.role\)/);
-    expect(src).toMatch(/eq\(journals\.tenantId,\s*request\.tenantId\)/);
+    // PR #110: admin 全局视图，不再校验 tenantId（journals 全局共享数据）
+    expect(src).not.toMatch(/eq\(journals\.tenantId,\s*request\.tenantId\)/);
     expect(src).toMatch(/enrichJournal/);
   });
 });

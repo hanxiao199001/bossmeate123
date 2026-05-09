@@ -17,11 +17,11 @@ describe("PR Q.10.1: prompt + 后处理 + strong 高亮", () => {
     expect(src).toMatch(/Q\.10\.1/);
   });
 
-  it("renderDeepAnalysisSection 含长段拆分（>150 → 按句号 [。！？] 切）+ <p> 各段 ≤ 100", async () => {
+  it("renderDeepAnalysisSection 含长段拆分（PR Q.10.2 阈值 80/50 激进切段）", async () => {
     const src = await read("../services/publisher/adapters/shunshi-style-template.ts");
-    expect(src).toMatch(/inner\.length <= 150/);
+    expect(src).toMatch(/inner\.length <= 80/);
     expect(src).toMatch(/split\(\/\(\?<=\[。！？\]\)\//);
-    expect(src).toMatch(/buf \+ s\)\.length > 100/);
+    expect(src).toMatch(/buf \+ s\)\.length > 50/);
   });
 
   it("renderDeepAnalysisSection 裸数字自动 <strong> 包裹", async () => {
@@ -30,9 +30,11 @@ describe("PR Q.10.1: prompt + 后处理 + strong 高亮", () => {
     expect(src).toMatch(/before.*<strong/);
   });
 
-  it("renderDeepAnalysisSection strong 加色块高亮（palette 占位 shunshi 末尾 replaceAll）", async () => {
+  it("renderDeepAnalysisSection strong 加 underline 高亮（PR Q.10.2 改 background → text-decoration-underline，wechat sanitize 兼容）", async () => {
     const src = await read("../services/publisher/adapters/shunshi-style-template.ts");
     expect(src).toMatch(/strong\\b.*\(\?\!\[\^>\]\*style=\)/);
-    expect(src).toMatch(/background:\{\{PRIMARY_BG\}\};color:\{\{PRIMARY\}\}/);
+    // PR Q.10.2: background:{{PRIMARY_BG}} → text-decoration:underline + color:{{PRIMARY}}
+    expect(src).toMatch(/text-decoration:\s*underline/);
+    expect(src).toMatch(/color:\{\{PRIMARY\}\}/);
   });
 });
