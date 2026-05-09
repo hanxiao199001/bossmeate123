@@ -160,6 +160,9 @@ async function bootstrap() {
     // P4 批量 csv 导入（5-12 backend Day 1）
     const { batchRoutes } = await import("./routes/batch.js");
     await protectedApp.register(batchRoutes, { prefix: `${env.API_PREFIX}` });
+    // P5 行业月度 cron（5-14 admin 手动 trigger）
+    const { industryMonthlyRoutes } = await import("./routes/industry-monthly.js");
+    await protectedApp.register(industryMonthlyRoutes, { prefix: `${env.API_PREFIX}` });
     // PR 2：期刊审计页（admin only）
     const { journalsAuditRoutes } = await import("./routes/journals-audit.js");
     await protectedApp.register(journalsAuditRoutes, { prefix: `${env.API_PREFIX}` });
