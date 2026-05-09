@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
-import { eq, and, sql, gte, lte, ilike, desc, asc } from "drizzle-orm";
+import { eq, and, sql, gte, lte, ilike, desc, asc, isNull, or } from "drizzle-orm";
 import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
@@ -233,6 +233,10 @@ export async function journalRoutes(app: FastifyInstance) {
   });
 
   // ============ 获取单个期刊详情 ============
+  // PR #115（5-10 hotfix）：journals 是 PR B.12 全局共享数据（tenant_id NULL = 共享）。
+  // user GET /:id 改 or(isNull(tenantId), eq(tenantId, current)) 让 user 看到全局 + 自定义。
+  // 修复 ContentDetailPage 加载时 GET 全局期刊（如 BMC 医学）→ 404 "期刊不存在" toast bug。
+  // PATCH/DELETE 仍保留严格 tenant filter（user 不能写全局期刊，防 cross-tenant 写）。
   app.get("/journals/:id", async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
@@ -241,7 +245,12 @@ export async function journalRoutes(app: FastifyInstance) {
       const result = await db
         .select()
         .from(journals)
-        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        .where(
+          and(
+            eq(journals.id, id),
+            or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)),
+          ),
+        )
         .limit(1);
 
       if (result.length === 0) {
