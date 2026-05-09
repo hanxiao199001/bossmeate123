@@ -37,8 +37,8 @@ export async function journalsAuditRoutes(app: FastifyInstance) {
     if (!isAdmin(request.user.role)) {
       return reply.code(403).send({ code: "FORBIDDEN", message: "需要 admin 角色" });
     }
-    const tenantFilter = eq(journals.tenantId, request.tenantId);
-
+    // PR #110 hotfix（5-9 user 反馈 stat 全 0）：journals 是全局参考数据（PR B.12 设计 tenant_id NULL=共享），
+    // admin audit 视图按 user spec "admin 视图应全局, 不该按 tenant 过滤"，砍 tenant filter。
     const [
       totalRow,
       highRow,
@@ -47,21 +47,21 @@ export async function journalsAuditRoutes(app: FastifyInstance) {
       aiRow,
       neverRow,
     ] = await Promise.all([
-      db.select({ c: count() }).from(journals).where(tenantFilter),
-      db.select({ c: count() }).from(journals).where(and(tenantFilter, gte(journals.confidence, 80))),
+      db.select({ c: count() }).from(journals),
+      db.select({ c: count() }).from(journals).where(gte(journals.confidence, 80)),
       db
         .select({ c: count() })
         .from(journals)
-        .where(and(tenantFilter, gte(journals.confidence, 50), lte(journals.confidence, 79))),
+        .where(and(gte(journals.confidence, 50), lte(journals.confidence, 79))),
       db
         .select({ c: count() })
         .from(journals)
-        .where(and(tenantFilter, lte(journals.confidence, 49))),
+        .where(lte(journals.confidence, 49)),
       db
         .select({ c: count() })
         .from(journals)
-        .where(and(tenantFilter, eq(journals.dataSource, "ai_fabricated"))),
-      db.select({ c: count() }).from(journals).where(and(tenantFilter, isNull(journals.lastVerifiedAt))),
+        .where(eq(journals.dataSource, "ai_fabricated")),
+      db.select({ c: count() }).from(journals).where(isNull(journals.lastVerifiedAt)),
     ]);
 
     return {
@@ -90,7 +90,8 @@ export async function journalsAuditRoutes(app: FastifyInstance) {
       return reply.code(400).send({ code: "BAD_REQUEST", message: (err as Error).message });
     }
 
-    const conditions = [eq(journals.tenantId, request.tenantId)];
+    // PR #110 hotfix：admin 全局视图，不按 tenant filter（journals 是全局参考数据）
+    const conditions: ReturnType<typeof eq>[] = [];
 
     if (parsed.dataSources) {
       const list = parsed.dataSources.split(",").map((s) => s.trim()).filter(Boolean);
@@ -174,14 +175,14 @@ export async function journalsAuditRoutes(app: FastifyInstance) {
       return reply.code(400).send({ code: "BAD_REQUEST", message: "missing id" });
     }
 
-    // 校验期刊归属当前 tenant
+    // PR #110 hotfix：admin 全局视图（journals 全局参考数据），仅校验 id 存在不校验 tenant 归属
     const [row] = await db
       .select({ id: journals.id })
       .from(journals)
-      .where(and(eq(journals.id, id), eq(journals.tenantId, request.tenantId)))
+      .where(eq(journals.id, id))
       .limit(1);
     if (!row) {
-      return reply.code(404).send({ code: "NOT_FOUND", message: "期刊不存在或无访问权限" });
+      return reply.code(404).send({ code: "NOT_FOUND", message: "期刊不存在" });
     }
 
     try {
