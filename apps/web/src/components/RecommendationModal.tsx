@@ -12,7 +12,7 @@
  * cache 30 min in-backend，前端反复打开不重 LLM。
  */
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+// PR #117 fix Bug 1：去掉 Link import（无 /journals/:id 路由）
 import { api } from "../utils/api";
 
 interface JournalRec {
@@ -141,7 +141,8 @@ export default function RecommendationModal({ open, onClose, initialJournalId, i
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
                       <div className="font-medium">
-                        <Link to={`/journals/${j.id}`} className="text-blue-700 hover:underline">{j.name}</Link>
+                        {/* PR #117 fix Bug 1：项目无 /journals/:id 路由，去 link 防跳首页（reason + IF 给 user 决策足够）*/}
+                        <span className="text-gray-900">{j.name}</span>
                         {j.nameEn && <span className="text-xs text-gray-400 ml-2">{j.nameEn}</span>}
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">

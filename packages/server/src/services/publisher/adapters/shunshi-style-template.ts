@@ -255,13 +255,14 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
     `<strong>创刊年：</strong>${greyOrValue(journal.foundingYear ? `${journal.foundingYear}` : null)}`,
     `<strong>出版国：</strong>${greyOrValue(journal.country)}`,
   ];
-  if (journal.website) {
+  // PR #117 fix Bug 2：website NULL/空时整行不渲染（不显示比"暂无"更专业；避免假"查看官网"链接）
+  // user 5-11 反馈：prod 多数 multi_source 期刊 website 字段 NULL（enricher 未抓取）→ 模板显示"暂无"被
+  // user 误以为"假链接"。降级方案：仅当真有合法 http(s) URL 才渲染"官网："行。
+  if (journal.website && /^https?:\/\//i.test(journal.website)) {
     const safe = esc(journal.website);
     // PR Q.10：长 URL 显示锚文本（避免微信公众号草稿 URL 占多行破坏布局）。href 不变。
     const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
     lines.push(`<strong>官网：</strong><a href="${safe}" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
-  } else {
-    lines.push(`<strong>官网：</strong>${greyOrValue(null)}`);
   }
 
   const ps = lines
