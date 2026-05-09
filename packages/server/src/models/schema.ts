@@ -298,7 +298,7 @@ export const journals = pgTable(
     publicationCosts: jsonb("publication_costs"),
 
     // === 期刊数据可信度治理 PR 1（5-8 P0++）===
-    // dataSource：数据来源 ('manual_seed_2024' | 'legacy_match' | 'token_fuzzy' | 'ai_fabricated' | 'multi_source_verified' | 'legacy_unknown')
+    // dataSource：数据来源 ('manual_seed_2024' | 'letpub_only' | 'token_fuzzy' | 'ai_fabricated' | 'multi_source_verified' | 'legacy_unknown')
     dataSource: text("data_source"),
     // sourceUrl：原始数据 URL（如 letpub detail 页 / crossref API URL）
     sourceUrl: text("source_url"),

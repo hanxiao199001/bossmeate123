@@ -988,6 +988,9 @@ WHERE data_source IS NULL;
 -- INDEX：审计页主排序（confidence ASC NULLS FIRST）+ data_source 过滤
 CREATE INDEX IF NOT EXISTS idx_journals_confidence ON journals(confidence ASC NULLS FIRST);
 CREATE INDEX IF NOT EXISTS idx_journals_data_source ON journals(data_source);
+
+-- PR #113（5-10 清理日 3）：data_source 'legacy_match' → 'letpub_only' 命名修正（更准确表达单源 LetPub）
+UPDATE journals SET data_source = 'letpub_only' WHERE data_source = 'legacy_match';
 `;
 
 async function migrate() {

@@ -9,11 +9,12 @@ async function readFs(rel: string): Promise<string> {
 }
 
 describe("PR Q.4: 4 套 CSS 主题文件存在 + 关键样式锁", () => {
+  // PR #113（5-10 清理日 3）：line-height 跟随 PR Q.6.3 web font CDN 强化后实际值更新
   const cases = [
-    { file: "academic", primary: "#2C5F8D", lineHeight: "1.7", font: "Source Han Serif" },
+    { file: "academic", primary: "#2C5F8D", lineHeight: "1.85", font: "Source Han Serif" },
     { file: "marketing", primary: "#FF6B35", lineHeight: "1.5", font: "Inter" },
-    { file: "popular", primary: "#00B4D8", lineHeight: "1.9", font: "Source Han Sans Rounded" },
-    { file: "vertical", primary: "#6B46C1", lineHeight: "1.6", font: "PingFang SC" },
+    { file: "popular", primary: "#00B4D8", lineHeight: "2", font: "Source Han Sans Rounded" },
+    { file: "vertical", primary: "#6B46C1", lineHeight: "1.55", font: "PingFang SC" },
   ];
   for (const c of cases) {
     it(`${c.file}.css 含主色 ${c.primary} + line-height ${c.lineHeight} + 字体 ${c.font}`, async () => {

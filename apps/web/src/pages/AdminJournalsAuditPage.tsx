@@ -35,7 +35,7 @@ interface AuditItem {
 const DATA_SOURCE_OPTIONS = [
   { value: "manual_seed_2024", label: "✅ Manual Seed", color: "bg-blue-100 text-blue-700" },
   { value: "multi_source_verified", label: "✅ Multi-Source", color: "bg-green-100 text-green-700" },
-  { value: "legacy_match", label: "Legacy Match", color: "bg-sky-100 text-sky-700" },
+  { value: "letpub_only", label: "📚 LetPub only", color: "bg-sky-100 text-sky-700" },
   { value: "token_fuzzy", label: "🟡 Token Fuzzy", color: "bg-yellow-100 text-yellow-700" },
   { value: "ai_fabricated", label: "⚠️ AI 编造", color: "bg-red-100 text-red-700" },
   { value: "legacy_unknown", label: "❓ 从未验证", color: "bg-gray-100 text-gray-600" },
