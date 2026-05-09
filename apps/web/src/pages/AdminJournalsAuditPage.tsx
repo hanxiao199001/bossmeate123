@@ -175,6 +175,19 @@ export default function AdminJournalsAuditPage() {
           </div>
         )}
 
+        {/* PR #111：全局横幅（高/中可信 ≥1 时不显示，提示 user enricher 状态） */}
+        {stats && stats.total > 0 && stats.highConfidence + stats.midConfidence === 0 && (
+          <div className="mb-4 rounded-xl border-2 border-yellow-300 bg-yellow-50 px-4 py-3">
+            <div className="flex items-start gap-2 text-sm text-yellow-900">
+              <span className="text-lg shrink-0">⚠️</span>
+              <span>
+                <strong>当前 {stats.total} 期刊均未经 enricher 验证</strong>（confidence = NULL）。
+                等明早 03:00 cron 自动跑，或点单行 <kbd className="px-1 rounded bg-yellow-100 border border-yellow-200 font-mono text-xs">🔄 重新验证</kbd> 立即触发 4 源验证。
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Filter */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
           <div className="flex flex-wrap items-center gap-3">
