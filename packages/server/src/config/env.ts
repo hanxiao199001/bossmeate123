@@ -82,7 +82,11 @@ const envSchema = z.object({
   SPRINGER_PROXY: z.string().optional(), // 代理地址（如 http://127.0.0.1:7890）
 
   // CORS
-  ALLOWED_ORIGINS: z.string().default("http://localhost:5173,http://localhost:3000"),
+  // PR #108（5-9 hotfix 永久）：default 含 boss-mates.com 防新部署忘加 .env 导致跨域白屏。
+  // 5-9 prod 事故 root cause：.env 缺 ALLOWED_ORIGINS → fallback 仅 localhost → 浏览器 CORS reject。
+  ALLOWED_ORIGINS: z.string().default(
+    "https://boss-mates.com,https://api.boss-mates.com,http://localhost:5173,http://localhost:3000",
+  ),
 
   // 日志
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
