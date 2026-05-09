@@ -1002,22 +1002,6 @@ export const salesMessages = pgTable(
   ]
 );
 
-// 6. 定时发布队列
-export const scheduledPublishes = pgTable(
-  "scheduled_publishes",
-  {
-    id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
-    contentId: uuid("content_id").references(() => contents.id).notNull(),
-    platform: varchar("platform", { length: 30 }).notNull(),
-    accountId: varchar("account_id", { length: 100 }).notNull(),
-    scheduledAt: timestamp("scheduled_at").notNull(),
-    status: varchar("status", { length: 20 }).default("pending"),
-    publishedAt: timestamp("published_at"),
-    error: text("error"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    index("idx_sp_pending").on(table.status, table.scheduledAt),
-  ]
-);
+// PR P1（5-9 砍定时发布）：scheduledPublishes 表 + publish-worker 已删除。
+// migrate.ts 加 DROP TABLE IF EXISTS 清理 prod 残留 row。
+// 用户改为审核通过后手动一键发布（走 publisher.publishToAccounts）。

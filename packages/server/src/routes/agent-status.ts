@@ -20,7 +20,7 @@ import {
   bossEdits,
   contents,
   tenants,
-  scheduledPublishes,
+  // PR P1：scheduledPublishes 已删（即时发布走 publisher.publishToAccounts）
 } from "../models/schema.js";
 
 export async function agentRoutes(app: FastifyInstance) {
@@ -290,21 +290,7 @@ export async function agentRoutes(app: FastifyInstance) {
         action: "approve",
       });
 
-      // 查找是否有待发布任务
-      const pendingPublishes = await db
-        .select()
-        .from(scheduledPublishes)
-        .where(
-          and(
-            eq(scheduledPublishes.contentId, id),
-            eq(scheduledPublishes.status, "pending")
-          )
-        );
-
-      if (pendingPublishes.length === 0) {
-        // 没有定时发布任务，标记为 approved 等待手动发布
-      }
-
+      // PR P1：定时发布功能已删，approve 后等待用户手动一键发布即可
       return { code: "OK", data: { success: true, message: "已通过审核" } };
     } catch (err) {
       logger.error({ err }, "审核通过失败");
