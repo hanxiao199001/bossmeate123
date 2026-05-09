@@ -39,6 +39,7 @@ export type SchedulerJobType =
   | "heat-journal-match"       // 热度×期刊交叉匹配
   | "journal-cover-prefetch"   // 期刊封面图预抓取
   | "journal-trust-reverify"   // PR #107 5-9 治理 PR 3：30 天前 / 未验证期刊 batch reverify
+  | "industry-monthly"         // P5 5-14：每月 1 号 4 行业 × 50 篇 article 自动生成
   | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
@@ -307,6 +308,13 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenants.length, totalMatches };
     }
 
+    case "industry-monthly": {
+      // P5（5-14）：每月 1 号 cron 4 行业 × 50 篇 = 200 篇 / tenant
+      const { cronMonthlyAllTenants } = await import("./industry-monthly/cron-handler.js");
+      await cronMonthlyAllTenants();
+      logger.info("P5 industry-monthly cron 完成");
+      return { ok: true };
+    }
     case "journal-trust-reverify": {
       // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
       const { sql: drizzleSql, asc: drizzleAsc, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
@@ -572,7 +580,17 @@ async function registerCronJobs() {
     }
   );
 
-  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理 + 期刊治理 reverify）");
+  // PR #120 P5（5-14）：每月 1 号 00:00 BJ 4 行业 × 50 篇 article 自动生成
+  await crawlerQueue.upsertJobScheduler(
+    "industry-monthly-schedule",
+    { pattern: "0 0 1 * *", tz: "Asia/Shanghai" },
+    {
+      name: "industry-monthly",
+      data: { type: "industry-monthly" as SchedulerJobType },
+    }
+  );
+
+  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理 + 期刊治理 reverify + 行业月度 batch）");
 }
 
 // ============ 手动触发接口 ============
