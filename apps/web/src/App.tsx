@@ -17,6 +17,7 @@ import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import AdminJournalsAuditPage from "./pages/AdminJournalsAuditPage";
+import BatchProgressPage from "./pages/BatchProgressPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
@@ -128,6 +129,16 @@ export default function App() {
           <ProtectedAdminRoute>
             <AdminJournalsAuditPage />
           </ProtectedAdminRoute>
+        }
+      />
+
+      {/* PR #119 (P4 frontend Day 2): 批量 csv 进度页 */}
+      <Route
+        path="/batch/:id"
+        element={
+          <ProtectedRoute>
+            <BatchProgressPage />
+          </ProtectedRoute>
         }
       />
 

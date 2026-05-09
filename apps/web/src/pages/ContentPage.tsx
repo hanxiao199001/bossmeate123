@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import RecommendationModal from "../components/RecommendationModal";
+import BatchUploadModal from "../components/BatchUploadModal";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -104,6 +105,8 @@ export default function ContentPage() {
 
   // PR #116 P3: AI 推荐 modal 状态
   const [recommendOpen, setRecommendOpen] = useState(false);
+  // PR #119 P4: 批量 csv 导入 modal 状态
+  const [batchUploadOpen, setBatchUploadOpen] = useState(false);
 
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
@@ -339,6 +342,14 @@ export default function ContentPage() {
             >
               🤖 AI 推荐
             </button>
+            {/* PR #119（P4 frontend Day 2）：批量 csv 导入入口 */}
+            <button
+              onClick={() => setBatchUploadOpen(true)}
+              className="px-4 py-2 bg-purple-700 text-white text-sm font-medium rounded-lg hover:bg-purple-800 transition-colors"
+              title="批量上传 csv 一次跑 50-100 篇 article"
+            >
+              📤 批量导入 CSV
+            </button>
             <Link
               to="/workflow/article"
               className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -356,6 +367,9 @@ export default function ContentPage() {
 
         {/* PR #116: AI 推荐 modal */}
         <RecommendationModal open={recommendOpen} onClose={() => setRecommendOpen(false)} />
+
+        {/* PR #119: 批量 csv 导入 modal */}
+        <BatchUploadModal open={batchUploadOpen} onClose={() => setBatchUploadOpen(false)} />
 
         {/* 内容列表 */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
