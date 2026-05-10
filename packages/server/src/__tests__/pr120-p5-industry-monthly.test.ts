@@ -31,9 +31,9 @@ describe("P5 topic-generator 静态约束（user 强约束）", () => {
     // 2. 50 个分散不重复
     expect(src).toMatch(/分散不重复|覆盖子领域/);
     expect(src).toMatch(/TOPIC_COUNT\s*=\s*50/);
-    // 3. 12-30 字
-    expect(src).toMatch(/MIN_LEN\s*=\s*12/);
-    expect(src).toMatch(/MAX_LEN\s*=\s*30/);
+    // 3. 8-50 字（PR #127 5-17 放宽：原 12-30 实测 17/22 篇命中过严）
+    expect(src).toMatch(/MIN_LEN\s*=\s*8/);
+    expect(src).toMatch(/MAX_LEN\s*=\s*50/);
     // 4. few-shot 引导
     expect(src).toMatch(/INDUSTRY_FEW_SHOT/);
     // 5. JSON 输出 + 禁止 markdown
@@ -75,11 +75,13 @@ describe("P5 cron-handler 静态校验", () => {
     expect(src).toMatch(/createBatch\(/);
   });
 
-  it("template 绑定行业 + journalId 缺则 AI 推荐", async () => {
+  it("template 绑定行业 + journalId 强制 multi_source 池（PR #122 5-15 fix）", async () => {
     const fs = await import("node:fs/promises");
     const src = await fs.readFile(new URL("../services/industry-monthly/cron-handler.ts", import.meta.url), "utf8");
     expect(src).toMatch(/INDUSTRY_TEMPLATE_MAP\[args\.industry\]/);
-    expect(src).toMatch(/journalId:\s*null/);
+    // PR #122 修：原 journalId:null 改为 multi_source_verified 池轮询（demo blocker fix）
+    expect(src).toMatch(/multi_source_verified/);
+    expect(src).toMatch(/pickJournalId\(/);
   });
 
   it("cronMonthlyAllTenants 找 active tenant 的 owner user", async () => {

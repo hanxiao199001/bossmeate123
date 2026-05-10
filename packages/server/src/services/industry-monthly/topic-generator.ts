@@ -7,8 +7,8 @@
  * Spec 严格约束（user 强约束）：
  * - 学术专业，不 sensational（避免标题党）
  * - 50 个主题分散不重复（覆盖子领域）
- * - 12-30 字长度
- * - 行业示例 topic 引导（few-shot 见下文）
+ * - 8-50 字长度（PR #127 5-17 放宽：原 12-30 实测 17/22 篇命中，新区间预期 35-45/50）
+ * - 行业示例 topic 引导（few-shot 见下文，含短/长两种风格各 1-2 例）
  * - JSON 数组输出，禁止 markdown 包裹
  */
 import { logger } from "../../config/logger.js";
@@ -26,33 +26,37 @@ export const INDUSTRY_TEMPLATE_MAP: Record<Industry, string> = {
   education: "popular-science",    // C 科普轻松
 };
 
-/** 4 行业 few-shot 引导示例（学术风、12-30 字、子领域分散） */
+/** 4 行业 few-shot 引导示例（学术风、8-50 字、子领域分散；短/长风格各 1-2 例） */
 const INDUSTRY_FEW_SHOT: Record<Industry, string[]> = {
   medical: [
     "心血管疾病早期筛查的 AI 辅助诊断进展",
     "肺癌靶向治疗耐药机制临床研究综述",
     "糖尿病肾病蛋白尿生物标志物的最新发现",
+    "基于深度学习的医学影像辅助诊断系统在三甲医院的多中心前瞻性临床验证",
   ],
   it: [
     "大语言模型推理优化的工程实践探讨",
     "微服务架构下分布式追踪系统的设计",
     "云原生数据库一致性保障方案对比",
+    "Serverless 架构在大规模事件驱动业务系统中的成本与冷启动权衡的工程实证",
   ],
   law: [
     "数据跨境流动法律框架的国际比较研究",
     "AI 生成内容著作权归属的司法判例分析",
     "个人信息保护法合规审查实务要点",
+    "数字平台经济反垄断执法中相关市场界定的司法判例与监管动向的实证分析",
   ],
   education: [
     "高校思政课混合式教学模式效果实证",
     "项目式学习对中学生科学素养的影响",
     "在线教育中学习者注意力监测技术应用",
+    "生成式 AI 在 K12 个性化学习场景的教学效果与教师角色重塑的实证研究",
   ],
 };
 
 const TOPIC_COUNT = 50;
-const MIN_LEN = 12;
-const MAX_LEN = 30;
+const MIN_LEN = 8;
+const MAX_LEN = 50;
 
 export interface IndustryTopicResult {
   industry: Industry;
