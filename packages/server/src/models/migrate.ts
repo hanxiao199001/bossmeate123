@@ -1026,6 +1026,16 @@ CREATE TABLE IF NOT EXISTS batch_rows (
 );
 CREATE INDEX IF NOT EXISTS idx_batch_rows_batch ON batch_rows(batch_id);
 CREATE INDEX IF NOT EXISTS idx_batch_rows_status ON batch_rows(status);
+
+-- ============ PR #123 V2 P6 tenant 偏好（5-15）============
+-- 通用 key/value（PK tenant_id + preference_key）。首发存 default_template。
+CREATE TABLE IF NOT EXISTS tenant_preferences (
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  preference_key VARCHAR(60) NOT NULL,
+  preference_value TEXT NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  PRIMARY KEY (tenant_id, preference_key)
+);
 `;
 
 async function migrate() {
