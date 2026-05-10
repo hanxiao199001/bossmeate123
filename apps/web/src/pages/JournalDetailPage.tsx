@@ -103,7 +103,7 @@ export default function JournalDetailPage() {
         <h1 className="text-2xl font-bold text-gray-900">{j.name}</h1>
         {j.nameEn && <div className="text-sm text-gray-500 mt-1">{j.nameEn}</div>}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">
-          <Field label="影响因子" value={j.impactFactor} />
+          <Field label="影响因子" value={j.impactFactor && j.impactFactor > 0 ? j.impactFactor : null} />
           <Field label="JCR 分区" value={j.partition} />
           <Field label="中科院分区" value={j.casPartition} />
           <Field label="ISSN" value={j.issn} />
@@ -123,10 +123,26 @@ export default function JournalDetailPage() {
         </div>
       </section>
 
-      <DataTable title="📈 近 10 年 IF 历史" rows={(j.ifHistory?.data ?? []).map((d) => [d.year, d.if])} cols={["年份", "IF"]} />
-      <DataTable title="📊 中国作者占比 (CAR)" rows={(j.carIndexHistory?.data ?? []).map((d) => [d.year, d.carIndex])} cols={["年份", "CAR 指数"]} />
-      <DataTable title="📰 年发文量历史" rows={(j.publicationStats?.annualVolumeHistory ?? []).map((d) => [d.year, d.count])} cols={["年份", "发文量"]} />
-      <DataTable title="🔗 引用 Top 10 期刊" rows={(j.citingJournalsTop10?.topJournals ?? []).map((d) => [d.name, `${d.percent}%`, d.count ?? "—"])} cols={["期刊", "占比", "次数"]} />
+      {(() => {
+        const ifRows = (j.ifHistory?.data ?? []).map((d) => [d.year, d.if] as Array<string | number>);
+        const carRows = (j.carIndexHistory?.data ?? []).map((d) => [d.year, d.carIndex] as Array<string | number>);
+        const pubRows = (j.publicationStats?.annualVolumeHistory ?? []).map((d) => [d.year, d.count] as Array<string | number>);
+        const citingRows = (j.citingJournalsTop10?.topJournals ?? []).map((d) => [d.name, `${d.percent}%`, d.count ?? "—"] as Array<string | number>);
+        const hasAnyChartData = ifRows.length + carRows.length + pubRows.length + citingRows.length > 0;
+        if (!hasAnyChartData) {
+          return (
+            <div className="border-l-4 border-amber-400 bg-amber-50 p-4 rounded text-sm text-amber-900">
+              🟠 该期刊历史 chart 数据扩展中（中文期刊 LetPub/OpenAlex 覆盖率有限，CNKI/万方接入计划中）。基本元数据已多源核验，可放心引用。
+            </div>
+          );
+        }
+        return <>
+          {ifRows.length > 0 && <DataTable title="📈 近 10 年 IF 历史" rows={ifRows} cols={["年份", "IF"]} />}
+          {carRows.length > 0 && <DataTable title="📊 中国作者占比 (CAR)" rows={carRows} cols={["年份", "CAR 指数"]} />}
+          {pubRows.length > 0 && <DataTable title="📰 年发文量历史" rows={pubRows} cols={["年份", "发文量"]} />}
+          {citingRows.length > 0 && <DataTable title="🔗 引用 Top 10 期刊" rows={citingRows} cols={["期刊", "占比", "次数"]} />}
+        </>;
+      })()}
     </div>
   );
 }
@@ -141,12 +157,8 @@ function DataTable({ title, rows, cols }: { title: string; rows: Array<Array<str
   return (
     <section className="border rounded-lg bg-white">
       <header className="px-4 py-2 border-b text-sm font-semibold text-gray-700">{title}</header>
-      {rows.length === 0 ? (
-        <div className="p-4 text-sm text-gray-400">暂无数据</div>
-      ) : (
-        <table className="w-full text-sm"><thead><tr className="bg-gray-50">{cols.map((c) => <th key={c} className="text-left px-4 py-2 font-medium text-gray-600">{c}</th>)}</tr></thead>
-          <tbody>{rows.map((r, i) => <tr key={i} className="border-t">{r.map((v, j) => <td key={j} className="px-4 py-2 text-gray-700">{v}</td>)}</tr>)}</tbody></table>
-      )}
+      <table className="w-full text-sm"><thead><tr className="bg-gray-50">{cols.map((c) => <th key={c} className="text-left px-4 py-2 font-medium text-gray-600">{c}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i} className="border-t">{r.map((v, j) => <td key={j} className="px-4 py-2 text-gray-700">{v}</td>)}</tr>)}</tbody></table>
     </section>
   );
 }
