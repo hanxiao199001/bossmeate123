@@ -133,7 +133,7 @@ export default function RecommendationModal({ open, onClose, initialJournalId, i
           {loading && <div className="text-center py-12 text-gray-400">⏳ AI 推荐中...（可能 5-15s）</div>}
           {err && <div className="text-center py-8 text-red-600 text-sm">❌ {err}</div>}
           {!loading && !err && tab === "journals" && (journals?.length === 0 ? (
-            <div className="text-center py-8 text-gray-400 text-sm">无候选期刊（DB confidence 全 &lt; 70）</div>
+            <div className="text-center py-8 text-gray-400 text-sm">无候选期刊（可信度全 &lt; 70）</div>
           ) : (
             <ul className="space-y-3">
               {(journals ?? []).map((j) => (
@@ -147,9 +147,9 @@ export default function RecommendationModal({ open, onClose, initialJournalId, i
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">
                         {j.partition && <span className="mr-2">{j.partition}</span>}
-                        {j.impactFactor !== null && <span className="mr-2">IF {j.impactFactor}</span>}
+                        {j.impactFactor !== null && <span className="mr-2">影响因子 {j.impactFactor}</span>}
                         {j.issn && <span className="mr-2">ISSN {j.issn}</span>}
-                        {j.confidence !== null && <span className="text-green-700">conf {j.confidence}</span>}
+                        {j.confidence !== null && <span className="text-green-700">可信度 {j.confidence}</span>}
                       </div>
                       <div className="text-sm text-gray-700 mt-1">{j.reason}</div>
                     </div>

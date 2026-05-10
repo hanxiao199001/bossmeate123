@@ -4,6 +4,7 @@ import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import RecommendationModal from "../components/RecommendationModal";
 import BatchUploadModal from "../components/BatchUploadModal";
+import { articleStatusLabel } from "../utils/i18n";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -34,12 +35,7 @@ const STATUS_TABS = ["draft", "generating", "failed", "generated", "published"] 
 type StatusTab = (typeof STATUS_TABS)[number];
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "草稿",
-  generating: "生成中",
-  failed: "失败",
-  generated: "已生成",
-  published: "已发布",
-  archived: "归档",
+  ...articleStatusLabel,
   // P0 迁移期兼容：旧 enum 显示标签
   reviewing: "审核中（旧）",
   approved: "已通过（旧）",

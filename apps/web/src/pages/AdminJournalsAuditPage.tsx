@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
+import { dataSourceLabel, journalAuditFieldLabel } from "../utils/i18n";
 
 interface AuditStats {
   total: number;
@@ -32,19 +33,27 @@ interface AuditItem {
   updatedAt: string;
 }
 
-const DATA_SOURCE_OPTIONS = [
-  { value: "manual_seed_2024", label: "✅ Manual Seed", color: "bg-blue-100 text-blue-700" },
-  { value: "multi_source_verified", label: "✅ Multi-Source", color: "bg-green-100 text-green-700" },
-  { value: "letpub_only", label: "📚 LetPub only", color: "bg-sky-100 text-sky-700" },
-  { value: "token_fuzzy", label: "🟡 Token Fuzzy", color: "bg-yellow-100 text-yellow-700" },
-  { value: "ai_fabricated", label: "⚠️ AI 编造", color: "bg-red-100 text-red-700" },
-  { value: "legacy_unknown", label: "❓ 从未验证", color: "bg-gray-100 text-gray-600" },
-];
+const DATA_SOURCE_COLOR: Record<string, string> = {
+  manual_seed_2024: "bg-blue-100 text-blue-700",
+  multi_source_verified: "bg-green-100 text-green-700",
+  letpub_only: "bg-sky-100 text-sky-700",
+  token_fuzzy: "bg-yellow-100 text-yellow-700",
+  ai_fabricated: "bg-red-100 text-red-700",
+  legacy_unknown: "bg-gray-100 text-gray-600",
+};
+
+const DATA_SOURCE_OPTIONS = Object.keys(DATA_SOURCE_COLOR).map((value) => ({
+  value,
+  label: dataSourceLabel[value] ?? value,
+  color: DATA_SOURCE_COLOR[value],
+}));
 
 function dataSourceBadge(ds: string | null): { label: string; color: string } {
   if (!ds) return { label: "❓ —", color: "bg-gray-100 text-gray-500" };
-  const o = DATA_SOURCE_OPTIONS.find((x) => x.value === ds);
-  return o ? { label: o.label, color: o.color } : { label: ds, color: "bg-gray-100 text-gray-600" };
+  return {
+    label: dataSourceLabel[ds] ?? ds,
+    color: DATA_SOURCE_COLOR[ds] ?? "bg-gray-100 text-gray-600",
+  };
 }
 
 function confidenceBadge(c: number | null): { color: string; text: string } {
@@ -181,7 +190,7 @@ export default function AdminJournalsAuditPage() {
             <div className="flex items-start gap-2 text-sm text-yellow-900">
               <span className="text-lg shrink-0">⚠️</span>
               <span>
-                <strong>当前 {stats.total} 期刊均未经 enricher 验证</strong>（confidence = NULL）。
+                <strong>当前 {stats.total} 期刊均未经 enricher 验证</strong>（可信度 = NULL）。
                 等明早 03:00 cron 自动跑，或点单行 <kbd className="px-1 rounded bg-yellow-100 border border-yellow-200 font-mono text-xs">🔄 重新验证</kbd> 立即触发 4 源验证。
               </span>
             </div>
@@ -245,10 +254,10 @@ export default function AdminJournalsAuditPage() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-2.5 bg-gray-50 border-b text-xs font-medium text-gray-500">
             <div className="col-span-3">期刊名</div>
-            <div className="col-span-2">data_source</div>
-            <div className="col-span-1 text-center">confidence</div>
-            <div className="col-span-2 text-center">last_verified</div>
-            <div className="col-span-2">source_url</div>
+            <div className="col-span-2">{journalAuditFieldLabel.data_source}</div>
+            <div className="col-span-1 text-center">{journalAuditFieldLabel.confidence}</div>
+            <div className="col-span-2 text-center">{journalAuditFieldLabel.last_verified}</div>
+            <div className="col-span-2">{journalAuditFieldLabel.source_url}</div>
             <div className="col-span-2 text-center">操作</div>
           </div>
           {loading ? (
