@@ -1006,6 +1006,22 @@ export const salesMessages = pgTable(
 // migrate.ts 加 DROP TABLE IF EXISTS 清理 prod 残留 row。
 // 用户改为审核通过后手动一键发布（走 publisher.publishToAccounts）。
 
+// ============ PR #123 V2 P6 tenant 偏好（5-15）============
+// 业务：用户上次选的 template 下次默认填这个（"用户上次选 B 营销 → 下次进 chat 默认 B"）。
+// 通用 key/value 结构（PK 复合 tenant_id + key），未来可加 default_journal / default_priority 等。
+export const tenantPreferences = pgTable(
+  "tenant_preferences",
+  {
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    preferenceKey: varchar("preference_key", { length: 60 }).notNull(),
+    preferenceValue: text("preference_value").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.preferenceKey] }),
+  ]
+);
+
 // ============ PR #118 V2 P4 批量 csv 导入（5-12）============
 // 业务：行业代发场景一次 csv 跑 50-100 个客户期刊。
 // batch 主表 + batch_rows 子表（一行 = 一篇 article 任务）。

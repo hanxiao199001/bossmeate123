@@ -222,9 +222,24 @@ export class ArticleSkill implements ISkill {
 
     // T4-1b: 从 metadata 读 variants 参数（默认 1，向后兼容）
     const variants = (context.metadata?.variants as number | undefined) ?? 1;
-    // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='shunshi-style' as of task #11；向后兼容）
-    const explicitTemplateId =
-      (context.metadata?.templateId as string | undefined) ?? getDefaultTemplateId();
+    // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='shunshi-style' as of task #11）
+    // PR #123 P6（5-15）：metadata 缺时优先读 tenant_preferences.default_template，仍缺才走 default
+    let explicitTemplateId = context.metadata?.templateId as string | undefined;
+    if (!explicitTemplateId) {
+      try {
+        const { getPreference, setPreference } = await import("../preferences.js");
+        const pref = await getPreference(context.tenantId, "default_template", null);
+        if (pref) explicitTemplateId = pref;
+        // 用户显式选 → 写回 preference（下次默认）。仅当 metadata 显式给且与 pref 不同时写。
+        const mdId = context.metadata?.templateId as string | undefined;
+        if (mdId && mdId !== pref) {
+          await setPreference(context.tenantId, "default_template", mdId).catch(() => {});
+        }
+      } catch (err) {
+        logger.warn({ err }, "P6 preference 读失败，走 default");
+      }
+    }
+    explicitTemplateId = explicitTemplateId ?? getDefaultTemplateId();
 
     // T4-3-4: variants > 1 时，副版本按租户偏好分配不同模板；variants=1 行为不变
     const templateIds: string[] =

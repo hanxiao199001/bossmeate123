@@ -163,6 +163,9 @@ async function bootstrap() {
     // P5 行业月度 cron（5-14 admin 手动 trigger）
     const { industryMonthlyRoutes } = await import("./routes/industry-monthly.js");
     await protectedApp.register(industryMonthlyRoutes, { prefix: `${env.API_PREFIX}` });
+    // P6 tenant 偏好（5-15）
+    const { preferencesRoutes } = await import("./routes/preferences.js");
+    await protectedApp.register(preferencesRoutes, { prefix: `${env.API_PREFIX}` });
     // PR 2：期刊审计页（admin only）
     const { journalsAuditRoutes } = await import("./routes/journals-audit.js");
     await protectedApp.register(journalsAuditRoutes, { prefix: `${env.API_PREFIX}` });

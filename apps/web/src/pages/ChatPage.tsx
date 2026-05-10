@@ -152,10 +152,19 @@ export default function ChatPage() {
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   useEffect(() => {
     if (skillType !== "article") return;
-    api.get<typeof templates>("/content-templates").then((r) => {
+    api.get<typeof templates>("/content-templates").then(async (r) => {
       const list = r.data ?? [];
       setTemplates(list);
       if (!selectedTemplateId) {
+        // PR #123 P6：优先 fetch tenant_preferences.default_template，没设过 → isDefault → 第一个
+        try {
+          const pref = await api.get<{ key: string; value: string | null }>("/preferences/default_template");
+          const prefId = pref.data?.value;
+          if (prefId && list.find((t) => t.id === prefId)) {
+            setSelectedTemplateId(prefId);
+            return;
+          }
+        } catch { /* preferences 加载失败回退 isDefault */ }
         const def = list.find((t) => t.isDefault) ?? list[0];
         if (def) setSelectedTemplateId(def.id);
       }
@@ -246,6 +255,8 @@ export default function ChatPage() {
   async function pickTemplateAndSend(templateId: string) {
     setSelectedTemplateId(templateId);
     setShowTemplatePicker(false);
+    // PR #123 P6：用户切模板后自动持久化（fire-and-forget，失败不阻塞发送）
+    api.put("/preferences/default_template", { value: templateId }).catch(() => { /* swallow */ });
     if (pendingSendArgs) {
       const args = pendingSendArgs;
       setPendingSendArgs(null);
