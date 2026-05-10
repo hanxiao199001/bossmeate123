@@ -66,7 +66,7 @@ describe("journalAuditFieldLabel — audit 页 column header", () => {
   it("4 字段中文 + last_verified_at/last_verified 双别名", () => {
     expect(journalAuditFieldLabel.data_source).toBe("数据来源");
     expect(journalAuditFieldLabel.confidence).toBe("可信度");
-    expect(journalAuditFieldLabel.source_url).toBe("来源链接");
+    expect(journalAuditFieldLabel.source_url).toBe("数据源验证");
     expect(journalAuditFieldLabel.last_verified).toBe("最后验证");
     expect(journalAuditFieldLabel.last_verified_at).toBe("最后验证");
   });
