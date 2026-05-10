@@ -50,7 +50,7 @@ export const journalAuditFieldLabel: Record<string, string> = {
   confidence: "可信度",
   last_verified_at: "最后验证",
   last_verified: "最后验证",
-  source_url: "来源链接",
+  source_url: "数据源验证",
 };
 
 /** unknown enum 兜底 — 拿不到 mapping 时显示原值，避免空白 */

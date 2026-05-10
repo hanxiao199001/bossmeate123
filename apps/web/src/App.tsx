@@ -23,6 +23,7 @@ import DataDashboardPage from "./pages/DataDashboardPage";
 import SalesPage from "./pages/SalesPage";
 import VideoCreationPage from "./pages/VideoCreationPage";
 import JournalsAdminPage from "./pages/JournalsAdminPage";
+import JournalDetailPage from "./pages/JournalDetailPage";
 import TryPage from "./pages/TryPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -196,6 +197,16 @@ export default function App() {
           <ProtectedAdminRoute>
             <JournalsAdminPage />
           </ProtectedAdminRoute>
+        }
+      />
+
+      {/* PR #125: 期刊详情页 — 修 audit 页 [👁️ 查看] 跳首页 bug */}
+      <Route
+        path="/journals/:id"
+        element={
+          <ProtectedRoute>
+            <JournalDetailPage />
+          </ProtectedRoute>
         }
       />
 
