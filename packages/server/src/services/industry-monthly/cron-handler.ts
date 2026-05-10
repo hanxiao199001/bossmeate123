@@ -13,9 +13,9 @@
  * - cron monthly 自动跑（scheduler 注册 '0 0 1 * *' 每月 1 号 00:00 BJ）
  * - admin 手动 trigger（routes/industry-monthly.ts POST /admin/industry-monthly/trigger）
  */
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { users, tenants } from "../../models/schema.js";
+import { users, tenants, journals } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { createBatch } from "../batch/batch-service.js";
 import type { CsvRow } from "../batch/csv-parser.js";
@@ -53,10 +53,20 @@ export async function runIndustryBatch(args: {
     };
     const tpl = templateLetter[INDUSTRY_TEMPLATE_MAP[args.industry]] ?? "A";
 
+    // PR #121 fix：强制从 multi_source_verified 池轮询分配 journalId（避免 article-skill
+    // AI 编造期刊触发 ⚠️ 警告横幅）。fall back 到 null 让 article-skill 兜底（极端 0 池场景）。
+    const multiPool = await db
+      .select({ id: journals.id })
+      .from(journals)
+      .where(eq(journals.dataSource, "multi_source_verified"))
+      .orderBy(desc(journals.confidence));
+    const pickJournalId = (i: number): string | null =>
+      multiPool.length > 0 ? multiPool[i % multiPool.length].id : null;
+
     const rows: CsvRow[] = result.topics.map((topic, i) => ({
       rowIndex: i + 1,
       topic,
-      journalId: null, // 缺则 article-skill AI 推荐
+      journalId: pickJournalId(i), // PR #121：multi_source 池轮询，强制可信期刊
       template: tpl,
       priority: 3,
     }));

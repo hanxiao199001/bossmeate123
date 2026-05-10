@@ -173,7 +173,17 @@ export class ArticleSkill implements ISkill {
 
     // V4: 先采集期刊数据到知识库（确保 RAG 有真实内容可查）
     let collectionResult: CollectionResult | undefined;
-    try {
+    // PR #121 P5 fix：caller 已 P3/cron 预选 journalId（如 batch-worker），直接 SELECT 跳 collector V6
+    // → 强制 P5 行业月度走 multi_source 池，避免 AI 编造期刊触发 ⚠️ 警告横幅
+    const explicitJournalId = context.metadata?.journalId as string | undefined;
+    if (explicitJournalId) {
+      const [j] = await db.select().from(journals).where(eq(journals.id, explicitJournalId)).limit(1);
+      if (j) {
+        collectionResult = { journals: [j as unknown as JournalInfo], abstracts: [], hotKeywords: parsed.keyPoints, knowledgeEntriesCreated: 0 };
+        logger.info({ journalId: explicitJournalId, name: j.name }, "PR #121: 用 caller 预选 journalId 跳 collector V6");
+      }
+    }
+    if (!collectionResult) try {
       collectionResult = await collectJournalContent({
         tenantId: context.tenantId,
         topic: parsed.topic,
