@@ -40,8 +40,9 @@ describe("PR #116: RecommendationModal 组件", () => {
     expect(src).toMatch(/j\.reason/);
   });
 
-  it("期刊点击跳 /journals/:id 详情", () => {
-    expect(src).toMatch(/<Link to=\{`\/journals\/\$\{j\.id\}`\}/);
+  it("期刊行 plain span 显示（PR #117 删 Link 防跳首页 + PR #125 详情页路由由 audit 页 [👁️ 查看] 入口）", () => {
+    expect(src).not.toMatch(/<Link to=\{`\/journals\/\$\{j\.id\}`\}/);
+    expect(src).toMatch(/<span className="text-gray-900">\{j\.name\}<\/span>/);
   });
 
   it("主题含复制按钮（navigator.clipboard）", () => {

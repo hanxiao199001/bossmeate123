@@ -71,12 +71,13 @@ describe("PR B.10: collector V12 raw 透传 + LetPub V7→V12 包装", () => {
 });
 
 describe("PR B.10: article-skill metadata.journalId（auto-video-bridge 触发条件）", () => {
-  it("article-skill.ts:323 metadata 字面量含 journalId 字段（防回归 grep）", async () => {
+  it("article-skill metadata 字面量含 journalId 字段（防回归 grep）", async () => {
     const fs = await import("node:fs/promises");
-    const src = await fs.readFile("src/services/skills/article-skill.ts", "utf-8");
+    // PR #127 修：原相对路径 vitest cwd != packages/server 时 ENOENT，改 import.meta.url 模式
+    const src = await fs.readFile(new URL("../services/skills/article-skill.ts", import.meta.url), "utf-8");
     expect(src).toMatch(/journalId:\s*collectionResult\?\.journals\[0\]\?\.id/);
     // PR Q.0 后 auto-video-bridge 已下线，chat.ts 仅 video script journalId 透传保留
-    const chat = await fs.readFile("src/routes/chat.ts", "utf-8");
+    const chat = await fs.readFile(new URL("../routes/chat.ts", import.meta.url), "utf-8");
     expect(chat).toMatch(/typeof\s+scriptData\.journalId\s*===\s*["']string["']/);
   });
 });
