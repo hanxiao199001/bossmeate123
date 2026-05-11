@@ -329,36 +329,24 @@ export default function ContentPage() {
             </label>
           </div>
 
-          <div className="flex gap-2">
-            {/* PR #116（P3 frontend Day 2）：AI 推荐 modal 入口 */}
-            <button
-              onClick={() => setRecommendOpen(true)}
-              className="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors"
-              title="AI 推荐期刊 + 主题（基于用户历史 + 高可信库）"
-            >
-              🤖 AI 推荐
-            </button>
-            {/* PR #119（P4 frontend Day 2）：批量 csv 导入入口 */}
-            <button
-              onClick={() => setBatchUploadOpen(true)}
-              className="px-4 py-2 bg-purple-700 text-white text-sm font-medium rounded-lg hover:bg-purple-800 transition-colors"
-              title="批量上传 csv 一次跑 50-100 篇 article"
-            >
-              📤 批量导入 CSV
-            </button>
-            <Link
-              to="/workflow/article"
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              + 选题创作
-            </Link>
-            <Link
-              to="/chat?skill=article"
-              className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
-            >
-              + AI对话创作
-            </Link>
-          </div>
+          {/* PR #129 5-12 V2.5 提前: 4 生成入口折 details, 主视图突出"挑发布"流程 */}
+          <details className="group">
+            <summary className="text-xs text-gray-500 hover:text-gray-700 cursor-pointer select-none">
+              ⚙️ 高级模式（手动创作入口） <span className="group-open:hidden">▼</span><span className="hidden group-open:inline">▲</span>
+            </summary>
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => setRecommendOpen(true)} className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700">🤖 AI 推荐</button>
+              <button onClick={() => setBatchUploadOpen(true)} className="px-3 py-1.5 bg-purple-700 text-white text-xs font-medium rounded hover:bg-purple-800">📤 批量 CSV</button>
+              <Link to="/workflow/article" className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">+ 选题创作</Link>
+              <Link to="/chat?skill=article" className="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded hover:bg-gray-200">+ AI 对话</Link>
+            </div>
+          </details>
+        </div>
+
+        {/* PR #129 V2.5 提前: 友好 banner — 主流程"挑发布"叙事 */}
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 flex items-center gap-2">
+          <span className="text-lg">📅</span>
+          <span><strong>BossMate 每天自动生成内容</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
         </div>
 
         {/* PR #116: AI 推荐 modal */}
@@ -485,9 +473,26 @@ export default function ContentPage() {
                     <button
                       onClick={() => navigate(`/content/${item.id}`)}
                       className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
+                      title="进入详情页（可编辑）"
                     >
-                      编辑
+                      👀 详情
                     </button>
+
+                    {/* PR #129 V2.5 提前: ⏭ 跳过 - sessionStorage hide + toast (V2.5 backend 接 user_skip_log 后变持久化) */}
+                    {item.status === "generated" && (
+                      <button
+                        onClick={() => {
+                          const skipped = JSON.parse(sessionStorage.getItem("v25_skip") || "[]");
+                          sessionStorage.setItem("v25_skip", JSON.stringify([...skipped, item.id]));
+                          setItems((prev) => prev.filter((x) => x.id !== item.id));
+                          alert("已跳过本会话隐藏。V2.5（5-23 起）后将记入推荐学习信号。");
+                        }}
+                        className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-50"
+                        title="本会话隐藏 (V2.5 后接推荐算法)"
+                      >
+                        ⏭ 跳过
+                      </button>
+                    )}
 
                     {/* P0-B：6 状态流转按钮 */}
                     {item.status === "failed" && (
