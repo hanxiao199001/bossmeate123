@@ -262,7 +262,8 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
     const safe = esc(journal.website);
     // PR Q.10：长 URL 显示锚文本（避免微信公众号草稿 URL 占多行破坏布局）。href 不变。
     const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
-    lines.push(`<strong>官网：</strong><a href="${safe}" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
+    // PR #132 (5-12): 外链新 tab + 安全防 referer
+    lines.push(`<strong>官网：</strong><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
   }
 
   const ps = lines

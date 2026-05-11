@@ -784,8 +784,9 @@ function buildBasicInfoTable(j: JournalInfo): string {
   if (j.issn) rows.push(infoRow("ISSN", j.issn));
   if (j.cnNumber) rows.push(infoRow("CN 刊号", j.cnNumber));
   if (j.frequency) rows.push(infoRow("刊期", j.frequency));
-  if (j.website) rows.push(infoRow("期刊官网", `<a href="${esc(j.website)}" style="color:#4f46e5;text-decoration:underline;">${esc(j.website)}</a>`));
-  if (j.cnkiUrl) rows.push(infoRow("知网主页", `<a href="${esc(j.cnkiUrl)}" style="color:#4f46e5;text-decoration:underline;">查看知网页面</a>`));
+  // PR #132 (5-12): 外链新 tab + 安全防 referer
+  if (j.website) rows.push(infoRow("期刊官网", `<a href="${esc(j.website)}" target="_blank" rel="noopener noreferrer" style="color:#4f46e5;text-decoration:underline;">${esc(j.website)}</a>`));
+  if (j.cnkiUrl) rows.push(infoRow("知网主页", `<a href="${esc(j.cnkiUrl)}" target="_blank" rel="noopener noreferrer" style="color:#4f46e5;text-decoration:underline;">查看知网页面</a>`));
 
   return `
 <div style="margin-bottom:24px;">
