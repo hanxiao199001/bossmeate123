@@ -188,6 +188,22 @@ export default function KeywordsPage() {
   const [filterPlatform, setFilterPlatform] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [filterTrack, setFilterTrack] = useState("");
+  // PR #129 V2.5 提前: 一键生成 article 状态
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
+
+  async function handleOneClickGenerate(keywordId: string, keywordText: string) {
+    if (generatingId) return;
+    setGeneratingId(keywordId);
+    try {
+      const r = await api.post<{ batchId: string; recommendedJournalId: string | null; message: string }>(`/keywords/${keywordId}/generate-article`, {});
+      const data = (r as any).data ?? r;
+      alert(`✅ 已为「${keywordText}」加入生成队列\n${data.message}\n推荐期刊: ${data.recommendedJournalId ? "已挑选 top1 multi_source" : "无候选, 走 fallback"}\nbatchId: ${data.batchId.slice(0, 8)}...`);
+    } catch (e) {
+      alert(`❌ 一键生成失败: ${(e as Error).message}`);
+    } finally {
+      setGeneratingId(null);
+    }
+  }
 
   // ===== 关键词聚类 state =====
   const [clustering, setClustering] = useState(false);
@@ -776,13 +792,14 @@ export default function KeywordsPage() {
                     <th className="text-right px-4 py-3 font-medium text-gray-600">综合热度</th>
                     <th className="text-right px-4 py-3 font-medium text-gray-600">出现天数</th>
                     <th className="text-left px-4 py-3 font-medium text-gray-600">最近出现</th>
+                    <th className="text-center px-4 py-3 font-medium text-gray-600">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={7} className="text-center py-12 text-gray-400">加载中...</td></tr>
+                    <tr><td colSpan={8} className="text-center py-12 text-gray-400">加载中...</td></tr>
                   ) : keywords.length === 0 ? (
-                    <tr><td colSpan={7} className="text-center py-12 text-gray-400">暂无关键词数据，点击上方按钮抓取</td></tr>
+                    <tr><td colSpan={8} className="text-center py-12 text-gray-400">暂无关键词数据，点击上方按钮抓取</td></tr>
                   ) : (
                     keywords.map((kw, idx) => {
                       const track = PLATFORM_TRACK[kw.sourcePlatform];
@@ -814,6 +831,16 @@ export default function KeywordsPage() {
                           </td>
                           <td className="px-4 py-3 text-gray-500">
                             {new Date(kw.lastSeenAt).toLocaleDateString("zh-CN")}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => handleOneClickGenerate(kw.id, kw.keyword)}
+                              disabled={generatingId === kw.id}
+                              className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 disabled:bg-gray-100 disabled:text-gray-400"
+                              title="一键基于此关键词生成 article（用 P3 推荐 top1 期刊 + 模板 A）"
+                            >
+                              {generatingId === kw.id ? "⏳..." : "⚡ 一键生成"}
+                            </button>
                           </td>
                         </tr>
                       );

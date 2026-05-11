@@ -45,6 +45,12 @@ import {
 } from "../services/agents/keyword-dictionary.js";
 import { logger } from "../config/logger.js";
 import type { PlatformName, CrawlerTrack } from "../services/crawler/types.js";
+// PR #129（5-12）：关键词库一键生成 article — 复用 P3 journal-recommender + P4 batch-service
+import { db } from "../models/db.js";
+import { keywords as keywordsTable } from "../models/schema.js";
+import { and, eq } from "drizzle-orm";
+import { recommendJournals } from "../services/recommendation/journal-recommender.js";
+import { createBatch } from "../services/batch/batch-service.js";
 
 export async function keywordRoutes(app: FastifyInstance) {
   /**
@@ -465,6 +471,43 @@ export async function keywordRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error({ err }, "关键词聚类失败");
       return reply.status(500).send({ code: "error", message: "关键词聚类失败" });
+    }
+  });
+
+  /**
+   * PR #129（5-12 V2.5 提前）：POST /keywords/:id/generate-article
+   * 关键词库一行一键生成 article（复用 P3 推荐 + P4 batch）。
+   * 流程：keyword → P3 top1 multi_source 期刊 → P4 createBatch 单行 priority=5 → 返 batchId。
+   * user 1-2 min 后 /content 池子看到 article。
+   */
+  app.post<{ Params: { id: string } }>("/:id/generate-article", async (request, reply) => {
+    const { id } = request.params;
+    const userId = request.user?.userId;
+    if (!userId) return reply.status(401).send({ code: "UNAUTHORIZED", message: "请先登录" });
+
+    const [kw] = await db
+      .select({ id: keywordsTable.id, keyword: keywordsTable.keyword })
+      .from(keywordsTable)
+      .where(and(eq(keywordsTable.id, id), eq(keywordsTable.tenantId, request.tenantId)))
+      .limit(1);
+    if (!kw) return reply.status(404).send({ code: "NOT_FOUND", message: "关键词不存在" });
+
+    try {
+      const recs = await recommendJournals({ tenantId: request.tenantId, topic: kw.keyword, limit: 1 });
+      const journalId = recs[0]?.id ?? null;
+
+      const result = await createBatch({
+        tenantId: request.tenantId,
+        userId,
+        filename: `keyword-oneclick-${kw.keyword.slice(0, 20)}`,
+        rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template: "A", priority: 5 }],
+      });
+
+      logger.info({ keywordId: id, keyword: kw.keyword, journalId, batchId: result.batchId }, "PR #129 keyword 一键生成 enqueued");
+      return reply.send({ code: "ok", data: { batchId: result.batchId, recommendedJournalId: journalId, message: "已加入队列，1-2 分钟后在 /content 查看" } });
+    } catch (err) {
+      logger.error({ err, keywordId: id }, "PR #129 keyword 一键生成失败");
+      return reply.status(500).send({ code: "error", message: (err as Error).message || "一键生成失败" });
     }
   });
 }
