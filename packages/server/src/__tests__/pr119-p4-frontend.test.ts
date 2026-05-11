@@ -103,7 +103,8 @@ describe("PR #119 ContentPage 入口 + App.tsx 路由", () => {
     const src = readWeb("pages/ContentPage.tsx");
     expect(src).toMatch(/import\s+BatchUploadModal\s+from/);
     expect(src).toMatch(/const\s+\[batchUploadOpen,\s*setBatchUploadOpen\]/);
-    expect(src).toMatch(/📤 批量导入 CSV/);
+    // PR #128 5-12 V2.5 提前: 按钮文字简化 "批量导入 CSV" → "批量 CSV"（折在 ⚙️ 高级模式下）
+    expect(src).toMatch(/📤 批量 CSV/);
     expect(src).toMatch(/<BatchUploadModal\s+open=\{batchUploadOpen\}/);
   });
 
