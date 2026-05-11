@@ -1049,6 +1049,17 @@ INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active)
 VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001',
         'system@bossmate.internal', 'unset-system-no-login', '_system', 'owner', true)
 ON CONFLICT (id) DO NOTHING;
+
+-- ============ PR #133 V2.5 Day 1（5-12）: user 跳过推荐 article 日志 ============
+-- ContentPage "📅 今日推荐" tab 的 ⏭ 跳过 写入此表（PR #128 用 sessionStorage, 现持久化）.
+-- PK (tenant_id, content_id) 保 idempotent（同 article 重复 skip 不报错）.
+CREATE TABLE IF NOT EXISTS user_skip_log (
+  tenant_id UUID NOT NULL,
+  content_id UUID NOT NULL,
+  skipped_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  PRIMARY KEY (tenant_id, content_id)
+);
+CREATE INDEX IF NOT EXISTS idx_skip_log_tenant ON user_skip_log(tenant_id);
 `;
 
 async function migrate() {

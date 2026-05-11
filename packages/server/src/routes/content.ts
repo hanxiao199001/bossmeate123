@@ -815,4 +815,56 @@ export async function contentRoutes(app: FastifyInstance) {
       });
     }
   });
+
+  /**
+   * PR #133 V2.5 Day 1（5-12）：GET /content/recommendations —— 推荐 feed.
+   *
+   * RecommendationFeedPage 主入口. 拉 system tenant 7 天内 generated article,
+   * LEFT JOIN journals 拿封面 + IF + confidence, 过滤 user 已 skip,
+   * ORDER BY confidence DESC NULLS LAST, created_at DESC.
+   */
+  app.get("/recommendations", async (request, reply) => {
+    try {
+      const query = request.query as { limit?: string; skipFiltered?: string };
+      const limit = query.limit ? parseInt(query.limit, 10) : undefined;
+      const skipFiltered = query.skipFiltered !== "false";
+      const { fetchRecommendations } = await import("../services/recommendation/feed-service.js");
+      const result = await fetchRecommendations({ userTenantId: request.tenantId, limit, skipFiltered });
+      return { code: "OK", data: result };
+    } catch (err) {
+      logger.error({ err }, "PR #133 GET /content/recommendations 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "推荐 feed 拉取失败" });
+    }
+  });
+
+  /**
+   * PR #133 V2.5 Day 1（5-12）：POST /content/:id/skip —— user 跳过推荐 article.
+   *
+   * 验证 content 存在 (system tenant) → INSERT INTO user_skip_log (user 自己 tenant).
+   * 重复 skip 用 ON CONFLICT DO NOTHING 静默成功.
+   */
+  app.post("/:id/skip", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      // 仅允许 skip system tenant 推荐 article（user 自己 article 不该 skip）
+      const [c] = await db
+        .select({ id: contents.id })
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)))
+        .limit(1);
+      if (!c) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "推荐内容不存在" });
+      }
+      await db.execute(sql`
+        INSERT INTO user_skip_log (tenant_id, content_id, skipped_at)
+        VALUES (${request.tenantId}::uuid, ${id}::uuid, NOW())
+        ON CONFLICT (tenant_id, content_id) DO NOTHING
+      `);
+      logger.debug({ tenantId: request.tenantId, contentId: id }, "PR #133 skip 推荐 article");
+      return { code: "OK", data: { skipped: true } };
+    } catch (err) {
+      logger.error({ err, contentId: id }, "PR #133 POST /:id/skip 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "跳过操作失败" });
+    }
+  });
 }
