@@ -1070,3 +1070,18 @@ export const batchRows = pgTable(
     index("idx_batch_rows_status").on(table.status),
   ]
 );
+
+// ============ PR #133 V2.5 Day 1 (5-12): user 跳过推荐 article 日志 ============
+// 用户在 "📅 今日推荐" tab 点 ⏭ 跳过，记入此表。GET /content/recommendations 默认排除已 skip。
+// PK (tenant_id, content_id) 保 idempotent。tenant_id 是 user 自己 tenant 不是 system。
+export const userSkipLog = pgTable(
+  "user_skip_log",
+  {
+    tenantId: uuid("tenant_id").notNull(),
+    contentId: uuid("content_id").notNull(),
+    skippedAt: timestamp("skipped_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_skip_log_tenant").on(table.tenantId),
+  ]
+);
