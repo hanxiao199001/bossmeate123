@@ -12,6 +12,12 @@ import {
   transitionToStatus,
   InvalidTransitionError,
 } from "../services/articles/state-machine.js";
+// PR #131 (5-12): system tenant article 全 user 可读（类似 PR #115 journals 全局共享 idiom）
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+
+/** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
+const READABLE_TENANT_FILTER = (tenantId: string) =>
+  or(eq(contents.tenantId, tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID));
 
 const createContentSchema = z.object({
   type: z.enum(["article", "video_script", "reply"]),
@@ -46,8 +52,7 @@ export async function contentRoutes(app: FastifyInstance) {
       const pageSize = Math.min(100, Math.max(1, parseInt(query.pageSize || "20", 10)));
       const offset = (page - 1) * pageSize;
 
-      // PR #130 V2.5: "📅 今日推荐" tab → 用 system tenant 替代 user tenant
-      const { SYSTEM_RECOMMENDATION_TENANT_ID } = await import("../config/system-recommendation.js");
+      // PR #130 V2.5: "📅 今日推荐" tab → 用 system tenant 替代 user tenant (top-level import 见文件顶, PR #131 重构)
       const filterTenantId = query.recommendation === "true" ? SYSTEM_RECOMMENDATION_TENANT_ID : request.tenantId;
       const conditions = [eq(contents.tenantId, filterTenantId)];
 
@@ -194,7 +199,8 @@ export async function contentRoutes(app: FastifyInstance) {
         .select()
         .from(contents)
         .where(
-          and(eq(contents.id, id), eq(contents.tenantId, request.tenantId))
+          // PR #131: GET /:id 读 — user 自己 OR system tenant article (推荐池可读)
+          and(eq(contents.id, id), READABLE_TENANT_FILTER(request.tenantId))
         )
         .limit(1);
 
@@ -255,9 +261,10 @@ export async function contentRoutes(app: FastifyInstance) {
               })
               .from(contents)
               .where(
+                // PR #131: sibling 同样允许 system tenant（system article 通常无多版本但保 consistent）
                 and(
                   inArray(contents.id, siblingContentIds),
-                  eq(contents.tenantId, request.tenantId)
+                  READABLE_TENANT_FILTER(request.tenantId)
                 )
               );
 
@@ -782,15 +789,17 @@ export async function contentRoutes(app: FastifyInstance) {
   app.get("/:id/edits", async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      // 防御：先验内容归属（即使 boss_edits 也带 tenantId，多一层早返回 404 让 UI 干净）
+      // PR #131: 防御 — system tenant article 也可读（编辑历史必空但端点不返 404）
       const [content] = await db
         .select({ id: contents.id })
         .from(contents)
-        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .where(and(eq(contents.id, id), READABLE_TENANT_FILTER(request.tenantId)))
         .limit(1);
       if (!content) {
         return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
       }
+      // bossEdits 仍按 request.tenantId 严过滤 — system article 自然 0 row（cron 生成不会被 boss 编辑），
+      // user 自己 article 返自己 boss edits。无越权 + 防回归测试 (content-edits-route.test.ts:90-94) 兼容。
       const rows = await db
         .select()
         .from(bossEdits)

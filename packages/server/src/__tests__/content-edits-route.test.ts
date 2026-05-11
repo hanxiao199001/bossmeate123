@@ -41,8 +41,10 @@ vi.mock("../models/schema.js", () => ({
 vi.mock("drizzle-orm", () => ({
   eq: (a: unknown, b: unknown) => ({ kind: "eq", a, b }),
   and: (...xs: unknown[]) => ({ kind: "and", xs }),
+  // PR #131: or 改捕获 xs（contents WHERE 现含 OR(user, SYSTEM) READABLE_TENANT_FILTER）
+  or: (...xs: unknown[]) => ({ kind: "or", xs }),
   desc: (x: unknown) => ({ kind: "desc", x }),
-  sql: () => ({}), count: () => ({}), or: () => ({}), isNull: () => ({}), inArray: () => ({}),
+  sql: () => ({}), count: () => ({}), isNull: () => ({}), inArray: () => ({}),
 }));
 
 const { contentRoutes } = await import("../routes/content.js");
@@ -88,9 +90,12 @@ describe("GET /content/:id/edits — task #21", () => {
     const app = await buildApp("tenant-A");
     await app.inject({ method: "GET", url: "/c-1/edits" });
     expect(lastWhereArgs).toHaveLength(2);
-    const hasTenantPredicate = (cond: any) =>
-      (cond?.xs ?? []).some((c: any) => c?.kind === "eq" && c?.b === "tenant-A");
-    expect(hasTenantPredicate(lastWhereArgs[0])).toBe(true);
-    expect(hasTenantPredicate(lastWhereArgs[1])).toBe(true);
+    // PR #131: contents WHERE 现含嵌套 or(eq(tenant=user), eq(tenant=SYSTEM))；递归找
+    const hasTenantPredicate = (cond: any): boolean => {
+      if (cond?.kind === "eq" && cond?.b === "tenant-A") return true;
+      return (cond?.xs ?? []).some((c: any) => hasTenantPredicate(c));
+    };
+    expect(hasTenantPredicate(lastWhereArgs[0])).toBe(true); // contents 查 - 含 OR(user, SYSTEM)
+    expect(hasTenantPredicate(lastWhereArgs[1])).toBe(true); // bossEdits 查 - 仍 strict eq(user)
   });
 });
