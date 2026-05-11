@@ -40,6 +40,7 @@ export type SchedulerJobType =
   | "journal-cover-prefetch"   // 期刊封面图预抓取
   | "journal-trust-reverify"   // PR #107 5-9 治理 PR 3：30 天前 / 未验证期刊 batch reverify
   | "industry-monthly"         // P5 5-14：每月 1 号 4 行业 × 50 篇 article 自动生成
+  | "daily-recommendation"     // PR #130 V2.5 5-13：每日 03:00 BJ 10 篇推荐 article 入 system tenant
   | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
@@ -315,6 +316,13 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       logger.info("P5 industry-monthly cron 完成");
       return { ok: true };
     }
+    case "daily-recommendation": {
+      // PR #130（5-13 V2.5 提前）：每日 03:00 BJ 10 篇推荐 article 入 system tenant
+      const { runDailyRecommendation } = await import("./recommendation/daily-cron.js");
+      const result = await runDailyRecommendation();
+      logger.info(result, "PR #130 daily-recommendation cron 完成");
+      return result;
+    }
     case "journal-trust-reverify": {
       // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
       const { sql: drizzleSql, asc: drizzleAsc, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
@@ -537,6 +545,16 @@ async function registerCronJobs() {
     {
       name: "journal-catalog-update",
       data: { type: "journal-catalog-update" as SchedulerJobType },
+    }
+  );
+
+  // PR #130 V2.5（5-13）：每日 03:00 BJ 自动生成 10 篇推荐 article 入 system tenant
+  await crawlerQueue.upsertJobScheduler(
+    "daily-recommendation-schedule",
+    { pattern: "0 3 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "daily-recommendation",
+      data: { type: "daily-recommendation" as SchedulerJobType },
     }
   );
 
