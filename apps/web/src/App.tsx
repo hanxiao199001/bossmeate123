@@ -24,6 +24,7 @@ import SalesPage from "./pages/SalesPage";
 import VideoCreationPage from "./pages/VideoCreationPage";
 import JournalsAdminPage from "./pages/JournalsAdminPage";
 import JournalDetailPage from "./pages/JournalDetailPage";
+import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -43,9 +44,17 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/try" element={<TryPage />} />  {/* B.9 onboarding —公众号罐头 URL 落地 */}
 
-      {/* 需要登录的页面 */}
+      {/* PR #134 V2.5 Day 2: 主页改 RecommendationFeedPage — 看 → 挑 → 一键发. 原 DashboardPage 备份到 /home */}
       <Route
         path="/"
+        element={
+          <ProtectedRoute>
+            <RecommendationFeedPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/home"
         element={
           <ProtectedRoute>
             <DashboardPage />
