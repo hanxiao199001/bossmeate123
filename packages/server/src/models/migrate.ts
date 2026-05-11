@@ -1036,6 +1036,19 @@ CREATE TABLE IF NOT EXISTS tenant_preferences (
   updated_at TIMESTAMP DEFAULT NOW() NOT NULL,
   PRIMARY KEY (tenant_id, preference_key)
 );
+
+-- ============ PR #130 V2.5 daily-recommendation system sentinel（5-13 Decision B）============
+-- 固定 UUID system tenant + system user，daily-cron 写入 contents.tenant_id=此 UUID,
+-- frontend ContentPage "📅 今日推荐" tab filter 此 UUID。
+-- ON CONFLICT DO NOTHING 保 idempotent（migrate 可重复跑）。
+INSERT INTO tenants (id, name, slug, plan, status)
+VALUES ('00000000-0000-0000-0000-000000000001', '_system_recommendation', '_system_recommendation', 'pro', 'active')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active)
+VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001',
+        'system@bossmate.internal', 'unset-system-no-login', '_system', 'owner', true)
+ON CONFLICT (id) DO NOTHING;
 `;
 
 async function migrate() {

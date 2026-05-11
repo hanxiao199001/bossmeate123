@@ -39,13 +39,17 @@ export async function contentRoutes(app: FastifyInstance) {
         userId?: string;
         page?: string;
         pageSize?: string;
+        recommendation?: string;  // PR #130 V2.5: ?recommendation=true → 切 system tenant
       };
 
       const page = Math.max(1, parseInt(query.page || "1", 10));
       const pageSize = Math.min(100, Math.max(1, parseInt(query.pageSize || "20", 10)));
       const offset = (page - 1) * pageSize;
 
-      const conditions = [eq(contents.tenantId, request.tenantId)];
+      // PR #130 V2.5: "📅 今日推荐" tab → 用 system tenant 替代 user tenant
+      const { SYSTEM_RECOMMENDATION_TENANT_ID } = await import("../config/system-recommendation.js");
+      const filterTenantId = query.recommendation === "true" ? SYSTEM_RECOMMENDATION_TENANT_ID : request.tenantId;
+      const conditions = [eq(contents.tenantId, filterTenantId)];
 
       // 如果指定了 userId 筛选，验证权限（owner/admin 可查看全部，其他用户只能查看自己的）
       if (query.userId) {

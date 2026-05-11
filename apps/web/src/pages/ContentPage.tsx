@@ -84,6 +84,14 @@ export default function ContentPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [filterType, setFilterType] = useState("");
   const filterStatus = searchParams.get("status") || "";
+  // PR #130 V2.5 (5-13): "📅 今日推荐" view mode — URL ?view=recommendation
+  const viewMode = searchParams.get("view") === "recommendation" ? "recommendation" : "all";
+  const setViewMode = useCallback((v: "all" | "recommendation") => {
+    const next = new URLSearchParams(searchParams);
+    if (v === "recommendation") next.set("view", "recommendation");
+    else next.delete("view");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const setFilterStatus = useCallback(
     (s: string) => {
       const next = new URLSearchParams(searchParams);
@@ -129,6 +137,8 @@ export default function ContentPage() {
       params.set("pageSize", String(pageSize));
       if (filterType) params.set("type", filterType);
       if (filterStatus) params.set("status", filterStatus);
+      // PR #130 V2.5: "📅 今日推荐" → backend 切 system tenant
+      if (viewMode === "recommendation") params.set("recommendation", "true");
 
       const res = await api.get<{
         items: ContentItem[];
@@ -146,7 +156,7 @@ export default function ContentPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterType, filterStatus]);
+  }, [page, filterType, filterStatus, viewMode]);
 
   // 获取统计
   const fetchStats = useCallback(async () => {
@@ -343,10 +353,22 @@ export default function ContentPage() {
           </details>
         </div>
 
+        {/* PR #130 V2.5 (5-13): View mode tab — "📅 今日推荐" 默认显前一天 cron 10 篇 vs "全部" 我的全部 */}
+        <div className="flex gap-2 border-b border-gray-200">
+          <button
+            onClick={() => setViewMode("recommendation")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${viewMode === "recommendation" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"}`}
+          >📅 今日推荐</button>
+          <button
+            onClick={() => setViewMode("all")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${viewMode === "all" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"}`}
+          >📝 我的全部</button>
+        </div>
+
         {/* PR #129 V2.5 提前: 友好 banner — 主流程"挑发布"叙事 */}
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 flex items-center gap-2">
           <span className="text-lg">📅</span>
-          <span><strong>BossMate 每天自动生成内容</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
+          <span><strong>{viewMode === "recommendation" ? "BossMate 每日 03:00 自动生成 10 篇推荐" : "BossMate 每天自动生成内容"}</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
         </div>
 
         {/* PR #116: AI 推荐 modal */}
