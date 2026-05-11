@@ -640,7 +640,8 @@ export function renderBasicInfoTable(journal: JournalInfo): string {
   if (journal.issn) items.push({ label: "ISSN", value: esc(journal.issn) });
   if (journal.cnNumber) items.push({ label: "CN 刊号", value: esc(journal.cnNumber) });
   if (journal.frequency) items.push({ label: "刊期", value: esc(journal.frequency) });
-  if (journal.website) items.push({ label: "官网", value: `<a href="${esc(journal.website)}" style="color:#4f46e5;text-decoration:underline;">${esc(journal.website)}</a>` });
+  // PR #132 (5-12): 外链新 tab + 安全防 referer
+  if (journal.website) items.push({ label: "官网", value: `<a href="${esc(journal.website)}" target="_blank" rel="noopener noreferrer" style="color:#4f46e5;text-decoration:underline;">${esc(journal.website)}</a>` });
 
   if (items.length === 0) return "";
 
