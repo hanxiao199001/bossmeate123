@@ -56,14 +56,22 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   const batchIds: string[] = [];
   const failures: Array<{ keyword: string; error: string }> = [];
 
+  // PR #135 (5-12) — anti-cluster: 同 journal 24h 内最多 MAX_PER_JOURNAL 篇.
+  // 用 usedJournalIds count 限流: top 1 → top 5 + 跳过已满期刊, 强制 spread 到不同期刊.
+  const MAX_PER_JOURNAL = 2;
+  const journalUseCount = new Map<string, number>();
+
   for (const kw of candidates) {
     try {
       const recs = await recommendJournals({
         tenantId: SYSTEM_RECOMMENDATION_TENANT_ID,
         topic: kw.keyword,
-        limit: 1,
+        limit: 5, // PR #135: 拿 top5 候选, 后面挑未饱和 journal
       });
-      const journalId = recs[0]?.id ?? null;
+      const journalId = recs.find((r) => (journalUseCount.get(r.id) ?? 0) < MAX_PER_JOURNAL)?.id
+        ?? recs[0]?.id // 全饱和兜底（仍取 top1, 避免 enqueue 失败）
+        ?? null;
+      if (journalId) journalUseCount.set(journalId, (journalUseCount.get(journalId) ?? 0) + 1);
 
       const result = await createBatch({
         tenantId: SYSTEM_RECOMMENDATION_TENANT_ID,
@@ -72,11 +80,11 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
         rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template: "A", priority: 3 }],
       });
       batchIds.push(result.batchId);
-      logger.debug({ keyword: kw.keyword, journalId, batchId: result.batchId }, "PR #130 keyword enqueued");
+      logger.debug({ keyword: kw.keyword, journalId, batchId: result.batchId, journalUseCount: journalUseCount.get(journalId ?? "") }, "PR #135 keyword enqueued (anti-cluster)");
     } catch (err) {
       const error = (err as Error).message || String(err);
       failures.push({ keyword: kw.keyword, error });
-      logger.warn({ keyword: kw.keyword, err }, "PR #130 daily-cron 单 keyword 失败（跳过）");
+      logger.warn({ keyword: kw.keyword, err }, "PR #135 daily-cron 单 keyword 失败（跳过）");
     }
   }
 

@@ -217,8 +217,8 @@ function renderP1Placeholder(opts: {
     `</section>`;
 }
 
-/** P2 灰阶 value：缺值显示"暂无" */
-function greyOrValue(v: unknown, fallback = "暂无"): string {
+/** P2 灰阶 value：缺值显示"未公开"（PR #135 5-12: 原"暂无"被 user 反馈像假数据） */
+function greyOrValue(v: unknown, fallback = "未公开"): string {
   if (v == null || v === "" || (typeof v === "number" && Number.isNaN(v))) {
     return `<span style="color:${MUTED};">${esc(fallback)}</span>`;
   }
@@ -231,9 +231,10 @@ function renderHeroBlock(journal: JournalInfo): string {
   const cnName = journal.nameEn && journal.name && journal.name !== journal.nameEn
     ? esc(journal.name) : "";
   const cover = journal.coverUrl || (journal as any).coverImageUrl;
-  const ifBadge = journal.impactFactor != null
+  // PR #135 (5-12): IF NULL → 整 badge skip, 不显灰 "IF 暂无" 占位（user 反馈假数据感）.
+  const ifBadge = journal.impactFactor != null && journal.impactFactor > 0
     ? `<div style="display:inline-block;padding:8px 16px;margin-top:12px;background:${RED};color:#fff;border-radius:8px;font-size:18px;font-weight:bold;line-height:1.3;">IF ${esc(String(journal.impactFactor))}</div>`
-    : `<div style="display:inline-block;padding:8px 16px;margin-top:12px;background:#EEE;color:${MUTED};border-radius:8px;font-size:14px;font-weight:600;line-height:1.3;">IF 暂无</div>`;
+    : "";
 
   const coverHtml = cover
     ? `<img src="${esc(cover)}" alt="${fullName}" style="max-width:100%;height:auto;display:block;margin:0 auto 12px auto;border-radius:6px;" />`
@@ -249,12 +250,13 @@ function renderHeroBlock(journal: JournalInfo): string {
 
 // ============ 区块 2: 期刊基本信息卡 ============
 function renderBasicInfoBlock(journal: JournalInfo): string {
-  const lines: string[] = [
-    `<strong>ISSN：</strong>${greyOrValue(journal.issn)}`,
-    `<strong>Publisher：</strong>${greyOrValue(journal.publisher)}`,
-    `<strong>创刊年：</strong>${greyOrValue(journal.foundingYear ? `${journal.foundingYear}` : null)}`,
-    `<strong>出版国：</strong>${greyOrValue(journal.country)}`,
-  ];
+  // PR #135 (5-12 demo blocker): NULL 字段整行不渲染（user 反馈"暂无"满屏假数据感）.
+  // 与 PR #117 (website 行) + PR #126 (chart 区) 同 idiom.
+  const lines: string[] = [];
+  if (journal.issn) lines.push(`<strong>ISSN：</strong>${esc(journal.issn)}`);
+  if (journal.publisher) lines.push(`<strong>Publisher：</strong>${esc(journal.publisher)}`);
+  if (journal.foundingYear) lines.push(`<strong>创刊年：</strong>${esc(String(journal.foundingYear))}`);
+  if (journal.country) lines.push(`<strong>出版国：</strong>${esc(journal.country)}`);
   // PR #117 fix Bug 2：website NULL/空时整行不渲染（不显示比"暂无"更专业；避免假"查看官网"链接）
   // user 5-11 反馈：prod 多数 multi_source 期刊 website 字段 NULL（enricher 未抓取）→ 模板显示"暂无"被
   // user 误以为"假链接"。降级方案：仅当真有合法 http(s) URL 才渲染"官网："行。
