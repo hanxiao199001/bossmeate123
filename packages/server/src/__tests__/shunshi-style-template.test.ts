@@ -128,12 +128,12 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).toContain("数据更新");
   });
 
-  it("renders ≥5 P1 placeholder cards when all 8 B-fields NULL", async () => {
+  it("hides P1 placeholder sections when all 8 B-fields NULL (PR #136: 假数据感修复)", async () => {
     const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
-    // 数据采集中 出现在每个 P1 占位卡片里
-    const matches = html.match(/数据采集中/g);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(5);
+    // PR #136: chart section NULL 时整 section skip, 不再"数据采集中"占位
+    expect(html).not.toMatch(/数据采集中/);
+    expect(html).not.toMatch(/数据完善中/);
+    expect(html).not.toMatch(/敬请期待/);
   });
 
   it("section open/close tags balanced", async () => {
@@ -153,7 +153,7 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).not.toMatch(/:\s*null\s*</);
   });
 
-  it("falls back gracefully when basic info fields missing", async () => {
+  it("hides basic info rows when fields missing (PR #135/#136: 整行 skip 不再 '暂无')", async () => {
     const j = {
       ...baseJournal,
       foundingYear: null,
@@ -163,8 +163,11 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
       website: null,
     };
     const html = await generateShunshiStyleHtml(j, baseAi, undefined);
-    // 灰阶 fallback：出现"暂无"
-    expect(html).toContain("暂无");
+    // PR #135/#136: NULL 整行 skip — basic info card 内不再字面 "暂无"
+    expect(html).not.toContain("ISSN：</strong>");
+    expect(html).not.toContain("Publisher：</strong>");
+    expect(html).not.toContain("创刊年：</strong>");
+    expect(html).not.toContain("出版国：</strong>");
     // 主流程不抛错
     expect(html).toContain("Frontiers in Oncology");
   });
@@ -311,10 +314,10 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).toContain("2,950");
     expect(html).toContain("APC 版面费");
 
-    // NULL → P2 灰阶 "暂无"
+    // PR #136: NULL → 整行 skip (不再 "暂无" 假数据感)
     const htmlNull = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
-    expect(htmlNull).toContain("APC 版面费");
-    expect(htmlNull).toContain("暂无");
+    expect(htmlNull).not.toContain("APC 版面费：");
+    expect(htmlNull).not.toContain(">暂无<");
   });
 });
 

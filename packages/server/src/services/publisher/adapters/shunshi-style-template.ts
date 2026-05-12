@@ -197,24 +197,21 @@ function isContactMeta(v: unknown): v is ContactMeta {
 
 // ============ 通用工具 ============
 
-/** P1 占位卡（最显眼）：核心 selling point 缺数据时用 */
-function renderP1Placeholder(opts: {
+/** P1 占位卡（最显眼）：核心 selling point 缺数据时用.
+ *
+ * PR #136 (5-12 demo blocker 余漏): chart 数据 NULL 时整 section 不渲染,
+ * 不再显示"数据采集中/数据完善中/敬请期待"假数据感占位. 8 callers (IF/CAR/发文/引用/JCR 等) 全自动 skip.
+ * 旧 P1 placeholder 在 backlog: V2.6 用 dataset 真填充时去掉, 不再 fallback HTML.
+ *
+ * Args 保留兼容 callers (无破坏改动), 但 return 永空字符串.
+ */
+function renderP1Placeholder(_opts: {
   title: string;
   icon: string;
   message: string;
   submessage?: string;
 }): string {
-  const sub = opts.submessage
-    ? `<p style="margin:6px 0 0 0;font-size:12px;color:#5A7A99;line-height:1.6;">${esc(opts.submessage)}</p>`
-    : "";
-  return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 10px 0;font-size:16px;font-weight:bold;color:${RED};text-align:center;line-height:1.5;">${esc(opts.title)}</p>` +
-    `<div style="border:2px dashed ${PLACEHOLDER_BORDER};padding:24px 16px;text-align:center;border-radius:8px;background:${PLACEHOLDER_BG};">` +
-      `<p style="margin:0 0 6px 0;font-size:28px;line-height:1;">${esc(opts.icon)}</p>` +
-      `<p style="margin:0;font-size:15px;font-weight:600;color:${BLUE};line-height:1.6;">${esc(opts.message)}</p>` +
-      sub +
-    `</div>` +
-    `</section>`;
+  return "";
 }
 
 /** P2 灰阶 value：缺值显示"未公开"（PR #135 5-12: 原"暂无"被 user 反馈像假数据） */
@@ -418,11 +415,9 @@ function renderJcrFullPanel(journal: JournalInfo): string {
 }
 
 function jcrRow(label: string, value: string | null | undefined): string {
-  const isEmpty = value == null || value === "";
-  const valHtml = isEmpty
-    ? `<span style="color:${MUTED};">暂无</span>`
-    : esc(String(value));
-  return `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};"><strong>${esc(label)}：</strong>${valHtml}</p>`;
+  // PR #136 (5-12 demo blocker): NULL value 整行不渲染（原"暂无"假数据感）.
+  if (value == null || value === "") return "";
+  return `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};"><strong>${esc(label)}：</strong>${esc(String(value))}</p>`;
 }
 
 function formatJcrSubjects(subj: JcrFullShape["jifSubjects"] | JcrFullShape["jciSubjects"]): string | null {
