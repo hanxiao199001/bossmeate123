@@ -62,3 +62,5 @@ data/
 
 # Deploy artifacts (server-side pg_dump backups, never committed)
 .deploy-backups/
+.review-stash/
+scripts/dvh-prototype-*.ts
