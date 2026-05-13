@@ -1,7 +1,6 @@
 /**
  * DVH GetVideoTaskInfo 轮询封装。5min timeout。status RUNNING → 继续 / SUCCESS → 拿 videoUrl / FAIL → 抛。
  */
-// @ts-expect-error
 import * as $Util from "@alicloud/tea-util";
 import { createDvhClient, $avatar20220130 } from "./client.js";
 import { logger } from "../../config/logger.js";

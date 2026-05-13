@@ -2,7 +2,6 @@
  * DVH SubmitTextTo2DAvatarVideoTask wrapper.
  * 业务级失败 (body.success===false, 5-13 实测 10010003 无访问权限) 抛错给 bridge 决定 fallback。
  */
-// @ts-expect-error
 import * as $Util from "@alicloud/tea-util";
 import { createDvhClient, $avatar20220130 } from "./client.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
