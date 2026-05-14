@@ -408,3 +408,48 @@ describe("renderContactBlock — task #35 tenant.contactMeta", () => {
     expect(html).toContain("+86 138-0000-0000");
   });
 });
+
+describe("PR #146: render*Block NULL → 整块 skip (placeholder 残留修复)", () => {
+  it("区块5 renderImpactFactorBlock: impactFactor=null → 整块 skip", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, impactFactor: null }, baseAi, undefined);
+    expect(html).not.toContain("最新影响因子");
+  });
+
+  it("区块5: impactFactor 有值 → 正常渲染", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, impactFactor: 4.7 }, baseAi, undefined);
+    expect(html).toContain("最新影响因子");
+  });
+
+  it("区块10 renderFrequencyBlock: frequency+publicationStats 都 null → 整块 skip, 无 '未知'", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, frequency: null, publicationStats: null }, baseAi, undefined);
+    expect(html).not.toContain("出版周期");
+    expect(html).not.toContain(">未知<");
+  });
+
+  it("区块10: frequency 有值 → 正常渲染", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, frequency: "月刊" }, baseAi, undefined);
+    expect(html).toContain("出版周期");
+    expect(html).toContain("月刊");
+  });
+
+  it("区块17 renderSubmissionAdviceBlock: ar+rc 都 null → 整块 skip", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, acceptanceRate: null, reviewCycle: null }, baseAi, undefined);
+    expect(html).not.toContain("投稿建议");
+  });
+
+  it("区块17: ar 有值 rc=null → 仍渲染（核心区块不因单字段缺失消失）", async () => {
+    const html = await generateShunshiStyleHtml({ ...baseJournal, acceptanceRate: 0.3, reviewCycle: null }, baseAi, undefined);
+    expect(html).toContain("投稿建议");
+  });
+
+  it("整体: 所有 P2 字段 null → body 无 暂无/未知/未公开 残留（区块 18/19 含在内）", async () => {
+    const html = await generateShunshiStyleHtml(
+      { ...baseJournal, impactFactor: null, frequency: null, publicationStats: null, acceptanceRate: null, reviewCycle: null },
+      baseAi,
+      undefined,
+    );
+    expect(html).not.toContain(">暂无<");
+    expect(html).not.toContain(">未知<");
+    expect(html).not.toContain("未公开");
+  });
+});
