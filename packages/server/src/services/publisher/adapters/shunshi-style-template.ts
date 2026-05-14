@@ -325,12 +325,8 @@ function renderIfHistoryChart(journal: JournalInfo): string {
 // ============ 区块 5: IF 最新值 + 同比变化 ============
 function renderImpactFactorBlock(journal: JournalInfo): string {
   const if_ = journal.impactFactor;
-  if (if_ == null) {
-    return `<section style="margin:0 0 22px 0;text-align:center;">` +
-      `<p style="margin:0 0 6px 0;font-size:14px;color:${TEXT};line-height:1.7;">最新影响因子</p>` +
-      `<p style="margin:0;font-size:24px;font-weight:bold;color:${MUTED};line-height:1.3;">暂无</p>` +
-      `</section>`;
-  }
+  // PR #146 (5-14): NULL → 整块 skip（跟 PR #135/#136 jcrRow 哲学一致，不显灰"暂无"）
+  if (if_ == null) return "";
 
   // 同比：从 if_history 推算（PR B.10：用 ifHistoryRaw 与 chart 槽位对齐）
   let yoy = "";
@@ -536,10 +532,12 @@ function renderFrequencyBlock(journal: JournalInfo): string {
   if (!freq && journal.frequency) {
     freq = journal.frequency;
   }
+  // PR #146 (5-14): NULL → 整块 skip（原 greyOrValue 兜底成灰"未知"，被 PR #135/#136 漏掉）
+  if (!freq) return "";
 
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">出版周期</p>` +
-    `<p style="margin:0;font-size:16px;font-weight:600;color:${TEXT};line-height:1.5;">${greyOrValue(freq, "未知")}</p>` +
+    `<p style="margin:0;font-size:16px;font-weight:600;color:${TEXT};line-height:1.5;">${esc(freq)}</p>` +
     `</section>`;
 }
 
@@ -726,6 +724,9 @@ function renderSummaryBlock(aiContent: AIGeneratedContent): string {
 function renderSubmissionAdviceBlock(journal: JournalInfo): string {
   const ar = journal.acceptanceRate;
   const rc = journal.reviewCycle;
+  // PR #146 (5-14): ar+rc 都空才 skip 整块（"投稿建议"是核心区块，任一字段有值就渲染，
+  // 缺的那个内部 greyOrValue 兜底）
+  if (ar == null && rc == null) return "";
 
   let difficulty = "难度待评估";
   let color = MUTED;
@@ -823,12 +824,8 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
 // ============ 区块 18: 优势 ============
 function renderAdvantagesBlock(journal: JournalInfo, aiContent: AIGeneratedContent): string {
   const items = deriveAdvantages(journal, aiContent);
-  if (items.length === 0) {
-    return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
-      `<p style="margin:0 0 6px 0;font-size:16px;font-weight:bold;color:#388E3C;line-height:1.5;">✅ 优势</p>` +
-      `<p style="margin:0;font-size:14px;color:${MUTED};line-height:1.7;">暂无</p>` +
-      `</section>`;
-  }
+  // PR #146 (5-14): 无 item → 整块 skip（"✅ 优势: 暂无"观感差，不如不显）
+  if (items.length === 0) return "";
   const lis = items
     .map((s) => `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};">· ${esc(s)}</p>`)
     .join("");
@@ -841,12 +838,8 @@ function renderAdvantagesBlock(journal: JournalInfo, aiContent: AIGeneratedConte
 // ============ 区块 19: 注意事项 ============
 function renderCautionsBlock(journal: JournalInfo, aiContent: AIGeneratedContent): string {
   const items = deriveCautions(journal, aiContent);
-  if (items.length === 0) {
-    return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
-      `<p style="margin:0 0 6px 0;font-size:16px;font-weight:bold;color:#F57C00;line-height:1.5;">⚠️ 注意事项</p>` +
-      `<p style="margin:0;font-size:14px;color:${MUTED};line-height:1.7;">暂无</p>` +
-      `</section>`;
-  }
+  // PR #146 (5-14): 无 item → 整块 skip（"⚠️ 注意事项: 暂无"观感差，不如不显）
+  if (items.length === 0) return "";
   const lis = items
     .map((s) => `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};">· ${esc(s)}</p>`)
     .join("");
