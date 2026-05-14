@@ -7,9 +7,10 @@
 
 import { db } from "../../models/db.js";
 import { platformAccounts, contents, distributionRecords } from "../../models/schema.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { WechatAdapter } from "./adapters/wechat.js";
 import { BaijiahaoAdapter } from "./adapters/baijiahao.js";
 import { ToutiaoAdapter } from "./adapters/toutiao.js";
@@ -111,11 +112,15 @@ export function getSupportedPlatforms() {
 export async function publishToAccounts(req: PublishRequest): Promise<PublishResult[]> {
   const { contentId, tenantId, accountIds, options } = req;
 
-  // 1. 获取内容
+  // 1. 获取内容（跟 GET /content READABLE_TENANT_FILTER 一致：放开 system 推荐文章，
+  //    让用户能发布每日推荐 feed 里的共享文章；非 owner 不会改其全局 status，见 step 4 guard）
   const [content] = await db
     .select()
     .from(contents)
-    .where(and(eq(contents.id, contentId), eq(contents.tenantId, tenantId)))
+    .where(and(
+      eq(contents.id, contentId),
+      or(eq(contents.tenantId, tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
+    ))
     .limit(1);
 
   if (!content) {
@@ -303,7 +308,9 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   // 4. 仅当至少一个账号真的"群发成功"(mode==='full') 才把 content 标 published。
   // draft_only 模式下内容只在微信草稿箱，真正发没发还没定，保留原状态。
   const hasFullPublish = results.some((r) => r.success && r.mode === "full");
-  if (hasFullPublish) {
+  // guard：发布共享 system 推荐文章不改其全局 status（多用户发布同一篇不互相污染）。
+  // distributionRecords 已按 caller tenant 独立审计，谁发了什么有独立记录。
+  if (hasFullPublish && content.tenantId === tenantId) {
     // P0-A2：publishToWechat（实际群发成功路径）→ transitionToStatus(generated → published)
     try {
       await transitionToStatus(contentId, "published");
