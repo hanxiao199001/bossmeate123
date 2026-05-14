@@ -71,7 +71,7 @@ export async function contentRoutes(app: FastifyInstance) {
         conditions.push(eq(contents.userId, query.userId));
       }
 
-      if (query.type && ["article", "video_script", "reply"].includes(query.type)) {
+      if (query.type && ["article", "video_script", "video", "reply"].includes(query.type)) {
         conditions.push(eq(contents.type, query.type));
       }
 
