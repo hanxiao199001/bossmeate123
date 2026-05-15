@@ -161,9 +161,8 @@ export default function ContentDetailPage() {
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
 
-  // PR Q.0：手动触发视频生成 + 5s 轮询直到 video_script 出现（最多 12 次 = 1 min）
-  const [videoGenStatus, setVideoGenStatus] = useState<"idle" | "generating" | "ready" | "failed">("idle");
-  const [videoContentId, setVideoContentId] = useState<string | null>(null);
+  // 5-15 PR #141: 数字人视频模板选择（替代 PR Q.0 的 video_script 老按钮）
+  const [dvhTemplate, setDvhTemplate] = useState<string>("A_academic");
 
   // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
   const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
@@ -238,34 +237,16 @@ export default function ContentDetailPage() {
     setHasChanges(titleChanged || bodyChanged);
   }, [editTitle, editBody, content]);
 
-  // PR Q.0：手动触发视频生成 + 5s 轮询（最多 12 次 ≈ 60s）
-  const handleGenerateVideo = useCallback(async () => {
+  // 5-15 PR #141: 触发数字人视频生成（DVH_REAL_MODE=false 时走 mock fixture）
+  const handleGenerateDvhVideo = useCallback(async () => {
     if (!content || content.type !== "article") return;
-    setVideoGenStatus("generating");
     try {
-      await api.post(`/articles/${content.id}/generate-video`, {});
+      await api.post(`/articles/${content.id}/generate-dvh-video`, { templateId: dvhTemplate });
+      toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
     } catch (err) {
-      toast.error("视频生成触发失败：" + (err instanceof Error ? err.message : "未知"));
-      setVideoGenStatus("failed");
-      return;
+      toast.error("生成失败：" + (err instanceof Error ? err.message : "未知错误"));
     }
-    let attempt = 0;
-    const tick = async () => {
-      attempt += 1;
-      try {
-        const res = await api.get<{ items: ContentItem[] }>(
-          "/content?type=video_script&pageSize=50",
-        );
-        const found = res.data?.items?.find(
-          (it) => (it.metadata as { sourceArticleId?: string } | null)?.sourceArticleId === content.id,
-        );
-        if (found) { setVideoContentId(found.id); setVideoGenStatus("ready"); return; }
-      } catch { /* swallow & continue polling */ }
-      if (attempt >= 12) { setVideoGenStatus("failed"); return; }
-      setTimeout(tick, 5000);
-    };
-    setTimeout(tick, 5000);
-  }, [content]);
+  }, [content, dvhTemplate]);
 
   // 保存
   const handleSave = async () => {
@@ -650,7 +631,7 @@ export default function ContentDetailPage() {
         </div>
       )}
 
-      {/* PR Q.0：图文 article 的 3 按钮快捷操作（拆按钮：编辑 / 生成视频 / 发布） */}
+      {/* 图文 article 快捷操作（5-15 PR #141: 老 video_script 按钮已下线，换数字人视频） */}
       {content.type === "article" && (
         <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-100 px-6 py-3 shrink-0">
           <div className="max-w-6xl mx-auto flex items-center gap-3 flex-wrap">
@@ -662,16 +643,23 @@ export default function ContentDetailPage() {
             >
               ✏️ 编辑此文
             </button>
-            <button
-              onClick={handleGenerateVideo}
-              disabled={videoGenStatus === "generating" || videoGenStatus === "ready"}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-pink-600 text-white hover:bg-pink-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-              title="基于当前文章 journalId 生成 21 秒视频脚本（5-10 多模板 sprint 后支持选模板）"
+            {/* 5-15 PR #141: 数字人视频 — inline select 选 4 套主播模板 */}
+            <select
+              value={dvhTemplate}
+              onChange={(e) => setDvhTemplate(e.target.value)}
+              className="px-2 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700"
+              aria-label="数字人模板"
             >
-              {videoGenStatus === "generating" ? "🎬 生成中..."
-                : videoGenStatus === "ready" ? "🎬 视频已生成 ✓"
-                : videoGenStatus === "failed" ? "🎬 重试生成视频"
-                : "🎬 生成视频"}
+              <option value="A_academic">A 学术</option>
+              <option value="B_marketing">B 营销</option>
+              <option value="C_popular">C 科普</option>
+              <option value="E_industry">E 行业</option>
+            </select>
+            <button
+              onClick={handleGenerateDvhVideo}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-pink-600 text-white hover:bg-pink-700"
+            >
+              🎬 生成数字人视频
             </button>
             <button
               onClick={() => setShowPublishPanel(true)}
@@ -680,11 +668,6 @@ export default function ContentDetailPage() {
             >
               📤 发布到公众号
             </button>
-            {videoGenStatus === "ready" && videoContentId && (
-              <Link to={`/content/${videoContentId}`} className="text-sm text-blue-600 hover:underline ml-auto">
-                查看视频脚本 →
-              </Link>
-            )}
           </div>
         </div>
       )}
