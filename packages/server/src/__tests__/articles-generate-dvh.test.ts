@@ -31,6 +31,7 @@ vi.mock("../models/schema.js", () => ({
 vi.mock("drizzle-orm", () => ({
   eq: (a: unknown, b: unknown) => ({ kind: "eq", a, b }),
   and: (...xs: unknown[]) => ({ kind: "and", xs }),
+  or: (...xs: unknown[]) => ({ kind: "or", xs }),
 }));
 
 // PR #140 关心的 mock — DVH bridge + isRealMode
