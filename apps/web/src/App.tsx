@@ -26,6 +26,7 @@ import JournalsAdminPage from "./pages/JournalsAdminPage";
 import JournalDetailPage from "./pages/JournalDetailPage";
 import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
+import CostComparisonPage from "./pages/CostComparisonPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -166,6 +167,16 @@ export default function App() {
         element={
           <ProtectedRoute>
             <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* 5-16 PR: 成本/工时对比 (5-22 demo 老板演示页) */}
+      <Route
+        path="/cost-comparison"
+        element={
+          <ProtectedRoute>
+            <CostComparisonPage />
           </ProtectedRoute>
         }
       />
