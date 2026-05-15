@@ -13,6 +13,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
 import { useAuthStore } from "../hooks/useAuthStore";
 import RecommendationCard, { type RecommendationItem } from "../components/RecommendationCard";
+import { toast } from "../components/Toast";
 
 interface FeedResponse {
   items: RecommendationItem[];
@@ -49,6 +50,16 @@ export default function RecommendationFeedPage() {
       console.error("skip failed", e); // 反正已隐藏，silent retry 由下次 load 自然清
     } finally {
       setSkippingId(null);
+    }
+  };
+
+  // 5-15 PR #141: 触发数字人视频生成（DVH_REAL_MODE=false 时走 mock fixture）
+  const handleGenerateDvh = async (id: string, templateId: string) => {
+    try {
+      await api.post(`/articles/${id}/generate-dvh-video`, { templateId });
+      toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
+    } catch (e) {
+      toast.error("生成失败：" + (e instanceof Error ? e.message : "未知错误"));
     }
   };
 
@@ -99,6 +110,7 @@ export default function RecommendationFeedPage() {
                 onView={() => navigate(`/content/${item.id}`)}
                 onPublish={() => navigate(`/content/${item.id}?action=publish`)}
                 onSkip={() => handleSkip(item.id)}
+                onGenerateDvh={(templateId) => handleGenerateDvh(item.id, templateId)}
               />
             ))}
           </div>
