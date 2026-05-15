@@ -737,6 +737,7 @@ function ToolGrid() {
     { to: "/dashboard", icon: "&#x1F4C8;", label: "数据看板", desc: "统计分析" },
     { to: "/accounts", icon: "&#x1F4F1;", label: "账号管理", desc: "多平台" },
     { to: "/video/create", icon: "&#x1F3AC;", label: "图片转视频", desc: "产品宣传" },
+    { to: "/cost-comparison", icon: "&#x1F4B0;", label: "成本对比", desc: "ROI 演示" },
     { to: "/settings", icon: "&#x2699;&#xFE0F;", label: "系统设置", desc: "模型配置" },
     // PR #111: admin only — 期刊数据审计页（PR 2 5-9 上线）
     ...(isAdmin
