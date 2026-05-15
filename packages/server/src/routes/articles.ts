@@ -6,7 +6,7 @@
  * 前端 wire 留 PR #141 (UI tile + batch 调度 + 工时对比页)。
  */
 import type { FastifyInstance } from "fastify";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { contents } from "../models/schema.js";
 import { logger } from "../config/logger.js";
@@ -18,6 +18,7 @@ import {
   isRealMode,
   type TemplateId,
 } from "../services/digital-human/index.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 
 export async function articlesRoutes(app: FastifyInstance) {
   // POST /articles/:id/generate-video — 用户手动触发 article → video script 生成
@@ -26,7 +27,11 @@ export async function articlesRoutes(app: FastifyInstance) {
     const [article] = await db
       .select()
       .from(contents)
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+      .where(and(
+        eq(contents.id, id),
+        // 跟 publishToAccounts (PR #143) 一致：放开 system 推荐文章，让用户能从推荐 feed 触发
+        or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
+      ))
       .limit(1);
     if (!article || article.type !== "article") {
       return reply.code(404).send({ code: "NOT_FOUND", message: "article 不存在" });
@@ -63,7 +68,11 @@ export async function articlesRoutes(app: FastifyInstance) {
     const [article] = await db
       .select()
       .from(contents)
-      .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+      .where(and(
+        eq(contents.id, id),
+        // 跟 publishToAccounts (PR #143) 一致：放开 system 推荐文章，让用户能从推荐 feed 触发
+        or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
+      ))
       .limit(1);
     if (!article || article.type !== "article") {
       return reply.code(404).send({ code: "NOT_FOUND", message: "article 不存在" });
