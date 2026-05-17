@@ -1,8 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
-import SmartInput from "../components/SmartInput";
+// 5-17 P0: SmartInput 从主 render 砍出，P3 chat 抽屉重新接入时再 import
+// import SmartInput from "../components/SmartInput";
 import { api } from "../utils/api";
+// 5-17 P0 hero
+import HeroSection from "../components/dashboard/HeroSection";
+import Pipeline24hStrip from "../components/dashboard/Pipeline24hStrip";
+import PreviewCardRow, { type LatestArticle, type RecentPublished } from "../components/dashboard/PreviewCardRow";
+import { loadInputs as loadCostInputs, computeMetrics } from "../utils/cost-comparison";
+
+// 5-17 P0 hero: /dashboard/overview todayHero 数据形状
+interface TodayHero {
+  systemTenantArticlesToday: number;
+  pipeline24h: { keywordsCrawled: number; articlesGenerated: number; articlesPublished: number; totalReadsToday: number };
+  latestArticlePreview: LatestArticle | null;
+  recentPublished: RecentPublished[];
+}
 
 // ============ 类型定义 ============
 
@@ -21,18 +35,26 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
 
-  // 时间问候
-  const hour = new Date().getHours();
-  const greeting = hour < 11 ? "早上好" : hour < 14 ? "中午好" : hour < 18 ? "下午好" : "晚上好";
-  const dateStr = new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" });
+  // 5-17 P0: 问候 / 日期已移入 <HeroSection /> 内部 (todayLabel + 接 userName)，主 render 不再用 greeting/dateStr
+
+  // 5-17 P0 hero: 拉 todayHero + 算 ROI/月省 (localStorage cost inputs)
+  const [hero, setHero] = useState<TodayHero | null>(null);
+  useEffect(() => {
+    api.get<{ data?: { todayHero?: TodayHero } }>("/dashboard/overview")
+      .then((r) => { const h = (r.data as any)?.todayHero; if (h) setHero(h); })
+      .catch(() => { /* 静默, hero 用 fallback 渲染 */ });
+  }, []);
+  const costMetrics = useMemo(() => computeMetrics(loadCostInputs()), []);
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航 */}
+      {/* 顶部导航 (5-17 P0: 加首页/推荐 feed 导航链接，方便老板 demo 切换) */}
       <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-5">
           <span className="text-lg font-bold text-blue-600">BossMate</span>
           <span className="text-xs text-gray-400">AI超级员工</span>
+          <Link to="/" className="text-sm font-medium text-blue-600">首页</Link>
+          <Link to="/recommendations" className="text-sm text-gray-600 hover:text-gray-900">📰 推荐 feed</Link>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600">{user?.name}</span>
@@ -42,36 +64,45 @@ export default function DashboardPage() {
         </div>
       </nav>
 
-      <div className="max-w-5xl mx-auto py-8 px-6">
-        {/* 问候 + 日期 */}
-        <div className="flex items-end justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{greeting}，{user?.name}</h1>
-            <p className="text-sm text-gray-400 mt-0.5">{dateStr}</p>
-          </div>
-        </div>
+      <div className="max-w-5xl mx-auto py-6 px-6">
+        {/* 5-17 P0 hero: 3 大数字 + 双 CTA */}
+        <HeroSection
+          systemArticlesToday={hero?.systemTenantArticlesToday ?? 0}
+          monthlySavings={costMetrics.savePerMonth}
+          roiMultiple={costMetrics.roiMultiple}
+          userName={user?.name}
+        />
+
+        {/* 5-17 P0: 24h pipeline 状态条 */}
+        <Pipeline24hStrip
+          keywordsCrawled={hero?.pipeline24h.keywordsCrawled ?? 0}
+          articlesGenerated={hero?.pipeline24h.articlesGenerated ?? 0}
+          articlesPublished={hero?.pipeline24h.articlesPublished ?? 0}
+          totalReadsToday={hero?.pipeline24h.totalReadsToday ?? 0}
+        />
+
+        {/* 5-17 P0: 3 列预览卡 */}
+        <PreviewCardRow
+          latestArticle={hero?.latestArticlePreview ?? null}
+          recentPublished={hero?.recentPublished ?? []}
+          monthlySavings={costMetrics.savePerMonth}
+          roiMultiple={costMetrics.roiMultiple}
+        />
 
         {/* PR Q.7 B 方案（5-7 user 拍板）：AI 内容工厂 widget 隐藏，V3 batch agent 默认关闭。
             FactoryHero 组件保留代码（不删），后续如需重启 V3 batch 可解注释 + 设 V3_BATCH_AGENT_ENABLED=true。 */}
         {/* <FactoryHero /> */}
 
-        {/* 2️⃣ 待审核队列（老板的核心操作） */}
-        <PendingReviewQueue />
+        {/* 5-17 P0: 砍 <PendingReviewQueue /> / <TopicStrip /> / <SmartInput /> 出主 render
+            (函数定义保留, P1 工坊 / P2 风控 / P3 chat 抽屉会重新接入) */}
 
-        {/* 3️⃣ 今日选题（轻量横向滚动） */}
-        <TopicStrip />
-
-        {/* 4️⃣ 工作流入口：图文8步 + 视频8步 + AI助手 */}
+        {/* 工作流入口：图文 / 视频 / AI 销售 */}
         <WorkflowSection />
 
-        {/* 5️⃣ 智能输入 */}
-        <div className="mb-8">
-          <SmartInput />
-        </div>
-
-        {/* 6️⃣ 工具导航 */}
+        {/* 工具导航（5-17 P0: 缩水到 admin 必要项，砍其余 8 个 tile） */}
         <ToolGrid />
       </div>
+
     </div>
   );
 }
@@ -729,17 +760,10 @@ function WorkflowSection() {
 function ToolGrid() {
   const role = useAuthStore((s) => s.user?.role);
   const isAdmin = role === "owner" || role === "admin";
+  // 5-17 P0: 缩水到 admin 必要项 (账号管理 / 期刊审计)；其余 8 个 tile (关键词库/内容管理/AI助手/
+  // 知识库/数据看板/图片转视频/成本对比/系统设置) 砍出主 hero 页 — 入口仍在 /content 等直接路径下可达。
   const tools = [
-    { to: "/keywords", icon: "&#x1F4CA;", label: "关键词库", desc: "热词趋势" },
-    { to: "/content", icon: "&#x1F4C2;", label: "内容管理", desc: "审核发布" },
-    { to: "/chat", icon: "&#x1F916;", label: "AI 助手", desc: "通用对话" },
-    { to: "/knowledge", icon: "&#x1F4D6;", label: "知识库", desc: "语义搜索" },
-    { to: "/dashboard", icon: "&#x1F4C8;", label: "数据看板", desc: "统计分析" },
     { to: "/accounts", icon: "&#x1F4F1;", label: "账号管理", desc: "多平台" },
-    { to: "/video/create", icon: "&#x1F3AC;", label: "图片转视频", desc: "产品宣传" },
-    { to: "/cost-comparison", icon: "&#x1F4B0;", label: "成本对比", desc: "ROI 演示" },
-    { to: "/settings", icon: "&#x2699;&#xFE0F;", label: "系统设置", desc: "模型配置" },
-    // PR #111: admin only — 期刊数据审计页（PR 2 5-9 上线）
     ...(isAdmin
       ? [{ to: "/admin/journals/audit", icon: "&#x1F4CA;", label: "期刊审计", desc: "数据可信度" }]
       : []),

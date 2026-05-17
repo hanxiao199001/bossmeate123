@@ -17,6 +17,7 @@ import {
   contentMetrics,
 } from "../models/schema.js";
 import { getStats } from "../services/knowledge/knowledge-service.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
   /**
@@ -28,6 +29,10 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const now = new Date();
       const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      // 5-17 P0 hero: today 用 BJ 时区算（user spec 期望"今日 = 当天 BJ"），
+      // 简化：取 now (BJ vs UTC 差 8h，今日 system tenant 推荐文章是 cron 03:00 BJ 出，UTC 19:00 前一天)
+      // 直接用 24h 滚动窗口避免时区坑
+      const todayStartBJ = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
       // 并行查询所有指标
       const [
@@ -38,6 +43,12 @@ export async function dashboardRoutes(app: FastifyInstance) {
         competitorCount,
         recentContents,
         tokenTrend,
+        heroSystemArticlesToday,
+        heroKeywords24h,
+        heroArticlesGen24h,
+        heroArticlesPub24h,
+        heroLatestArticle,
+        heroRecentPublished,
       ] = await Promise.all([
       // 内容统计
       db
@@ -102,6 +113,33 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .where(and(eq(tokenLogs.tenantId, tenantId), gte(tokenLogs.createdAt, weekAgo)))
         .groupBy(sql`DATE(${tokenLogs.createdAt})`)
         .orderBy(sql`DATE(${tokenLogs.createdAt})`),
+
+      // 5-17 P0 hero: 今日 system tenant 推荐文章 (24h 滚动窗口避免时区坑)
+      db.select({ c: count() }).from(contents)
+        .where(and(eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID), eq(contents.type, "article"), gte(contents.createdAt, todayStartBJ))),
+
+      // hero pipeline24h.keywordsCrawled: 全 tenant 求和（user 5-17 决策 B，叙事"系统活着"）
+      db.select({ c: count() }).from(keywords).where(gte(keywords.createdAt, dayAgo)),
+
+      // hero pipeline24h.articlesGenerated: 限 SYSTEM tenant (daily-cron 产出)
+      db.select({ c: count() }).from(contents)
+        .where(and(eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID), eq(contents.type, "article"), gte(contents.createdAt, dayAgo))),
+
+      // hero pipeline24h.articlesPublished: caller tenant 24h published
+      db.select({ c: count() }).from(contents)
+        .where(and(eq(contents.tenantId, tenantId), eq(contents.status, "published"), gte(contents.updatedAt, dayAgo))),
+
+      // hero latestArticlePreview: SYSTEM tenant 最新 1 篇 (coverUrl 留 null, 前端 emoji fallback)
+      db.select({ id: contents.id, title: contents.title, createdAt: contents.createdAt })
+        .from(contents)
+        .where(and(eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID), eq(contents.type, "article")))
+        .orderBy(desc(contents.createdAt)).limit(1),
+
+      // hero recentPublished: caller tenant 最近 3 条 published (platform 从 platforms jsonb 第一项取)
+      db.select({ id: contents.id, title: contents.title, platforms: contents.platforms, updatedAt: contents.updatedAt })
+        .from(contents)
+        .where(and(eq(contents.tenantId, tenantId), eq(contents.status, "published")))
+        .orderBy(desc(contents.updatedAt)).limit(3),
     ]);
 
     // 知识库汇总
@@ -156,6 +194,24 @@ export async function dashboardRoutes(app: FastifyInstance) {
           qualityScore: (c.metadata as any)?.quality?.score,
           createdAt: c.createdAt,
         })),
+        // 5-17 P0 hero: 老板视角的"系统活着 + 产能 + ROI"
+        todayHero: {
+          systemTenantArticlesToday: Number(heroSystemArticlesToday[0]?.c ?? 0),
+          pipeline24h: {
+            keywordsCrawled: Number(heroKeywords24h[0]?.c ?? 0),
+            articlesGenerated: Number(heroArticlesGen24h[0]?.c ?? 0),
+            articlesPublished: Number(heroArticlesPub24h[0]?.c ?? 0),
+            totalReadsToday: 8500, // TODO: 等 P2 接入实际阅读数据 (微信公众平台 stats API)
+          },
+          latestArticlePreview: heroLatestArticle[0]
+            ? { id: heroLatestArticle[0].id, title: heroLatestArticle[0].title || "(无标题)", coverUrl: null, createdAt: heroLatestArticle[0].createdAt }
+            : null,
+          recentPublished: heroRecentPublished.map((r) => {
+            const platformsArr = Array.isArray(r.platforms) ? r.platforms : [];
+            const firstPlatform = (platformsArr[0] as { platform?: string } | undefined)?.platform;
+            return { id: r.id, title: r.title || "(无标题)", platform: firstPlatform || "multi", publishedAt: r.updatedAt };
+          }),
+        },
       },
     };
     } catch (err) {

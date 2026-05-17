@@ -45,23 +45,25 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/try" element={<TryPage />} />  {/* B.9 onboarding —公众号罐头 URL 落地 */}
 
-      {/* PR #134 V2.5 Day 2: 主页改 RecommendationFeedPage — 看 → 挑 → 一键发. 原 DashboardPage 备份到 /home */}
+      {/* 5-17 P0 反转 PR #134：/ 改回 DashboardPage (新 hero), RecommendationFeedPage 挪到 /recommendations.
+          /home 保留 redirect 到 / 防老书签 404. P2 加 role-based routing 后, 运营登录会自动跳 /recommendations. */}
       <Route
         path="/"
-        element={
-          <ProtectedRoute>
-            <RecommendationFeedPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/home"
         element={
           <ProtectedRoute>
             <DashboardPage />
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/recommendations"
+        element={
+          <ProtectedRoute>
+            <RecommendationFeedPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="/home" element={<Navigate to="/" replace />} />
 
       {/* 工作流管线（图文/视频） */}
       <Route

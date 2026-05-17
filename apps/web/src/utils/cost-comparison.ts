@@ -33,6 +33,28 @@ export const DEFAULTS: CostInputs = {
   operatorOutputDaily: 2,
 };
 
+// localStorage 持久化 (CostComparisonPage + HeroSection 共用)
+export const STORAGE_KEY = "bossmate.costInputs.v1";
+
+export function loadInputs(): CostInputs {
+  try {
+    if (typeof localStorage === "undefined") return DEFAULTS;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+  } catch {
+    /* ignore */
+  }
+  return DEFAULTS;
+}
+
+export function saveInputs(v: CostInputs): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+  } catch {
+    /* ignore */
+  }
+}
+
 const WORK_DAYS_PER_MONTH = 22;
 const BOSSMATE_DAILY_OUTPUT = 10;
 const DAYS_PER_MONTH = 30;

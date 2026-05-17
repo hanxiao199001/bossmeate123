@@ -7,27 +7,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
-import { computeMetrics, DEFAULTS, type CostInputs } from "../utils/cost-comparison";
-
-const STORAGE_KEY = "bossmate.costInputs.v1";
-
-function loadInputs(): CostInputs {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return DEFAULTS;
-}
-
-function saveInputs(v: CostInputs) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
-  } catch {
-    /* ignore */
-  }
-}
+import { computeMetrics, loadInputs, saveInputs, type CostInputs } from "../utils/cost-comparison";
 
 const yuan = (n: number) => `¥${Math.round(n).toLocaleString("zh-CN")}`;
 
