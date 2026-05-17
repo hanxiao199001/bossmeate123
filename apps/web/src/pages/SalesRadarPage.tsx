@@ -112,8 +112,9 @@ export default function SalesRadarPage() {
               <p className="text-5xl font-bold text-blue-600">{stats?.todayNew ?? "—"}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 mb-1">本周转热</p>
+              <p className="text-xs text-gray-500 mb-1">🔥 活跃热线索</p>
               <p className="text-5xl font-bold text-amber-600">{stats?.weekWarm ?? "—"}</p>
+              <p className="text-xs text-gray-400 mt-1">当前管线里的热线索</p>
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1">本月成交</p>

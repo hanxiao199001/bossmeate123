@@ -361,10 +361,10 @@ export async function salesRoutes(app: FastifyInstance) {
   app.get("/stats", async (request, reply) => {
     try {
       const tenantId = request.tenantId;
-      // 5-21 P3 销售雷达: 用 24h 滚动窗口 (todayNew) + 7d/30d (weekWarm/monthConverted), 避免时区坑
+      // 5-21 P3 销售雷达: 24h (todayNew) + 30d (monthConverted) 滚动窗口避时区坑;
+      // weekWarm 改 stock 池语义 (无时间窗) 见下方
       const now = new Date();
       const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const [{ totalLeads }] = await db
@@ -414,13 +414,14 @@ export async function salesRoutes(app: FastifyInstance) {
         .from(leads)
         .where(and(eq(leads.tenantId, tenantId), eq(leads.stage, "new"), gte(leads.createdAt, dayAgo)));
 
+      // 5-21 P3 决策 (d): weekWarm 改 stock 池语义 (砍 7d 时间窗) — "当前在热 stage 的 stock 池"
+      // 字段名 weekWarm 保留为技术债 (post-demo 重命名 activeWarm), 不破前端契约
       const [{ weekWarm }] = await db
         .select({ weekWarm: sql<number>`count(*)::int` })
         .from(leads)
         .where(and(
           eq(leads.tenantId, tenantId),
           inArray(leads.stage, ["qualified", "negotiating", "need_human"]),
-          gte(leads.updatedAt, weekAgo),
         ));
 
       const [{ monthConverted }] = await db
