@@ -27,6 +27,7 @@ import JournalDetailPage from "./pages/JournalDetailPage";
 import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
 import CostComparisonPage from "./pages/CostComparisonPage";
+import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -55,8 +56,20 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      {/* 5-18 P1: /workbench 是新主战场 (左 list + 中 preview + 右分发卡), 替代 /recommendations.
+          /recommendations 保留 Navigate redirect 到 /workbench (防老书签 + 早期 P0 链接). */}
       <Route
-        path="/recommendations"
+        path="/workbench"
+        element={
+          <ProtectedRoute>
+            <ContentWorkbenchPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="/recommendations" element={<Navigate to="/workbench" replace />} />
+      {/* /recommend-feed: 留 RecommendationFeedPage 后门 (调试/未来 role-based 路由复用), 不暴露 nav */}
+      <Route
+        path="/recommend-feed"
         element={
           <ProtectedRoute>
             <RecommendationFeedPage />
