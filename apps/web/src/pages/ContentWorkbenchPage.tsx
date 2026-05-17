@@ -195,6 +195,7 @@ export default function ContentWorkbenchPage() {
           <span className="text-lg font-bold text-blue-600">BossMate</span>
           <Link to="/" className="text-sm text-gray-600 hover:text-gray-900">首页</Link>
           <Link to="/workbench" className="text-sm font-medium text-blue-600">📝 内容工坊</Link>
+          <Link to="/sales-radar" className="text-sm text-gray-600 hover:text-gray-900">📡 销售雷达</Link>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600">{user?.name}</span>

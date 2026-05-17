@@ -28,6 +28,11 @@ import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
 import CostComparisonPage from "./pages/CostComparisonPage";
 import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
+import SalesRadarPage from "./pages/SalesRadarPage";
+// 5-21 P3 全局 chat 抽屉 (mount 在登录后所有 protected 页可见)
+import { useState } from "react";
+import ChatFab from "./components/chat-drawer/ChatFab";
+import ChatDrawer from "./components/chat-drawer/ChatDrawer";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -36,9 +41,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // 5-21 P3 chat 抽屉全局 state (登录后所有 protected 页可触发)
+  const [chatOpen, setChatOpen] = useState(false);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
   return (
     <>
       <ToastContainer />
+      {isAuthenticated && <ChatFab onClick={() => setChatOpen(true)} />}
+      {isAuthenticated && <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)} />}
       <ErrorBoundary>
         <Routes>
       {/* 公开页面 */}
@@ -67,6 +78,16 @@ export default function App() {
         }
       />
       <Route path="/recommendations" element={<Navigate to="/workbench" replace />} />
+
+      {/* 5-21 P3 销售雷达 (老板视角 hero + 5 tab + leads list) */}
+      <Route
+        path="/sales-radar"
+        element={
+          <ProtectedRoute>
+            <SalesRadarPage />
+          </ProtectedRoute>
+        }
+      />
       {/* /recommend-feed: 留 RecommendationFeedPage 后门 (调试/未来 role-based 路由复用), 不暴露 nav */}
       <Route
         path="/recommend-feed"
