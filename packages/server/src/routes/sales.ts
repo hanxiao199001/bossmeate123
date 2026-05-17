@@ -18,7 +18,9 @@ import {
   desc,
   eq,
   gt,
+  gte,
   ilike,
+  inArray,
   isNull,
   or,
   sql,
@@ -72,7 +74,12 @@ export async function salesRoutes(app: FastifyInstance) {
       const offset = (page - 1) * pageSize;
 
       const conditions = [eq(leads.tenantId, tenantId)];
-      if (query.stage) conditions.push(eq(leads.stage, query.stage));
+      if (query.stage) {
+        // 5-21 P3: stage 支持逗号分隔多值 (热 tab = qualified,negotiating,need_human)
+        const stages = query.stage.split(",").map((s) => s.trim()).filter(Boolean);
+        if (stages.length === 1) conditions.push(eq(leads.stage, stages[0]));
+        else if (stages.length > 1) conditions.push(inArray(leads.stage, stages));
+      }
       if (query.handoverMode)
         conditions.push(eq(leads.handoverMode, query.handoverMode));
       if (query.search && query.search.trim()) {
@@ -354,6 +361,11 @@ export async function salesRoutes(app: FastifyInstance) {
   app.get("/stats", async (request, reply) => {
     try {
       const tenantId = request.tenantId;
+      // 5-21 P3 销售雷达: 用 24h 滚动窗口 (todayNew) + 7d/30d (weekWarm/monthConverted), 避免时区坑
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const [{ totalLeads }] = await db
         .select({ totalLeads: sql<number>`count(*)::int` })
@@ -396,6 +408,26 @@ export async function salesRoutes(app: FastifyInstance) {
           )
         );
 
+      // 5-21 P3 销售雷达 3 数字 (additive, 老 caller 不破)
+      const [{ todayNew }] = await db
+        .select({ todayNew: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(and(eq(leads.tenantId, tenantId), eq(leads.stage, "new"), gte(leads.createdAt, dayAgo)));
+
+      const [{ weekWarm }] = await db
+        .select({ weekWarm: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(and(
+          eq(leads.tenantId, tenantId),
+          inArray(leads.stage, ["qualified", "negotiating", "need_human"]),
+          gte(leads.updatedAt, weekAgo),
+        ));
+
+      const [{ monthConverted }] = await db
+        .select({ monthConverted: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(and(eq(leads.tenantId, tenantId), eq(leads.stage, "won"), gte(leads.updatedAt, monthAgo)));
+
       return reply.send({
         code: "ok",
         data: {
@@ -403,6 +435,10 @@ export async function salesRoutes(app: FastifyInstance) {
           unreadLeads,
           needHumanCount,
           humanModeCount,
+          // P3 销售雷达 hero 3 大数字
+          todayNew,
+          weekWarm,
+          monthConverted,
         },
       });
     } catch (err) {

@@ -55,6 +55,7 @@ export default function DashboardPage() {
           <span className="text-xs text-gray-400">AI超级员工</span>
           <Link to="/" className="text-sm font-medium text-blue-600">首页</Link>
           <Link to="/workbench" className="text-sm text-gray-600 hover:text-gray-900">📝 内容工坊</Link>
+          <Link to="/sales-radar" className="text-sm text-gray-600 hover:text-gray-900">📡 销售雷达</Link>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600">{user?.name}</span>
