@@ -43,6 +43,9 @@ const publishSchema = z.object({
     digest: z.string().optional(),
     coverImageUrl: z.string().optional(),
   }).optional(),
+  // 5-20 P2 风控: 用户二次确认强制放行 (跳过 audit gate)
+  forceOverride: z.boolean().optional(),
+  overrideReason: z.string().max(200).optional(),
 });
 
 export async function accountRoutes(app: FastifyInstance) {
@@ -349,6 +352,9 @@ export async function accountRoutes(app: FastifyInstance) {
         tenantId: request.tenantId,
         accountIds: body.accountIds,
         options: body.options,
+        // 5-20 P2: 风控 forceOverride 透传
+        forceOverride: body.forceOverride,
+        overrideReason: body.overrideReason,
       });
 
       const successCount = results.filter(r => r.success).length;

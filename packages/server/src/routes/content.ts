@@ -14,6 +14,7 @@ import {
 } from "../services/articles/state-machine.js";
 // PR #131 (5-12): system tenant article 全 user 可读（类似 PR #115 journals 全局共享 idiom）
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+import { auditContent } from "../services/risk-control/audit-content.js";
 
 /** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
 const READABLE_TENANT_FILTER = (tenantId: string) =>
@@ -835,6 +836,33 @@ export async function contentRoutes(app: FastifyInstance) {
       logger.error({ err }, "PR #133 GET /content/recommendations 失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "推荐 feed 拉取失败" });
     }
+  });
+
+  /**
+   * 5-20 P2: POST /content/:id/audit — 风控审核 inline (跨平台 dict 扫描)。
+   * body: { platforms: string[] }  期望传 ["wechat", "douyin", ...]
+   * 返回: { hits, summary }
+   * 注: content 加载同 publishToAccounts pattern — 放开 system tenant readable (PR #131 模式)
+   */
+  app.post("/:id/audit", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { platforms?: string[] } | null) || {};
+    const platforms = Array.isArray(body.platforms) ? body.platforms : [];
+    if (platforms.length === 0) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "platforms 不能为空" });
+    }
+    const [c] = await db.select({ id: contents.id, title: contents.title, body: contents.body })
+      .from(contents)
+      .where(and(
+        eq(contents.id, id),
+        or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
+      ))
+      .limit(1);
+    if (!c) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+    }
+    const result = await auditContent({ content: { title: c.title, body: c.body }, platforms });
+    return { code: "OK", data: result };
   });
 
   /**
