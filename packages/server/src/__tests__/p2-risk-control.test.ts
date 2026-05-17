@@ -11,45 +11,46 @@ async function readSrc(rel: string): Promise<string> {
 }
 
 describe("auditContent — pure function 跨平台扫描", () => {
-  it("微信平台命中『免费』+『加微』", async () => {
+  // 5-22 hotfix #154: dict 精化后, 测试 fixture 改用新精确短语
+  it("微信平台命中『扫码免费领』+『加微』", async () => {
     const r = await auditContent({
-      content: { title: "学术期刊免费投稿指南", body: "加微 wx123 获取" },
+      content: { title: "学术期刊扫码免费领模板", body: "加微 wx123 获取" },
       platforms: ["wechat"],
     });
     const words = r.hits.map((h) => h.word);
-    expect(words).toContain("免费");
+    expect(words).toContain("扫码免费领");
     expect(words).toContain("加微");
     expect(r.summary.byPlatform.wechat).toBeGreaterThanOrEqual(2);
   });
 
-  it("抖音命中跨平台导流『微信』『WeChat』", async () => {
+  it("抖音命中跨平台导流『WeChat:』『vx:』", async () => {
     const r = await auditContent({
-      content: { title: "投稿攻略", body: "评论区微信，WeChat 联系" },
+      content: { title: "投稿攻略", body: "评论区 WeChat: 123, vx: abc 联系" },
       platforms: ["douyin"],
     });
     const words = r.hits.map((h) => h.word);
-    expect(words).toContain("微信");
-    expect(words).toContain("WeChat");
+    expect(words).toContain("WeChat:");
+    expect(words).toContain("vx:");
   });
 
-  it("视频号继承 wechat 营销底线（『免费』）+ 自身专有（『抖音』）", async () => {
+  it("视频号继承 wechat 营销底线（『扫码免费领』）+ 自身专有（『跳转抖音』）", async () => {
     const r = await auditContent({
-      content: { title: "免费教程", body: "请去抖音观看" },
+      content: { title: "扫码免费领教程", body: "请跳转抖音观看" },
       platforms: ["wechat_video"],
     });
     const words = r.hits.map((h) => h.word);
-    expect(words).toContain("免费");
-    expect(words).toContain("抖音");
+    expect(words).toContain("扫码免费领");
+    expect(words).toContain("跳转抖音");
   });
 
   it("跨平台多命中: positions 字符级偏移正确", async () => {
     const r = await auditContent({
-      content: { title: null, body: "免费 abc 免费 xyz 免费" },
+      content: { title: null, body: "扫码免费领 abc 扫码免费领 xyz 扫码免费领" },
       platforms: ["wechat"],
     });
-    const free = r.hits.find((h) => h.word === "免费");
-    expect(free).toBeDefined();
-    expect(free!.positions.length).toBe(3);
+    const hit = r.hits.find((h) => h.word === "扫码免费领");
+    expect(hit).toBeDefined();
+    expect(hit!.positions.length).toBe(3);
   });
 
   it("干净内容 → 0 hits", async () => {
