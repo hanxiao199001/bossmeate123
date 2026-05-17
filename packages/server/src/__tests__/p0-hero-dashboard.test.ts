@@ -9,14 +9,13 @@ async function readSrc(rel: string): Promise<string> {
 }
 
 describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
-  it("App.tsx: / → DashboardPage, /recommendations → RecommendationFeedPage, /home redirect", async () => {
+  it("App.tsx: / → DashboardPage, /home redirect", async () => {
     const src = await readSrc("../../../../apps/web/src/App.tsx");
     // / 走 DashboardPage
     expect(src).toMatch(/path="\/"[\s\S]{0,200}<DashboardPage/);
-    // /recommendations 走 RecommendationFeedPage
-    expect(src).toMatch(/path="\/recommendations"[\s\S]{0,200}<RecommendationFeedPage/);
     // /home Navigate redirect (不再渲染 DashboardPage)
     expect(src).toMatch(/path="\/home"\s+element={<Navigate to="\/" replace/);
+    // 注：/recommendations 路由从「→ RecommendationFeedPage」改为「Navigate redirect /workbench」(P1 5-18 接管)
   });
 
   it("dashboard.ts /overview 含 todayHero block (含 5 字段)", async () => {
@@ -37,8 +36,8 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).toMatch(/ROI/);
     expect(src).toMatch(/✨ 一键生成图文/);
     expect(src).toMatch(/🎬 一键生成视频/);
-    // 双 CTA 跳转
-    expect(src).toMatch(/to="\/recommendations"/);
+    // 双 CTA 跳转 (P1 5-18: ✨ 一键生成图文 → /workbench, 老 /recommendations 也会 Navigate redirect 过去)
+    expect(src).toMatch(/to="\/workbench"/);
     expect(src).toMatch(/to="\/video\/create"/);
   });
 
@@ -77,9 +76,9 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).not.toMatch(/^\s*<TopicStrip \/>$/m);
     // PR Q.7 防回归: <FactoryHero /> 注释保留
     expect(src).toMatch(/\{\s*\/\*\s*<FactoryHero \/>\s*\*\/\s*\}/);
-    // 顶部 nav 含首页 + 推荐 feed 链接
+    // 顶部 nav 含首页链接 (P1 5-18: 推荐 feed → 内容工坊)
     expect(src).toMatch(/首页/);
-    expect(src).toMatch(/📰 推荐 feed/);
+    expect(src).toMatch(/📝 内容工坊/);
   });
 
   it("cost-comparison.ts 含 loadInputs/saveInputs export (HeroSection 复用)", async () => {

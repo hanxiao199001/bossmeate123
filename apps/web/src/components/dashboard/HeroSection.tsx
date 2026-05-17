@@ -41,7 +41,7 @@ export default function HeroSection({ systemArticlesToday, monthlySavings, roiMu
       </div>
 
       <div className="flex gap-3 flex-wrap">
-        <Link to="/recommendations" className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+        <Link to="/workbench" className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
           ✨ 一键生成图文
         </Link>
         <Link to="/video/create" className="px-5 py-2.5 rounded-lg bg-pink-600 text-white text-sm font-medium hover:bg-pink-700">
