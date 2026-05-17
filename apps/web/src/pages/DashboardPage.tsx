@@ -1,14 +1,13 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 // 5-17 P0: SmartInput 从主 render 砍出，P3 chat 抽屉重新接入时再 import
 // import SmartInput from "../components/SmartInput";
 import { api } from "../utils/api";
-// 5-17 P0 hero
+// 5-17 P0 hero (5-21 hotfix: 去掉 ROI/月省, /cost-comparison 才是 ROI 的家)
 import HeroSection from "../components/dashboard/HeroSection";
 import Pipeline24hStrip from "../components/dashboard/Pipeline24hStrip";
 import PreviewCardRow, { type LatestArticle, type RecentPublished } from "../components/dashboard/PreviewCardRow";
-import { loadInputs as loadCostInputs, computeMetrics } from "../utils/cost-comparison";
 
 // 5-17 P0 hero: /dashboard/overview todayHero 数据形状
 interface TodayHero {
@@ -37,14 +36,13 @@ export default function DashboardPage() {
 
   // 5-17 P0: 问候 / 日期已移入 <HeroSection /> 内部 (todayLabel + 接 userName)，主 render 不再用 greeting/dateStr
 
-  // 5-17 P0 hero: 拉 todayHero + 算 ROI/月省 (localStorage cost inputs)
+  // 5-17 P0 hero: 拉 todayHero (5-21 hotfix: 砍 ROI/月省 reads, 那个搬 /cost-comparison)
   const [hero, setHero] = useState<TodayHero | null>(null);
   useEffect(() => {
     api.get<{ data?: { todayHero?: TodayHero } }>("/dashboard/overview")
       .then((r) => { const h = (r.data as any)?.todayHero; if (h) setHero(h); })
       .catch(() => { /* 静默, hero 用 fallback 渲染 */ });
   }, []);
-  const costMetrics = useMemo(() => computeMetrics(loadCostInputs()), []);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -66,15 +64,13 @@ export default function DashboardPage() {
       </nav>
 
       <div className="max-w-5xl mx-auto py-6 px-6">
-        {/* 5-17 P0 hero: 3 大数字 + 双 CTA */}
+        {/* hero: 今日产出 + 双 CTA (5-21 hotfix: 去 ROI 视觉污染) */}
         <HeroSection
           systemArticlesToday={hero?.systemTenantArticlesToday ?? 0}
-          monthlySavings={costMetrics.savePerMonth}
-          roiMultiple={costMetrics.roiMultiple}
           userName={user?.name}
         />
 
-        {/* 5-17 P0: 24h pipeline 状态条 */}
+        {/* 24h pipeline 状态条 */}
         <Pipeline24hStrip
           keywordsCrawled={hero?.pipeline24h.keywordsCrawled ?? 0}
           articlesGenerated={hero?.pipeline24h.articlesGenerated ?? 0}
@@ -82,12 +78,10 @@ export default function DashboardPage() {
           totalReadsToday={hero?.pipeline24h.totalReadsToday ?? 0}
         />
 
-        {/* 5-17 P0: 3 列预览卡 */}
+        {/* 2 列预览卡: 今日最新 / 近期发布 (5-21 hotfix: 砍中间 ROI 卡) */}
         <PreviewCardRow
           latestArticle={hero?.latestArticlePreview ?? null}
           recentPublished={hero?.recentPublished ?? []}
-          monthlySavings={costMetrics.savePerMonth}
-          roiMultiple={costMetrics.roiMultiple}
         />
 
         {/* PR Q.7 B 方案（5-7 user 拍板）：AI 内容工厂 widget 隐藏，V3 batch agent 默认关闭。
