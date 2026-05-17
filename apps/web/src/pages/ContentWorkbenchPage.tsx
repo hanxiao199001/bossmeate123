@@ -11,9 +11,8 @@
  *  - POST /articles/:id/generate-dvh-video (PR #144/#145)  数字人
  */
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { toast } from "../components/Toast";
 import ContentTabBar, { type WorkbenchTab } from "../components/workbench/ContentTabBar";
 import ContentListItem, { type WorkbenchListItem } from "../components/workbench/ContentListItem";
@@ -22,8 +21,7 @@ import DistributionCard, { type WorkbenchAccount } from "../components/workbench
 import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAuditModal";
 
 export default function ContentWorkbenchPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
+  // 5-21 P0: user/logout 已搬 sidebar (MainLayout), 本页不再用
   const navigate = useNavigate();
 
   const [tab, setTab] = useState<WorkbenchTab>("recommend");
@@ -189,20 +187,7 @@ export default function ContentWorkbenchPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
-      {/* 顶部 nav */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-5">
-          <span className="text-lg font-bold text-blue-600">BossMate</span>
-          <Link to="/" className="text-sm text-gray-600 hover:text-gray-900">首页</Link>
-          <Link to="/workbench" className="text-sm font-medium text-blue-600">📝 内容工坊</Link>
-          <Link to="/sales-radar" className="text-sm text-gray-600 hover:text-gray-900">📡 销售雷达</Link>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">退出</button>
-        </div>
-      </nav>
-
+      {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
 
       {/* 3 列布局 */}

@@ -65,23 +65,22 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).not.toMatch(/monthlySavings/);
   });
 
-  it("DashboardPage 渲染 3 hero 组件 + 砍掉 PendingReviewQueue/TopicStrip/SmartInput 主 render", async () => {
+  it("DashboardPage 函数定义保留 (revert safety), 主 render 不再调", async () => {
+    // 5-21 P0: 全 redesign — 老 HeroSection/Pipeline24hStrip/PreviewCardRow 已撤出主 render, 改用
+    // Greeting + KpiStrip + PrimaryActionBar + RecommendationPanel + LeadsPanel (见 p0-sidebar-layout.test.ts)。
+    // 老组件文件本身仍存在 (本测试文件上方 5 个 it 仍验证), 仅 DashboardPage 不再 import / 主渲染。
     const src = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
-    // 3 个 hero 组件 wire
-    expect(src).toMatch(/<HeroSection/);
-    expect(src).toMatch(/<Pipeline24hStrip/);
-    expect(src).toMatch(/<PreviewCardRow/);
-    // 砍出主 render (函数定义还在, 但 jsx 调用不在 return 块)
-    // 主 return 块在 export default 之后，函数定义在文件尾部
-    // 不能有未注释的 <PendingReviewQueue /> / <TopicStrip /> 在主 render 调用
-    // 用 ^\s* 行首匹配避免误伤函数定义内引用
-    expect(src).not.toMatch(/^\s*<PendingReviewQueue \/>$/m);
-    expect(src).not.toMatch(/^\s*<TopicStrip \/>$/m);
+    expect(src).not.toMatch(/^\s*<HeroSection/m);
+    expect(src).not.toMatch(/^\s*<Pipeline24hStrip/m);
+    expect(src).not.toMatch(/^\s*<PreviewCardRow/m);
+    expect(src).not.toMatch(/^\s*<PendingReviewQueue/m);
+    expect(src).not.toMatch(/^\s*<TopicStrip/m);
     // PR Q.7 防回归: <FactoryHero /> 注释保留
     expect(src).toMatch(/\{\s*\/\*\s*<FactoryHero \/>\s*\*\/\s*\}/);
-    // 顶部 nav 含首页链接 (P1 5-18: 推荐 feed → 内容工坊)
-    expect(src).toMatch(/首页/);
-    expect(src).toMatch(/📝 内容工坊/);
+    // 5-21 P0 dead-code 函数定义保留, 方便 revert
+    expect(src).toMatch(/function FactoryHero\b/);
+    expect(src).toMatch(/function PendingReviewQueue\b/);
+    expect(src).toMatch(/function TopicStrip\b/);
   });
 
   it("cost-comparison.ts 含 loadInputs/saveInputs export (HeroSection 复用)", async () => {

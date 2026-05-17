@@ -33,6 +33,8 @@ import SalesRadarPage from "./pages/SalesRadarPage";
 import { useState } from "react";
 import ChatFab from "./components/chat-drawer/ChatFab";
 import ChatDrawer from "./components/chat-drawer/ChatDrawer";
+// 5-21 P0: 全局 sidebar layout (包 / /workbench /sales-radar /content/:id 这 4 个 demo 页)
+import MainLayout from "./components/layout/MainLayout";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -63,7 +65,9 @@ export default function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <MainLayout>
+              <DashboardPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -73,7 +77,9 @@ export default function App() {
         path="/workbench"
         element={
           <ProtectedRoute>
-            <ContentWorkbenchPage />
+            <MainLayout>
+              <ContentWorkbenchPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -84,7 +90,9 @@ export default function App() {
         path="/sales-radar"
         element={
           <ProtectedRoute>
-            <SalesRadarPage />
+            <MainLayout>
+              <SalesRadarPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -145,7 +153,9 @@ export default function App() {
         path="/content/:id"
         element={
           <ProtectedRoute>
-            <ContentDetailPage />
+            <MainLayout>
+              <ContentDetailPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />

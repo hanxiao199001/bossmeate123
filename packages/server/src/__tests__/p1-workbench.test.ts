@@ -16,11 +16,12 @@ describe("5-18 P1: 内容工坊 + 分发卡", () => {
     expect(src).toMatch(/path="\/recommend-feed"[\s\S]{0,200}<RecommendationFeedPage/);
   });
 
-  it("DashboardPage nav: 推荐 feed 链接已换成 内容工坊", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
-    expect(src).toMatch(/to="\/workbench"/);
-    expect(src).toMatch(/📝 内容工坊/);
-    expect(src).not.toMatch(/to="\/recommendations"/);
+  it("Sidebar (5-21 P0 全局 layout): 内容工坊 链接已配 (DashboardPage nav 搬 Sidebar)", async () => {
+    // 5-21 P0: DashboardPage 顶部 nav 搬到 Sidebar (全局 MainLayout), 资产改在 Sidebar 验证
+    const src = await readSrc("../../../../apps/web/src/components/layout/Sidebar.tsx");
+    expect(src).toMatch(/to:\s*"\/workbench"/);
+    expect(src).toMatch(/内容工坊/);
+    expect(src).not.toMatch(/to:\s*"\/recommendations"/);
   });
 
   it("HeroSection CTA: 一键生成图文 跳 /workbench (不再 /recommendations)", async () => {

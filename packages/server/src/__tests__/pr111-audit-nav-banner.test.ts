@@ -12,20 +12,20 @@ function readWeb(rel: string): string {
   return readFileSync(join(__dirname, "../../../../apps/web/src", rel), "utf8");
 }
 
-describe("PR #111: DashboardPage ToolGrid 加期刊审计入口（admin only）", () => {
-  const src = readWeb("pages/DashboardPage.tsx");
+describe("PR #111: 期刊审计入口（admin only） — 5-21 P0 从 DashboardPage ToolGrid 搬到 Sidebar", () => {
+  const src = readWeb("components/layout/Sidebar.tsx");
 
-  it("ToolGrid 含 isAdmin role check", () => {
+  it("Sidebar 含 isAdmin role check", () => {
     expect(src).toMatch(/role === "owner".*role === "admin"|isAdmin\s*=/);
   });
 
-  it("admin 时 grid 加 /admin/journals/audit 入口", () => {
+  it("admin 时 sidebar 含 /admin/journals/audit 入口", () => {
     expect(src).toMatch(/to:\s*"\/admin\/journals\/audit"/);
     expect(src).toMatch(/期刊审计/);
   });
 
-  it("非 admin 时不渲染该入口（条件展开）", () => {
-    expect(src).toMatch(/isAdmin[\s\S]*?\?\s*\[/);
+  it("非 admin 时不渲染该入口（isAdmin 条件 spread）", () => {
+    expect(src).toMatch(/isAdmin\s*\?\s*\[/);
   });
 });
 
