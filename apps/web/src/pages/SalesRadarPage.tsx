@@ -4,9 +4,8 @@
  * 决策 2: /sales/stats 已扩 todayNew/weekWarm/monthConverted (additive)
  */
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+// 5-21 P0: 顶部 nav 搬 sidebar 后, 本页不再用 Link
 import { api } from "../utils/api";
-import { useAuthStore } from "../hooks/useAuthStore";
 
 type Tab = "all" | "cold" | "warm" | "hot" | "won" | "lost";
 
@@ -58,8 +57,7 @@ function relTime(t: string | null): string {
 }
 
 export default function SalesRadarPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
+  // 5-21 P0: user/logout 已搬 sidebar (MainLayout)
 
   const [stats, setStats] = useState<SalesStats | null>(null);
   const [tab, setTab] = useState<Tab>("all");
@@ -90,19 +88,7 @@ export default function SalesRadarPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-5">
-          <span className="text-lg font-bold text-blue-600">BossMate</span>
-          <Link to="/" className="text-sm text-gray-600 hover:text-gray-900">首页</Link>
-          <Link to="/workbench" className="text-sm text-gray-600 hover:text-gray-900">📝 内容工坊</Link>
-          <Link to="/sales-radar" className="text-sm font-medium text-blue-600">📡 销售雷达</Link>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">退出</button>
-        </div>
-      </nav>
-
+      {/* 5-21 P0: 顶部 nav 搬 sidebar (MainLayout) */}
       <main className="max-w-6xl mx-auto px-6 py-6 space-y-5">
         {/* Hero 3 大数字 */}
         <section className="bg-white rounded-2xl border border-gray-200 p-6">

@@ -81,11 +81,10 @@ describe("5-21 P3 — frontend", () => {
     expect(panel).toMatch(/SKILLS/); // 4 skill dropdown
   });
 
-  it("DashboardPage + ContentWorkbenchPage nav 加 [📡 销售雷达] 链接", async () => {
-    const dash = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
-    const work = await readSrc("../../../../apps/web/src/pages/ContentWorkbenchPage.tsx");
-    expect(dash).toMatch(/to="\/sales-radar"/);
-    expect(dash).toMatch(/📡 销售雷达/);
-    expect(work).toMatch(/to="\/sales-radar"/);
+  it("Sidebar (5-21 P0 全局 layout): 销售雷达 链接已配 (Dashboard/Workbench nav 搬 Sidebar)", async () => {
+    // 5-21 P0: Dashboard/Workbench 顶部 nav 搬到 Sidebar, 销售雷达 链接在 Sidebar.PRIMARY_NAV
+    const src = await readSrc("../../../../apps/web/src/components/layout/Sidebar.tsx");
+    expect(src).toMatch(/to:\s*"\/sales-radar"/);
+    expect(src).toMatch(/销售雷达/);
   });
 });

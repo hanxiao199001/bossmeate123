@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import { toast } from "../components/Toast";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
@@ -122,8 +121,7 @@ export default function ContentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
+  // 5-21 P0: user/logout 已搬 sidebar (MainLayout)
 
   // 内容数据
   const [content, setContent] = useState<ContentItem | null>(null);
@@ -611,10 +609,7 @@ export default function ContentDetailPage() {
             </button>
           )}
 
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">
-            退出
-          </button>
+          {/* 5-21 P0: user/logout 已搬 sidebar (MainLayout), 此处保留 action 行 (Save/改段/History/发布) */}
         </div>
       </nav>
 
