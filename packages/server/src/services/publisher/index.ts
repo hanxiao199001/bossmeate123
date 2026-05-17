@@ -19,6 +19,7 @@ import { XiaohongshuAdapter } from "./adapters/xiaohongshu.js";
 import { DouyinAdapter } from "./adapters/douyin.js";
 import { WechatVideoAdapter } from "./adapters/wechat-video.js";
 import { hydrateAccount, decryptCredentialField } from "./credentials-loader.js";
+import { auditContent, type AuditHit } from "../risk-control/audit-content.js";
 import {
   getLeadCaptureConfig,
   articleLeadCaptureText,
@@ -37,6 +38,9 @@ export interface PublishRequest {
     digest?: string;
     coverImageUrl?: string;
   };
+  // 5-20 P2 风控: 默认 false → 触发 audit gate; true → 跳过 (用户已二次确认强制放行)
+  forceOverride?: boolean;
+  overrideReason?: string; // 强制放行原因 (审计留底)
 }
 
 export interface PublishResult {
@@ -54,6 +58,10 @@ export interface PublishResult {
   /** 成功/提示文案（draft_only 下会包含"请到后台手动发送"指引） */
   message?: string;
   error?: string;
+  // 5-20 P2 风控扩展（非破坏性 optional）
+  status?: "blocked"; // 风控拦截标记 (仅 audit gate 拦下时填)
+  reason?: string;    // 拦截原因人类可读
+  riskHits?: AuditHit[]; // 该 platform 的具体禁词命中 (frontend 用于 modal 展示)
 }
 
 export interface PlatformAdapter {
@@ -170,7 +178,30 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     throw new Error("未找到有效的发布账号");
   }
 
-  // 3. 并发发布到各账号
+  // 3. 5-20 P2 风控 audit gate: forceOverride=false (默认) → 扫禁词，命中即拦截整批
+  if (!req.forceOverride) {
+    const platforms = [...new Set(targetAccounts.map((a) => a.platform))];
+    const auditResult = await auditContent({
+      content: { title: content.title, body: content.body },
+      platforms,
+    });
+    if (auditResult.summary.totalHits > 0) {
+      logger.warn({ contentId, platforms, totalHits: auditResult.summary.totalHits }, "P2 audit gate 拦截发布");
+      return targetAccounts.map((acc): PublishResult => ({
+        accountId: acc.id,
+        accountName: acc.accountName,
+        platform: acc.platform,
+        success: false,
+        status: "blocked",
+        reason: `风控拦截: ${auditResult.summary.byPlatform[acc.platform] ?? 0} 个禁词命中`,
+        riskHits: auditResult.hits.filter((h) => h.platform === acc.platform),
+      }));
+    }
+  } else {
+    logger.info({ contentId, overrideReason: req.overrideReason, accountIds }, "P2 强制放行发布 (跳过 audit gate)");
+  }
+
+  // 4. 并发发布到各账号
   const results: PublishResult[] = await Promise.all(
     targetAccounts.map(async (account) => {
       const adapter = getAdapter(account.platform);
