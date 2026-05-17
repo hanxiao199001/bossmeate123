@@ -1,6 +1,7 @@
 /**
- * 5-17 P0 — Hero 下方 3 列预览卡：今日最新 / 本月 ROI / 近期发布。
- * coverUrl null → emoji fallback (RecommendationCard 同模式, 5-17 决策 2)。
+ * 5-17 P0 — Hero 下方预览卡。
+ * 5-21 hotfix: 砍中间 ROI 卡, 2 列 50/50 (今日最新 / 近期发布)。ROI 已搬 /cost-comparison。
+ * coverUrl null → emoji fallback (RecommendationCard 同模式)。
  */
 import { Link } from "react-router-dom";
 
@@ -21,11 +22,7 @@ export interface RecentPublished {
 export interface PreviewCardRowProps {
   latestArticle: LatestArticle | null;
   recentPublished: RecentPublished[];
-  monthlySavings: number;
-  roiMultiple: number;
 }
-
-const yuan = (n: number) => `¥${Math.round(n).toLocaleString("zh-CN")}`;
 
 const PLATFORM_LABEL: Record<string, string> = {
   wechat: "公众号", wechat_video: "视频号", baijiahao: "百家号",
@@ -42,9 +39,9 @@ function relativeTime(d: string | Date): string {
   return `${days} 天前`;
 }
 
-export default function PreviewCardRow({ latestArticle, recentPublished, monthlySavings, roiMultiple }: PreviewCardRowProps) {
+export default function PreviewCardRow({ latestArticle, recentPublished }: PreviewCardRowProps) {
   return (
-    <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+    <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
       {/* 卡 1: 今日最新 */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 flex flex-col">
         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">📰 今日最新</div>
@@ -63,17 +60,7 @@ export default function PreviewCardRow({ latestArticle, recentPublished, monthly
         )}
       </div>
 
-      {/* 卡 2: 本月 ROI */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-4 flex flex-col text-center">
-        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 text-left">💰 本月 ROI</div>
-        <div className="flex-1 flex flex-col justify-center">
-          <p className="text-4xl font-bold text-emerald-600">{roiMultiple.toFixed(1)}<span className="text-lg">x</span></p>
-          <p className="text-sm text-gray-600 mt-2">月省 <span className="font-semibold text-gray-900">{yuan(monthlySavings)}</span></p>
-        </div>
-        <Link to="/cost-comparison" className="text-xs text-blue-600 hover:underline self-start mt-2">详情 →</Link>
-      </div>
-
-      {/* 卡 3: 近期发布 */}
+      {/* 卡 2: 近期发布 */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 flex flex-col">
         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">📈 近期发布</div>
         <div className="flex-1 space-y-2">

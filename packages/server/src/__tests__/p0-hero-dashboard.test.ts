@@ -29,16 +29,17 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).toMatch(/totalReadsToday:\s*8500/); // hardcode with TODO
   });
 
-  it("HeroSection.tsx 含 3 大数字 + 双 CTA", async () => {
+  it("HeroSection.tsx 含今日产出 + 双 CTA (5-21 hotfix: ROI 卡已搬 /cost-comparison)", async () => {
     const src = await readSrc("../../../../apps/web/src/components/dashboard/HeroSection.tsx");
     expect(src).toMatch(/今日 BossMate 自动产出/);
-    expect(src).toMatch(/本月帮你节省/);
-    expect(src).toMatch(/ROI/);
     expect(src).toMatch(/✨ 一键生成图文/);
     expect(src).toMatch(/🎬 一键生成视频/);
-    // 双 CTA 跳转 (P1 5-18: ✨ 一键生成图文 → /workbench, 老 /recommendations 也会 Navigate redirect 过去)
+    // 双 CTA 跳转 (P1 5-18: ✨ 一键生成图文 → /workbench)
     expect(src).toMatch(/to="\/workbench"/);
     expect(src).toMatch(/to="\/video\/create"/);
+    // 5-21 hotfix: ROI/月省 不在 hero
+    expect(src).not.toMatch(/本月帮你节省/);
+    expect(src).not.toMatch(/monthlySavings/);
   });
 
   it("Pipeline24hStrip 含 4 段 + 系统/你 归属标签", async () => {
@@ -52,14 +53,16 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).toMatch(/scope:\s*"你"/);
   });
 
-  it("PreviewCardRow 含 3 卡 + emoji fallback", async () => {
+  it("PreviewCardRow 含 2 卡 + emoji fallback (5-21 hotfix: 砍中间 ROI 卡, 改 2 列 50/50)", async () => {
     const src = await readSrc("../../../../apps/web/src/components/dashboard/PreviewCardRow.tsx");
     expect(src).toMatch(/📰 今日最新/);
-    expect(src).toMatch(/💰 本月 ROI/);
     expect(src).toMatch(/📈 近期发布/);
+    expect(src).toMatch(/grid-cols-2/);
     // emoji fallback when coverUrl null
     expect(src).toMatch(/latestArticle\?\.coverUrl/);
-    expect(src).toMatch(/to="\/cost-comparison"/);
+    // 5-21 hotfix: ROI 卡已删
+    expect(src).not.toMatch(/💰 本月 ROI/);
+    expect(src).not.toMatch(/monthlySavings/);
   });
 
   it("DashboardPage 渲染 3 hero 组件 + 砍掉 PendingReviewQueue/TopicStrip/SmartInput 主 render", async () => {
