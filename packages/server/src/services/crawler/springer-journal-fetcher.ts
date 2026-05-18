@@ -155,8 +155,6 @@ export async function enrichJournalWithAI(
 输出纯 JSON，不要 markdown 包裹：
 {
   "abbreviation": "期刊简称（如 EHO、JHO 等）",
-  "foundingYear": 创刊年份数字,
-  "country": "出版国家（如 英国、美国、荷兰）",
   "website": "期刊官方网站URL",
   "apcFee": APC费用美元数字,
   "selfCitationRate": 自引率百分比数字,
@@ -164,7 +162,11 @@ export async function enrichJournalWithAI(
   "casPartitionNew": "中科院新锐分区（如 医学1区TOP）",
   "jcrSubjects": [{"subject":"学科名","rank":"Q1","position":"9/100"}],
   "topInstitutions": ["机构1","机构2","机构3"]
-}`,
+}
+
+##禁止字段## (PR #169: 0 真源, 你之前编了 1976/英国 等假数据被 validator 拦截)
+- 严禁返回 foundingYear / country, JSON 中不要包含这两个 key
+- 即使你认为知道该期刊真实创刊年/出版国, 也不要返 (BossMate 不信任 AI 推测这 2 字段)`,
         },
         {
           role: "user",
@@ -187,10 +189,20 @@ ${journal.publisher ? `出版商：${journal.publisher}` : ""}
     if (!jsonMatch) return {};
 
     const parsed = JSON.parse(jsonMatch[0]);
+
+    // 5-23 PR #169: AI 模型可能"自作主张"仍返禁字段, 防御性 strip + warn log
+    if (parsed && parsed.foundingYear !== undefined && parsed.foundingYear !== null) {
+      logger.warn({ journal: journal.name, raw: parsed.foundingYear }, "PR #169: AI 自作主张返 foundingYear, 已 strip");
+      delete parsed.foundingYear;
+    }
+    if (parsed && parsed.country !== undefined && parsed.country !== null) {
+      logger.warn({ journal: journal.name, raw: parsed.country }, "PR #169: AI 自作主张返 country, 已 strip");
+      delete parsed.country;
+    }
+
     return {
       abbreviation: parsed.abbreviation || undefined,
-      foundingYear: typeof parsed.foundingYear === "number" ? parsed.foundingYear : undefined,
-      country: parsed.country || undefined,
+      // PR #169: foundingYear / country 砍 (0 真源, AI 编 100% 被 validator 拦), template 已 NULL safe
       website: parsed.website || undefined,
       apcFee: typeof parsed.apcFee === "number" ? parsed.apcFee : undefined,
       selfCitationRate: typeof parsed.selfCitationRate === "number" ? parsed.selfCitationRate : undefined,
