@@ -52,13 +52,14 @@ describe("PR #107: trust-score computeTrust 公式", () => {
     expect(r.fieldProvenance.apc).toBe("doaj");
   });
 
-  it("4 源全命中 → 95 (cap)，所有 provenance 字段", () => {
+  // PR #166: scimago +15 + sjr/qPartition provenance 已砍 — 3 源 50+20+10+20=100 cap 95
+  it("3 源全命中 (crossref+doaj+letpub) → 95 cap, scimago flag 被忽略", () => {
     const r = computeTrust({ crossref: true, doaj: true, scimago: true, letpub: true });
-    expect(r.confidence).toBe(95); // base 50+20+10+15+20=115 但 cap 95
+    expect(r.confidence).toBe(95); // base 50+20+10+20=100, cap 95 (PR #166 后 scimago +15 已废, cap 不动)
     expect(r.dataSource).toBe("multi_source_verified");
     expect(r.fieldProvenance.publisher).toBe("crossref");
     expect(r.fieldProvenance.apc).toBe("doaj");
-    expect(r.fieldProvenance.sjr).toBe("scimago");
+    expect(r.fieldProvenance.sjr).toBeUndefined(); // PR #166: 砍
     expect(r.fieldProvenance.if_history).toBe("letpub");
   });
 
@@ -70,10 +71,11 @@ describe("PR #107: trust-score computeTrust 公式", () => {
     expect(r.fieldProvenance.publisher).toBe("letpub"); // override
   });
 
-  it("doaj + scimago 双源（非 crossref 非 letpub）→ 75 multi", () => {
+  // PR #166: scimago 不再计分, 单 doaj 等于 60 (50+10), 不是 multi (totalHits=1 + !letpub = multi 判定)
+  it("doaj 单源 (scimago flag 已废) → 60, multi (因 非 letpub 也算 multi)", () => {
     const r = computeTrust({ crossref: false, doaj: true, scimago: true, letpub: false });
-    expect(r.confidence).toBe(75); // 50+10+15
-    expect(r.dataSource).toBe("multi_source_verified");
+    expect(r.confidence).toBe(60); // 50+10 (scimago +15 砍)
+    expect(r.dataSource).toBe("multi_source_verified"); // totalHits=1 且非 letpub → multi (老逻辑保留)
   });
 });
 
@@ -100,7 +102,8 @@ describe("PR #107: orchestrator 集成 trust + 4 源", () => {
       "utf8",
     );
     expect(src).toMatch(/fetchCrossrefByIssn/);
-    expect(src).toMatch(/fetchScimagoByIssn/);
+    // PR #166: scimago import 已删
+    expect(src).not.toMatch(/fetchScimagoByIssn/);
     expect(src).toMatch(/computeTrust/);
   });
 
