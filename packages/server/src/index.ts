@@ -169,6 +169,9 @@ async function bootstrap() {
     // PR 2：期刊审计页（admin only）
     const { journalsAuditRoutes } = await import("./routes/journals-audit.js");
     await protectedApp.register(journalsAuditRoutes, { prefix: `${env.API_PREFIX}` });
+    // PR #161 admin-only (workbench v2 手动生成 + bulk-distribute)
+    const { adminRoutes } = await import("./routes/admin.js");
+    await protectedApp.register(adminRoutes, { prefix: `${env.API_PREFIX}/admin` });
     await protectedApp.register(topicRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(workflowRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });
