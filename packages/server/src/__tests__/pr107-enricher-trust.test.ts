@@ -113,7 +113,8 @@ describe("PR #107: orchestrator 集成 trust + 4 源", () => {
     expect(src).toMatch(/confidence:\s*trust\.confidence/);
     expect(src).toMatch(/lastVerifiedAt:\s*new Date\(\)/);
     expect(src).toMatch(/dataSource:\s*trust\.dataSource/);
-    expect(src).toMatch(/fieldProvenance:\s*trust\.fieldProvenance/);
+    // PR #165a: trust.fieldProvenance 与 realProvenance 合并成 mergedProvenance, 二者任 1 命中皆 OK
+    expect(src).toMatch(/fieldProvenance:\s*(trust\.fieldProvenance|mergedProvenance)/);
     expect(src).toMatch(/sourceUrl/);
   });
 
