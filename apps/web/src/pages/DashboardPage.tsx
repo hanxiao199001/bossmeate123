@@ -67,7 +67,9 @@ export default function DashboardPage() {
         setRecTotal(items.length);
         setRecItems(items.map((it: any) => ({
           id: it.id, title: it.title || it.topic || "未命名",
-          platform: it.platform ?? null, coverUrl: it.coverUrl ?? null,
+          platform: it.platform ?? null,
+          // 5-23 PR Bug #1 fix: API 返回 it.journal.coverImageUrl (LetPub CDN), 老 mapping 漏读
+          coverUrl: it.coverUrl ?? it.journal?.coverImageUrl ?? it.journal?.coverUrlHd ?? null,
         })));
       })
       .catch(() => {})
