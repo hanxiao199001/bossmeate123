@@ -102,6 +102,14 @@ describe("5-21 P0: Sidebar 全局 layout 重构", () => {
     expect(src).toMatch(/to="\/sales-radar"/);
   });
 
+  it("DashboardPage recItems mapping: coverUrl fallback 链 (API 字段 journal.coverImageUrl) — Bug #1 fix", async () => {
+    const src = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
+    // 5-23 Bug #1: 旧 mapping coverUrl: it.coverUrl ?? null 漏读 it.journal.coverImageUrl
+    // 修后应 fallback 到 journal.coverImageUrl + coverUrlHd (HD)
+    expect(src).toMatch(/it\.coverUrl\s*\?\?\s*it\.journal\?\.coverImageUrl/);
+    expect(src).toMatch(/it\.journal\?\.coverUrlHd/);
+  });
+
   it("RecommendationPanel + LeadsPanel: 含 empty state 文案 (引导而非冷漠)", async () => {
     const recSrc = await readSrc("../../../../apps/web/src/components/dashboard/RecommendationPanel.tsx");
     expect(recSrc).toMatch(/暂无新推荐/);
