@@ -13,7 +13,7 @@
  * 强依赖 P0 状态机。
  */
 import { Worker, Job } from "bullmq";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { batchRows, contents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
@@ -108,9 +108,23 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           .handle(row.topic, [], skillContext);
 
         if (result.artifact?.body) {
+          // 5-23 hotfix #164: merge artifact.metadata 进 contents.metadata
+          // 之前只 set body+title, artifact.metadata (含 PR #162 hasWarnings/validatorIssues + qualityScore 等) 全丢
+          // 用 jsonb_set / || merge 保住老 metadata (batchId/journalId/...) + 加新 artifact 字段
+          const artMeta = (result.artifact as { metadata?: Record<string, unknown> }).metadata || {};
+          // 只 cherry-pick 有意义的字段, 防 LLM artifact 杂字段污染 contents.metadata
+          const metaMerge: Record<string, unknown> = {};
+          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId"]) {
+            if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
+          }
           await db
             .update(contents)
-            .set({ body: result.artifact.body, title: result.artifact.title ?? row.topic, updatedAt: new Date() })
+            .set({
+              body: result.artifact.body,
+              title: result.artifact.title ?? row.topic,
+              metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(metaMerge)}::jsonb`,
+              updatedAt: new Date(),
+            })
             .where(eq(contents.id, content.id));
         }
 

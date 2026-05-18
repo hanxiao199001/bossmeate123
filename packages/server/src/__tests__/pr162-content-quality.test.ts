@@ -167,4 +167,13 @@ describe("PR #162 Phase 4-lite: validator gate wiring", () => {
     const src = await readSrc("../services/recommendation/feed-service.ts");
     expect(src).toMatch(/c\.metadata->>'hasWarnings' IS DISTINCT FROM 'true'/);
   });
+
+  // 5-23 hotfix #164: batch-worker 之前只 update body+title, 丢 artifact.metadata 全字段
+  // 包括 hasWarnings/validatorIssues → validator 跑了也不持久化 → feed filter 失效
+  it("batch-worker: 合并 artifact.metadata (含 hasWarnings) 到 contents.metadata", async () => {
+    const src = await readSrc("../services/batch/batch-worker.ts");
+    expect(src).toMatch(/"hasWarnings"/);
+    expect(src).toMatch(/"validatorIssues"/);
+    expect(src).toMatch(/COALESCE\(\$\{contents\.metadata\}, '\{\}'::jsonb\) \|\|/);
+  });
 });
