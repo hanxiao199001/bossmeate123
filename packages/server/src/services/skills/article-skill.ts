@@ -979,15 +979,38 @@ export class ArticleSkill implements ISkill {
     // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)
     // 提取 body 中具体数字 (IF/录用率/审稿/版面费/创刊年/出版国) 与 DB journal 对照
     // warnings 写入 article.metadata, 推荐池 feed 会 filter hasWarnings=true 不展示给用户
+    //
+    // 5-23 PR #168 hotfix: in-memory journal.foundingYear/country 被 ensureJournalEnriched
+    // 用 AI 推测污染了 (line ~854-855), validator 不能用它当 DB truth. 改 SELECT DB 真值.
     const bodyClaims = extractClaimedFacts(wrappedBody);
-    const factIssues = verifyClaimsAgainstDb(bodyClaims, {
-      impactFactor: journal.impactFactor,
-      acceptanceRate: journal.acceptanceRate,
-      reviewCycle: journal.reviewCycle,
+    let dbJournalTruth: { impactFactor: number | null; acceptanceRate: number | null; reviewCycle: string | null; apcFee: number | null; foundingYear: number | null; country: string | null } = {
+      impactFactor: journal.impactFactor ?? null,
+      acceptanceRate: journal.acceptanceRate ?? null,
+      reviewCycle: journal.reviewCycle ?? null,
       apcFee: (journal as any).apcFee ?? null,
-      foundingYear: (journal as any).foundingYear ?? null,
-      country: (journal as any).country ?? null,
-    });
+      foundingYear: null, // PR #168: in-memory 这俩可能被 AI 编, 不信
+      country: null,
+    };
+    if ((journal as any).id) {
+      try {
+        const [dbRow] = await db
+          .select({
+            impactFactor: journals.impactFactor,
+            acceptanceRate: journals.acceptanceRate,
+            reviewCycle: journals.reviewCycle,
+            apcFee: journals.apcFee,
+            foundingYear: journals.foundingYear,
+            country: journals.country,
+          })
+          .from(journals)
+          .where(eq(journals.id, (journal as any).id))
+          .limit(1);
+        if (dbRow) dbJournalTruth = dbRow;
+      } catch (err) {
+        logger.warn({ journalId: (journal as any).id, err: err instanceof Error ? err.message : String(err) }, "PR #168 fetch DB truth 失败, 回退 in-memory");
+      }
+    }
+    const factIssues = verifyClaimsAgainstDb(bodyClaims, dbJournalTruth);
     const hasFactWarnings = factIssues.length > 0;
     if (hasFactWarnings) {
       logger.warn(
