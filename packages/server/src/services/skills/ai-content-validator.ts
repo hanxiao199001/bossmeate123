@@ -569,9 +569,14 @@ export interface ClaimedFact {
 /**
  * 从 article body (HTML 或 markdown 任意纯文本) 提取数字声明.
  * 6 类: IF / 录用率 / 审稿 / 版面费 / 创刊年 / 出版国
+ *
+ * 5-23 hotfix: 先 strip HTML 标签. journal-template 渲染时 key/value 隔 `<strong>` 等标签
+ * (e.g. "创刊年：</strong>2010"), 不剥就漏识 "创刊年 2010" "出版国 瑞士" 等关键 fabricated claim.
  */
 export function extractClaimedFacts(body: string): ClaimedFact[] {
   if (!body) return [];
+  // strip HTML: 换标签为单空格, 不丢字符位置
+  body = body.replace(/<[^>]+>/g, " ");
   const out: ClaimedFact[] = [];
   const seen = new Set<string>(); // 同 field+claimed 去重 (body 多处重复提及只算 1 次)
 
