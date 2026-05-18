@@ -74,6 +74,20 @@ describe("PR #162 Phase 3: extractClaimedFacts (body 数字提取)", () => {
     expect(extractClaimedFacts("")).toEqual([]);
     expect(extractClaimedFacts("这是篇没数字的文章, 介绍投稿流程")).toEqual([]);
   });
+
+  // 5-23 hotfix #163: journal-template 渲染 HTML 时 key/value 隔 <strong> 等标签 →
+  // 老 regex 不跨标签匹配 → 漏识 "创刊年：</strong>2010" / "出版国：</strong>瑞士" 等 fabricated claim.
+  // 修法: extractClaimedFacts 入口 strip HTML 标签为空格.
+  it("strip HTML — key/value 被 <strong> 等标签隔时仍能 extract", () => {
+    const htmlBody = `<p><strong>创刊年：</strong>2010</p><p><strong>出版国：</strong>瑞士</p><div>IF 2.6</div>`;
+    const facts = extractClaimedFacts(htmlBody);
+    const yearFact = facts.find((f) => f.field === "foundingYear");
+    const countryFact = facts.find((f) => f.field === "country");
+    const ifFact = facts.find((f) => f.field === "impactFactor");
+    expect(yearFact?.claimed).toBe(2010);
+    expect(countryFact?.claimed).toBe("瑞士");
+    expect(ifFact?.claimed).toBe(2.6);
+  });
 });
 
 describe("PR #162 Phase 3: verifyClaimsAgainstDb", () => {
