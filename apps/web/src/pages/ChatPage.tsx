@@ -395,7 +395,8 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="h-screen flex bg-gray-50">
+    <div className="flex bg-gray-50" style={{ height: "calc(100vh - 0px)" }}>
+      {/* 5-23 PR #156: MainLayout 提供外层, ChatPage 自撑 100vh; 内部 conversations sidebar 与 MainLayout sidebar 并列 */}
       {/* 侧边栏 - 对话列表 */}
       {sidebarOpen && (
         <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
@@ -430,19 +431,16 @@ export default function ChatPage() {
       )}
 
       {/* 主内容区 */}
-      <div className="flex-1 flex flex-col">
-        {/* 顶部导航 */}
-        <nav className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* 5-23 PR #156: 砍 nav (返回首页 → sidebar 提供), 留 1 行内嵌 header (toggle + skill 标签 + loading) */}
+        <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3 shrink-0">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="text-gray-500 hover:text-gray-700 text-lg"
+            title={sidebarOpen ? "折叠对话列表" : "展开对话列表"}
           >
             {sidebarOpen ? "◀" : "▶"}
           </button>
-          <Link to="/" className="text-blue-600 hover:text-blue-700 text-sm">
-            返回首页
-          </Link>
-          <span className="text-gray-300">|</span>
           <span className="font-medium text-gray-900 text-sm">
             {skillType === "article" ? "图文创作" : skillType === "video" ? "视频制作" : "AI 助手"}
           </span>
@@ -451,7 +449,7 @@ export default function ChatPage() {
               AI正在生成中...
             </span>
           )}
-        </nav>
+        </div>
 
         {/* 消息区域 */}
         <div className="flex-1 overflow-y-auto px-4 py-4" ref={messagesContainerRef}>

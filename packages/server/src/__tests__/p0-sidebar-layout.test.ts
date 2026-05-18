@@ -33,14 +33,37 @@ describe("5-21 P0: Sidebar 全局 layout 重构", () => {
     expect(src).toMatch(/z-30/);
   });
 
-  it("App.tsx: 4 demo 路由 (/ /workbench /sales-radar /content/:id) 已包 MainLayout", async () => {
+  it("App.tsx: 4 demo + /cost-comparison + /chat 6 路由已包 MainLayout (5-23 PR #156 收尾)", async () => {
     const src = await readSrc("../../../../apps/web/src/App.tsx");
     expect(src).toMatch(/import\s+MainLayout/);
-    // 4 demo 路由都包
+    // 4 demo 路由 (PR #153)
     expect(src).toMatch(/path="\/"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<DashboardPage/);
     expect(src).toMatch(/path="\/workbench"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ContentWorkbenchPage/);
     expect(src).toMatch(/path="\/sales-radar"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<SalesRadarPage/);
     expect(src).toMatch(/path="\/content\/:id"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ContentDetailPage/);
+    // PR #156 收尾的 2 页 (cost-comparison + chat × 2 路由)
+    expect(src).toMatch(/path="\/cost-comparison"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<CostComparisonPage/);
+    expect(src).toMatch(/path="\/chat"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ChatPage/);
+    expect(src).toMatch(/path="\/chat\/:conversationId"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ChatPage/);
+  });
+
+  it("5-23 PR #156: CostComparisonPage + ChatPage 已砍内联 nav", async () => {
+    const cost = await readSrc("../../../../apps/web/src/pages/CostComparisonPage.tsx");
+    expect(cost).not.toMatch(/<nav\b/);
+    expect(cost).not.toMatch(/← 返回首页/);
+    expect(cost).not.toMatch(/^import.*useAuthStore/m); // user/logout 搬 sidebar — 无 import (注释提及不算)
+    // 留 1 行简化 header
+    expect(cost).toMatch(/💰 价值对比/);
+
+    const chat = await readSrc("../../../../apps/web/src/pages/ChatPage.tsx");
+    expect(chat).not.toMatch(/<nav\b/);
+    // 砍 Link to="/"，注释里提到不算
+    expect(chat).not.toMatch(/<Link\s+to="\/"[^>]*>\s*\n?\s*返回首页/);
+    // 保留 sidebarOpen toggle (◀/▶) 在 ChatPage 内部 header
+    expect(chat).toMatch(/setSidebarOpen\(!sidebarOpen\)/);
+    expect(chat).toMatch(/sidebarOpen \? "◀" : "▶"/);
+    // 保留 skill 标签
+    expect(chat).toMatch(/图文创作[\s\S]{0,40}视频制作[\s\S]{0,30}AI 助手/);
   });
 
   it("DashboardPage: 主 render 用新 5 组件 (Greeting/KpiStrip/PrimaryActionBar/RecommendationPanel/LeadsPanel)", async () => {
