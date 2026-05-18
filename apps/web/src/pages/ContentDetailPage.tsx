@@ -522,19 +522,28 @@ export default function ContentDetailPage() {
     !showVariantCompare &&
     !currentIsRejected &&
     (content.status === "draft" || content.status === "reviewing");
+  // 5-9 PR P0 state-machine: 旧 'approved' → 新 'generated'. canPublish 加 'generated'
+  // 让推荐池文章 (system tenant cron 产出 status='generated') 能直接发, 不再灰按钮.
+  // 'approved' 保留作历史兼容 (老数据未 migration 过).
   const canPublish =
     !showVariantCompare &&
     !currentIsRejected &&
-    (content.status === "approved" || content.status === "draft");
+    (content.status === "generated" ||
+      content.status === "approved" ||
+      content.status === "draft");
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* 顶部导航 */}
       <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
-          <Link to="/content" className="text-blue-600 hover:text-blue-700 text-sm">
-            ← 返回列表
-          </Link>
+          {/* 5-23 hotfix: navigate(-1) 自动回上一页 (/workbench 或 /content), Link 写死 /content 是 bug */}
+          <button
+            onClick={() => navigate(-1)}
+            className="text-blue-600 hover:text-blue-700 text-sm bg-transparent border-none p-0 cursor-pointer"
+          >
+            ← 返回
+          </button>
           <span className="text-gray-300">|</span>
           <span className="text-sm text-gray-500">
             {TYPE_LABELS[content.type] || content.type}
