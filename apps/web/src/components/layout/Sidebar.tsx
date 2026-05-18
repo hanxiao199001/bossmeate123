@@ -16,6 +16,7 @@ const PRIMARY_NAV: NavItem[] = [
   { to: "/", icon: "🏠", label: "首页", matchPrefix: "" }, // 精确匹配 / 即可
   { to: "/workbench", icon: "📝", label: "内容工坊", matchPrefix: "/workbench" },
   { to: "/sales-radar", icon: "📡", label: "销售雷达", matchPrefix: "/sales-radar" },
+  { to: "/chat", icon: "💬", label: "AI 助手", matchPrefix: "/chat" }, // 5-23 PR #156 follow-up: /chat 页入口
   { to: "/accounts", icon: "📱", label: "账号", matchPrefix: "/accounts" },
 ];
 

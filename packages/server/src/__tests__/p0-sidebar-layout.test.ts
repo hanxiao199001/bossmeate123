@@ -17,14 +17,16 @@ describe("5-21 P0: Sidebar 全局 layout 重构", () => {
     expect(src).toMatch(/<main[\s\S]*ml-40/); // sidebar 160px → main 左 margin
   });
 
-  it("Sidebar 含 4 主导航 (首页/工坊/雷达/账号) + 用户区", async () => {
+  it("Sidebar 含 5 主导航 (首页/工坊/雷达/AI 助手/账号) + 用户区", async () => {
     const src = await readSrc("../../../../apps/web/src/components/layout/Sidebar.tsx");
     expect(src).toMatch(/首页/);
     expect(src).toMatch(/内容工坊/);
     expect(src).toMatch(/销售雷达/);
+    expect(src).toMatch(/AI 助手/); // 5-23 PR #156 follow-up
     expect(src).toMatch(/账号/);
     expect(src).toMatch(/to:\s*"\/workbench"/);
     expect(src).toMatch(/to:\s*"\/sales-radar"/);
+    expect(src).toMatch(/to:\s*"\/chat"/);
     expect(src).toMatch(/to:\s*"\/accounts"/);
     expect(src).toMatch(/useAuthStore/);
     expect(src).toMatch(/logout/);
