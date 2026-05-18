@@ -121,7 +121,9 @@ export default function App() {
         path="/chat"
         element={
           <ProtectedRoute>
-            <ChatPage />
+            <MainLayout>
+              <ChatPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -129,7 +131,9 @@ export default function App() {
         path="/chat/:conversationId"
         element={
           <ProtectedRoute>
-            <ChatPage />
+            <MainLayout>
+              <ChatPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -222,7 +226,9 @@ export default function App() {
         path="/cost-comparison"
         element={
           <ProtectedRoute>
-            <CostComparisonPage />
+            <MainLayout>
+              <CostComparisonPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />

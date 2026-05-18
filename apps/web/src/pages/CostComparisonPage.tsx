@@ -5,14 +5,12 @@
  * 计算逻辑在 utils/cost-comparison.ts (纯函数, 已 vitest 覆盖)。
  */
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
+// 5-23 PR #156: 砍 nav (sidebar 全局提供), 删 Link / useAuthStore 不再用
 import { computeMetrics, loadInputs, saveInputs, type CostInputs } from "../utils/cost-comparison";
 
 const yuan = (n: number) => `¥${Math.round(n).toLocaleString("zh-CN")}`;
 
 export default function CostComparisonPage() {
-  const user = useAuthStore((s) => s.user);
   const [inputs, setInputs] = useState<CostInputs>(loadInputs);
   useEffect(() => saveInputs(inputs), [inputs]);
   const m = computeMetrics(inputs);
@@ -22,16 +20,14 @@ export default function CostComparisonPage() {
   const bmBarPct = m.operatorCostPerArticle > 0 ? Math.max(1, (m.bossmateCostPerArticle / m.operatorCostPerArticle) * 100) : 0;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="text-sm text-blue-600 hover:underline">← 返回首页</Link>
-          <h1 className="text-lg font-bold text-gray-900">💰 BossMate 价值对比</h1>
-        </div>
-        <span className="text-sm text-gray-500">{user?.name}</span>
-      </nav>
+    <div>
+      {/* 5-23 PR #156: 砍 nav (sidebar 提供), 留 1 行简化 header */}
+      <div className="px-6 pt-4">
+        <h1 className="text-xl font-medium">💰 价值对比</h1>
+        <p className="text-xs text-gray-500 mt-0.5">假设参数可编辑, 自动保存</p>
+      </div>
 
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-5xl mx-auto px-6 py-6 space-y-6">
         {/* 输入区 */}
         <section className="bg-white rounded-xl border border-gray-200 p-5">
           <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">假设参数（可编辑，自动保存）</h2>
