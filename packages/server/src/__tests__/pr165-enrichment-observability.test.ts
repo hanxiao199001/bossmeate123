@@ -39,7 +39,8 @@ describe("PR #165: enrichment observability (field_provenance + log)", () => {
     expect(src).toMatch(/timed\("letpub"/);
     expect(src).toMatch(/timed\("crossref"/);
     expect(src).toMatch(/timed\("doaj"/);
-    expect(src).toMatch(/timed\("scimago"/);
+    // PR #166: scimago 已砍 — 不再 timed("scimago")
+    expect(src).not.toMatch(/timed\("scimago"/);
     expect(src).toMatch(/timed\("openalex"/);
     // log INSERT
     expect(src).toMatch(/db\.insert\(journalEnrichmentLog\)\.values\(logRows\)/);

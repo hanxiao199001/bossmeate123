@@ -5,9 +5,8 @@
  *   base = 50
  *   + crossref 命中  +20
  *   + doaj 命中     +10
- *   + scimago 命中  +15
  *   + letpub 命中   +20
- *   → 最高 95
+ *   → 3 源全命中 = 100, cap 95 (PR #166: scimago +15 已砍 — Cloudflare 拉黑 0% 命中, cap 不动保兼容)
  *
  * ai-fallback only → 30 fixed（不进 multi-source，由 article-skill.persistAIJournal 直接写）
  *
@@ -20,7 +19,7 @@
 export interface TrustSourceFlags {
   crossref: boolean;
   doaj: boolean;
-  scimago: boolean;
+  scimago: boolean; // PR #166: 保签名兼容老 caller, 但 computeTrust 内部忽略 (永远当 false 处理)
   letpub: boolean;
 }
 
@@ -41,11 +40,11 @@ export function computeTrust(
   let confidence = 50;
   if (flags.crossref) confidence += 20;
   if (flags.doaj) confidence += 10;
-  if (flags.scimago) confidence += 15;
+  // PR #166: scimago +15 已砍 (Cloudflare 拉黑 0% 命中) — flag 仍接收兼容老 caller
   if (flags.letpub) confidence += 20;
 
   // base 50 = 0 命中（无源）→ 保留原状态，不强写
-  const totalHits = Number(flags.crossref) + Number(flags.doaj) + Number(flags.scimago) + Number(flags.letpub);
+  const totalHits = Number(flags.crossref) + Number(flags.doaj) + Number(flags.letpub);
   if (totalHits === 0) {
     return { confidence: 50, dataSource: null, fieldProvenance: {} };
   }
@@ -64,10 +63,8 @@ export function computeTrust(
     fieldProvenance.apc = "doaj";
     fieldProvenance.openAccess = "doaj";
   }
-  if (flags.scimago) {
-    fieldProvenance.sjr = "scimago";
-    fieldProvenance.qPartition = "scimago";
-  }
+  // PR #166: scimago provenance 已砍 — sjr/qPartition 不再 default-map
+  // (老 jsonb 残留 'scimago' 会被下次 enrichJournal 覆盖)
   if (flags.letpub) {
     fieldProvenance.if_history = "letpub";
     fieldProvenance.cas_partition = "letpub";

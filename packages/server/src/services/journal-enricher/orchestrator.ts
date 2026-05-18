@@ -41,9 +41,8 @@ async function timed<T>(label: string, p: Promise<T> | T): Promise<{ value: T; m
 }
 import { fetchLetpubDetail } from "./fetchers/letpub-adapter.js";
 import { fetchDoajByIssn } from "./fetchers/doaj-fetcher.js";
-// PR #107（5-9 治理 PR 3）：crossref + scimago 加入 4 源治理（spec 第 3 段公式）
+// PR #107 / PR #166: crossref 主源 (scimago 5-23 PR #166 砍掉 — Cloudflare 拉黑 0% 命中)
 import { fetchCrossrefByIssn } from "./fetchers/crossref-fetcher.js";
-import { fetchScimagoByIssn } from "./fetchers/scimago-fetcher.js";
 import { computeTrust } from "./trust-score.js";
 import {
   fetchOpenAlexJournal,
@@ -111,16 +110,15 @@ export async function enrichJournal(
   // B.2.2: + fenqubiao 预警名单（redis cache 24h，多刊批量首调一次）
   // B.4-2: + 万方期刊详情（仅当 metadata.wanfang.perioId admin 预填时触发）
   const wanfangPerioId = ((journal.metadata as Record<string, any> | null)?.wanfang?.perioId ?? null) as string | null;
-  // PR #107：spec 4 源治理 = crossref + doaj + scimago + letpub（all parallel allSettled）
+  // PR #107 / PR #166: 6 源 (letpub/doaj/openalex/fenqubiao/wanfang/crossref) — scimago 已砍
   // PR #165: 用 timed() 包每源, 收集 per-source duration + status 给 journal_enrichment_log
-  const [letpubTimed, doajTimed, openalexTimed, fenqubiaoTimed, wanfangTimed, crossrefTimed, scimagoTimed] = await Promise.all([
+  const [letpubTimed, doajTimed, openalexTimed, fenqubiaoTimed, wanfangTimed, crossrefTimed] = await Promise.all([
     timed("letpub", options?.skipLetpub ? Promise.resolve(null) : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn })),
     timed("doaj", options?.skipDoaj ? Promise.resolve(null) : fetchDoajByIssn(journal.issn)),
     timed("openalex", options?.skipOpenAlex ? Promise.resolve(null) : fetchOpenAlexJournal(journal.issn)),
     timed("fenqubiao", options?.skipFenqubiao ? Promise.resolve(null) : fetchFenqubiaoWarningList()),
     timed("wanfang", options?.skipWanfang || !wanfangPerioId ? Promise.resolve(null) : fetchWanfangPeriodical({ perioId: wanfangPerioId, issn: journal.issn, nameZh: journal.name })),
     timed("crossref", fetchCrossrefByIssn(journal.issn)),
-    timed("scimago", fetchScimagoByIssn({ issn: journal.issn })),
   ]);
 
   const letpub = letpubTimed.value;
@@ -129,7 +127,6 @@ export async function enrichJournal(
   const warningList = fenqubiaoTimed.value;
   const wanfangRaw = wanfangTimed.value;
   const crossref = crossrefTimed.value;
-  const scimagoHtml = scimagoTimed.value;
   // 老 *Result 别名保 backward compat (errors block 用)
   const letpubResult = { status: letpubTimed.status === "success" ? "fulfilled" : "rejected", reason: letpubTimed.error } as { status: string; reason?: string };
   const doajResult = { status: doajTimed.status === "success" ? "fulfilled" : "rejected", reason: doajTimed.error } as { status: string; reason?: string };
@@ -323,18 +320,16 @@ export async function enrichJournal(
   const trust = computeTrust({
     crossref: !!crossref,
     doaj: !!doaj,
-    scimago: !!scimagoHtml,
+    scimago: false, // PR #166: scimago 已砍, trust-score 接 4 源 flag (scimago 永远 false)
     letpub: !!letpub,
   });
-  // sourceUrl 优先级：letpub detail 页 > scimago search > crossref API
+  // sourceUrl 优先级：letpub detail 页 > crossref API  (PR #166: scimago search 已砍)
   const trustSourceUrl =
     letpub && (letpub as { sourceUrl?: string }).sourceUrl
       ? (letpub as { sourceUrl?: string }).sourceUrl
-      : scimagoHtml && journal.issn
-        ? `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(journal.issn)}`
-        : crossref && journal.issn
-          ? `https://api.crossref.org/journals/${journal.issn}`
-          : null;
+      : crossref && journal.issn
+        ? `https://api.crossref.org/journals/${journal.issn}`
+        : null;
 
   if (!options?.dryRun) {
     // 合并 metadata.enrichmentLog（最近 3 条），不破坏其他 metadata 键
@@ -382,7 +377,6 @@ export async function enrichJournal(
       { source: "fenqubiao", timed: fenqubiaoTimed, hasData: !!warningList },
       { source: "wanfang", timed: wanfangTimed, hasData: !!wanfangRaw },
       { source: "crossref", timed: crossrefTimed, hasData: !!crossref },
-      { source: "scimago", timed: scimagoTimed, hasData: !!scimagoHtml },
     ].map((r) => ({
       journalId,
       source: r.source,
