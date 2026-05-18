@@ -582,8 +582,9 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
     out.push(f);
   };
 
-  // 1. IF — "IF 14.7" / "影响因子 14.7" / "IF=14.7" / "影响因子 高达 14.7"
-  for (const m of body.matchAll(/(?:IF|影响因子)[\s=：:高达]*?(\d+(?:\.\d+)?)/g)) {
+  // 1. IF — "IF 14.7" / "影响因子 14.7" / "IF=14.7" / "影响因子 高达 14.7" / "影响因子仅 2.6"
+  // .{0,6}? 允许中间任意 6 字 (e.g. "高达"/"仅"/"约"/"达到"等修饰词)
+  for (const m of body.matchAll(/(?:IF|影响因子).{0,6}?(\d+(?:\.\d+)?)/g)) {
     const n = parseFloat(m[1]!);
     if (!isNaN(n) && n > 0 && n < 200) {
       push({ field: "impactFactor", claimed: n, rawMatch: m[0] });
@@ -604,7 +605,8 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
   }
 
   // 4. 版面费 / APC — "版面费 $2000" / "APC 1500 美元" / "$2,000"
-  for (const m of body.matchAll(/(?:版面费|APC)[\s=：:为约]*?[$¥]?(\d{1,3}(?:,\d{3})*|\d+)/g)) {
+  // 注: \d+ 在 [\d,]+ 前提下兜底, 防 "$2900" 被 \d{1,3} 提早截 "290"
+  for (const m of body.matchAll(/(?:版面费|APC).{0,5}?[$¥]?([\d,]+)/g)) {
     const n = parseInt(m[1]!.replace(/,/g, ""), 10);
     if (!isNaN(n) && n >= 100 && n <= 20000) {
       push({ field: "apcFee", claimed: n, rawMatch: m[0] });
@@ -619,8 +621,8 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
     }
   }
 
-  // 6. 出版国 — "出版国 X" / "出版国：X" — 取 1-6 字
-  for (const m of body.matchAll(/出版国[：:\s]*([一-龥A-Za-z]{1,8}?)[。,，；;<\s]/g)) {
+  // 6. 出版国 — "出版国 X" / "出版国：X" — 取 1-6 字, 含 EOL 兜底 (?=...|$)
+  for (const m of body.matchAll(/出版国[：:\s]*([一-龥A-Za-z]{1,8}?)(?=[。,，；;<\s]|$)/g)) {
     const c = m[1]!.trim();
     if (c.length >= 1) {
       push({ field: "country", claimed: c, rawMatch: m[0] });

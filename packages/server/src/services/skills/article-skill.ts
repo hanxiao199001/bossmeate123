@@ -22,7 +22,7 @@ import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
-import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
+import { validateAIContent, type ValidationIssue, extractClaimedFacts, verifyClaimsAgainstDb } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
@@ -250,7 +250,7 @@ export class ArticleSkill implements ISkill {
         : [explicitTemplateId];
 
     // 生成流程（传入期刊数据用于图片插入）
-    const { article, quality, extraVariants } = await this.fullGenerate(
+    const { article, quality, extraVariants, bodyHasWarnings, bodyFactIssues } = await this.fullGenerate(
       parsed,
       ragText,
       previousFeedback,
@@ -350,6 +350,9 @@ export class ArticleSkill implements ISkill {
           // PR B.10：journalId 透传给 routes/chat.ts:236 的 auto-video-bridge 触发条件
           // （此前 metadata 缺该字段 → typeof journalId === "string" 永远 false → bridge 死代码）
           journalId: collectionResult?.journals[0]?.id,
+          // 5-23 PR #162 Phase 4-lite: body fact check 结果, feed-service 据 hasWarnings filter
+          hasWarnings: !!bodyHasWarnings,
+          validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -548,6 +551,9 @@ export class ArticleSkill implements ISkill {
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
+    // 5-23 PR #162 透传 body-level fact check (主版本 only)
+    bodyHasWarnings?: boolean;
+    bodyFactIssues?: ValidationIssue[];
     extraVariants?: Array<{
       article: GeneratedArticle;
       quality: QualityReport;
@@ -811,6 +817,9 @@ export class ArticleSkill implements ISkill {
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
+    // 5-23 PR #162 Phase 4-lite: body-level fact check results (caller 设 metadata.hasWarnings)
+    bodyHasWarnings?: boolean;
+    bodyFactIssues?: ValidationIssue[];
   }> {
     // T4-1b: variantId 用于多版本并行生成时的日志区分
     const variantId = nanoid(6);
@@ -967,6 +976,26 @@ export class ArticleSkill implements ISkill {
       wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
     };
 
+    // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)
+    // 提取 body 中具体数字 (IF/录用率/审稿/版面费/创刊年/出版国) 与 DB journal 对照
+    // warnings 写入 article.metadata, 推荐池 feed 会 filter hasWarnings=true 不展示给用户
+    const bodyClaims = extractClaimedFacts(wrappedBody);
+    const factIssues = verifyClaimsAgainstDb(bodyClaims, {
+      impactFactor: journal.impactFactor,
+      acceptanceRate: journal.acceptanceRate,
+      reviewCycle: journal.reviewCycle,
+      apcFee: (journal as any).apcFee ?? null,
+      foundingYear: (journal as any).foundingYear ?? null,
+      country: (journal as any).country ?? null,
+    });
+    const hasFactWarnings = factIssues.length > 0;
+    if (hasFactWarnings) {
+      logger.warn(
+        { journalName: journal.nameEn || journal.name, claimsCount: bodyClaims.length, issuesCount: factIssues.length, firstIssue: factIssues[0]?.message },
+        "PR #162 body-level fact check 发现 warnings"
+      );
+    }
+
     // 质检（包含 AI 内容校验结果）
     const validationIssueTexts = validation.issues
       .filter((i: ValidationIssue) => i.severity !== "info")
@@ -1009,7 +1038,7 @@ export class ArticleSkill implements ISkill {
 
     logger.info({ journal: journal.name, title: aiContent.title, templateId: template!.id }, "V6 期刊推荐文章生成完成");
 
-    return { article, quality, outline };
+    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues };
   }
 
   /**
