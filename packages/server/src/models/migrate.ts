@@ -1060,6 +1060,29 @@ CREATE TABLE IF NOT EXISTS user_skip_log (
   PRIMARY KEY (tenant_id, content_id)
 );
 CREATE INDEX IF NOT EXISTS idx_skip_log_tenant ON user_skip_log(tenant_id);
+
+-- ============ PR #161 Workbench v2: bulk-distribute 永久去重日志 ============
+-- POST /admin/bulk-distribute 把 (content_id, account_id) 笛卡尔积入 queue, 完成后写本表.
+-- UNIQUE (content_id, account_id) 让 ON CONFLICT 跳过历史已成功的对, 避免重复发布.
+-- backfill: spec 原假设 contents.platforms 含 accountId, 实测 schema 无该字段且 prod 0 行
+--          有非空 platforms, 因此不做历史 backfill, 表起 0 行 (新发布从此刻起记录).
+CREATE TABLE IF NOT EXISTS content_publish_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  content_id UUID NOT NULL,
+  account_id UUID NOT NULL REFERENCES platform_accounts(id),
+  status VARCHAR(20) NOT NULL,                -- 'success' | 'failed' | 'skipped'
+  media_id VARCHAR(200),
+  error_message VARCHAR(500),
+  initiated_by VARCHAR(20),                   -- 'bulk_distribute' | 'manual' | 'system'
+  initiated_user_id UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cpl_dedup ON content_publish_log(content_id, account_id);
+CREATE INDEX IF NOT EXISTS idx_cpl_tenant ON content_publish_log(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cpl_status ON content_publish_log(status);
+CREATE INDEX IF NOT EXISTS idx_cpl_created ON content_publish_log(created_at DESC);
 `;
 
 async function migrate() {
