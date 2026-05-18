@@ -58,4 +58,18 @@ describe("PR #167: prompt 黑名单 4 字段", () => {
     expect(src).toMatch(/verifyClaimsAgainstDb\(bodyClaims/);
     expect(src).toMatch(/bodyHasWarnings/);
   });
+
+  // 5-23 PR #168 hotfix: in-memory journal.foundingYear/country 被 ensureJournalEnriched
+  // AI 编填充, validator 必须 SELECT DB 真值不能用 in-memory
+  it("PR #168: validator 用 DB 真值 (SELECT journals) 不用 in-memory journal", async () => {
+    const src = await readSrc("../services/skills/article-skill.ts");
+    // dbJournalTruth 变量存在
+    expect(src).toMatch(/dbJournalTruth/);
+    // foundingYear / country 默认 null (不信 in-memory)
+    expect(src).toMatch(/foundingYear:\s*null,[\s\S]{0,80}country:\s*null/);
+    // 显式 SELECT DB
+    expect(src).toMatch(/\.select\(\{[\s\S]{0,300}foundingYear:\s*journals\.foundingYear/);
+    // verify 用 dbJournalTruth 而非 in-memory
+    expect(src).toMatch(/verifyClaimsAgainstDb\(bodyClaims,\s*dbJournalTruth\)/);
+  });
 });
