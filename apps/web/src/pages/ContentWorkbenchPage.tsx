@@ -19,6 +19,11 @@ import ContentListItem, { type WorkbenchListItem } from "../components/workbench
 import ContentPreviewPane, { type PreviewContent } from "../components/workbench/ContentPreviewPane";
 import DistributionCard, { type WorkbenchAccount } from "../components/workbench/DistributionCard";
 import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAuditModal";
+// 5-23 PR #161 — Workbench v2: 多选 + 手动生成
+import WorkbenchTopBar from "../components/workbench/WorkbenchTopBar";
+import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
+import ManualGenerateVideoModal from "../components/workbench/ManualGenerateVideoModal";
+import { useAuthStore } from "../hooks/useAuthStore";
 
 export default function ContentWorkbenchPage() {
   // 5-21 P0: user/logout 已搬 sidebar (MainLayout), 本页不再用
@@ -40,6 +45,27 @@ export default function ContentWorkbenchPage() {
   // 5-20 P2 风控: audit modal state
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
   const [showAudit, setShowAudit] = useState(false);
+
+  // 5-23 PR #161 — admin role check + 多选 state + 生成 modal state
+  const userRole = useAuthStore((s) => s.user?.role);
+  const isAdmin = userRole === "owner" || userRole === "admin";
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [generateModal, setGenerateModal] = useState<"article" | "video" | null>(null);
+  const toggleMultiSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const handleGenerateComplete = useCallback((newContentId: string) => {
+    // 跳 draft tab + 自动 select 新文章
+    setTab("draft");
+    setSelectedId(newContentId);
+    setGenerateModal(null);
+    toast.success(`生成完成: ${newContentId.slice(0, 8)}...`);
+  }, []);
 
   // 拉账号 (一次) + 默认勾 isVerified
   useEffect(() => {
@@ -188,6 +214,15 @@ export default function ContentWorkbenchPage() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
+      {/* 5-23 PR #161: admin only 顶部工具栏 (2 个生成按钮 + 已选 badge) */}
+      {isAdmin && (
+        <WorkbenchTopBar
+          selectedCount={selectedIds.size}
+          onClickGenerateArticle={() => setGenerateModal("article")}
+          onClickGenerateVideo={() => setGenerateModal("video")}
+          onClickClearSelection={() => setSelectedIds(new Set())}
+        />
+      )}
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
 
       {/* 3 列布局 */}
@@ -198,7 +233,14 @@ export default function ContentWorkbenchPage() {
             <p className="text-xs text-gray-400 text-center py-8">暂无内容</p>
           ) : (
             items.map((it) => (
-              <ContentListItem key={it.id} item={it} selected={selectedId === it.id} onClick={() => setSelectedId(it.id)} />
+              <ContentListItem
+                key={it.id}
+                item={it}
+                selected={selectedId === it.id}
+                multiSelected={selectedIds.has(it.id)}
+                onClick={() => setSelectedId(it.id)}
+                onToggleSelect={isAdmin ? () => toggleMultiSelect(it.id) : undefined}
+              />
             ))
           )}
         </aside>
@@ -234,6 +276,27 @@ export default function ContentWorkbenchPage() {
         onEdit={handleAuditEdit}
         onSkipRiskyPlatforms={handleAuditSkipRisky}
         onForceOverride={handleAuditForceOverride}
+      />
+
+      {/* 5-23 PR #161 — 手动生成 modal (admin only) */}
+      <ManualGenerateModal
+        open={generateModal === "article"}
+        onClose={() => setGenerateModal(null)}
+        onComplete={handleGenerateComplete}
+      />
+      <ManualGenerateVideoModal
+        open={generateModal === "video"}
+        onClose={() => setGenerateModal(null)}
+        onTriggered={(info) => {
+          setGenerateModal(null);
+          if (info.mode === "direct" && info.articleId) {
+            toast.success(`视频任务已触发 (article ${info.articleId.slice(0, 8)}...)`);
+          } else if (info.mode === "pending_article" && info.articleId) {
+            toast.success(`视频任务已触发 (新生成 article ${info.articleId.slice(0, 8)}...)`);
+            setTab("draft");
+            setSelectedId(info.articleId);
+          }
+        }}
       />
     </div>
   );
