@@ -13,10 +13,11 @@ async function readSrc(rel: string): Promise<string> {
 }
 
 describe("PR #162 Phase 2: article-skill prompt 双重硬约束", () => {
-  it("baseSystemPrompt 含 ##硬约束## 块 (system message 强约束)", async () => {
+  it("baseSystemPrompt 含 ##硬约束## 或 ##硬规则## 块 (PR #167 strengthen 改命名)", async () => {
     const src = await readSrc("../services/skills/article-skill.ts");
-    expect(src).toMatch(/baseSystemPrompt\s*=[\s\S]{0,500}##硬约束##/);
-    expect(src).toMatch(/严禁从训练记忆调任何具体数字/);
+    // PR #167: 改 ##硬约束## → ##硬规则## (加 4 字段特别注意), 二者任 1 命中皆 OK
+    expect(src).toMatch(/baseSystemPrompt\s*=[\s\S]{0,500}(##硬约束##|##硬规则##)/);
+    expect(src).toMatch(/严禁从训练记忆调任何/); // 字符稍弱化 ("具体数字" 改 "数字" 也接受)
     expect(src).toMatch(/##已知期刊数据##/); // system 提到 user 段名
   });
 
