@@ -1152,11 +1152,23 @@ export class ArticleSkill implements ISkill {
       ? `\n##未公开字段## (这些字段缺数据, 文章中**不要写具体数字**, 必要时用"据公开资料尚无统一披露"代替)：${unknownFields.join("、")}\n`
       : "";
 
+    // 5-23 PR #167: 4 字段黑名单 — backfill 报告确认这 4 字段 DB 0 源覆盖 (AI 编源 100% 确认)
+    // 任何场景下都不允许出具体值. 仅允许模糊词 (较高/较低/适中/相对宽松/较快/较慢/标准)
+    const blacklistBlock = `
+##禁止字段## (BossMate database 缺失数据, 严禁虚构以下 4 类具体值)
+- **创刊年 / founded in / 创办于**: 禁止提具体年份, 禁止"可追溯至 XXXX"、"创办于 XXXX"。若必须提及, 用"历史悠久的"或"近年新创"等模糊词
+- **出版国 / 出版地 / based in / country**: 禁止具体国家名 (如"瑞士"、"美国"、"英国"). 若必须提及, 用"国际期刊"或"业内"等中性词
+- **录用率**: 仅允许"较高 / 较低 / 适中 / 相对宽松 / 难度较大"等模糊词. **禁止具体百分比** (除非 ##已知期刊数据## 给了 acceptanceRate 字段)
+- **审稿周期**: 仅允许"较快 / 较慢 / 标准 / 周期合理"等模糊词. **禁止具体周数** (除非 ##已知期刊数据## 给了 reviewCycle 字段)
+
+违反任一 → validator 拦截 → 文章排除推荐池 (无效产出, 浪费 token).
+`;
+
     const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
 
 ##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
 ${knownFields.join("\n")}
-${unknownBlock}${enrichmentBlock}
+${unknownBlock}${blacklistBlock}${enrichmentBlock}
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
@@ -1194,11 +1206,15 @@ ${disciplineHint}
     // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
     const baseSystemPrompt = `你是学术期刊分析专家，输出严格JSON格式。
 
-##硬约束##
-- 文章中所有具体数字 (IF / 录用率 / 审稿周期 / 版面费 / 创刊年 / 出版国) **必须**来自下方用户消息里 "##已知期刊数据##" 段
-- "##已知期刊数据##" 未列字段, 文章中**不要提**或用 "据公开资料尚无统一披露" 代替
-- 严禁从训练记忆调任何具体数字 / 年份 / 国家 / 价格
-- 若违反: 文章会被 validator 拦截重写, 浪费 token`;
+##硬规则##
+1. 文章中所有具体数字必须来自 user 消息 ##已知期刊数据## 段, 严禁从训练记忆调任何数字 / 年份 / 国家 / 价格
+2. 未在 ##已知期刊数据## 出现的字段, 严禁虚构, 用兜底语代替
+3. **特别注意 — 以下 4 字段是 BossMate database 没有的数据 (backfill 实测 0 源覆盖):**
+   - **创刊年**: 禁止提具体年份, 若必须涉及用"历史悠久的"等模糊词
+   - **出版国 / 出版地**: 禁止具体国家名, 用"国际期刊""业内"等中性词
+   - **具体录用率百分比**: 禁止 "录用率 48%" 类表述, 仅允许"较高/较低/适中"
+   - **具体审稿周数**: 禁止 "审稿 5-8 周" 类表述 (除非 ##已知期刊数据## 给了 reviewCycle), 仅允许"较快/较慢/标准"
+4. 违反 → validator 拦截 + hasWarnings=true → 文章排除推荐池, 浪费 token`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
 
     try {
