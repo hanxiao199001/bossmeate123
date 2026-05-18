@@ -19,6 +19,14 @@ import ContentListItem, { type WorkbenchListItem } from "../components/workbench
 import ContentPreviewPane, { type PreviewContent } from "../components/workbench/ContentPreviewPane";
 import DistributionCard, { type WorkbenchAccount } from "../components/workbench/DistributionCard";
 import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAuditModal";
+// 5-23 PR #161 — Workbench v2: 多选 + 手动生成 + 批量发布
+import WorkbenchTopBar from "../components/workbench/WorkbenchTopBar";
+import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
+import ManualGenerateVideoModal from "../components/workbench/ManualGenerateVideoModal";
+import BatchPreviewSummary from "../components/workbench/BatchPreviewSummary";
+import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
+import BulkDistributeProgressPanel from "../components/workbench/BulkDistributeProgressPanel";
+import { useAuthStore } from "../hooks/useAuthStore";
 
 export default function ContentWorkbenchPage() {
   // 5-21 P0: user/logout 已搬 sidebar (MainLayout), 本页不再用
@@ -40,6 +48,53 @@ export default function ContentWorkbenchPage() {
   // 5-20 P2 风控: audit modal state
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
   const [showAudit, setShowAudit] = useState(false);
+
+  // 5-23 PR #161 — admin role check + 多选 state + 生成 modal state
+  const userRole = useAuthStore((s) => s.user?.role);
+  const isAdmin = userRole === "owner" || userRole === "admin";
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [generateModal, setGenerateModal] = useState<"article" | "video" | null>(null);
+  const toggleMultiSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const handleGenerateComplete = useCallback((newContentId: string) => {
+    // 跳 draft tab + 自动 select 新文章
+    setTab("draft");
+    setSelectedId(newContentId);
+    setGenerateModal(null);
+    toast.success(`生成完成: ${newContentId.slice(0, 8)}...`);
+  }, []);
+
+  // 5-23 PR #161 — bulk distribute state
+  const [bulkBatchId, setBulkBatchId] = useState<string | null>(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const handleBulkSubmit = useCallback(async () => {
+    if (selectedIds.size === 0 || selectedAccountIds.size === 0) return;
+    setBulkSubmitting(true);
+    try {
+      const res = await api.post<{ batchId: string; total: number; skipped: number; queued: number }>(
+        "/admin/bulk-distribute",
+        {
+          articleIds: [...selectedIds],
+          accountIds: [...selectedAccountIds],
+        }
+      );
+      const data = (res.data as any);
+      if (!data?.batchId) throw new Error("无 batchId 返回");
+      setBulkBatchId(data.batchId);
+      toast.success(`已入队 ${data.queued} 个发布任务 (${data.skipped} 重复跳过)`);
+    } catch (err: any) {
+      toast.error(err?.message || "批量发布请求失败");
+    } finally {
+      setBulkSubmitting(false);
+    }
+  }, [selectedIds, selectedAccountIds]);
+  const isMultiSelectMode = selectedIds.size > 0;
 
   // 拉账号 (一次) + 默认勾 isVerified
   useEffect(() => {
@@ -188,6 +243,15 @@ export default function ContentWorkbenchPage() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
+      {/* 5-23 PR #161: admin only 顶部工具栏 (2 个生成按钮 + 已选 badge) */}
+      {isAdmin && (
+        <WorkbenchTopBar
+          selectedCount={selectedIds.size}
+          onClickGenerateArticle={() => setGenerateModal("article")}
+          onClickGenerateVideo={() => setGenerateModal("video")}
+          onClickClearSelection={() => setSelectedIds(new Set())}
+        />
+      )}
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
 
       {/* 3 列布局 */}
@@ -198,30 +262,52 @@ export default function ContentWorkbenchPage() {
             <p className="text-xs text-gray-400 text-center py-8">暂无内容</p>
           ) : (
             items.map((it) => (
-              <ContentListItem key={it.id} item={it} selected={selectedId === it.id} onClick={() => setSelectedId(it.id)} />
+              <ContentListItem
+                key={it.id}
+                item={it}
+                selected={selectedId === it.id}
+                multiSelected={selectedIds.has(it.id)}
+                onClick={() => setSelectedId(it.id)}
+                onToggleSelect={isAdmin ? () => toggleMultiSelect(it.id) : undefined}
+              />
             ))
           )}
         </aside>
 
-        {/* MIDDLE preview */}
+        {/* MIDDLE — 5-23 PR #161 dual mode: 多选 → 批量预览 / 单选 → 文章预览 */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <ContentPreviewPane content={preview} loading={previewLoading} />
+          {isMultiSelectMode ? (
+            <BatchPreviewSummary selectedIds={selectedIds} items={items} />
+          ) : (
+            <ContentPreviewPane content={preview} loading={previewLoading} />
+          )}
         </main>
 
-        {/* RIGHT 分发卡 sticky */}
+        {/* RIGHT — 5-23 PR #161 dual mode: 多选 → 批量发布卡 / 单选 → 单文章 DistributionCard */}
         <aside className="w-1/4 min-w-[280px] border-l border-gray-200 overflow-y-auto px-4 py-4 bg-white">
-          <DistributionCard
-            accounts={accounts}
-            selectedAccountIds={selectedAccountIds}
-            onToggleAccount={toggleAccount}
-            onPublish={handlePublish}
-            publishing={publishing}
-            dvhTemplate={dvhTemplate}
-            onTemplateChange={setDvhTemplate}
-            onGenerateDvh={handleGenerateDvh}
-            generatingDvh={generatingDvh}
-            disabled={!selectedId}
-          />
+          {isMultiSelectMode ? (
+            <BulkDistributeCard
+              selectedArticleIds={selectedIds}
+              accounts={accounts}
+              selectedAccountIds={selectedAccountIds}
+              onToggleAccount={toggleAccount}
+              onSubmit={handleBulkSubmit}
+              submitting={bulkSubmitting}
+            />
+          ) : (
+            <DistributionCard
+              accounts={accounts}
+              selectedAccountIds={selectedAccountIds}
+              onToggleAccount={toggleAccount}
+              onPublish={handlePublish}
+              publishing={publishing}
+              dvhTemplate={dvhTemplate}
+              onTemplateChange={setDvhTemplate}
+              onGenerateDvh={handleGenerateDvh}
+              generatingDvh={generatingDvh}
+              disabled={!selectedId}
+            />
+          )}
         </aside>
       </div>
 
@@ -234,6 +320,36 @@ export default function ContentWorkbenchPage() {
         onEdit={handleAuditEdit}
         onSkipRiskyPlatforms={handleAuditSkipRisky}
         onForceOverride={handleAuditForceOverride}
+      />
+
+      {/* 5-23 PR #161 — 手动生成 modal (admin only) */}
+      <ManualGenerateModal
+        open={generateModal === "article"}
+        onClose={() => setGenerateModal(null)}
+        onComplete={handleGenerateComplete}
+      />
+      <ManualGenerateVideoModal
+        open={generateModal === "video"}
+        onClose={() => setGenerateModal(null)}
+        onTriggered={(info) => {
+          setGenerateModal(null);
+          if (info.mode === "direct" && info.articleId) {
+            toast.success(`视频任务已触发 (article ${info.articleId.slice(0, 8)}...)`);
+          } else if (info.mode === "pending_article" && info.articleId) {
+            toast.success(`视频任务已触发 (新生成 article ${info.articleId.slice(0, 8)}...)`);
+            setTab("draft");
+            setSelectedId(info.articleId);
+          }
+        }}
+      />
+
+      {/* 5-23 PR #161 — bulk distribute SSE progress panel (浮右下) */}
+      <BulkDistributeProgressPanel
+        batchId={bulkBatchId}
+        onClose={() => {
+          setBulkBatchId(null);
+          setSelectedIds(new Set()); // 关 panel 时清多选 (typical flow: 发完 → 清)
+        }}
       />
     </div>
   );

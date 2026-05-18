@@ -1085,3 +1085,30 @@ export const userSkipLog = pgTable(
     index("idx_skip_log_tenant").on(table.tenantId),
   ]
 );
+
+// ============ PR #161 Workbench v2: bulk-distribute 永久去重日志 ============
+// POST /admin/bulk-distribute 笛卡尔积入 queue, worker 完成后 INSERT ... ON CONFLICT UPDATE.
+// UNIQUE (content_id, account_id) 让重复发布"已成功"对自动 skipped, 节省 API 调用 + 防重发.
+// initiated_by: 'bulk_distribute' (本 PR 主路径) | 'manual' (单文章 publish) | 'system' (cron)
+export const contentPublishLog = pgTable(
+  "content_publish_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    contentId: uuid("content_id").notNull(),
+    accountId: uuid("account_id").references(() => platformAccounts.id).notNull(),
+    status: varchar("status", { length: 20 }).notNull(), // success | failed | skipped
+    mediaId: varchar("media_id", { length: 200 }),
+    errorMessage: varchar("error_message", { length: 500 }),
+    initiatedBy: varchar("initiated_by", { length: 20 }),
+    initiatedUserId: uuid("initiated_user_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_cpl_dedup").on(table.contentId, table.accountId),
+    index("idx_cpl_tenant").on(table.tenantId),
+    index("idx_cpl_status").on(table.status),
+    index("idx_cpl_created").on(table.createdAt),
+  ]
+);

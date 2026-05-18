@@ -1,5 +1,7 @@
 /**
  * 5-18 P1 — Workbench 左列单个 item。选中态高亮，元数据简版（IF / 关键词等可有可无）。
+ * 5-23 PR #161: 加 always-on checkbox (Gmail 风) + multiSelected ring 高亮.
+ *   selected (单选高亮, 现有) 与 multiSelected (多选 checkbox 勾) 区分 — 命名不重叠.
  */
 export interface WorkbenchListItem {
   id: string;
@@ -14,11 +16,19 @@ export interface WorkbenchListItem {
 
 export interface ContentListItemProps {
   item: WorkbenchListItem;
-  selected: boolean;
+  selected: boolean;       // 单选高亮 (preview pane 跟着切)
+  multiSelected?: boolean; // 5-23 PR #161: 多选模式勾中 (批量发布)
   onClick: () => void;
+  onToggleSelect?: () => void; // 5-23 PR #161: 复选框 onChange
 }
 
-export default function ContentListItem({ item, selected, onClick }: ContentListItemProps) {
+export default function ContentListItem({
+  item,
+  selected,
+  multiSelected = false,
+  onClick,
+  onToggleSelect,
+}: ContentListItemProps) {
   const j = item.journal;
   const keyword = (item.metadata as { keyword?: string } | null | undefined)?.keyword;
   const meta: string[] = [];
@@ -27,21 +37,39 @@ export default function ContentListItem({ item, selected, onClick }: ContentList
   if (j?.partition) meta.push(j.partition);
   if (keyword) meta.push(`#${keyword}`);
 
+  // 单选 selected → 蓝色填充, 多选勾 → 紫色 ring (不冲突, 可叠加)
+  // 边框逻辑: multiSelected 加 ring, selected 加 bg
+  const borderClass = multiSelected
+    ? "ring-2 ring-purple-300 border-purple-200"
+    : selected
+      ? "border-blue-300"
+      : "border-gray-200 hover:border-gray-300";
+  const bgClass = selected ? "bg-blue-50" : multiSelected ? "bg-purple-50/30" : "bg-white hover:bg-gray-50";
+
   return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
-        selected
-          ? "bg-blue-50 border-blue-300"
-          : "bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-      }`}
-    >
-      <p className={`text-sm font-medium line-clamp-2 ${selected ? "text-blue-900" : "text-gray-900"}`}>
-        {item.title || "(无标题)"}
-      </p>
-      {meta.length > 0 && (
-        <p className="text-xs text-gray-500 mt-1 line-clamp-1">{meta.join(" · ")}</p>
+    <div className={`w-full flex items-start gap-2 px-3 py-2.5 rounded-lg border transition-colors ${borderClass} ${bgClass}`}>
+      {/* 5-23 PR #161: Gmail 风 always-on checkbox; 始终可见但点击 onChange 仅触发多选, 不影响单选 */}
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={multiSelected}
+          onChange={(e) => {
+            e.stopPropagation();
+            onToggleSelect();
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="mt-0.5 shrink-0 cursor-pointer"
+          aria-label={`多选 ${item.title || ""}`}
+        />
       )}
-    </button>
+      <button onClick={onClick} className="flex-1 min-w-0 text-left">
+        <p className={`text-sm font-medium line-clamp-2 ${selected ? "text-blue-900" : "text-gray-900"}`}>
+          {item.title || "(无标题)"}
+        </p>
+        {meta.length > 0 && (
+          <p className="text-xs text-gray-500 mt-1 line-clamp-1">{meta.join(" · ")}</p>
+        )}
+      </button>
+    </div>
   );
 }
