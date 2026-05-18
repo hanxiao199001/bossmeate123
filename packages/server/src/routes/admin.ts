@@ -20,6 +20,9 @@ import { recommendJournals } from "../services/recommendation/journal-recommende
 import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "../services/digital-human/template-mapping.js";
 import { isRealMode } from "../services/digital-human/client.js";
+import { bulkDistributeQueue, initBulkProgress, getBulkProgress, type BulkProgress } from "../services/bulk-distribute/queue.js";
+import { contentPublishLog } from "../models/schema.js";
+import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
 
 const generateArticleSchema = z.object({
@@ -37,6 +40,14 @@ const generateVideoSchema = z.object({
   (d) => (d.source === "from_article" ? !!d.articleId : !!d.topic),
   { message: "from_article 需 articleId; from_topic 需 topic" }
 );
+
+const bulkDistributeSchema = z.object({
+  articleIds: z.array(z.string().uuid()).min(1).max(50),
+  accountIds: z.array(z.string().uuid()).min(1).max(20),
+  options: z.object({ throttleMs: z.number().int().min(0).max(60_000).default(3000) }).optional(),
+});
+
+const MAX_CARTESIAN = 200; // 笛卡尔积 safety cap
 
 // 期刊 confidence 下限 (admin 生成时只用高质量期刊数据)
 const MIN_JOURNAL_CONFIDENCE = 90;
@@ -202,4 +213,187 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "视频生成请求失败" });
     }
   });
+
+  /**
+   * POST /admin/bulk-distribute
+   * body: { articleIds: uuid[], accountIds: uuid[], options?: {throttleMs: 3000} }
+   * 返回: { batchId, total, skipped, queued }
+   *
+   * 流程:
+   *   1. 笛卡尔积 (articleIds × accountIds), 验 ≤ 200 防滥用
+   *   2. SELECT content_publish_log WHERE (cid, aid) in (...) AND status='success'
+   *      已成功的 → INSERT 'skipped' log + 算 progress
+   *   3. 剩余对入 bulkDistributeQueue (throttleMs delay 累加)
+   *   4. 返回 batchId + 三类计数, 客户端 SSE /bulk-distribute/:batchId/stream 拿进度
+   */
+  app.post("/bulk-distribute", async (request, reply) => {
+    try {
+      const body = bulkDistributeSchema.parse(request.body);
+      const pairs: Array<{ contentId: string; accountId: string }> = [];
+      for (const cid of body.articleIds) {
+        for (const aid of body.accountIds) {
+          pairs.push({ contentId: cid, accountId: aid });
+        }
+      }
+      if (pairs.length > MAX_CARTESIAN) {
+        return reply.code(400).send({
+          code: "TOO_MANY_PAIRS",
+          message: `笛卡尔积 ${pairs.length} > ${MAX_CARTESIAN} 上限, 减少 articles 或 accounts`,
+        });
+      }
+
+      // 2. 查已成功的 (cid, aid) 对 — 直接 raw sql IN tuple match
+      const tupleList = pairs.map((p) => `(${escapeUuid(p.contentId)}::uuid, ${escapeUuid(p.accountId)}::uuid)`).join(",");
+      const existingResult = await db.execute(
+        sqlRaw(`SELECT content_id, account_id FROM content_publish_log WHERE status = 'success' AND (content_id, account_id) IN (${tupleList})`)
+      );
+      const existing = new Set(
+        ((existingResult as any).rows as Array<{ content_id: string; account_id: string }>).map(
+          (r) => `${r.content_id}|${r.account_id}`
+        )
+      );
+
+      const batchId = `bd-${nanoid(10)}`;
+      const skippedPairs = pairs.filter((p) => existing.has(`${p.contentId}|${p.accountId}`));
+      const queuedPairs = pairs.filter((p) => !existing.has(`${p.contentId}|${p.accountId}`));
+
+      // 3. INSERT skipped log (ON CONFLICT update updated_at — 不破坏已有 success)
+      if (skippedPairs.length > 0) {
+        const skippedValues = skippedPairs
+          .map(
+            (p) =>
+              `(${escapeUuid(request.tenantId)}::uuid, ${escapeUuid(p.contentId)}::uuid, ${escapeUuid(p.accountId)}::uuid, 'skipped', NULL, 'duplicate', 'bulk_distribute', ${escapeUuid(request.user.userId)}::uuid)`
+          )
+          .join(",");
+        await db.execute(
+          sqlRaw(`INSERT INTO content_publish_log (tenant_id, content_id, account_id, status, media_id, error_message, initiated_by, initiated_user_id) VALUES ${skippedValues} ON CONFLICT (content_id, account_id) DO UPDATE SET updated_at = NOW()`)
+        );
+      }
+
+      // 4. init progress + 入 queue
+      initBulkProgress(batchId, pairs.length, skippedPairs.length);
+      const throttleMs = body.options?.throttleMs ?? 3000;
+      for (let i = 0; i < queuedPairs.length; i++) {
+        const p = queuedPairs[i]!;
+        await bulkDistributeQueue.add(
+          "bulk-job",
+          { batchId, contentId: p.contentId, accountId: p.accountId, tenantId: request.tenantId, userId: request.user.userId },
+          { delay: i * throttleMs, jobId: `${batchId}-${p.contentId}-${p.accountId}` }
+        );
+      }
+
+      logger.info(
+        { batchId, total: pairs.length, skipped: skippedPairs.length, queued: queuedPairs.length, throttleMs, userId: request.user.userId },
+        "PR #161 bulk-distribute 入队"
+      );
+
+      return {
+        code: "OK",
+        data: { batchId, total: pairs.length, skipped: skippedPairs.length, queued: queuedPairs.length },
+      };
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({ code: "BAD_REQUEST", message: err.errors[0]?.message ?? "参数错误" });
+      }
+      logger.error({ err }, "PR #161 bulk-distribute 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "批量发布请求失败" });
+    }
+  });
+
+  /**
+   * GET /admin/bulk-distribute/:batchId/stream — SSE 进度推送
+   * events:
+   *   progress: { batchId, total, completed, success, failed, skipped, lastFailed? }
+   *   done:     { batchId, success, failed, skipped, durationMs }
+   * 心跳每 15s `: ping\n\n` 防中间件超时断连.
+   */
+  app.get("/bulk-distribute/:batchId/stream", async (request, reply) => {
+    const { batchId } = request.params as { batchId: string };
+    const progress = getBulkProgress(batchId);
+    if (!progress) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "batch 不存在或已过期 (10 分钟)" });
+    }
+
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+
+    const sendEvent = (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // 推第一帧
+    sendEvent("progress", serializeProgress(progress));
+    if (progress.finishedAt) {
+      sendEvent("done", {
+        batchId,
+        success: progress.success,
+        failed: progress.failed,
+        skipped: progress.skipped,
+        durationMs: progress.finishedAt - progress.startedAt,
+      });
+      reply.raw.end();
+      return;
+    }
+
+    // 订阅 progress 更新
+    const onUpdate = (p: BulkProgress) => {
+      sendEvent("progress", serializeProgress(p));
+      if (p.finishedAt) {
+        sendEvent("done", {
+          batchId,
+          success: p.success,
+          failed: p.failed,
+          skipped: p.skipped,
+          durationMs: p.finishedAt - p.startedAt,
+        });
+        cleanup();
+        reply.raw.end();
+      }
+    };
+    progress.subscribers.add(onUpdate);
+
+    // 心跳防中间件超时
+    const heartbeat = setInterval(() => reply.raw.write(": ping\n\n"), 15_000);
+
+    const cleanup = () => {
+      progress.subscribers.delete(onUpdate);
+      clearInterval(heartbeat);
+    };
+
+    request.raw.on("close", cleanup);
+    request.raw.on("error", cleanup);
+
+    // fastify 异步 handler 默认会自动 reply, 这里手动 hijack
+    return reply;
+  });
 }
+
+// 工具: UUID 安全转义 (regex 校验 + 直接 inline, 避免 prepared statement 复杂度)
+function escapeUuid(uuid: string): string {
+  if (!/^[0-9a-fA-F-]{36}$/.test(uuid)) throw new Error(`非法 UUID: ${uuid}`);
+  return `'${uuid}'`;
+}
+
+// drizzle sql 模板裸字符串 (因 IN tuple list 无法用参数化, 已 escapeUuid 防注入)
+import { sql as drizzleSql } from "drizzle-orm";
+function sqlRaw(s: string) {
+  return drizzleSql.raw(s);
+}
+
+function serializeProgress(p: BulkProgress) {
+  return {
+    batchId: p.batchId,
+    total: p.total,
+    completed: p.completed,
+    success: p.success,
+    failed: p.failed,
+    skipped: p.skipped,
+    lastFailed: p.lastFailed,
+  };
+}
+
+// 防 unused
+void contentPublishLog;

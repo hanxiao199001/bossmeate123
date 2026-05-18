@@ -248,10 +248,15 @@ async function bootstrap() {
   const { startBatchWorker } = await import("./services/batch/batch-worker.js");
   const batchWorker = startBatchWorker();
 
+  // PR #161 (5-23) bulk-distribute worker — admin 多选批量发布
+  const { startBulkDistributeWorker } = await import("./services/bulk-distribute/worker.js");
+  const bulkDistributeWorker = startBulkDistributeWorker();
+
   // Graceful shutdown
   const shutdown = async () => {
     stopWatchdog();
     await batchWorker.close().catch(() => {});
+    await bulkDistributeWorker.close().catch(() => {});
     await stopScheduler();
     // PR P1：stopPublishWorker 已删
     await agentRegistry.shutdownAll();
