@@ -554,3 +554,183 @@ function validatePublisherName(
 function escRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// ============ 5-23 PR #162 Phase 3: body 数字事实提取 + DB 对照 ============
+// 解决: 文章 body (frozen HTML) 中 AI 编 IF/录用率/创刊年 等数字, 之前的 validator
+// 只看 AIGeneratedContent 几个字段, 不扫整 body. 加这 2 个 helper 在 body level 兜底.
+
+/** body 中提取的 1 条数字声明 */
+export interface ClaimedFact {
+  field: "impactFactor" | "acceptanceRate" | "reviewCycle" | "apcFee" | "foundingYear" | "country";
+  claimed: string | number; // 原始 string ("3-5 周" / "瑞士") 或 number (2.6 / 2010)
+  rawMatch: string; // 原匹配文本片段 (debug 用)
+}
+
+/**
+ * 从 article body (HTML 或 markdown 任意纯文本) 提取数字声明.
+ * 6 类: IF / 录用率 / 审稿 / 版面费 / 创刊年 / 出版国
+ */
+export function extractClaimedFacts(body: string): ClaimedFact[] {
+  if (!body) return [];
+  const out: ClaimedFact[] = [];
+  const seen = new Set<string>(); // 同 field+claimed 去重 (body 多处重复提及只算 1 次)
+
+  const push = (f: ClaimedFact) => {
+    const k = `${f.field}|${String(f.claimed).toLowerCase()}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(f);
+  };
+
+  // 1. IF — "IF 14.7" / "影响因子 14.7" / "IF=14.7" / "影响因子 高达 14.7" / "影响因子仅 2.6"
+  // .{0,6}? 允许中间任意 6 字 (e.g. "高达"/"仅"/"约"/"达到"等修饰词)
+  for (const m of body.matchAll(/(?:IF|影响因子).{0,6}?(\d+(?:\.\d+)?)/g)) {
+    const n = parseFloat(m[1]!);
+    if (!isNaN(n) && n > 0 && n < 200) {
+      push({ field: "impactFactor", claimed: n, rawMatch: m[0] });
+    }
+  }
+
+  // 2. 录用率 — "录用率 48%" / "录用率仅 8%" / "录用率约 48%"
+  for (const m of body.matchAll(/录用率[\s仅约为]*?(\d+(?:\.\d+)?)%/g)) {
+    const n = parseFloat(m[1]!) / 100;
+    if (!isNaN(n) && n > 0 && n <= 1) {
+      push({ field: "acceptanceRate", claimed: n, rawMatch: m[0] });
+    }
+  }
+
+  // 3. 审稿周期 — "审稿 5-8 周" / "审稿周期 4-6 周" / "审稿 仅 4 周"
+  for (const m of body.matchAll(/审稿(?:周期)?[\s仅只]*?(\d+(?:-\d+)?)\s*[周月]/g)) {
+    push({ field: "reviewCycle", claimed: m[1]!, rawMatch: m[0] });
+  }
+
+  // 4. 版面费 / APC — "版面费 $2000" / "APC 1500 美元" / "$2,000"
+  // 注: \d+ 在 [\d,]+ 前提下兜底, 防 "$2900" 被 \d{1,3} 提早截 "290"
+  for (const m of body.matchAll(/(?:版面费|APC).{0,5}?[$¥]?([\d,]+)/g)) {
+    const n = parseInt(m[1]!.replace(/,/g, ""), 10);
+    if (!isNaN(n) && n >= 100 && n <= 20000) {
+      push({ field: "apcFee", claimed: n, rawMatch: m[0] });
+    }
+  }
+
+  // 5. 创刊年 — "创刊 2010" / "创刊年 2010" / "成立于 2010"
+  for (const m of body.matchAll(/(?:创刊(?:年|于)?|成立于)[\s：:]*?(\d{4})/g)) {
+    const y = parseInt(m[1]!, 10);
+    if (y >= 1800 && y <= new Date().getFullYear()) {
+      push({ field: "foundingYear", claimed: y, rawMatch: m[0] });
+    }
+  }
+
+  // 6. 出版国 — "出版国 X" / "出版国：X" — 取 1-6 字, 含 EOL 兜底 (?=...|$)
+  for (const m of body.matchAll(/出版国[：:\s]*([一-龥A-Za-z]{1,8}?)(?=[。,，；;<\s]|$)/g)) {
+    const c = m[1]!.trim();
+    if (c.length >= 1) {
+      push({ field: "country", claimed: c, rawMatch: m[0] });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * 把 claims 与 DB journal 行对照, 偏差 / fabricated 返 ValidationIssue.
+ *
+ * 规则:
+ * - DB 字段 NULL + claim 非空 → severity=warning 'fabricated' (DB 无数据 AI 却编了)
+ * - DB 字段有值, claim 偏差超阈值 → severity=warning 'stale_or_wrong'
+ *   * IF: ±0.3 (一年 IF 波动 < 0.3 算正常)
+ *   * acceptanceRate: ±0.05 (5% 差异容忍)
+ *   * reviewCycle: 字符串包含或 range 重叠 (松)
+ *   * apcFee/foundingYear/country: 完全相等
+ * - DB 字段有值, claim 在阈值内 → 无 issue
+ */
+export function verifyClaimsAgainstDb(
+  claims: ClaimedFact[],
+  journal: { impactFactor?: number | null; acceptanceRate?: number | null; reviewCycle?: string | null; apcFee?: number | null; foundingYear?: number | null; country?: string | null }
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  for (const c of claims) {
+    const dbValue = journal[c.field];
+
+    // case 1: DB 无, claim 有 → fabricated
+    if (dbValue == null || dbValue === "") {
+      issues.push({
+        severity: "warning",
+        field: c.field,
+        message: `body 含 ${c.field}='${c.claimed}' 但 DB 该字段为空 (疑 AI 编造). 原文: "${c.rawMatch}"`,
+        aiValue: String(c.claimed),
+        realValue: "(DB 无)",
+        autoCorrected: false,
+      });
+      continue;
+    }
+
+    // case 2: DB 有值, 按字段类型对比
+    if (c.field === "impactFactor") {
+      const diff = Math.abs((c.claimed as number) - (dbValue as number));
+      if (diff > 0.3) {
+        issues.push({
+          severity: "warning",
+          field: "impactFactor",
+          message: `body IF=${c.claimed} 偏离 DB ${dbValue} 超 ±0.3 (差 ${diff.toFixed(2)})`,
+          aiValue: String(c.claimed),
+          realValue: String(dbValue),
+          autoCorrected: false,
+        });
+      }
+    } else if (c.field === "acceptanceRate") {
+      const diff = Math.abs((c.claimed as number) - (dbValue as number));
+      if (diff > 0.05) {
+        issues.push({
+          severity: "warning",
+          field: "acceptanceRate",
+          message: `body 录用率=${(c.claimed as number * 100).toFixed(0)}% 偏离 DB ${((dbValue as number) * 100).toFixed(0)}% 超 ±5%`,
+          aiValue: `${(c.claimed as number * 100).toFixed(0)}%`,
+          realValue: `${((dbValue as number) * 100).toFixed(0)}%`,
+          autoCorrected: false,
+        });
+      }
+    } else if (c.field === "reviewCycle") {
+      // 松: DB string 与 claim string 任一互含算 OK (e.g. DB="5-8周" claim="5-8" 或 "4 周")
+      const dbStr = String(dbValue);
+      const claimStr = String(c.claimed);
+      if (!dbStr.includes(claimStr) && !claimStr.includes(dbStr.replace(/[周月]/g, ""))) {
+        issues.push({
+          severity: "warning",
+          field: "reviewCycle",
+          message: `body 审稿='${claimStr}' DB='${dbStr}' 不一致`,
+          aiValue: claimStr,
+          realValue: dbStr,
+          autoCorrected: false,
+        });
+      }
+    } else if (c.field === "apcFee" || c.field === "foundingYear") {
+      if (c.claimed !== dbValue) {
+        issues.push({
+          severity: "warning",
+          field: c.field,
+          message: `body ${c.field}=${c.claimed} DB=${dbValue} 不相等`,
+          aiValue: String(c.claimed),
+          realValue: String(dbValue),
+          autoCorrected: false,
+        });
+      }
+    } else if (c.field === "country") {
+      const dbStr = String(dbValue);
+      const claimStr = String(c.claimed);
+      if (!dbStr.includes(claimStr) && !claimStr.includes(dbStr)) {
+        issues.push({
+          severity: "warning",
+          field: "country",
+          message: `body 出版国='${claimStr}' DB='${dbStr}' 不一致`,
+          aiValue: claimStr,
+          realValue: dbStr,
+          autoCorrected: false,
+        });
+      }
+    }
+  }
+
+  return issues;
+}

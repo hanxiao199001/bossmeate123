@@ -22,7 +22,7 @@ import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
-import { validateAIContent, type ValidationIssue } from "./ai-content-validator.js";
+import { validateAIContent, type ValidationIssue, extractClaimedFacts, verifyClaimsAgainstDb } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
@@ -250,7 +250,7 @@ export class ArticleSkill implements ISkill {
         : [explicitTemplateId];
 
     // 生成流程（传入期刊数据用于图片插入）
-    const { article, quality, extraVariants } = await this.fullGenerate(
+    const { article, quality, extraVariants, bodyHasWarnings, bodyFactIssues } = await this.fullGenerate(
       parsed,
       ragText,
       previousFeedback,
@@ -350,6 +350,9 @@ export class ArticleSkill implements ISkill {
           // PR B.10：journalId 透传给 routes/chat.ts:236 的 auto-video-bridge 触发条件
           // （此前 metadata 缺该字段 → typeof journalId === "string" 永远 false → bridge 死代码）
           journalId: collectionResult?.journals[0]?.id,
+          // 5-23 PR #162 Phase 4-lite: body fact check 结果, feed-service 据 hasWarnings filter
+          hasWarnings: !!bodyHasWarnings,
+          validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -548,6 +551,9 @@ export class ArticleSkill implements ISkill {
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
+    // 5-23 PR #162 透传 body-level fact check (主版本 only)
+    bodyHasWarnings?: boolean;
+    bodyFactIssues?: ValidationIssue[];
     extraVariants?: Array<{
       article: GeneratedArticle;
       quality: QualityReport;
@@ -811,6 +817,9 @@ export class ArticleSkill implements ISkill {
     article: GeneratedArticle;
     quality: QualityReport;
     outline: ArticleOutline;
+    // 5-23 PR #162 Phase 4-lite: body-level fact check results (caller 设 metadata.hasWarnings)
+    bodyHasWarnings?: boolean;
+    bodyFactIssues?: ValidationIssue[];
   }> {
     // T4-1b: variantId 用于多版本并行生成时的日志区分
     const variantId = nanoid(6);
@@ -967,6 +976,26 @@ export class ArticleSkill implements ISkill {
       wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
     };
 
+    // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)
+    // 提取 body 中具体数字 (IF/录用率/审稿/版面费/创刊年/出版国) 与 DB journal 对照
+    // warnings 写入 article.metadata, 推荐池 feed 会 filter hasWarnings=true 不展示给用户
+    const bodyClaims = extractClaimedFacts(wrappedBody);
+    const factIssues = verifyClaimsAgainstDb(bodyClaims, {
+      impactFactor: journal.impactFactor,
+      acceptanceRate: journal.acceptanceRate,
+      reviewCycle: journal.reviewCycle,
+      apcFee: (journal as any).apcFee ?? null,
+      foundingYear: (journal as any).foundingYear ?? null,
+      country: (journal as any).country ?? null,
+    });
+    const hasFactWarnings = factIssues.length > 0;
+    if (hasFactWarnings) {
+      logger.warn(
+        { journalName: journal.nameEn || journal.name, claimsCount: bodyClaims.length, issuesCount: factIssues.length, firstIssue: factIssues[0]?.message },
+        "PR #162 body-level fact check 发现 warnings"
+      );
+    }
+
     // 质检（包含 AI 内容校验结果）
     const validationIssueTexts = validation.issues
       .filter((i: ValidationIssue) => i.severity !== "info")
@@ -1009,7 +1038,7 @@ export class ArticleSkill implements ISkill {
 
     logger.info({ journal: journal.name, title: aiContent.title, templateId: template!.id }, "V6 期刊推荐文章生成完成");
 
-    return { article, quality, outline };
+    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues };
   }
 
   /**
@@ -1099,19 +1128,35 @@ export class ArticleSkill implements ISkill {
       ? `\n【真实补充数据 — 深度分析必须基于此】\n${enrichmentLines.join("\n")}\n`
       : "";
 
+    // 5-23 PR #162 Phase 2: 改 "字段缺=未知" → "字段缺=不列出" + 显式 ##未公开字段## 块
+    // 让 AI 清楚哪些字段没数据, 文章中不要提 (或用"据公开资料尚无统一披露" 兜底)
+    const knownFields: string[] = [];
+    const unknownFields: string[] = [];
+    knownFields.push(`- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`);
+    if (journal.discipline) knownFields.push(`- 学科：${journal.discipline}`); else unknownFields.push("学科");
+    // ifText 在前面构造 (来自 journal.impactFactor 或 ifHistory), 非 "未知" 才算 known
+    if (ifText && !ifText.includes("未知")) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
+    if (journal.casPartition || journal.partition) knownFields.push(`- 分区：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
+    if (journal.casPartitionNew) knownFields.push(`- 新锐分区：${journal.casPartitionNew}`);
+    if (journal.acceptanceRate != null) {
+      knownFields.push(`- 录用率：${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%`);
+    } else { unknownFields.push("录用率"); }
+    if (journal.reviewCycle) knownFields.push(`- 审稿周期：${journal.reviewCycle}`); else unknownFields.push("审稿周期");
+    if (journal.publisher) knownFields.push(`- 出版商：${journal.publisher}`); else unknownFields.push("出版商");
+    if ((journal as any).foundingYear) knownFields.push(`- 创刊年：${(journal as any).foundingYear}`); else unknownFields.push("创刊年");
+    if ((journal as any).country) knownFields.push(`- 出版国：${(journal as any).country}`); else unknownFields.push("出版国");
+    if ((journal as any).apcFee != null) knownFields.push(`- 版面费 (APC)：$${(journal as any).apcFee}`); else unknownFields.push("版面费");
+    knownFields.push(journal.isWarningList ? "- ⚠️ 在中科院预警名单中" : "- 不在中科院预警名单中");
+
+    const unknownBlock = unknownFields.length > 0
+      ? `\n##未公开字段## (这些字段缺数据, 文章中**不要写具体数字**, 必要时用"据公开资料尚无统一披露"代替)：${unknownFields.join("、")}\n`
+      : "";
+
     const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
 
-期刊信息：
-- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}
-- 学科：${journal.discipline || "未知"}
-- 影响因子：${ifText}
-- 分区：${journal.casPartition || journal.partition || "未知"}
-${journal.casPartitionNew ? `- 新锐分区：${journal.casPartitionNew}` : ""}
-- 录用率：${journal.acceptanceRate != null ? (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0) + "%" : "未知"}
-- 审稿周期：${journal.reviewCycle || "未知"}
-- 出版商：${journal.publisher || "未知"}
-${journal.isWarningList ? "- ⚠️ 在预警名单中" : "- 不在预警名单中"}
-${enrichmentBlock}
+##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
+${knownFields.join("\n")}
+${unknownBlock}${enrichmentBlock}
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
@@ -1146,7 +1191,14 @@ ${disciplineHint}
   "submissionAdvice": "章 4 — HTML，引用真实数据。"
 }`;
 
-    const baseSystemPrompt = "你是学术期刊分析专家，输出严格JSON格式。基于真实数据深度分析，禁止编造数字。";
+    // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
+    const baseSystemPrompt = `你是学术期刊分析专家，输出严格JSON格式。
+
+##硬约束##
+- 文章中所有具体数字 (IF / 录用率 / 审稿周期 / 版面费 / 创刊年 / 出版国) **必须**来自下方用户消息里 "##已知期刊数据##" 段
+- "##已知期刊数据##" 未列字段, 文章中**不要提**或用 "据公开资料尚无统一披露" 代替
+- 严禁从训练记忆调任何具体数字 / 年份 / 国家 / 价格
+- 若违反: 文章会被 validator 拦截重写, 浪费 token`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
 
     try {

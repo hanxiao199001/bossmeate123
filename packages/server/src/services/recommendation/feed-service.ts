@@ -67,6 +67,9 @@ export async function fetchRecommendations(input: FetchRecommendationsInput): Pr
     WHERE c.tenant_id = ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid
       AND c.status = 'generated'
       AND c.created_at > NOW() - INTERVAL '${sql.raw(`${FRESH_WINDOW_DAYS} days`)}'
+      -- 5-23 PR #162: filter 有 body-level fact warnings 的 (validator 标 hasWarnings=true)
+      -- IS DISTINCT FROM 处理 NULL: 老文章无该字段 → NULL → NOT 'true' = 留, 新文章命中 warnings → 排除
+      AND (c.metadata->>'hasWarnings' IS DISTINCT FROM 'true')
       ${skipFilter}
     ORDER BY j.confidence DESC NULLS LAST, c.created_at DESC
     LIMIT ${limit}
