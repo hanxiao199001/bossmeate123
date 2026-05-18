@@ -37,8 +37,34 @@ interface ContentItem {
   conversationId: string | null;
   metadata?: Record<string, any>;
   siblings?: VariantSibling[];
+  // 5-23 PR #159: 后端 GET /:id 注入 journal (join journals 表), 详情页用于渲染封面 hero
+  // 老 article body HTML 是 frozen 的, 不能回填 cover; 通过 journal 字段独立注入图
+  journal?: {
+    id: string;
+    nameEn: string | null;
+    coverImageUrl: string | null;
+    impactFactor: number | null;
+    partition: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// 5-23 PR #159 — 期刊封面 hero (frozen body 不动, 详情页前端注入)
+// 命名: JournalCoverHero 区别于 wechat-article-template 里的 renderCoverHero (server-side string)
+function JournalCoverHero({ coverUrl, journalName }: { coverUrl?: string | null; journalName?: string | null }) {
+  if (!coverUrl) return null;
+  return (
+    <div className="mb-4">
+      <img
+        src={coverUrl}
+        alt={journalName ? `${journalName} 封面` : "期刊封面"}
+        className="w-full max-h-60 object-cover rounded-lg border border-gray-200"
+        onError={(e) => { e.currentTarget.style.display = "none"; }}
+        loading="lazy"
+      />
+    </div>
+  );
 }
 
 interface Account {
@@ -1075,15 +1101,22 @@ export default function ContentDetailPage() {
                       </div>
                     </div>
                   ) : (
-                    <div
-                      // PR Q.8 hotfix：去 prose-sm（Tailwind typography 覆盖 4 套模板 inline CSS），
-                      // 加 bossmate-article-preview wrapper（global.css 内重置 box-sizing 防干扰）。
-                      // 4 套主题靠内层 <article class="bm-template-{styleTag}"> CSS 命中。
-                      className="bossmate-article-preview flex-1 min-h-[500px] p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto"
-                      dangerouslySetInnerHTML={{
-                        __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
-                      }}
-                    />
+                    <div className="flex-1 flex flex-col min-h-[500px]">
+                      {/* 5-23 PR #159: 期刊封面 hero (frozen body 不动, 详情页注入) */}
+                      <JournalCoverHero
+                        coverUrl={content.journal?.coverImageUrl}
+                        journalName={content.journal?.nameEn}
+                      />
+                      <div
+                        // PR Q.8 hotfix：去 prose-sm（Tailwind typography 覆盖 4 套模板 inline CSS），
+                        // 加 bossmate-article-preview wrapper（global.css 内重置 box-sizing 防干扰）。
+                        // 4 套主题靠内层 <article class="bm-template-{styleTag}"> CSS 命中。
+                        className="bossmate-article-preview flex-1 p-6 bg-white border border-gray-200 rounded-xl overflow-y-auto"
+                        dangerouslySetInnerHTML={{
+                          __html: renderMarkdown(canEdit ? editBody : (content.body || "暂无内容")),
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               )}

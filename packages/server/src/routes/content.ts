@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, and, desc, sql, count, or, isNull, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
-import { contents, productionRecords, bossEdits } from "../models/schema.js";
+import { contents, productionRecords, bossEdits, journals } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import {
   ARTICLE_STATUSES,
@@ -292,7 +292,29 @@ export async function contentRoutes(app: FastifyInstance) {
         }
       }
 
-      return { code: "OK", data: { ...content, siblings } };
+      // 5-23 PR #159: 拉 journal 数据 (cover/IF/分区), 前端 ContentDetailPage 详情页注入 cover hero
+      // 解决: 60 篇老 article body HTML 是 frozen 的, 后写入 journals.cover_image_url 不影响 body
+      let journal: {
+        id: string; nameEn: string | null; coverImageUrl: string | null;
+        impactFactor: number | null; partition: string | null;
+      } | null = null;
+      const journalIdRaw = (content.metadata as Record<string, unknown> | null)?.journalId;
+      if (typeof journalIdRaw === "string" && journalIdRaw.length > 0) {
+        const [j] = await db
+          .select({
+            id: journals.id,
+            nameEn: journals.nameEn,
+            coverImageUrl: journals.coverImageUrl,
+            impactFactor: journals.impactFactor,
+            partition: journals.partition,
+          })
+          .from(journals)
+          .where(eq(journals.id, journalIdRaw))
+          .limit(1);
+        if (j) journal = j;
+      }
+
+      return { code: "OK", data: { ...content, siblings, journal } };
     } catch (err) {
       logger.error({ err }, "获取内容详情失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
