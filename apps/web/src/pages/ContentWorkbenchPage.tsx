@@ -19,10 +19,13 @@ import ContentListItem, { type WorkbenchListItem } from "../components/workbench
 import ContentPreviewPane, { type PreviewContent } from "../components/workbench/ContentPreviewPane";
 import DistributionCard, { type WorkbenchAccount } from "../components/workbench/DistributionCard";
 import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAuditModal";
-// 5-23 PR #161 — Workbench v2: 多选 + 手动生成
+// 5-23 PR #161 — Workbench v2: 多选 + 手动生成 + 批量发布
 import WorkbenchTopBar from "../components/workbench/WorkbenchTopBar";
 import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
 import ManualGenerateVideoModal from "../components/workbench/ManualGenerateVideoModal";
+import BatchPreviewSummary from "../components/workbench/BatchPreviewSummary";
+import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
+import BulkDistributeProgressPanel from "../components/workbench/BulkDistributeProgressPanel";
 import { useAuthStore } from "../hooks/useAuthStore";
 
 export default function ContentWorkbenchPage() {
@@ -66,6 +69,32 @@ export default function ContentWorkbenchPage() {
     setGenerateModal(null);
     toast.success(`生成完成: ${newContentId.slice(0, 8)}...`);
   }, []);
+
+  // 5-23 PR #161 — bulk distribute state
+  const [bulkBatchId, setBulkBatchId] = useState<string | null>(null);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const handleBulkSubmit = useCallback(async () => {
+    if (selectedIds.size === 0 || selectedAccountIds.size === 0) return;
+    setBulkSubmitting(true);
+    try {
+      const res = await api.post<{ batchId: string; total: number; skipped: number; queued: number }>(
+        "/admin/bulk-distribute",
+        {
+          articleIds: [...selectedIds],
+          accountIds: [...selectedAccountIds],
+        }
+      );
+      const data = (res.data as any);
+      if (!data?.batchId) throw new Error("无 batchId 返回");
+      setBulkBatchId(data.batchId);
+      toast.success(`已入队 ${data.queued} 个发布任务 (${data.skipped} 重复跳过)`);
+    } catch (err: any) {
+      toast.error(err?.message || "批量发布请求失败");
+    } finally {
+      setBulkSubmitting(false);
+    }
+  }, [selectedIds, selectedAccountIds]);
+  const isMultiSelectMode = selectedIds.size > 0;
 
   // 拉账号 (一次) + 默认勾 isVerified
   useEffect(() => {
@@ -245,25 +274,40 @@ export default function ContentWorkbenchPage() {
           )}
         </aside>
 
-        {/* MIDDLE preview */}
+        {/* MIDDLE — 5-23 PR #161 dual mode: 多选 → 批量预览 / 单选 → 文章预览 */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <ContentPreviewPane content={preview} loading={previewLoading} />
+          {isMultiSelectMode ? (
+            <BatchPreviewSummary selectedIds={selectedIds} items={items} />
+          ) : (
+            <ContentPreviewPane content={preview} loading={previewLoading} />
+          )}
         </main>
 
-        {/* RIGHT 分发卡 sticky */}
+        {/* RIGHT — 5-23 PR #161 dual mode: 多选 → 批量发布卡 / 单选 → 单文章 DistributionCard */}
         <aside className="w-1/4 min-w-[280px] border-l border-gray-200 overflow-y-auto px-4 py-4 bg-white">
-          <DistributionCard
-            accounts={accounts}
-            selectedAccountIds={selectedAccountIds}
-            onToggleAccount={toggleAccount}
-            onPublish={handlePublish}
-            publishing={publishing}
-            dvhTemplate={dvhTemplate}
-            onTemplateChange={setDvhTemplate}
-            onGenerateDvh={handleGenerateDvh}
-            generatingDvh={generatingDvh}
-            disabled={!selectedId}
-          />
+          {isMultiSelectMode ? (
+            <BulkDistributeCard
+              selectedArticleIds={selectedIds}
+              accounts={accounts}
+              selectedAccountIds={selectedAccountIds}
+              onToggleAccount={toggleAccount}
+              onSubmit={handleBulkSubmit}
+              submitting={bulkSubmitting}
+            />
+          ) : (
+            <DistributionCard
+              accounts={accounts}
+              selectedAccountIds={selectedAccountIds}
+              onToggleAccount={toggleAccount}
+              onPublish={handlePublish}
+              publishing={publishing}
+              dvhTemplate={dvhTemplate}
+              onTemplateChange={setDvhTemplate}
+              onGenerateDvh={handleGenerateDvh}
+              generatingDvh={generatingDvh}
+              disabled={!selectedId}
+            />
+          )}
         </aside>
       </div>
 
@@ -296,6 +340,15 @@ export default function ContentWorkbenchPage() {
             setTab("draft");
             setSelectedId(info.articleId);
           }
+        }}
+      />
+
+      {/* 5-23 PR #161 — bulk distribute SSE progress panel (浮右下) */}
+      <BulkDistributeProgressPanel
+        batchId={bulkBatchId}
+        onClose={() => {
+          setBulkBatchId(null);
+          setSelectedIds(new Set()); // 关 panel 时清多选 (typical flow: 发完 → 清)
         }}
       />
     </div>
