@@ -1099,19 +1099,35 @@ export class ArticleSkill implements ISkill {
       ? `\n【真实补充数据 — 深度分析必须基于此】\n${enrichmentLines.join("\n")}\n`
       : "";
 
+    // 5-23 PR #162 Phase 2: 改 "字段缺=未知" → "字段缺=不列出" + 显式 ##未公开字段## 块
+    // 让 AI 清楚哪些字段没数据, 文章中不要提 (或用"据公开资料尚无统一披露" 兜底)
+    const knownFields: string[] = [];
+    const unknownFields: string[] = [];
+    knownFields.push(`- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`);
+    if (journal.discipline) knownFields.push(`- 学科：${journal.discipline}`); else unknownFields.push("学科");
+    // ifText 在前面构造 (来自 journal.impactFactor 或 ifHistory), 非 "未知" 才算 known
+    if (ifText && !ifText.includes("未知")) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
+    if (journal.casPartition || journal.partition) knownFields.push(`- 分区：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
+    if (journal.casPartitionNew) knownFields.push(`- 新锐分区：${journal.casPartitionNew}`);
+    if (journal.acceptanceRate != null) {
+      knownFields.push(`- 录用率：${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%`);
+    } else { unknownFields.push("录用率"); }
+    if (journal.reviewCycle) knownFields.push(`- 审稿周期：${journal.reviewCycle}`); else unknownFields.push("审稿周期");
+    if (journal.publisher) knownFields.push(`- 出版商：${journal.publisher}`); else unknownFields.push("出版商");
+    if ((journal as any).foundingYear) knownFields.push(`- 创刊年：${(journal as any).foundingYear}`); else unknownFields.push("创刊年");
+    if ((journal as any).country) knownFields.push(`- 出版国：${(journal as any).country}`); else unknownFields.push("出版国");
+    if ((journal as any).apcFee != null) knownFields.push(`- 版面费 (APC)：$${(journal as any).apcFee}`); else unknownFields.push("版面费");
+    knownFields.push(journal.isWarningList ? "- ⚠️ 在中科院预警名单中" : "- 不在中科院预警名单中");
+
+    const unknownBlock = unknownFields.length > 0
+      ? `\n##未公开字段## (这些字段缺数据, 文章中**不要写具体数字**, 必要时用"据公开资料尚无统一披露"代替)：${unknownFields.join("、")}\n`
+      : "";
+
     const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
 
-期刊信息：
-- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}
-- 学科：${journal.discipline || "未知"}
-- 影响因子：${ifText}
-- 分区：${journal.casPartition || journal.partition || "未知"}
-${journal.casPartitionNew ? `- 新锐分区：${journal.casPartitionNew}` : ""}
-- 录用率：${journal.acceptanceRate != null ? (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0) + "%" : "未知"}
-- 审稿周期：${journal.reviewCycle || "未知"}
-- 出版商：${journal.publisher || "未知"}
-${journal.isWarningList ? "- ⚠️ 在预警名单中" : "- 不在预警名单中"}
-${enrichmentBlock}
+##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
+${knownFields.join("\n")}
+${unknownBlock}${enrichmentBlock}
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
@@ -1146,7 +1162,14 @@ ${disciplineHint}
   "submissionAdvice": "章 4 — HTML，引用真实数据。"
 }`;
 
-    const baseSystemPrompt = "你是学术期刊分析专家，输出严格JSON格式。基于真实数据深度分析，禁止编造数字。";
+    // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
+    const baseSystemPrompt = `你是学术期刊分析专家，输出严格JSON格式。
+
+##硬约束##
+- 文章中所有具体数字 (IF / 录用率 / 审稿周期 / 版面费 / 创刊年 / 出版国) **必须**来自下方用户消息里 "##已知期刊数据##" 段
+- "##已知期刊数据##" 未列字段, 文章中**不要提**或用 "据公开资料尚无统一披露" 代替
+- 严禁从训练记忆调任何具体数字 / 年份 / 国家 / 价格
+- 若违反: 文章会被 validator 拦截重写, 浪费 token`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
 
     try {
