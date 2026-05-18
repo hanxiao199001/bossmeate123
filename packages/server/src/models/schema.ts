@@ -1086,6 +1086,29 @@ export const userSkipLog = pgTable(
   ]
 );
 
+// ============ PR #165 enrichment 观察日志 (0 风险, 仅记录 source 命中/耗时) ============
+// 每次 enrichJournal 调多源 fetcher, 每源写一行 (含 status / duration / fields_written).
+// 用于 PR #165c/d 决策基线 (失败率 / 字段贡献分布).
+export const journalEnrichmentLog = pgTable(
+  "journal_enrichment_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    journalId: uuid("journal_id").references(() => journals.id).notNull(),
+    source: varchar("source", { length: 20 }).notNull(), // letpub | crossref | doaj | scimago | openalex | wanfang | fenqubiao
+    status: varchar("status", { length: 20 }).notNull(), // success | failed | timeout | skipped
+    fieldsWritten: jsonb("fields_written"),
+    errorMessage: varchar("error_message", { length: 500 }),
+    durationMs: integer("duration_ms"),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_jel_journal").on(table.journalId),
+    index("idx_jel_source").on(table.source),
+    index("idx_jel_status").on(table.status),
+    index("idx_jel_attempted").on(table.attemptedAt),
+  ]
+);
+
 // ============ PR #161 Workbench v2: bulk-distribute 永久去重日志 ============
 // POST /admin/bulk-distribute 笛卡尔积入 queue, worker 完成后 INSERT ... ON CONFLICT UPDATE.
 // UNIQUE (content_id, account_id) 让重复发布"已成功"对自动 skipped, 节省 API 调用 + 防重发.

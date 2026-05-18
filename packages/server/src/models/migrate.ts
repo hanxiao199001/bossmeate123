@@ -1083,6 +1083,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cpl_dedup ON content_publish_log(content_i
 CREATE INDEX IF NOT EXISTS idx_cpl_tenant ON content_publish_log(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cpl_status ON content_publish_log(status);
 CREATE INDEX IF NOT EXISTS idx_cpl_created ON content_publish_log(created_at DESC);
+
+-- ============ PR #165 enrichment 观察日志 (0 风险, 不改 fetcher 逻辑) ============
+-- 目的: 每次 enrichJournal 调 6 源 (letpub/crossref/doaj/scimago/openalex/wanfang/fenqubiao)
+-- 写一行记录 source 命中/失败/耗时, 给 PR #165c/d 数据驱动决策提供基线.
+-- 不破现有 metadata.enrichmentLog (那是 caller-side log, 这是 source-level log).
+CREATE TABLE IF NOT EXISTS journal_enrichment_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  journal_id UUID NOT NULL REFERENCES journals(id),
+  source VARCHAR(20) NOT NULL,                     -- letpub | crossref | doaj | scimago | openalex | wanfang | fenqubiao
+  status VARCHAR(20) NOT NULL,                     -- success | failed | timeout | skipped
+  fields_written JSONB,                            -- 该源实际写入的字段列表 (orchestrator extract 之后才知)
+  error_message VARCHAR(500),
+  duration_ms INTEGER,
+  attempted_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jel_journal ON journal_enrichment_log(journal_id);
+CREATE INDEX IF NOT EXISTS idx_jel_source ON journal_enrichment_log(source);
+CREATE INDEX IF NOT EXISTS idx_jel_status ON journal_enrichment_log(status);
+CREATE INDEX IF NOT EXISTS idx_jel_attempted ON journal_enrichment_log(attempted_at DESC);
 `;
 
 async function migrate() {

@@ -23,9 +23,22 @@
  */
 
 import { db } from "../../models/db.js";
-import { journals } from "../../models/schema.js";
+import { journals, journalEnrichmentLog } from "../../models/schema.js";
 import { eq } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
+
+// 5-23 PR #165 — 观察日志 per-source 计时辅助 (0 风险, 不改 fetcher 逻辑)
+async function timed<T>(label: string, p: Promise<T> | T): Promise<{ value: T; ms: number; status: "success" | "failed" | "timeout"; error?: string }> {
+  const t0 = Date.now();
+  try {
+    const value = await p;
+    return { value, ms: Date.now() - t0, status: "success" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimeout = /timeout|aborted|ETIMEDOUT|signal/i.test(msg);
+    return { value: null as unknown as T, ms: Date.now() - t0, status: isTimeout ? "timeout" : "failed", error: msg };
+  }
+}
 import { fetchLetpubDetail } from "./fetchers/letpub-adapter.js";
 import { fetchDoajByIssn } from "./fetchers/doaj-fetcher.js";
 // PR #107（5-9 治理 PR 3）：crossref + scimago 加入 4 源治理（spec 第 3 段公式）
@@ -99,35 +112,29 @@ export async function enrichJournal(
   // B.4-2: + 万方期刊详情（仅当 metadata.wanfang.perioId admin 预填时触发）
   const wanfangPerioId = ((journal.metadata as Record<string, any> | null)?.wanfang?.perioId ?? null) as string | null;
   // PR #107：spec 4 源治理 = crossref + doaj + scimago + letpub（all parallel allSettled）
-  const [letpubResult, doajResult, openalexSourceResult, warningListResult, wanfangResult, crossrefResult, scimagoResult] = await Promise.allSettled([
-    options?.skipLetpub
-      ? Promise.resolve(null)
-      : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn }),
-    options?.skipDoaj
-      ? Promise.resolve(null)
-      : fetchDoajByIssn(journal.issn),
-    options?.skipOpenAlex
-      ? Promise.resolve(null)
-      : fetchOpenAlexJournal(journal.issn),
-    options?.skipFenqubiao
-      ? Promise.resolve(null)
-      : fetchFenqubiaoWarningList(),
-    options?.skipWanfang || !wanfangPerioId
-      ? Promise.resolve(null)
-      : fetchWanfangPeriodical({ perioId: wanfangPerioId, issn: journal.issn, nameZh: journal.name }),
-    // PR #107 第 1 源：Crossref 公开 API（ISSN 校验 + publisher）
-    fetchCrossrefByIssn(journal.issn),
-    // PR #107 第 3 源：Scimago HTML（SJR / Q 分区，stealth fetcher）
-    fetchScimagoByIssn({ issn: journal.issn }),
+  // PR #165: 用 timed() 包每源, 收集 per-source duration + status 给 journal_enrichment_log
+  const [letpubTimed, doajTimed, openalexTimed, fenqubiaoTimed, wanfangTimed, crossrefTimed, scimagoTimed] = await Promise.all([
+    timed("letpub", options?.skipLetpub ? Promise.resolve(null) : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn })),
+    timed("doaj", options?.skipDoaj ? Promise.resolve(null) : fetchDoajByIssn(journal.issn)),
+    timed("openalex", options?.skipOpenAlex ? Promise.resolve(null) : fetchOpenAlexJournal(journal.issn)),
+    timed("fenqubiao", options?.skipFenqubiao ? Promise.resolve(null) : fetchFenqubiaoWarningList()),
+    timed("wanfang", options?.skipWanfang || !wanfangPerioId ? Promise.resolve(null) : fetchWanfangPeriodical({ perioId: wanfangPerioId, issn: journal.issn, nameZh: journal.name })),
+    timed("crossref", fetchCrossrefByIssn(journal.issn)),
+    timed("scimago", fetchScimagoByIssn({ issn: journal.issn })),
   ]);
 
-  const letpub = letpubResult.status === "fulfilled" ? letpubResult.value : null;
-  const doaj = doajResult.status === "fulfilled" ? doajResult.value : null;
-  const openalex = openalexSourceResult.status === "fulfilled" ? openalexSourceResult.value : null;
-  const warningList = warningListResult.status === "fulfilled" ? warningListResult.value : null;
-  const wanfangRaw = wanfangResult.status === "fulfilled" ? wanfangResult.value : null;
-  const crossref = crossrefResult.status === "fulfilled" ? crossrefResult.value : null;
-  const scimagoHtml = scimagoResult.status === "fulfilled" ? scimagoResult.value : null;
+  const letpub = letpubTimed.value;
+  const doaj = doajTimed.value;
+  const openalex = openalexTimed.value;
+  const warningList = fenqubiaoTimed.value;
+  const wanfangRaw = wanfangTimed.value;
+  const crossref = crossrefTimed.value;
+  const scimagoHtml = scimagoTimed.value;
+  // 老 *Result 别名保 backward compat (errors block 用)
+  const letpubResult = { status: letpubTimed.status === "success" ? "fulfilled" : "rejected", reason: letpubTimed.error } as { status: string; reason?: string };
+  const doajResult = { status: doajTimed.status === "success" ? "fulfilled" : "rejected", reason: doajTimed.error } as { status: string; reason?: string };
+  const openalexSourceResult = { status: openalexTimed.status === "success" ? "fulfilled" : "rejected", reason: openalexTimed.error } as { status: string; reason?: string };
+  const warningListResult = { status: fenqubiaoTimed.status === "success" ? "fulfilled" : "rejected", reason: fenqubiaoTimed.error } as { status: string; reason?: string };
 
   if (letpubResult.status === "rejected") {
     errors["_letpub_fetch"] = String(letpubResult.reason);
@@ -185,6 +192,9 @@ export async function enrichJournal(
   // Bug A 修：updates 用 drizzle camelCase key（snake_case 会被 drizzle 静默丢弃）
   const updates: JournalUpdate = {};
 
+  // PR #165a: 真实字段来源追踪 (vs trust-score 的默认 mapping). 后面 merge 入 fieldProvenance.
+  const realProvenance: Record<string, string> = {};
+
   const tryExtract = <K extends keyof JournalUpdate>(
     logName: string,
     drizzleKey: K,
@@ -205,36 +215,45 @@ export async function enrichJournal(
   };
 
   tryExtract("if_history", "ifHistory", () => extractIfHistory(letpub));
-  tryExtract("jcr_full", "jcrFull", () => extractJcrFull(letpub));
+  if (updates.ifHistory) realProvenance.ifHistory = "letpub";
 
-  // publication_stats: LetPub annualVolume + frequency + OpenAlex Top 机构
+  tryExtract("jcr_full", "jcrFull", () => extractJcrFull(letpub));
+  if (updates.jcrFull) realProvenance.jcrFull = "letpub";
+
+  // publication_stats: LetPub annualVolume + frequency + OpenAlex Top 机构 (混合源)
   tryExtract("publication_stats", "publicationStats", () => extractPublicationStats({
     letpub,
     journalFrequency: journal.frequency,
     topInstitutions,
   }));
+  if (updates.publicationStats) realProvenance.publicationStats = "letpub+openalex";
 
-  // publication_costs: DOAJ > OpenAlex APC > journal.apcFee 兜底
+  // publication_costs: DOAJ > OpenAlex APC > journal.apcFee 兜底 — 跟踪具体哪一源命中
   tryExtract("publication_costs", "publicationCosts", () => {
     const doajResult2 = extractPublicationCosts({ doaj, journalApcFee: null });
-    if (doajResult2) return doajResult2;
+    if (doajResult2) { realProvenance.publicationCosts = "doaj"; return doajResult2; }
     const openalexResult = extractPublicationCostsFromOpenAlex(openalex);
-    if (openalexResult) return openalexResult;
-    return extractPublicationCosts({ doaj: null, journalApcFee: journal.apcFee });
+    if (openalexResult) { realProvenance.publicationCosts = "openalex"; return openalexResult; }
+    const fallback = extractPublicationCosts({ doaj: null, journalApcFee: journal.apcFee });
+    if (fallback) realProvenance.publicationCosts = "journal_apcFee";
+    return fallback;
   });
 
   // scope_details: OpenAlex topics → field rollup
   tryExtract("scope_details", "scopeDetails", () => extractScopeDetailsFromOpenAlex(openalex));
+  if (updates.scopeDetails) realProvenance.scopeDetails = "openalex";
 
   // B.2.2: citing journals top 10 + self-cite confidence
   tryExtract("citing_journals_top10", "citingJournalsTop10", () =>
     openalex ? extractCitingJournalsTop10(citingRaw, openalex.id) : null,
   );
+  if (updates.citingJournalsTop10) realProvenance.citingJournalsTop10 = "openalex";
 
   // B.2.2: CAR 历史 + riskLevel（融合 fenqubiao 预警名单）
   tryExtract("car_index_history", "carIndexHistory", () =>
     extractCarIndexHistory(carRaw, warningList, journal.issn),
   );
+  if (updates.carIndexHistory) realProvenance.carIndexHistory = "openalex+fenqubiao";
 
   // B.4-2: 万方 extract（partial OK）+ cscd / pku 互补（仅 NULL 才填，不覆盖 B.4-1 静态权威）
   let wanfangData: WanfangExtractedShape | null = null;
@@ -248,10 +267,12 @@ export async function enrichJournal(
   if (wanfangData?.cscdLevelDynamic && !journal.cscdLevel) {
     updates.cscdLevel = wanfangData.cscdLevelDynamic;
     successFields.push("cscd_level (wanfang dynamic)");
+    realProvenance.cscdLevel = "wanfang";
   }
   if (wanfangData?.pkuCoreDynamic && !journal.pkuCoreLevel) {
     updates.pkuCoreLevel = wanfangData.pkuCoreDynamic;
     successFields.push("pku_core_level (wanfang dynamic)");
+    realProvenance.pkuCoreLevel = "wanfang";
   }
 
   // B.2.1.B.2: publisher 回填（仅当 DB 当前 NULL 才覆盖，避免覆盖手维值）
@@ -261,6 +282,7 @@ export async function enrichJournal(
       if (pub) {
         updates.publisher = pub;
         successFields.push("publisher");
+        realProvenance.publisher = "openalex";
       }
     } catch (err) {
       errors["publisher"] = err instanceof Error ? err.message : String(err);
@@ -330,17 +352,52 @@ export async function enrichJournal(
     };
 
     // PR #107：trust 5 列写入（仅当至少 1 源命中才覆盖 dataSource，避免破坏 manual_seed_2024）
+    // PR #165a: merge realProvenance (真实字段来源 from extractors) 入 trust.fieldProvenance (默认 mapping)
+    // realProvenance 覆盖 trust 默认 (后者准确性低), 后者作 fallback
+    const mergedProvenance = { ...trust.fieldProvenance, ...realProvenance };
     const trustUpdate: Partial<typeof journals.$inferInsert> = {
       confidence: trust.confidence,
       lastVerifiedAt: new Date(),
       ...(trust.dataSource ? { dataSource: trust.dataSource } : {}),
       ...(trustSourceUrl ? { sourceUrl: trustSourceUrl } : {}),
-      ...(Object.keys(trust.fieldProvenance).length > 0 ? { fieldProvenance: trust.fieldProvenance } : {}),
+      ...(Object.keys(mergedProvenance).length > 0 ? { fieldProvenance: mergedProvenance } : {}),
     };
 
     await db.update(journals)
       .set({ ...updates, ...trustUpdate, metadata: newMeta, updatedAt: new Date() })
       .where(eq(journals.id, journalId));
+
+    // PR #165b: 每源写一行 journal_enrichment_log (failed/success/timeout 都记) 给 PR #165c/d 决策基线
+    // perSourceFieldsWritten: 从 realProvenance 反向 group by source
+    const perSourceFieldsWritten: Record<string, string[]> = {};
+    for (const [field, source] of Object.entries(realProvenance)) {
+      for (const s of source.split("+")) {
+        (perSourceFieldsWritten[s] ||= []).push(field);
+      }
+    }
+    const logRows = [
+      { source: "letpub", timed: letpubTimed, hasData: !!letpub },
+      { source: "doaj", timed: doajTimed, hasData: !!doaj },
+      { source: "openalex", timed: openalexTimed, hasData: !!openalex },
+      { source: "fenqubiao", timed: fenqubiaoTimed, hasData: !!warningList },
+      { source: "wanfang", timed: wanfangTimed, hasData: !!wanfangRaw },
+      { source: "crossref", timed: crossrefTimed, hasData: !!crossref },
+      { source: "scimago", timed: scimagoTimed, hasData: !!scimagoHtml },
+    ].map((r) => ({
+      journalId,
+      source: r.source,
+      // 即使 success 但 hasData=false (e.g. ISSN 不存在 doaj/scimago 找不到) 算 'skipped' 区别于 'failed' (fetcher 抛错)
+      status: r.timed.status === "success" ? (r.hasData ? "success" : "skipped") : r.timed.status,
+      fieldsWritten: perSourceFieldsWritten[r.source] ?? [],
+      errorMessage: r.timed.error?.slice(0, 500) ?? null,
+      durationMs: r.timed.ms,
+    }));
+    try {
+      await db.insert(journalEnrichmentLog).values(logRows);
+    } catch (err) {
+      // 观察日志失败不阻塞主流程
+      logger.warn({ journalId, err: err instanceof Error ? err.message : String(err) }, "PR #165 enrichment log insert failed");
+    }
 
     logger.info(
       {
