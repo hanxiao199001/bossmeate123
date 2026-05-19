@@ -182,7 +182,7 @@ export async function refreshJournalsPool(opts?: Partial<RefreshOptions>): Promi
           name: s.display_name,
           nameEn: s.display_name,
           issn,
-          discipline: inferDiscipline(s.x_concepts || []),
+          discipline: inferDiscipline(s),
           status: "active",
           source: "openalex",
           dataSource: "openalex_monthly_refresh",
