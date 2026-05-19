@@ -254,20 +254,19 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
   if (journal.publisher) lines.push(`<strong>Publisher：</strong>${esc(journal.publisher)}`);
   if (journal.foundingYear) lines.push(`<strong>创刊年：</strong>${esc(String(journal.foundingYear))}`);
   if (journal.country) lines.push(`<strong>出版国：</strong>${esc(journal.country)}`);
-  // PR #117 fix Bug 2：website NULL/空时整行不渲染（不显示比"暂无"更专业；避免假"查看官网"链接）
-  // user 5-11 反馈：prod 多数 multi_source 期刊 website 字段 NULL（enricher 未抓取）→ 模板显示"暂无"被
-  // user 误以为"假链接"。降级方案：仅当真有合法 http(s) URL 才渲染"官网："行。
-  // PR #180: website 有值且非 Springer 登录 URL → 显示; NULL → fallback Google 搜索
+  // PR #117 fix Bug 2：website NULL/空时整行不渲染（避免假"查看官网"链接）
+  // user 5-11 反馈：prod 多数 multi_source 期刊 website 字段 NULL → 模板显示"暂无"被误以为"假链接"
+  // 降级方案：仅当真有合法 http(s) URL 才渲染"官网："行
+  // PR #180 曾改成 NULL → fallback Google 搜索, 但 user 测试反馈跳 Google 体验差
+  // PR #182 (5-19, A 方案): website 字段 NULL 或 Springer 登录页 → 整行 skip (按钮直接藏)
+  //   现状: backfill 后 514/527 = 97.5% 有真 website, 剩 13 个 NULL = 中文/停刊期刊, 这部分直接不渲染
   const isSpringerLogin = journal.website && /idp\.springer\.com/i.test(journal.website);
   if (journal.website && /^https?:\/\//i.test(journal.website) && !isSpringerLogin) {
     const safe = esc(journal.website);
     const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
     lines.push(`<strong>官网：</strong><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
-  } else if (journal.nameEn || journal.name) {
-    const searchName = esc(journal.nameEn || journal.name);
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent((journal.nameEn || journal.name) + " journal official website")}`;
-    lines.push(`<strong>官网：</strong><a href="${searchUrl}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">搜索 ${searchName} →</a>`);
   }
+  // else: 不渲染"官网："行 (A 方案 — 无真官网就藏按钮, 不引导用户去 Google 搜索)
 
   const ps = lines
     .map((l) => `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};">${l}</p>`)
