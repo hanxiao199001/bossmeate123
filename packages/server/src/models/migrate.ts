@@ -1102,6 +1102,14 @@ CREATE INDEX IF NOT EXISTS idx_jel_journal ON journal_enrichment_log(journal_id)
 CREATE INDEX IF NOT EXISTS idx_jel_source ON journal_enrichment_log(source);
 CREATE INDEX IF NOT EXISTS idx_jel_status ON journal_enrichment_log(status);
 CREATE INDEX IF NOT EXISTS idx_jel_attempted ON journal_enrichment_log(attempted_at DESC);
+
+-- ============ PR #172 每日推荐多样性 — keywords.last_recommended_at ============
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='keywords' AND column_name='last_recommended_at') THEN
+    ALTER TABLE keywords ADD COLUMN last_recommended_at TIMESTAMPTZ;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_kw_last_recommended ON keywords(last_recommended_at);
 `;
 
 async function migrate() {

@@ -190,6 +190,7 @@ export const keywords = pgTable(
     usedInArticles: jsonb("used_in_articles").default([]), // 关联的文章ID列表
     metadata: jsonb("metadata").default({}), // 原始数据快照等附加信息
     crawlDate: date("crawl_date").notNull(), // 抓取日期（用于滚动窗口）
+    lastRecommendedAt: timestamp("last_recommended_at"), // PR #172: 上次被 daily-cron 推荐的时间 (NULL = 从未推荐)
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
