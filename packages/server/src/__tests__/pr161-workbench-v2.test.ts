@@ -124,16 +124,16 @@ describe("PR #161: frontend Workbench v2 多选 + 手动生成", () => {
     expect(src).toMatch(/addEventListener\("done"/);
   });
 
-  it("ManualGenerateModal PR #173 一键 N 篇 poll batch + 进度条", async () => {
+  it("ManualGenerateModal PR #174 一键生成发布 poll batch + 进度条", async () => {
     const src = await readSrc("../../../../apps/web/src/components/workbench/ManualGenerateModal.tsx");
     expect(src).toMatch(/POLL_INTERVAL_MS/);
     expect(src).toMatch(/MAX_WAIT_MS/);
-    // PR #173: poll 多个 batchIds
+    // PR #174: poll 多个 batchIds + 学科 + 账号 + 发布
     expect(src).toMatch(/batchIds/);
     expect(src).toMatch(/completedCount/);
+    expect(src).toMatch(/DISCIPLINE_OPTIONS/);
+    expect(src).toMatch(/skipPublish/);
     // POST endpoint
-    expect(src).toMatch(/api\.post[\s\S]{0,80}\/admin\/generate-article/);
-    // count radio
-    expect(src).toMatch(/COUNT_OPTIONS/);
+    expect(src).toMatch(/api\.post[\s\S]{0,80}\/admin\/generate-and-publish/);
   });
 });
