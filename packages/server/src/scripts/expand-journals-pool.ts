@@ -36,31 +36,54 @@ export interface OpenAlexSource {
   cited_by_count: number;
   works_count: number;
   homepage_url: string | null;
+  // PR #179: x_concepts 已被 OpenAlex 废弃, topics 是新字段
   x_concepts: Array<{ display_name: string; level: number; score: number }>;
+  topics?: Array<{
+    display_name: string;
+    subfield?: { display_name: string };
+    field?: { display_name: string };
+    domain?: { display_name: string };
+  }>;
 }
 
-// PR #178: export 给 refresh-journals-pool 复用
-export function inferDiscipline(concepts: Array<{ display_name: string; level: number; score: number }>): string | null {
-  const top = concepts.filter(c => c.level <= 1).sort((a, b) => b.score - a.score)[0];
-  if (!top) return null;
-  const name = top.display_name.toLowerCase();
-  const map: Record<string, string> = {
-    medicine: "medicine", "clinical medicine": "medicine", "internal medicine": "medicine",
-    biology: "biology", "molecular biology": "biology", biochemistry: "biology",
-    psychology: "psychology",
-    education: "education",
-    economics: "economics", business: "economics", management: "economics", finance: "economics",
-    engineering: "engineering", "materials science": "engineering",
-    "computer science": "computer", "artificial intelligence": "computer",
-    agriculture: "agriculture", "environmental science": "environment",
-    law: "law", chemistry: "chemistry", physics: "physics",
-    "political science": "law", sociology: "economics",
-    mathematics: "physics", geology: "environment",
-    "art": "education", history: "education", philosophy: "education",
-  };
-  for (const [key, val] of Object.entries(map)) {
-    if (name.includes(key)) return val;
+/**
+ * PR #179 fix: 从 OpenAlex source 推断学科.
+ * 优先级: topics[0].field > topics[0].domain > x_concepts (已废弃 fallback)
+ */
+export function inferDiscipline(source: OpenAlexSource): string | null {
+  // 优先级 1: topics (新 API, x_concepts 已废弃)
+  const topic = source.topics?.[0];
+  if (topic) {
+    const field = topic.field?.display_name || topic.domain?.display_name || "";
+    const mapped = mapToDiscipline(field);
+    if (mapped) return mapped;
   }
+
+  // 优先级 2: x_concepts (旧 API fallback)
+  const top = (source.x_concepts || []).filter(c => c.level <= 1).sort((a, b) => b.score - a.score)[0];
+  if (top) {
+    const mapped = mapToDiscipline(top.display_name);
+    if (mapped) return mapped;
+  }
+
+  return "multidisciplinary";
+}
+
+function mapToDiscipline(name: string): string | null {
+  const lower = name.toLowerCase();
+  if (lower.includes("medicine") || lower.includes("health") || lower.includes("clinical") || lower.includes("nursing") || lower.includes("pharmacol")) return "medicine";
+  if (lower.includes("biolog") || lower.includes("biochem") || lower.includes("genetics") || lower.includes("ecology") || lower.includes("life science")) return "biology";
+  if (lower.includes("engineer") || lower.includes("material") || lower.includes("energy")) return "engineering";
+  if (lower.includes("computer") || lower.includes("information") || lower.includes("artificial")) return "computer";
+  if (lower.includes("chemistry") || lower.includes("chemical")) return "chemistry";
+  if (lower.includes("physics") || lower.includes("astrono") || lower.includes("math")) return "physics";
+  if (lower.includes("psychology") || lower.includes("psychiatr") || lower.includes("neurosci")) return "psychology";
+  if (lower.includes("education") || lower.includes("pedagog")) return "education";
+  if (lower.includes("economic") || lower.includes("finance") || lower.includes("business") || lower.includes("management") || lower.includes("account")) return "economics";
+  if (lower.includes("social") || lower.includes("sociolog") || lower.includes("political") || lower.includes("communi")) return "economics";
+  if (lower.includes("agriculture") || lower.includes("plant") || lower.includes("animal") || lower.includes("food") || lower.includes("veterina")) return "agriculture";
+  if (lower.includes("environ") || lower.includes("earth") || lower.includes("geolog") || lower.includes("climate")) return "environment";
+  if (lower.includes("law") || lower.includes("legal") || lower.includes("criminol")) return "law";
   return null;
 }
 
@@ -118,7 +141,7 @@ async function main() {
     }
     existingIssns.add(issn); // 防同 batch 重复
 
-    const discipline = inferDiscipline(s.x_concepts || []);
+    const discipline = inferDiscipline(s);
 
     try {
       const [row] = await db.insert(journals).values({
