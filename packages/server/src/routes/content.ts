@@ -96,7 +96,8 @@ export async function contentRoutes(app: FastifyInstance) {
       if (query.pinned === "true") {
         conditions.push(eq(contents.pinned, true));
       } else if (query.pinned === "false") {
-        conditions.push(or(eq(contents.pinned, false), isNull(contents.pinned)));
+        const unpinned = or(eq(contents.pinned, false), isNull(contents.pinned));
+        if (unpinned) conditions.push(unpinned);
       }
 
       const whereClause = and(...conditions);
