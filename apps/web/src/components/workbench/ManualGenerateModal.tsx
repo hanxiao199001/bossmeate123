@@ -340,7 +340,6 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
           </div>
 
         </div>
-        {/* end quick tab */}
         )}
 
         {/* Shared: error + progress + buttons (both tabs) */}
