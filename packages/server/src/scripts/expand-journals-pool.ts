@@ -27,7 +27,7 @@ const OPENALEX_BASE = "https://api.openalex.org/sources";
 const THROTTLE_MS = 5000; // 5s per enrich call
 const PAGE_SIZE = 200; // OpenAlex max per_page
 
-interface OpenAlexSource {
+export interface OpenAlexSource {
   id: string;
   display_name: string;
   issn_l: string | null;
@@ -39,7 +39,8 @@ interface OpenAlexSource {
   x_concepts: Array<{ display_name: string; level: number; score: number }>;
 }
 
-function inferDiscipline(concepts: Array<{ display_name: string; level: number; score: number }>): string | null {
+// PR #178: export 给 refresh-journals-pool 复用
+export function inferDiscipline(concepts: Array<{ display_name: string; level: number; score: number }>): string | null {
   const top = concepts.filter(c => c.level <= 1).sort((a, b) => b.score - a.score)[0];
   if (!top) return null;
   const name = top.display_name.toLowerCase();
@@ -63,7 +64,8 @@ function inferDiscipline(concepts: Array<{ display_name: string; level: number; 
   return null;
 }
 
-async function fetchOpenAlexSources(count: number): Promise<OpenAlexSource[]> {
+// PR #178: export 给 refresh-journals-pool 复用
+export async function fetchOpenAlexSources(count: number): Promise<OpenAlexSource[]> {
   const all: OpenAlexSource[] = [];
   let cursor = "*";
   while (all.length < count) {

@@ -41,6 +41,7 @@ export type SchedulerJobType =
   | "journal-trust-reverify"   // PR #107 5-9 治理 PR 3：30 天前 / 未验证期刊 batch reverify
   | "industry-monthly"         // P5 5-14：每月 1 号 4 行业 × 50 篇 article 自动生成
   | "daily-recommendation"     // PR #130 V2.5 5-13：每日 03:00 BJ 10 篇推荐 article 入 system tenant
+  | "monthly-journal-refresh"  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
   | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
@@ -322,6 +323,14 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       const result = await runDailyRecommendation();
       logger.info(result, "PR #130 daily-recommendation cron 完成");
       return result;
+    }
+
+    case "monthly-journal-refresh": {
+      // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
+      const { refreshJournalsPool } = await import("../scripts/refresh-journals-pool.js");
+      const refreshResult = await refreshJournalsPool({ newCount: 50, refreshExisting: true });
+      logger.info(refreshResult, "PR #178 monthly-journal-refresh cron 完成");
+      return refreshResult;
     }
     case "journal-trust-reverify": {
       // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
@@ -608,7 +617,17 @@ async function registerCronJobs() {
     }
   );
 
-  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理 + 期刊治理 reverify + 行业月度 batch）");
+  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常值检测
+  await crawlerQueue.upsertJobScheduler(
+    "monthly-journal-refresh-schedule",
+    { pattern: "0 4 1 * *", tz: "Asia/Shanghai" },
+    {
+      name: "monthly-journal-refresh",
+      data: { type: "monthly-journal-refresh" as SchedulerJobType },
+    }
+  );
+
+  logger.info("📅 Cron 定时任务注册完成（含月度期刊更新 + 每日热度匹配 + 封面预抓取 + 超时审核清理 + 期刊治理 reverify + 行业月度 batch + 月度期刊刷新）");
 }
 
 // ============ 手动触发接口 ============
