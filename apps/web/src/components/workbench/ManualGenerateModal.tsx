@@ -47,6 +47,7 @@ interface Account {
   accountName: string;
   platform: string;
   isVerified: boolean;
+  status: string;
 }
 
 interface ManualGenerateModalProps {
