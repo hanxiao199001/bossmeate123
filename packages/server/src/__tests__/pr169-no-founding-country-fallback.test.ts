@@ -20,22 +20,22 @@ describe("PR #169: AI fallback 砍 foundingYear + country", () => {
 
   const stubJournal = { name: "Frontiers in Psychology", nameEn: "Frontiers in Psychology", issn: "1664-1078" };
 
-  it("AI 返 foundingYear/country → strip 掉 + warn log", async () => {
+  it("AI 返 foundingYear/country/apcFee → 全 strip 掉 + warn log (PR #169 + #170)", async () => {
     const provider = mockProvider({
       abbreviation: "Front Psy",
       foundingYear: 2010,
       country: "瑞士",
+      apcFee: 2900, // PR #170: apcFee 加入禁字段
       website: "https://example.com",
-      apcFee: 2900,
     });
     const result = await enrichJournalWithAI(provider, stubJournal);
     // 期望: 即使 AI 返了, 也被 strip
     expect((result as any).foundingYear).toBeUndefined();
     expect((result as any).country).toBeUndefined();
+    expect((result as any).apcFee).toBeUndefined(); // PR #170
     // 其他字段保留 (回归保护)
     expect(result.abbreviation).toBe("Front Psy");
     expect(result.website).toBe("https://example.com");
-    expect(result.apcFee).toBe(2900);
   });
 
   it("AI 不返 foundingYear/country → 正常 (无 warn 噪音)", async () => {
@@ -61,16 +61,16 @@ describe("PR #169: AI fallback 砍 foundingYear + country", () => {
   });
 
   // 源码级 file-content regression
-  it("源码: prompt schema 不含 foundingYear/country key + 含 ##禁止字段##", async () => {
+  it("源码: prompt schema 不含 foundingYear/country/apcFee key + 含 ##禁止字段##", async () => {
     const src = await readSrc("../services/crawler/springer-journal-fetcher.ts");
-    // prompt schema 砍 (注: 仅 enrichJournalWithAI 内 prompt 部分; 老 ScraplingResult 接口 line 20-21 keep)
     expect(src).toMatch(/##禁止字段##/);
-    expect(src).toMatch(/严禁返回 foundingYear \/ country/);
-    // return 对象砍 (有 PR #169 注释标记)
-    expect(src).toMatch(/PR #169.*foundingYear \/ country 砍/);
+    // PR #169 + #170: 3 字段全禁
+    expect(src).toMatch(/严禁返回 foundingYear \/ country \/ apcFee/);
     // 防御性 strip 在
     expect(src).toMatch(/delete parsed\.foundingYear/);
     expect(src).toMatch(/delete parsed\.country/);
+    expect(src).toMatch(/delete parsed\.apcFee/); // PR #170
     expect(src).toMatch(/AI 自作主张返 foundingYear, 已 strip/);
+    expect(src).toMatch(/AI 自作主张返 apcFee, 已 strip/); // PR #170
   });
 });

@@ -156,7 +156,6 @@ export async function enrichJournalWithAI(
 {
   "abbreviation": "期刊简称（如 EHO、JHO 等）",
   "website": "期刊官方网站URL",
-  "apcFee": APC费用美元数字,
   "selfCitationRate": 自引率百分比数字,
   "casPartition": "中科院大类分区（如 医学2区）",
   "casPartitionNew": "中科院新锐分区（如 医学1区TOP）",
@@ -164,9 +163,9 @@ export async function enrichJournalWithAI(
   "topInstitutions": ["机构1","机构2","机构3"]
 }
 
-##禁止字段## (PR #169: 0 真源, 你之前编了 1976/英国 等假数据被 validator 拦截)
-- 严禁返回 foundingYear / country, JSON 中不要包含这两个 key
-- 即使你认为知道该期刊真实创刊年/出版国, 也不要返 (BossMate 不信任 AI 推测这 2 字段)`,
+##禁止字段## (PR #169 + #170: 0 真源, 你之前编了 1976/英国/APC 1000 等假数据被 validator 拦截)
+- 严禁返回 foundingYear / country / apcFee, JSON 中不要包含这三个 key
+- 即使你认为知道该期刊真实创刊年/出版国/版面费, 也不要返 (BossMate 不信任 AI 推测这 3 字段)`,
         },
         {
           role: "user",
@@ -190,7 +189,7 @@ ${journal.publisher ? `出版商：${journal.publisher}` : ""}
 
     const parsed = JSON.parse(jsonMatch[0]);
 
-    // 5-23 PR #169: AI 模型可能"自作主张"仍返禁字段, 防御性 strip + warn log
+    // 5-23 PR #169 / 5-19 PR #170: AI 模型可能"自作主张"仍返禁字段, 防御性 strip + warn log
     if (parsed && parsed.foundingYear !== undefined && parsed.foundingYear !== null) {
       logger.warn({ journal: journal.name, raw: parsed.foundingYear }, "PR #169: AI 自作主张返 foundingYear, 已 strip");
       delete parsed.foundingYear;
@@ -199,12 +198,15 @@ ${journal.publisher ? `出版商：${journal.publisher}` : ""}
       logger.warn({ journal: journal.name, raw: parsed.country }, "PR #169: AI 自作主张返 country, 已 strip");
       delete parsed.country;
     }
+    if (parsed && parsed.apcFee !== undefined && parsed.apcFee !== null) {
+      logger.warn({ journal: journal.name, raw: parsed.apcFee }, "PR #170: AI 自作主张返 apcFee, 已 strip");
+      delete parsed.apcFee;
+    }
 
     return {
       abbreviation: parsed.abbreviation || undefined,
-      // PR #169: foundingYear / country 砍 (0 真源, AI 编 100% 被 validator 拦), template 已 NULL safe
+      // PR #169: foundingYear / country 砍 / PR #170: apcFee 砍 (全 0 真源, AI 编 100%, template 已 NULL safe)
       website: parsed.website || undefined,
-      apcFee: typeof parsed.apcFee === "number" ? parsed.apcFee : undefined,
       selfCitationRate: typeof parsed.selfCitationRate === "number" ? parsed.selfCitationRate : undefined,
       casPartition: parsed.casPartition || undefined,
       casPartitionNew: parsed.casPartitionNew || undefined,
