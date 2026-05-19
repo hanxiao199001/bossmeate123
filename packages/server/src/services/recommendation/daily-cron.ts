@@ -37,7 +37,8 @@ const CANDIDATE_POOL_SIZE = 50;
 
 // 学科 day-of-week 轮换 (0=Sun ... 6=Sat)
 // 每天优先 2 个学科, fallback 时放宽到全部
-const DISCIPLINE_ROTATION: Record<number, string[]> = {
+// PR #173: export 给 admin 端点复用
+export const DISCIPLINE_ROTATION: Record<number, string[]> = {
   1: ["psychology", "education"],        // 周一
   2: ["medicine", "biology"],            // 周二
   3: ["engineering", "computer"],         // 周三
@@ -61,7 +62,8 @@ export interface DailyRecommendationResult {
 /**
  * PR #172: 查 journal 最近 30 天在 SYSTEM tenant 的 contents 数量
  */
-async function getJournal30dCount(journalId: string): Promise<number> {
+// PR #173: export 给 admin 端点复用
+export async function getJournal30dCount(journalId: string): Promise<number> {
   const rows = await db
     .select({ cnt: sql<number>`COUNT(*)` })
     .from(contents)
@@ -74,7 +76,8 @@ async function getJournal30dCount(journalId: string): Promise<number> {
 /**
  * PR #172: 选候选 keywords (cooldown + 学科 + 新鲜度)
  */
-async function selectCandidates(opts: {
+// PR #173: export 给 admin/generate-article 复用
+export async function selectCandidates(opts: {
   disciplines: string[] | null; // null = 全学科
   cooldownDays: number;
   poolSize: number;

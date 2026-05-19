@@ -1,16 +1,18 @@
 /**
- * 5-23 PR #161 — admin 手动生成图文 modal.
+ * PR #173 — "一键 N 篇" 生成 modal.
  *
- * 调 POST /admin/generate-article → 拿 batchId → poll GET /batch/:id 至 row[0].status='generated' → onComplete(contentId)
- * 失败 / 超时 (>120s) 显示 error + retry 按钮.
+ * 砍掉 topic input + journal dropdown, 改为选数量 (3/5/10/自定义) + 模板.
+ * 系统自动选 keyword + journal (复用 daily-cron 多样性逻辑).
  *
- * UX: 单字段表单 (topic + template radio + 可选 journalId), 极简上线 v1.
- * v2 加 journal autocomplete (post-demo backlog).
+ * POST /admin/generate-article { count, template }
+ * 返回 { batchIds: [...N], estimatedSeconds }
+ * poll 所有 batch 至全完成 → 跳 /workbench?tab=draft
  */
 import { useState, useEffect, useRef } from "react";
 import { api } from "../../utils/api";
 
 type Template = "A" | "B" | "C" | "E";
+type CountOption = 3 | 5 | 10 | "custom";
 
 const TEMPLATE_LABELS: Record<Template, { name: string; desc: string }> = {
   A: { name: "A 学术", desc: "适合 SCI/SSCI 期刊推荐" },
@@ -19,33 +21,36 @@ const TEMPLATE_LABELS: Record<Template, { name: string; desc: string }> = {
   E: { name: "E 行业", desc: "适合产业研究" },
 };
 
-interface BatchRow {
-  status: string;
-  articleId: string | null;
-  errorMessage: string | null;
-}
+const COUNT_OPTIONS: { value: CountOption; label: string; time: string }[] = [
+  { value: 3, label: "3 篇", time: "~20 秒" },
+  { value: 5, label: "5 篇", time: "~30 秒" },
+  { value: 10, label: "10 篇", time: "~60 秒" },
+  { value: "custom", label: "自定义", time: "" },
+];
 
 interface ManualGenerateModalProps {
   open: boolean;
   onClose: () => void;
-  onComplete: (contentId: string) => void; // 文章生成完跳工坊
+  onComplete: (contentId: string) => void;
 }
 
 const POLL_INTERVAL_MS = 3000;
-const MAX_WAIT_MS = 120_000;
+const MAX_WAIT_MS = 300_000; // 5 分钟
 
 export default function ManualGenerateModal({ open, onClose, onComplete }: ManualGenerateModalProps) {
-  const [topic, setTopic] = useState("");
+  const [countOption, setCountOption] = useState<CountOption>(5);
+  const [customCount, setCustomCount] = useState(5);
   const [template, setTemplate] = useState<Template>("A");
-  const [journalId, setJournalId] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchIds, setBatchIds] = useState<string[]>([]);
+  const [completedCount, setCompletedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(0);
 
-  // 清理 timer
+  const actualCount = countOption === "custom" ? customCount : countOption;
+
   const cleanup = () => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -54,58 +59,63 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
   };
   useEffect(() => cleanup, []);
 
-  // poll batch status
+  // poll all batch statuses
   useEffect(() => {
-    if (!batchId || !generating) return;
+    if (batchIds.length === 0 || !generating) return;
     startedAtRef.current = Date.now();
+    const doneSet = new Set<string>();
+
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - startedAtRef.current;
       setElapsedMs(elapsed);
       if (elapsed > MAX_WAIT_MS) {
         cleanup();
-        setError("生成超时 (120s), 请重试");
+        setError(`生成超时 (${Math.floor(MAX_WAIT_MS / 1000)}s), 已完成 ${doneSet.size}/${batchIds.length} 篇`);
         setGenerating(false);
         return;
       }
-      try {
-        const res = await api.get<{ batch: any; rows: BatchRow[] }>(`/batch/${batchId}`);
-        const row = (res.data as any)?.rows?.[0];
-        if (!row) return;
-        if (row.status === "generated" && row.articleId) {
-          cleanup();
-          setGenerating(false);
-          onComplete(row.articleId);
-        } else if (row.status === "failed") {
-          cleanup();
-          setError(row.errorMessage || "生成失败");
-          setGenerating(false);
-        }
-      } catch {
-        // 单次轮询失败不中断 (网络抖动)
+      for (const bid of batchIds) {
+        if (doneSet.has(bid)) continue;
+        try {
+          const res = await api.get<{ batch: any; rows: any[] }>(`/batch/${bid}`);
+          const row = (res.data as any)?.rows?.[0];
+          if (row?.status === "generated" || row?.status === "failed") {
+            doneSet.add(bid);
+            setCompletedCount(doneSet.size);
+          }
+        } catch { /* ignore single poll failure */ }
+      }
+      if (doneSet.size >= batchIds.length) {
+        cleanup();
+        setGenerating(false);
+        // 找任意一个成功的 articleId 跳转
+        onComplete(""); // 空串触发刷新 workbench
       }
     }, POLL_INTERVAL_MS);
     return cleanup;
-  }, [batchId, generating, onComplete]);
+  }, [batchIds, generating, onComplete]);
 
   if (!open) return null;
 
   const handleSubmit = async () => {
     setError(null);
-    if (topic.trim().length < 2) {
-      setError("topic 至少 2 个字符");
+    if (actualCount < 1 || actualCount > 20) {
+      setError("数量需在 1-20 之间");
       return;
     }
     setGenerating(true);
     setElapsedMs(0);
+    setCompletedCount(0);
     try {
-      const body: Record<string, unknown> = { topic: topic.trim(), template };
-      if (journalId.trim()) body.journalId = journalId.trim();
-      const res = await api.post<{ batchId: string }>("/admin/generate-article", body);
-      const id = (res.data as any)?.batchId;
-      if (!id) throw new Error("无 batchId 返回");
-      setBatchId(id);
+      const res = await api.post<{ data: { batchIds: string[]; estimatedSeconds: number } }>(
+        "/admin/generate-article",
+        { count: actualCount, template },
+      );
+      const ids = (res.data as any)?.data?.batchIds ?? (res.data as any)?.batchIds ?? [];
+      if (!ids.length) throw new Error("无 batchId 返回");
+      setBatchIds(ids);
     } catch (err: any) {
-      setError(err?.message || "请求失败");
+      setError(err?.response?.data?.message || err?.message || "请求失败");
       setGenerating(false);
     }
   };
@@ -116,9 +126,8 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
     }
     cleanup();
     setGenerating(false);
-    setBatchId(null);
-    setTopic("");
-    setJournalId("");
+    setBatchIds([]);
+    setCompletedCount(0);
     setError(null);
     setElapsedMs(0);
     onClose();
@@ -130,25 +139,52 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-bold text-gray-900">+ 生成图文</h2>
+          <h2 className="text-base font-bold text-gray-900">+ 一键生成图文</h2>
           <button onClick={handleCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
         </div>
 
         <div className="space-y-4">
+          {/* 生成数量 */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">主题 (topic)</label>
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="如: Q1 心理学投稿指南"
-              disabled={generating}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
-            />
+            <label className="block text-xs font-medium text-gray-700 mb-2">生成数量</label>
+            <div className="grid grid-cols-2 gap-2">
+              {COUNT_OPTIONS.map((opt) => (
+                <label
+                  key={String(opt.value)}
+                  className={`px-3 py-2 border rounded-lg cursor-pointer text-sm ${
+                    countOption === opt.value ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 hover:border-gray-300"
+                  } ${generating ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="count"
+                    checked={countOption === opt.value}
+                    onChange={() => setCountOption(opt.value)}
+                    disabled={generating}
+                    className="hidden"
+                  />
+                  <div className="font-medium">{opt.label}</div>
+                  {opt.time && <div className="text-[11px] text-gray-400">{opt.time}</div>}
+                </label>
+              ))}
+            </div>
+            {countOption === "custom" && (
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={customCount}
+                onChange={(e) => setCustomCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                disabled={generating}
+                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
+                placeholder="1-20"
+              />
+            )}
           </div>
 
+          {/* 模板风格 */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">模板</label>
+            <label className="block text-xs font-medium text-gray-700 mb-2">模板风格</label>
             <div className="grid grid-cols-2 gap-2">
               {(Object.keys(TEMPLATE_LABELS) as Template[]).map((t) => (
                 <label
@@ -173,26 +209,22 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">期刊 ID (可选, 留空则自动匹配)</label>
-            <input
-              type="text"
-              value={journalId}
-              onChange={(e) => setJournalId(e.target.value)}
-              placeholder="UUID, 留空让系统推荐 top1"
-              disabled={generating}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
-            />
-          </div>
-
           {error && (
             <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
           )}
 
           {generating && (
-            <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700 flex items-center gap-2">
-              <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
-              <span>生成中... ({elapsedSec}s / 60s 预计)</span>
+            <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
+                <span>生成中... {completedCount}/{batchIds.length} 篇完成 ({elapsedSec}s)</span>
+              </div>
+              <div className="w-full bg-blue-200 rounded-full h-1.5">
+                <div
+                  className="bg-blue-600 h-1.5 rounded-full transition-all"
+                  style={{ width: `${batchIds.length > 0 ? (completedCount / batchIds.length) * 100 : 0}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -203,14 +235,14 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
           </button>
           <button
             onClick={handleSubmit}
-            disabled={generating || topic.trim().length < 2}
+            disabled={generating}
             className={`px-4 py-2 text-sm font-medium rounded-lg ${
-              generating || topic.trim().length < 2
+              generating
                 ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                 : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
           >
-            {generating ? "生成中..." : "生成"}
+            {generating ? "生成中..." : `一键生成 ${actualCount} 篇`}
           </button>
         </div>
       </div>
