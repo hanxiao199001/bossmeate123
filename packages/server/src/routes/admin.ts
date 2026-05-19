@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, gte, or } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { journals, contents } from "../models/schema.js";
+import { journals, contents, platformAccounts } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
@@ -32,6 +32,14 @@ import { logger } from "../config/logger.js";
 const generateArticleSchema = z.object({
   count: z.number().int().min(1).max(20),
   template: z.enum(["A", "B", "C", "E"]).default("A"),
+});
+
+// PR #174: "一键生成发布" — 学科 + 数量 + 账号 + 可选发布
+const generateAndPublishSchema = z.object({
+  discipline: z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics", "auto"]).default("auto"),
+  count: z.number().int().min(1).max(20).default(5),
+  template: z.enum(["A", "B", "C", "E"]).default("A"),
+  accountIds: z.array(z.string().uuid()).default([]), // 空数组 = 仅生成不发布
 });
 
 const generateVideoSchema = z.object({
@@ -167,6 +175,108 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.code(400).send({ code: "BAD_REQUEST", message: err.errors[0]?.message ?? "参数错误" });
       }
       logger.error({ err }, "PR #173 generate-article 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "生成失败, 请稍后重试" });
+    }
+  });
+
+  /**
+   * POST /admin/generate-and-publish — PR #174 "一键生成发布"
+   * body: { discipline, count, template, accountIds }
+   *
+   * Chain: select keywords → create batches → return batchIds + progressId
+   * 前端 poll batch status + 完成后可选 bulk-distribute
+   */
+  app.post("/generate-and-publish", async (request, reply) => {
+    try {
+      const body = generateAndPublishSchema.parse(request.body);
+      const { count, template } = body;
+
+      // 1. 学科选择
+      let disciplines: string[] | null = null;
+      if (body.discipline === "auto") {
+        const dayOfWeek = new Date().getDay();
+        const todayDisc = DISCIPLINE_ROTATION[dayOfWeek] ?? [];
+        disciplines = todayDisc.length > 0 ? todayDisc : null;
+      } else {
+        disciplines = [body.discipline];
+      }
+
+      // 2. 选候选 keywords (复用 daily-cron 多样性)
+      let candidates = await selectCandidates({
+        disciplines,
+        cooldownDays: 30,
+        poolSize: count * 5,
+      });
+      if (candidates.length < count && disciplines) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 30, poolSize: count * 5 });
+      }
+      if (candidates.length < count) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 14, poolSize: count * 5 });
+      }
+      if (candidates.length < count) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 0, poolSize: count * 5 });
+      }
+
+      if (candidates.length === 0) {
+        return reply.code(400).send({ code: "NO_KEYWORDS", message: "无可用关键词" });
+      }
+
+      // 3. 逐候选选 journal + 入 batch
+      const batchIds: string[] = [];
+      const selectedKeywordIds: string[] = [];
+      const journalUseCount = new Map<string, number>();
+
+      for (const kw of candidates) {
+        if (batchIds.length >= count) break;
+        try {
+          const recs = await recommendJournals({ tenantId: request.tenantId, topic: kw.keyword, limit: 5 });
+          let journalId: string | null = null;
+          for (const r of recs) {
+            if ((journalUseCount.get(r.id) ?? 0) >= 2) continue;
+            const use30d = await getJournal30dCount(r.id);
+            if (use30d >= 5) continue;
+            journalId = r.id;
+            break;
+          }
+          if (!journalId) journalId = recs[0]?.id ?? null;
+          if (journalId) journalUseCount.set(journalId, (journalUseCount.get(journalId) ?? 0) + 1);
+
+          const result = await createBatch({
+            tenantId: request.tenantId,
+            userId: request.user.userId,
+            filename: `auto-${kw.keyword.slice(0, 20)}-${Date.now()}`,
+            rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, priority: 1 }],
+          });
+          batchIds.push(result.batchId);
+          selectedKeywordIds.push(kw.id);
+        } catch (err) {
+          logger.warn({ keyword: kw.keyword, err }, "PR #174 单 keyword 入队失败 (跳过)");
+        }
+      }
+
+      // 4. 更新 keyword cooldown
+      if (selectedKeywordIds.length > 0) {
+        await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(inArray(keywordsTable.id, selectedKeywordIds));
+      }
+
+      logger.info(
+        { count, enqueued: batchIds.length, discipline: body.discipline, template, accountIds: body.accountIds, userId: request.user.userId },
+        "PR #174 generate-and-publish 入队"
+      );
+
+      return {
+        code: "OK",
+        data: {
+          batchIds,
+          accountIds: body.accountIds,
+          estimatedSeconds: batchIds.length * 6,
+        },
+      };
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({ code: "BAD_REQUEST", message: err.errors[0]?.message ?? "参数错误" });
+      }
+      logger.error({ err }, "PR #174 generate-and-publish 失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "生成失败, 请稍后重试" });
     }
   });
