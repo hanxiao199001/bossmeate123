@@ -36,10 +36,11 @@ describe("PR #161: backend admin endpoints + migration", () => {
     expect(src).toMatch(/FORBIDDEN/);
   });
 
-  it("routes/admin.ts: addHook preHandler adminOnlyMiddleware + 3 endpoint", async () => {
+  it("routes/admin.ts: per-route adminOnlyMiddleware (PR #171 砍全局 addHook, 仅 bulk admin) + 4 endpoint", async () => {
     const src = await readSrc("../routes/admin.ts");
-    // 守
-    expect(src).toMatch(/app\.addHook\("preHandler",\s*adminOnlyMiddleware\)/);
+    // PR #171: 砍全局 addHook, 改 per-route preHandler. generate-* 全 user, bulk admin only
+    expect(src).not.toMatch(/app\.addHook\("preHandler",\s*adminOnlyMiddleware\)/);
+    expect(src).toMatch(/bulk-distribute[\s\S]{0,80}\{ preHandler: adminOnlyMiddleware \}/);
     // 3 endpoint
     expect(src).toMatch(/app\.post\("\/generate-article"/);
     expect(src).toMatch(/app\.post\("\/generate-video"/);
@@ -103,9 +104,10 @@ describe("PR #161: frontend Workbench v2 多选 + 手动生成", () => {
     expect(src).toMatch(/isMultiSelectMode\s*=\s*selectedIds\.size\s*>\s*0/);
     expect(src).toMatch(/isMultiSelectMode \?[\s\S]{0,80}<BatchPreviewSummary/);
     expect(src).toMatch(/isMultiSelectMode \?[\s\S]{0,80}<BulkDistributeCard/);
-    // admin role check (TopBar / checkbox only for admin/owner)
-    expect(src).toMatch(/isAdmin\s*=[\s\S]{0,80}owner[\s\S]{0,30}admin/);
-    expect(src).toMatch(/isAdmin && \(\s*<WorkbenchTopBar/);
+    // PR #171: 砍 isAdmin gate, TopBar 全 user 开放 (老 isAdmin var 仍存在但 dormant)
+    expect(src).toMatch(/isAdmin\s*=[\s\S]{0,80}owner[\s\S]{0,30}admin/); // var still defined
+    expect(src).not.toMatch(/\{isAdmin && \(\s*<WorkbenchTopBar/); // gate 已删
+    expect(src).toMatch(/<WorkbenchTopBar/); // TopBar 仍 mount (无条件)
     // 2 modal mounted
     expect(src).toMatch(/<ManualGenerateModal/);
     expect(src).toMatch(/<ManualGenerateVideoModal/);
