@@ -274,7 +274,11 @@ export async function ensureJournalEnriched(
       if (data.abbreviation) updateFields.abbreviation = data.abbreviation;
       if (data.foundingYear) updateFields.foundingYear = data.foundingYear;
       if (data.country) updateFields.country = data.country;
-      if (data.website) updateFields.website = data.website;
+      // PR #180 fix: website 只在 DB 无值时写入, 不覆盖已有正确官网 (防 Springer 登录 URL 覆写)
+      if (data.website) {
+        const [existing] = await db.select({ website: journals.website }).from(journals).where(eq(journals.id, journalId)).limit(1);
+        if (!existing?.website) updateFields.website = data.website;
+      }
       if (data.apcFee) updateFields.apcFee = data.apcFee;
       if (data.selfCitationRate) updateFields.selfCitationRate = data.selfCitationRate;
       if (data.casPartition) updateFields.casPartition = data.casPartition;

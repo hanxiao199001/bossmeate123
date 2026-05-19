@@ -178,7 +178,7 @@ export async function adminRoutes(app: FastifyInstance) {
       const batchIds: string[] = [];
       const selectedKeywordIds: string[] = [];
       const journalUseCount = new Map<string, number>();
-      const MAX_PER_JOURNAL_24H = 2;
+      const MAX_PER_JOURNAL_24H = 1; // PR #180: batch 内每期刊最多 1 篇
       const JOURNAL_MAX_PER_30D = 5;
 
       for (const kw of candidates) {
@@ -316,7 +316,8 @@ export async function adminRoutes(app: FastifyInstance) {
             const recs = await recommendJournals({ tenantId: request.tenantId, topic: kw.keyword, limit: 5 });
             let journalId: string | null = null;
             for (const r of recs) {
-              if ((journalUseCount.get(r.id) ?? 0) >= 2) continue;
+              // PR #180: batch 内每期刊最多 1 篇 (5 篇 → 5 不同期刊)
+              if ((journalUseCount.get(r.id) ?? 0) >= 1) continue;
               const use30d = await getJournal30dCount(r.id);
               if (use30d >= 5) continue;
               journalId = r.id;
