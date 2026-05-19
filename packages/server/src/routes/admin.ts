@@ -17,6 +17,9 @@ import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
 import { recommendJournals } from "../services/recommendation/journal-recommender.js";
+import { selectCandidates, DISCIPLINE_ROTATION, getJournal30dCount } from "../services/recommendation/daily-cron.js";
+import { keywords as keywordsTable } from "../models/schema.js";
+import { inArray } from "drizzle-orm";
 import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "../services/digital-human/template-mapping.js";
 import { isRealMode } from "../services/digital-human/client.js";
@@ -25,9 +28,9 @@ import { contentPublishLog } from "../models/schema.js";
 import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
 
+// PR #173: "一键 N 篇" 模式 — count 替代 topic+journalId
 const generateArticleSchema = z.object({
-  topic: z.string().min(2).max(100),
-  journalId: z.string().uuid().optional(),
+  count: z.number().int().min(1).max(20),
   template: z.enum(["A", "B", "C", "E"]).default("A"),
 });
 
@@ -57,76 +60,113 @@ export async function adminRoutes(app: FastifyInstance) {
   app.addHook("preHandler", adminOnlyMiddleware);
 
   /**
-   * POST /admin/generate-article
-   * body: { topic: string, journalId?: uuid, template?: 'A'|'B'|'C'|'E' }
-   * 返回: { batchId, contentId(待 worker 完成), estimatedSeconds: 60 }
+   * POST /admin/generate-article  — PR #173 "一键 N 篇" 模式
+   * body: { count: 1-20, template?: 'A'|'B'|'C'|'E' }
+   * 返回: { batchIds: string[], estimatedSeconds: count*6 }
    *
    * 行为:
-   *   1. 若 journalId 提供: 校验 journals where id=? AND confidence>=90
-   *   2. 若 journalId 不提供: recommendJournals top1 (tenantId=request.tenantId)
-   *   3. createBatch(priority=1, rows=[{topic, journalId, template}])
-   *   4. 返回 batchId, 前端 poll /batch/:id/status 至 ready 拿 contentId
+   *   1. selectCandidates (复用 daily-cron 多样性: cooldown + 学科 rotation + journal 30d 限流)
+   *   2. recommendJournals top5 per keyword → 过 30d 限流 → 选 journal
+   *   3. createBatch per keyword (priority=1)
+   *   4. UPDATE keyword.last_recommended_at
    */
   app.post("/generate-article", async (request, reply) => {
     try {
       const body = generateArticleSchema.parse(request.body);
+      const count = body.count;
 
-      // 1. 决定 journalId
-      let journalId = body.journalId;
-      if (journalId) {
-        const [j] = await db
-          .select({ id: journals.id, confidence: journals.confidence })
-          .from(journals)
-          .where(and(eq(journals.id, journalId), gte(journals.confidence, MIN_JOURNAL_CONFIDENCE)))
-          .limit(1);
-        if (!j) {
-          return reply.code(400).send({
-            code: "JOURNAL_NOT_QUALIFIED",
-            message: `期刊不存在或 confidence < ${MIN_JOURNAL_CONFIDENCE}`,
-          });
-        }
-      } else {
-        // 自动选 top1
-        const recs = await recommendJournals({
-          tenantId: request.tenantId,
-          topic: body.topic,
-          limit: 1,
-        });
-        if (recs.length === 0 || !recs[0]) {
-          return reply.code(400).send({
-            code: "NO_JOURNAL_MATCH",
-            message: `无法为 topic '${body.topic}' 匹配到合适期刊, 请手动指定 journalId`,
-          });
-        }
-        journalId = recs[0].id;
-      }
+      // 1. 选候选 keywords (复用 daily-cron 多样性逻辑)
+      const dayOfWeek = new Date().getDay();
+      const todayDisciplines = DISCIPLINE_ROTATION[dayOfWeek] ?? [];
 
-      // 2. createBatch (priority=1 最高优先)
-      const filename = `manual-${body.topic.slice(0, 20)}-${Date.now()}`;
-      const result = await createBatch({
-        tenantId: request.tenantId,
-        userId: request.user.userId,
-        filename,
-        rows: [{ rowIndex: 1, topic: body.topic, journalId, template: body.template, priority: 1 }],
+      let candidates = await selectCandidates({
+        disciplines: todayDisciplines.length > 0 ? todayDisciplines : null,
+        cooldownDays: 30,
+        poolSize: count * 5,
       });
 
+      // Fallback: 学科放宽
+      if (candidates.length < count && todayDisciplines.length > 0) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 30, poolSize: count * 5 });
+      }
+      // Fallback: cooldown 放宽
+      if (candidates.length < count) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 14, poolSize: count * 5 });
+      }
+      // Fallback: 无 cooldown
+      if (candidates.length < count) {
+        candidates = await selectCandidates({ disciplines: null, cooldownDays: 0, poolSize: count * 5 });
+      }
+
+      if (candidates.length === 0) {
+        return reply.code(400).send({ code: "NO_KEYWORDS", message: "无可用关键词, 请检查 keywords 抓取链路" });
+      }
+
+      // 2. 逐候选选 journal + 入队
+      const batchIds: string[] = [];
+      const selectedKeywordIds: string[] = [];
+      const journalUseCount = new Map<string, number>();
+      const MAX_PER_JOURNAL_24H = 2;
+      const JOURNAL_MAX_PER_30D = 5;
+
+      for (const kw of candidates) {
+        if (batchIds.length >= count) break;
+        try {
+          const recs = await recommendJournals({
+            tenantId: request.tenantId,
+            topic: kw.keyword,
+            limit: 5,
+          });
+
+          let journalId: string | null = null;
+          for (const r of recs) {
+            if ((journalUseCount.get(r.id) ?? 0) >= MAX_PER_JOURNAL_24H) continue;
+            const use30d = await getJournal30dCount(r.id);
+            if (use30d >= JOURNAL_MAX_PER_30D) continue;
+            journalId = r.id;
+            break;
+          }
+          if (!journalId) journalId = recs[0]?.id ?? null;
+          if (journalId) journalUseCount.set(journalId, (journalUseCount.get(journalId) ?? 0) + 1);
+
+          const result = await createBatch({
+            tenantId: request.tenantId,
+            userId: request.user.userId,
+            filename: `manual-batch-${kw.keyword.slice(0, 20)}-${Date.now()}`,
+            rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template: body.template, priority: 1 }],
+          });
+          batchIds.push(result.batchId);
+          selectedKeywordIds.push(kw.id);
+        } catch (err) {
+          logger.warn({ keyword: kw.keyword, err }, "PR #173 单 keyword 入队失败 (跳过)");
+        }
+      }
+
+      // 3. 更新 keyword.last_recommended_at
+      if (selectedKeywordIds.length > 0) {
+        await db
+          .update(keywordsTable)
+          .set({ lastRecommendedAt: new Date() })
+          .where(inArray(keywordsTable.id, selectedKeywordIds));
+      }
+
       logger.info(
-        { batchId: result.batchId, topic: body.topic, journalId, template: body.template, userId: request.user.userId },
-        "PR #161 admin generate-article 入队"
+        { count, enqueued: batchIds.length, template: body.template, userId: request.user.userId },
+        "PR #173 admin generate-article 一键 N 篇入队"
       );
 
       return {
         code: "OK",
         data: {
-          batchId: result.batchId,
-          estimatedSeconds: 60,
+          batchIds,
+          estimatedSeconds: batchIds.length * 6,
         },
       };
     } catch (err) {
       if (err instanceof z.ZodError) {
         return reply.code(400).send({ code: "BAD_REQUEST", message: err.errors[0]?.message ?? "参数错误" });
       }
-      logger.error({ err }, "PR #161 generate-article 失败");
+      logger.error({ err }, "PR #173 generate-article 失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "生成失败, 请稍后重试" });
     }
   });
