@@ -49,9 +49,11 @@ export default function ContentWorkbenchPage() {
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
   const [showAudit, setShowAudit] = useState(false);
 
-  // 5-23 PR #161 — admin role check + 多选 state + 生成 modal state
+  // 5-19 PR #171: 砍 admin role 限制 — 生成按钮 + checkbox 对所有 authenticated user 开放
+  // 老 isAdmin 仍保留 (未来 admin-only UI 元素可复用 — 如 bulk-distribute 按钮 admin only)
   const userRole = useAuthStore((s) => s.user?.role);
   const isAdmin = userRole === "owner" || userRole === "admin";
+  void isAdmin; // 留 dormant 防 lint 警告 (未来 bulk UI 可启用)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [generateModal, setGenerateModal] = useState<"article" | "video" | null>(null);
   const toggleMultiSelect = useCallback((id: string) => {
@@ -243,15 +245,13 @@ export default function ContentWorkbenchPage() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
-      {/* 5-23 PR #161: admin only 顶部工具栏 (2 个生成按钮 + 已选 badge) */}
-      {isAdmin && (
-        <WorkbenchTopBar
-          selectedCount={selectedIds.size}
-          onClickGenerateArticle={() => setGenerateModal("article")}
-          onClickGenerateVideo={() => setGenerateModal("video")}
-          onClickClearSelection={() => setSelectedIds(new Set())}
-        />
-      )}
+      {/* 5-19 PR #171: 砍 isAdmin gate — 生成按钮全 user 开放 (PR #161 admin only 过严, 韩宵也看不到) */}
+      <WorkbenchTopBar
+        selectedCount={selectedIds.size}
+        onClickGenerateArticle={() => setGenerateModal("article")}
+        onClickGenerateVideo={() => setGenerateModal("video")}
+        onClickClearSelection={() => setSelectedIds(new Set())}
+      />
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
 
       {/* 3 列布局 */}
@@ -268,7 +268,7 @@ export default function ContentWorkbenchPage() {
                 selected={selectedId === it.id}
                 multiSelected={selectedIds.has(it.id)}
                 onClick={() => setSelectedId(it.id)}
-                onToggleSelect={isAdmin ? () => toggleMultiSelect(it.id) : undefined}
+                onToggleSelect={() => toggleMultiSelect(it.id)} // PR #171: checkbox 全 user 开放
               />
             ))
           )}

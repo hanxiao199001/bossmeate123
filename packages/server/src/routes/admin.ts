@@ -83,8 +83,9 @@ const MAX_CARTESIAN = 200; // 笛卡尔积 safety cap
 const MIN_JOURNAL_CONFIDENCE = 90;
 
 export async function adminRoutes(app: FastifyInstance) {
-  // 所有 /admin/* 路由先经 adminOnlyMiddleware
-  app.addHook("preHandler", adminOnlyMiddleware);
+  // 5-19 PR #171: 权限分级 — 删全局 addHook, 改 per-route preHandler
+  // generate-article/video: 任 authenticated user (单文章生成无破坏)
+  // bulk-distribute / SSE: admin only (大批量影响外部 API, 跨多文章)
 
   /**
    * GET /admin/journals/search — PR #175 期刊实时筛选
@@ -132,7 +133,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
-   * POST /admin/generate-article  — PR #173 "一键 N 篇" 模式
+   * POST /admin/generate-article — PR #173 "一键 N 篇" + PR #171 全 user 可调
    * body: { count: 1-20, template?: 'A'|'B'|'C'|'E' }
    * 返回: { batchIds: string[], estimatedSeconds: count*6 }
    *
@@ -462,7 +463,8 @@ export async function adminRoutes(app: FastifyInstance) {
    *   3. 剩余对入 bulkDistributeQueue (throttleMs delay 累加)
    *   4. 返回 batchId + 三类计数, 客户端 SSE /bulk-distribute/:batchId/stream 拿进度
    */
-  app.post("/bulk-distribute", async (request, reply) => {
+  // 5-19 PR #171: bulk-distribute admin only (大批量影响外部 API + 笛卡尔积 ≤ 200, 防滥用)
+  app.post("/bulk-distribute", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     try {
       const body = bulkDistributeSchema.parse(request.body);
       const pairs: Array<{ contentId: string; accountId: string }> = [];
@@ -543,7 +545,8 @@ export async function adminRoutes(app: FastifyInstance) {
    *   done:     { batchId, success, failed, skipped, durationMs }
    * 心跳每 15s `: ping\n\n` 防中间件超时断连.
    */
-  app.get("/bulk-distribute/:batchId/stream", async (request, reply) => {
+  // 5-19 PR #171: SSE stream admin only (跟随 POST /bulk-distribute 同权限)
+  app.get("/bulk-distribute/:batchId/stream", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const { batchId } = request.params as { batchId: string };
     const progress = getBulkProgress(batchId);
     if (!progress) {
