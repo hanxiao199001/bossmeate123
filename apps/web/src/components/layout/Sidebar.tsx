@@ -15,6 +15,7 @@ interface NavItem {
 const PRIMARY_NAV: NavItem[] = [
   { to: "/", icon: "🏠", label: "首页", matchPrefix: "" }, // 精确匹配 / 即可
   { to: "/workbench", icon: "📝", label: "内容工坊", matchPrefix: "/workbench" },
+  { to: "/content", icon: "📂", label: "内容管理", matchPrefix: "/content" },
   { to: "/sales-radar", icon: "📡", label: "销售雷达", matchPrefix: "/sales-radar" },
   { to: "/accounts", icon: "📱", label: "账号", matchPrefix: "/accounts" },
 ];

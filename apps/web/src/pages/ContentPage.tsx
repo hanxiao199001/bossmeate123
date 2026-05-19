@@ -20,6 +20,7 @@ interface ContentItem {
   platforms: Array<{ platform: string; status?: string; publishedAt?: string; mediaId?: string }>;
   tokensTotal: number;
   metadata?: Record<string, any>;
+  pinned?: boolean; // PR #178
   createdAt: string;
   updatedAt: string;
 }
@@ -492,6 +493,19 @@ export default function ContentPage() {
 
                   {/* 操作 */}
                   <div className="col-span-2 flex items-center justify-center gap-2">
+                    {/* PR #178: pin toggle */}
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post(`/content/${item.id}/pin`, { pinned: !item.pinned });
+                          fetchContents();
+                        } catch { /* ignore */ }
+                      }}
+                      className={`text-xs px-1.5 py-1 rounded ${item.pinned ? "text-amber-600 bg-amber-50" : "text-gray-400 hover:text-amber-500 hover:bg-amber-50"}`}
+                      title={item.pinned ? "取消钉住" : "钉住 (防自动清理)"}
+                    >
+                      {item.pinned ? "📌" : "📍"}
+                    </button>
                     <button
                       onClick={() => navigate(`/content/${item.id}`)}
                       className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50"
