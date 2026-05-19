@@ -708,6 +708,10 @@ function renderAiSubmissionAdvice(ai: AIGeneratedContent): string {
 }
 
 // ============ 区块 16: 综合点评（aiContent.recommendation 摘要） ============
+// 5-19 hotfix: AI prompt 要 HTML 输出 (article-skill.ts:1223 "用HTML格式"),
+// 之前 esc(reco) 把 <p><strong><ul><li> 转成 &lt;p&gt; 字面文本 — 公众号草稿里 raw 显示 HTML 标签.
+// 修复: (1) 砍 esc() 直接 inject (与 renderDeepAnalysisSection 一致)
+//       (2) 外包 <p> → <div> (reco 内含 <ul>, <ul> 放 <p> 里是 invalid HTML)
 function renderSummaryBlock(aiContent: AIGeneratedContent): string {
   const reco = aiContent.recommendation
     ? aiContent.recommendation.replace(/\s+/g, " ").trim()
@@ -718,9 +722,10 @@ function renderSummaryBlock(aiContent: AIGeneratedContent): string {
       `<p style="margin:0;font-size:14px;color:${MUTED};line-height:1.7;">待 AI 生成</p>` +
       `</section>`;
   }
+  // reco 含 AI 生成的 <p><strong><ul><li> 等 HTML, 直接 inject (不 esc)
   return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
     `<p style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">综合点评</p>` +
-    `<p style="margin:0;font-size:14px;line-height:1.8;color:${TEXT};">${esc(reco)}</p>` +
+    `<div style="margin:0;font-size:14px;line-height:1.8;color:${TEXT};">${reco}</div>` +
     `</section>`;
 }
 
