@@ -573,10 +573,21 @@ export interface ClaimedFact {
  * 5-23 hotfix: 先 strip HTML 标签. journal-template 渲染时 key/value 隔 `<strong>` 等标签
  * (e.g. "创刊年：</strong>2010"), 不剥就漏识 "创刊年 2010" "出版国 瑞士" 等关键 fabricated claim.
  */
+// PR #171: 模糊语境检测 — "通常"/"大约"/"左右"/"据公开资料" 等修饰 → 跳过 validation
+const MODAL_PHRASES = /(?:据公开资料|通常|大约|左右|约为|大致|预计|展望|未来|预测|维持在|区间)/;
+function isModalContext(text: string, idx: number, windowSize = 15): boolean {
+  const start = Math.max(0, idx - windowSize);
+  const end = Math.min(text.length, idx + windowSize);
+  return MODAL_PHRASES.test(text.slice(start, end));
+}
+
 export function extractClaimedFacts(body: string): ClaimedFact[] {
   if (!body) return [];
   // strip HTML: 换标签为单空格, 不丢字符位置
   body = body.replace(/<[^>]+>/g, " ");
+  // PR #171: 深度清洗 — 去掉 SVG/chart 残留数字噪声
+  body = body.replace(/\d+\s*[\/／]\s*\d+/g, " ");  // "2/5" "4 / 5" 评分
+  body = body.replace(/Q\s*[12345]\b/g, " ");         // "Q1" "Q 1" 分区标记
   const out: ClaimedFact[] = [];
   const seen = new Set<string>(); // 同 field+claimed 去重 (body 多处重复提及只算 1 次)
 
@@ -587,11 +598,20 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
     out.push(f);
   };
 
-  // 1. IF — "IF 14.7" / "影响因子 14.7" / "IF=14.7" / "影响因子 高达 14.7" / "影响因子仅 2.6"
-  // .{0,6}? 允许中间任意 6 字 (e.g. "高达"/"仅"/"约"/"达到"等修饰词)
-  for (const m of body.matchAll(/(?:IF|影响因子).{0,6}?(\d+(?:\.\d+)?)/g)) {
+  // 1. IF — PR #171 精化: 收紧为 3 层过滤
+  //   Layer A: decimal IF (e.g. "IF 14.7" "影响因子 2.6") — 最可信, 窗口放宽到 6 字
+  //   Layer B: integer IF 仅当紧跟 "分"/"(" 限定符 (e.g. "IF 7 分") — 防 "近10年" 误提
+  //   Layer C: 模糊语境过滤 — "预测 IF 维持在 60-65" 不算 claim
+  for (const m of body.matchAll(/(?:IF|影响因子)[\s:：=]{0,3}(?:高达|仅|约|达到|为)?[\s]*?(\d+\.\d+)/g)) {
     const n = parseFloat(m[1]!);
-    if (!isNaN(n) && n > 0 && n < 200) {
+    if (!isNaN(n) && n > 0 && n < 200 && !isModalContext(body, m.index!)) {
+      push({ field: "impactFactor", claimed: n, rawMatch: m[0] });
+    }
+  }
+  // Layer B: integer IF + 限定符 (e.g. "IF 7 分")
+  for (const m of body.matchAll(/(?:IF|影响因子)[\s:：=]{0,3}(?:高达|仅|约|达到|为)?[\s]*?(\d+)\s*(?=分|（|\()/g)) {
+    const n = parseFloat(m[1]!);
+    if (!isNaN(n) && n > 0 && n < 200 && !isModalContext(body, m.index!)) {
       push({ field: "impactFactor", claimed: n, rawMatch: m[0] });
     }
   }
@@ -610,10 +630,10 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
   }
 
   // 4. 版面费 / APC — "版面费 $2000" / "APC 1500 美元" / "$2,000"
-  // 注: \d+ 在 [\d,]+ 前提下兜底, 防 "$2900" 被 \d{1,3} 提早截 "290"
+  // PR #171: 加模糊语境过滤
   for (const m of body.matchAll(/(?:版面费|APC).{0,5}?[$¥]?([\d,]+)/g)) {
     const n = parseInt(m[1]!.replace(/,/g, ""), 10);
-    if (!isNaN(n) && n >= 100 && n <= 20000) {
+    if (!isNaN(n) && n >= 100 && n <= 20000 && !isModalContext(body, m.index!, 40)) {
       push({ field: "apcFee", claimed: n, rawMatch: m[0] });
     }
   }
