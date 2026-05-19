@@ -11,6 +11,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../../utils/api";
+import JournalFilterTab from "./JournalFilterTab";
 
 type Template = "A" | "B" | "C" | "E";
 type CountOption = 3 | 5 | 10 | "custom";
@@ -60,6 +61,8 @@ const POLL_INTERVAL_MS = 3000;
 const MAX_WAIT_MS = 300_000;
 
 export default function ManualGenerateModal({ open, onClose, onComplete }: ManualGenerateModalProps) {
+  // PR #175: tab 切换 (快速 / 精准)
+  const [activeTab, setActiveTab] = useState<"quick" | "precise">("quick");
   // 段 1: 学科
   const [discipline, setDiscipline] = useState<Discipline>("auto");
   // 段 2: 数量 + 模板
@@ -156,9 +159,33 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
     setCompletedCount(0);
     try {
       const res = await api.post("/admin/generate-and-publish", {
+        mode: "discipline-auto",
         discipline,
         count: actualCount,
         template,
+        accountIds: skipPublish ? [] : [...selectedAccountIds],
+      });
+      const data = (res.data as any)?.data ?? res.data;
+      const ids = data?.batchIds ?? [];
+      if (!ids.length) throw new Error("无 batchId 返回");
+      setBatchIds(ids);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err?.message || "请求失败");
+      setPhase("error");
+    }
+  };
+
+  // PR #175: 精准筛选提交
+  const handlePreciseSubmit = async (journalIds: string[], tmpl: "A" | "B" | "C" | "E") => {
+    setError(null);
+    setPhase("generating");
+    setElapsedMs(0);
+    setCompletedCount(0);
+    try {
+      const res = await api.post("/admin/generate-and-publish", {
+        mode: "journal-specified",
+        journalIds,
+        template: tmpl,
         accountIds: skipPublish ? [] : [...selectedAccountIds],
       });
       const data = (res.data as any)?.data ?? res.data;
@@ -190,11 +217,41 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-bold text-gray-900">一键生成发布</h2>
           <button onClick={handleCancel} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
 
+        {/* PR #175: Tab bar */}
+        <div className="flex gap-1 mb-4 border-b border-gray-100">
+          {([["quick", "快速"], ["precise", "精准筛选"]] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => !generating && setActiveTab(key)}
+              disabled={generating}
+              className={`px-3 py-1.5 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === key
+                  ? "border-blue-500 text-blue-700"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              } ${generating ? "cursor-not-allowed opacity-50" : ""}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        {activeTab === "precise" ? (
+          <JournalFilterTab
+            accounts={accounts}
+            selectedAccountIds={selectedAccountIds}
+            toggleAccount={toggleAccount}
+            skipPublish={skipPublish}
+            setSkipPublish={setSkipPublish}
+            onSubmit={handlePreciseSubmit}
+            generating={generating}
+          />
+        ) : (
         <div className="space-y-5">
           {/* 段 1: 学科 */}
           <div>
@@ -282,32 +339,35 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
             )}
           </div>
 
-          {/* 错误 */}
-          {error && (
-            <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
-          )}
-
-          {/* 进度 */}
-          {generating && (
-            <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
-                <span>生成中... {completedCount}/{batchIds.length} 篇 ({elapsedSec}s)</span>
-              </div>
-              <div className="w-full bg-blue-200 rounded-full h-1.5">
-                <div className="bg-blue-600 h-1.5 rounded-full transition-all" style={{ width: `${batchIds.length > 0 ? (completedCount / batchIds.length) * 100 : 0}%` }} />
-              </div>
-            </div>
-          )}
-
-          {phase === "done" && (
-            <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
-              生成完成! {completedCount} 篇已入库, 正在跳转...
-            </div>
-          )}
         </div>
+        {/* end quick tab */}
+        )}
 
-        {/* 按钮 */}
+        {/* Shared: error + progress + buttons (both tabs) */}
+        {error && (
+          <div className="mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+        )}
+
+        {generating && (
+          <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="inline-block w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
+              <span>生成中... {completedCount}/{batchIds.length} 篇 ({elapsedSec}s)</span>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-1.5">
+              <div className="bg-blue-600 h-1.5 rounded-full transition-all" style={{ width: `${batchIds.length > 0 ? (completedCount / batchIds.length) * 100 : 0}%` }} />
+            </div>
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="mt-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+            生成完成! {completedCount} 篇已入库, 正在跳转...
+          </div>
+        )}
+
+        {/* 快速 tab 按钮 (精准 tab 有自己的按钮) */}
+        {activeTab === "quick" && (
         <div className="mt-5 flex items-center justify-end gap-2">
           <button onClick={handleCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">
             {generating ? "取消" : "关闭"}
@@ -324,6 +384,7 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
             {generating ? "生成中..." : phase === "done" ? "完成" : skipPublish ? `生成 ${actualCount} 篇` : `生成并发布 ${actualCount} 篇`}
           </button>
         </div>
+        )}
       </div>
     </div>
   );
