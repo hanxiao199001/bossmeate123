@@ -1074,19 +1074,16 @@ export class ArticleSkill implements ISkill {
     const journalName = journal.nameEn || journal.name;
 
     // ---- 标题多元化：随机选择句式风格 ----
+    // PR #180: 标题风格重写 — 必含期刊名, 禁模板化句式, 禁无数据评价
+    const rateText = journal.acceptanceRate != null ? `录用率${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%` : "";
+    const cycleText = journal.reviewCycle ? `审稿${journal.reviewCycle}` : "";
+    const partitionText = journal.partition ? `${journal.partition}` : "";
     const titleStyles = [
-      // 数据亮点型
-      `数据驱动型标题：用IF分数、录用率、审稿周期等关键数据作为标题核心卖点。示例："IF ${ifText}分，录用率仅${journal.acceptanceRate != null ? (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0) + "%" : "XX%"}，${journalName}值得一投！"`,
-      // 疑问悬念型
-      `疑问悬念型标题：用提问或悬念引发好奇心，让读者想点进来看答案。示例："这本${journal.discipline || ""}期刊凭什么IF年年涨？审稿只要${journal.reviewCycle || "X天"}的秘密"`,
-      // 对比推荐型
-      `对比推荐型标题：通过横向对比或排名突出期刊优势。示例："${journal.discipline || ""}领域性价比最高的Q1期刊？${journalName}深度解析"`,
-      // 痛点切入型
-      `痛点切入型标题：从科研人的实际痛点出发（赶毕业、评职称、发不出论文），关联到期刊推荐。示例："毕业季还没发SCI？这本${journal.casPartition || journal.partition || "高分"}期刊审稿快、录用率高！"`,
-      // 热点结合型
-      `热点趋势型标题：结合学科领域当前热门研究方向或关键词，增加时效感。示例："2025年${journal.discipline || ""}最火研究方向+高分期刊推荐，${journalName}全解读"`,
-      // 榜单盘点型
-      `榜单盘点型标题：用「必看」「盘点」「TOP」等词汇制造权威感。示例："${journal.discipline || ""}方向必投TOP期刊盘点：${journalName}，IF ${ifText}"`,
+      `数据亮点型：以 IF + 期刊英文全名为核心。示例："${journalName} IF ${ifText}: ${journal.discipline || "学术"}领域的标杆期刊深度盘点"`,
+      `学科定位型：突出期刊所属学科和出版社。示例："${journalName}: ${journal.publisher || "国际出版社"}旗下${journal.discipline || "学术"}领域旗舰期刊"`,
+      `横向对比型：与同领域期刊对比突出差异。示例："${journal.discipline || "学术"}顶刊横向对比: ${journalName} 为何是${partitionText ? partitionText+"中的" : ""}性价比之王?"`,
+      `深度解读型：聚焦期刊特色和收稿范围。示例："${journalName} 全面解读: IF ${ifText}${rateText ? "·" + rateText : ""}${cycleText ? "·" + cycleText : ""}"`,
+      `趋势分析型：结合年度热点。示例："2025年${journal.discipline || "学术"}最火研究方向 + ${journalName} 全解读"`,
     ];
     const chosenStyle = titleStyles[Math.floor(Math.random() * titleStyles.length)];
 
@@ -1192,12 +1189,20 @@ export class ArticleSkill implements ISkill {
 ##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
 ${knownFields.join("\n")}
 ${unknownBlock}${blacklistBlock}${enrichmentBlock}
+## 分区数据约束 (PR #180)
+任何 "分区" / "Q1" / "Q2" / "Q3" / "Q4" / "X区顶刊" 等表述,
+必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.
+若两个字段都 NULL → 文章中**禁止提分区**, 也禁止说"顶刊" / "X区刊"。
+
+## 标题硬约束 (PR #180)
+1. 标题必须包含期刊英文全名 (如 "${journalName}")
+2. 禁止以下模板式句式: "毕业季还没发SCI?" / "XX值得一投!" / "审稿快、录用率高"
+3. 禁止无数据模糊评价: "录用率高/低" / "审稿快/慢" / "性价比高" (除非有 DB 真数字)
+4. 标题长度 20-50 字
+
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
-
-重要：标题风格必须严格遵循上面的"本次标题风格"要求，不要总是写成一种风格！
-标题长度控制在 20-50 字，可以用「|」「，」「！」等标点断句增加节奏感。
 
 【叙事口吻】
 - recommendation 不要写成干巴巴的总结，要有个人观点和态度（像资深编辑而非百科词条）

@@ -257,12 +257,16 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
   // PR #117 fix Bug 2：website NULL/空时整行不渲染（不显示比"暂无"更专业；避免假"查看官网"链接）
   // user 5-11 反馈：prod 多数 multi_source 期刊 website 字段 NULL（enricher 未抓取）→ 模板显示"暂无"被
   // user 误以为"假链接"。降级方案：仅当真有合法 http(s) URL 才渲染"官网："行。
-  if (journal.website && /^https?:\/\//i.test(journal.website)) {
+  // PR #180: website 有值且非 Springer 登录 URL → 显示; NULL → fallback Google 搜索
+  const isSpringerLogin = journal.website && /idp\.springer\.com/i.test(journal.website);
+  if (journal.website && /^https?:\/\//i.test(journal.website) && !isSpringerLogin) {
     const safe = esc(journal.website);
-    // PR Q.10：长 URL 显示锚文本（避免微信公众号草稿 URL 占多行破坏布局）。href 不变。
     const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
-    // PR #132 (5-12): 外链新 tab + 安全防 referer
     lines.push(`<strong>官网：</strong><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
+  } else if (journal.nameEn || journal.name) {
+    const searchName = esc(journal.nameEn || journal.name);
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent((journal.nameEn || journal.name) + " journal official website")}`;
+    lines.push(`<strong>官网：</strong><a href="${searchUrl}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">搜索 ${searchName} →</a>`);
   }
 
   const ps = lines
