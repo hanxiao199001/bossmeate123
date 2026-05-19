@@ -42,6 +42,7 @@ export type SchedulerJobType =
   | "industry-monthly"         // P5 5-14：每月 1 号 4 行业 × 50 篇 article 自动生成
   | "daily-recommendation"     // PR #130 V2.5 5-13：每日 03:00 BJ 10 篇推荐 article 入 system tenant
   | "monthly-journal-refresh"  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
+  | "content-retention-cleanup" // PR #178：每日 03:30 BJ 60 天保留清理
   | "stale-review-cleanup";    // 清理超时未审核内容（3天）
 
 export interface SchedulerJobData {
@@ -326,11 +327,19 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
     }
 
     case "monthly-journal-refresh": {
-      // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
+      // PR #177：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
       const { refreshJournalsPool } = await import("../scripts/refresh-journals-pool.js");
       const refreshResult = await refreshJournalsPool({ newCount: 50, refreshExisting: true });
-      logger.info(refreshResult, "PR #178 monthly-journal-refresh cron 完成");
+      logger.info(refreshResult, "PR #177 monthly-journal-refresh cron 完成");
       return refreshResult;
+    }
+
+    case "content-retention-cleanup": {
+      // PR #178：每日 03:30 BJ 60 天保留清理
+      const { cleanupOldContents } = await import("../scripts/cleanup-old-contents.js");
+      const cleanupResult = await cleanupOldContents();
+      logger.info(cleanupResult, "PR #178 content-retention-cleanup cron 完成");
+      return cleanupResult;
     }
     case "journal-trust-reverify": {
       // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
@@ -617,13 +626,23 @@ async function registerCronJobs() {
     }
   );
 
-  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常值检测
+  // PR #177：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常值检测
   await crawlerQueue.upsertJobScheduler(
     "monthly-journal-refresh-schedule",
     { pattern: "0 4 1 * *", tz: "Asia/Shanghai" },
     {
       name: "monthly-journal-refresh",
       data: { type: "monthly-journal-refresh" as SchedulerJobType },
+    }
+  );
+
+  // PR #178：每日 03:30 BJ 60 天保留清理
+  await crawlerQueue.upsertJobScheduler(
+    "content-retention-cleanup-schedule",
+    { pattern: "30 3 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "content-retention-cleanup",
+      data: { type: "content-retention-cleanup" as SchedulerJobType },
     }
   );
 

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, and, desc, sql, count, or, isNull, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, count, or, isNull, inArray, gte, lt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
 import { contents, productionRecords, bossEdits, journals } from "../models/schema.js";
@@ -47,6 +47,8 @@ export async function contentRoutes(app: FastifyInstance) {
         page?: string;
         pageSize?: string;
         recommendation?: string;  // PR #130 V2.5: ?recommendation=true → 切 system tenant
+        days?: string;           // PR #178: 时间窗口 (default 60)
+        pinned?: string;         // PR #178: "true" | "false" | undefined
       };
 
       const page = Math.max(1, parseInt(query.page || "1", 10));
@@ -84,6 +86,19 @@ export async function contentRoutes(app: FastifyInstance) {
         conditions.push(eq(contents.status, filterStatus));
       }
 
+      // PR #178: 时间窗口 (默认 60 天)
+      if (query.days) {
+        const days = Math.max(1, Math.min(365, parseInt(query.days, 10) || 60));
+        conditions.push(gte(contents.createdAt, new Date(Date.now() - days * 24 * 60 * 60 * 1000)));
+      }
+
+      // PR #178: pinned filter
+      if (query.pinned === "true") {
+        conditions.push(eq(contents.pinned, true));
+      } else if (query.pinned === "false") {
+        conditions.push(or(eq(contents.pinned, false), isNull(contents.pinned)));
+      }
+
       const whereClause = and(...conditions);
 
       const [list, totalResult] = await Promise.all([
@@ -115,6 +130,34 @@ export async function contentRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error({ err }, "获取内容列表失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * POST /content/:id/pin — PR #178 toggle pinned 保护
+   */
+  app.post("/:id/pin", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const body = (request.body as { pinned?: boolean }) ?? {};
+      const pinned = body.pinned ?? true;
+
+      const [row] = await db
+        .select({ id: contents.id, tenantId: contents.tenantId })
+        .from(contents)
+        .where(and(eq(contents.id, id), eq(contents.tenantId, request.tenantId)))
+        .limit(1);
+
+      if (!row) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      }
+
+      await db.update(contents).set({ pinned, updatedAt: new Date() }).where(eq(contents.id, id));
+
+      return { code: "OK", data: { id, pinned } };
+    } catch (err) {
+      logger.error({ err }, "PR #178 pin 操作失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败" });
     }
   });
 

@@ -130,6 +130,7 @@ export const contents = pgTable(
     platforms: jsonb("platforms").default([]), // 发布到的平台 [{platform, publishedAt, url}]
     tokensTotal: integer("tokens_total").default(0), // 生成消耗的Token总量
     metadata: jsonb("metadata").default({}),
+    pinned: boolean("pinned").default(false), // PR #178: 防自动清理
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

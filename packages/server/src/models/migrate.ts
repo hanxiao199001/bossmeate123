@@ -1110,6 +1110,15 @@ DO $$ BEGIN
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS idx_kw_last_recommended ON keywords(last_recommended_at);
+
+-- ============ PR #178 内容管理 — contents.pinned + retention index ============
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contents' AND column_name='pinned') THEN
+    ALTER TABLE contents ADD COLUMN pinned BOOLEAN DEFAULT false;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_contents_pinned ON contents(pinned) WHERE pinned = true;
+CREATE INDEX IF NOT EXISTS idx_contents_created_status ON contents(created_at, status);
 `;
 
 async function migrate() {
