@@ -56,8 +56,12 @@ export async function contentRoutes(app: FastifyInstance) {
       const offset = (page - 1) * pageSize;
 
       // PR #130 V2.5: "📅 今日推荐" tab → 用 system tenant 替代 user tenant (top-level import 见文件顶, PR #131 重构)
-      const filterTenantId = query.recommendation === "true" ? SYSTEM_RECOMMENDATION_TENANT_ID : request.tenantId;
-      const conditions = [eq(contents.tenantId, filterTenantId)];
+      // PR #186 (5-20): "全部" 视图改用 READABLE_TENANT_FILTER (user + system 推荐) 汇总所有生成内容
+      //   (运营反馈: 今日推荐生成的内容也应出现在内容管理"全部"里). "今日推荐" tab 仍只 system.
+      const tenantCondition = query.recommendation === "true"
+        ? eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)
+        : READABLE_TENANT_FILTER(request.tenantId);
+      const conditions = [tenantCondition];
 
       // 如果指定了 userId 筛选，验证权限（owner/admin 可查看全部，其他用户只能查看自己的）
       if (query.userId) {
@@ -174,7 +178,8 @@ export async function contentRoutes(app: FastifyInstance) {
           count: count(),
         })
         .from(contents)
-        .where(eq(contents.tenantId, request.tenantId))
+        // PR #186: stats 同步汇总 user + system 推荐 (与列表"全部"一致)
+        .where(READABLE_TENANT_FILTER(request.tenantId))
         .groupBy(contents.status, contents.type);
 
       // 聚合为更友好的格式

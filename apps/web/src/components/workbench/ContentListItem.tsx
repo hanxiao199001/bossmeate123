@@ -7,11 +7,28 @@ export interface WorkbenchListItem {
   id: string;
   title: string | null;
   metadata?: Record<string, unknown> | null;
+  createdAt?: string | null; // PR #186: 生成时间 (列表项显示相对时间)
   journal?: {
     name: string | null;
     impactFactor: number | null;
     partition: string | null;
   } | null;
+}
+
+// PR #186: 相对时间格式化 (与 ContentPage 同逻辑)
+function relativeTime(dateStr?: string | null): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  const diffMs = Date.now() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMs / 3600000);
+  const diffDay = Math.floor(diffMs / 86400000);
+  if (diffMin < 1) return "刚刚";
+  if (diffMin < 60) return `${diffMin}分钟前`;
+  if (diffHour < 24) return `${diffHour}小时前`;
+  if (diffDay < 7) return `${diffDay}天前`;
+  return d.toLocaleDateString("zh-CN");
 }
 
 export interface ContentListItemProps {
@@ -68,6 +85,10 @@ export default function ContentListItem({
         </p>
         {meta.length > 0 && (
           <p className="text-xs text-gray-500 mt-1 line-clamp-1">{meta.join(" · ")}</p>
+        )}
+        {/* PR #186: 生成时间 — 解决"分不清哪篇何时生成" */}
+        {item.createdAt && (
+          <p className="text-xs text-gray-400 mt-1">🕐 {relativeTime(item.createdAt)}</p>
         )}
       </button>
     </div>
