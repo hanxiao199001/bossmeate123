@@ -215,3 +215,70 @@ export function toJournalInfo(data: ScraplingResult): Partial<import("../data-co
     scopeDescription: data.scopeDescription || null,
   };
 }
+
+// ============ PR #187: LetPub 学科列表翻页爬取 (主渠道扩池) ============
+
+export interface LetpubListItem {
+  letpub_id: string;
+  name: string;
+  issn: string | null;
+  impactFactor: number | null;
+  partition: string | null;
+  isWarningList: boolean;
+  platform: string;
+}
+
+export interface CrawlLetpubCategoryOptions {
+  category: string;      // 学科 code (如 "medicine") 或 LetPub field id
+  maxPages?: number;     // 最大翻页 (默认 50)
+  throttle?: number;     // 每页间隔秒 (默认 4, 防反爬)
+  stealthy?: boolean;    // StealthySession 隐身 (绕 Cloudflare, 慢)
+  timeoutMs?: number;    // 默认 10 分钟 (翻页 + 限速耗时长)
+}
+
+/**
+ * 调 Python Scrapling 按学科分类翻页爬 LetPub 期刊列表.
+ * 失败返回 [] (不抛, 让 caller 继续下个学科).
+ */
+export function crawlLetpubCategory(opts: CrawlLetpubCategoryOptions): Promise<LetpubListItem[]> {
+  return new Promise((resolve) => {
+    const args: string[] = [SCRAPER_SCRIPT, "--list-category", opts.category];
+    if (opts.maxPages) args.push("--max-pages", String(opts.maxPages));
+    if (opts.throttle != null) args.push("--throttle", String(opts.throttle));
+    if (opts.stealthy) args.push("--stealthy");
+
+    const timeout = opts.timeoutMs || 600_000; // 10 min
+    logger.info({ category: opts.category, maxPages: opts.maxPages, timeout }, "PR #187 LetPub 列表爬取");
+    const startTime = Date.now();
+
+    execFile("python3", args, { timeout, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const elapsed = Date.now() - startTime;
+      if (stderr) logger.debug({ stderr: stderr.slice(0, 1000) }, "LetPub list stderr (含 progress)");
+      if (error) {
+        logger.warn({ err: error.message, category: opts.category, elapsed }, "LetPub 列表爬取失败");
+        resolve([]);
+        return;
+      }
+      const trimmed = (stdout || "").trim();
+      if (!trimmed) {
+        logger.warn({ category: opts.category, elapsed }, "LetPub 列表无输出");
+        resolve([]);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as { error?: string; items?: LetpubListItem[]; count?: number };
+        if (parsed.error) {
+          logger.warn({ error: parsed.error, category: opts.category }, "LetPub 列表返回 error");
+          resolve([]);
+          return;
+        }
+        const items = Array.isArray(parsed.items) ? parsed.items : [];
+        logger.info({ category: opts.category, count: items.length, elapsed }, "PR #187 LetPub 列表爬取完成");
+        resolve(items);
+      } catch (e) {
+        logger.warn({ e: String(e), category: opts.category }, "LetPub 列表 JSON 解析失败");
+        resolve([]);
+      }
+    });
+  });
+}
