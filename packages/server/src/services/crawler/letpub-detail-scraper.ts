@@ -16,8 +16,15 @@
  */
 
 import { logger } from "../../config/logger.js";
+import { ProxyAgent } from "undici";
 
 const LETPUB_BASE = "https://www.letpub.com.cn";
+
+// PR #189 (5-20): enrich 详情爬代理支持 — LetPub 封 IP 时, env LETPUB_PROXY 设代理 URL,
+//   走代理新 IP 绕过封禁 (方案 C 补 IF/分区/录用率 的前提). 模块级单例 dispatcher.
+const LETPUB_PROXY = process.env.LETPUB_PROXY;
+const proxyDispatcher = LETPUB_PROXY ? new ProxyAgent(LETPUB_PROXY) : undefined;
+if (LETPUB_PROXY) logger.info({ proxy: LETPUB_PROXY.replace(/:[^:@]*@/, ":***@") }, "PR #189 LetPub 详情爬启用代理");
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -124,7 +131,12 @@ async function fetchWithRetryLetPub(
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
-      const resp = await fetch(url, { ...init, signal: controller.signal });
+      // PR #189: 有 LETPUB_PROXY 时走代理 dispatcher (undici 扩展, RequestInit 类型不含, as any)
+      const resp = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+        ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
+      } as RequestInit & { dispatcher?: unknown });
       clearTimeout(timeout);
       if (resp.ok) return resp;
       logger.debug({ url, status: resp.status, attempt: i + 1 }, "LetPub 请求非200");
