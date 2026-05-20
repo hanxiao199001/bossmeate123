@@ -20,8 +20,8 @@ describe("PR #172: daily-cron.ts 多样性结构守卫", () => {
     expect(src).toMatch(/getJournal30dCount/);
     // Layer 3: 学科轮换
     expect(src).toMatch(/DISCIPLINE_ROTATION/);
-    // PR #135 anti-cluster 保留
-    expect(src).toMatch(/MAX_PER_JOURNAL_24H\s*=\s*2/);
+    // PR #135 anti-cluster — PR #183 改 2→1 (批内期刊唯一)
+    expect(src).toMatch(/MAX_PER_JOURNAL_24H\s*=\s*1/);
     // Fallback 3 级
     expect(src).toMatch(/fallbackLevel/);
     expect(src).toMatch(/fallback A/);

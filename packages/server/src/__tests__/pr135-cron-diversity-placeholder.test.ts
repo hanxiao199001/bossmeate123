@@ -9,8 +9,9 @@ describe("PR #135 daily-cron anti-cluster diversity", () => {
     const fs = await import("node:fs/promises");
     const src = await fs.readFile(new URL("../services/recommendation/daily-cron.ts", import.meta.url), "utf8");
     expect(src).toMatch(/limit:\s*5/);
-    expect(src).toMatch(/MAX_PER_JOURNAL_24H\s*=\s*2/); // PR #172: renamed MAX_PER_JOURNAL → MAX_PER_JOURNAL_24H
+    expect(src).toMatch(/MAX_PER_JOURNAL_24H\s*=\s*1/); // PR #183: 2→1 批内期刊唯一
     expect(src).toMatch(/journalUseCount24h/); // PR #172: renamed journalUseCount → journalUseCount24h
+    expect(src).toMatch(/usedJournalIds\.has/); // PR #183: 批内唯一守卫
     expect(src).toMatch(/anti-cluster/);
   });
 });

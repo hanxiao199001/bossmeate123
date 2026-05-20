@@ -1075,16 +1075,26 @@ export class ArticleSkill implements ISkill {
 
     // ---- 标题多元化：随机选择句式风格 ----
     // PR #180: 标题风格重写 — 必含期刊名, 禁模板化句式, 禁无数据评价
+    // PR #183 (5-20): (1) 年份动态 currentYear 不再硬编码 2025
+    //                 (2) IF 为 null 的期刊不放含 IF 的风格 (避免 "IF N/A" 裸露标题)
+    //                 (3) 砍掉容易撞车的固定营销话术, 示例标注"仅供骨架参考, 措辞须重写"
+    const currentYear = new Date().getFullYear();
+    const hasIF = journal.impactFactor != null;
     const rateText = journal.acceptanceRate != null ? `录用率${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%` : "";
     const cycleText = journal.reviewCycle ? `审稿${journal.reviewCycle}` : "";
-    const partitionText = journal.partition ? `${journal.partition}` : "";
-    const titleStyles = [
-      `数据亮点型：以 IF + 期刊英文全名为核心。示例："${journalName} IF ${ifText}: ${journal.discipline || "学术"}领域的标杆期刊深度盘点"`,
-      `学科定位型：突出期刊所属学科和出版社。示例："${journalName}: ${journal.publisher || "国际出版社"}旗下${journal.discipline || "学术"}领域旗舰期刊"`,
-      `横向对比型：与同领域期刊对比突出差异。示例："${journal.discipline || "学术"}顶刊横向对比: ${journalName} 为何是${partitionText ? partitionText+"中的" : ""}性价比之王?"`,
-      `深度解读型：聚焦期刊特色和收稿范围。示例："${journalName} 全面解读: IF ${ifText}${rateText ? "·" + rateText : ""}${cycleText ? "·" + cycleText : ""}"`,
-      `趋势分析型：结合年度热点。示例："2025年${journal.discipline || "学术"}最火研究方向 + ${journalName} 全解读"`,
+    // 无 IF 依赖的风格 (所有期刊都可用)
+    const titleStyles: string[] = [
+      `学科定位型：突出期刊所属学科和出版社。示例骨架（措辞必须重写，勿照抄）："${journalName}: ${journal.publisher || "国际出版社"}旗下${journal.discipline || "学术"}领域旗舰期刊"`,
+      `横向对比型：与同领域期刊对比突出差异。示例骨架（措辞必须重写，勿照抄）："${journal.discipline || "学术"}领域期刊盘点: ${journalName} 的定位与特色"`,
+      `趋势分析型：结合年度热点。示例骨架（措辞必须重写，勿照抄）："${currentYear}年${journal.discipline || "学术"}研究趋势与 ${journalName} 投稿指南"`,
     ];
+    // 含 IF 的风格 — 仅当期刊有真 IF 时启用 (否则会写出 "IF N/A")
+    if (hasIF) {
+      titleStyles.push(
+        `数据亮点型：以 IF + 期刊英文全名为核心。示例骨架（措辞必须重写，勿照抄）："${journalName} IF ${ifText}: ${journal.discipline || "学术"}领域深度盘点"`,
+        `深度解读型：聚焦期刊特色和数据。示例骨架（措辞必须重写，勿照抄）："${journalName} 全面解读: IF ${ifText}${rateText ? "·" + rateText : ""}${cycleText ? "·" + cycleText : ""}"`,
+      );
+    }
     const chosenStyle = titleStyles[Math.floor(Math.random() * titleStyles.length)];
 
     // ---- 学科领域定制标题风格 ----
@@ -1194,11 +1204,14 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.
 若两个字段都 NULL → 文章中**禁止提分区**, 也禁止说"顶刊" / "X区刊"。
 
-## 标题硬约束 (PR #180)
+## 标题硬约束 (PR #180 + #183)
 1. 标题必须包含期刊英文全名 (如 "${journalName}")
-2. 禁止以下模板式句式: "毕业季还没发SCI?" / "XX值得一投!" / "审稿快、录用率高"
+2. 禁止以下模板式句式: "毕业季还没发SCI?" / "XX值得一投!" / "审稿快、录用率高" / "为何是性价比之王?" / "最火研究方向"
 3. 禁止无数据模糊评价: "录用率高/低" / "审稿快/慢" / "性价比高" (除非有 DB 真数字)
 4. 标题长度 20-50 字
+5. 【防撞车】"本次标题风格"里引号内仅是结构骨架, 严禁照搬其措辞/句式; 必须用全新词汇重新构思
+6. 【年份】如需写年份, 一律用 ${currentYear} (当前年), 禁止写 2025 或其它过往年份
+7. 【无 IF 不提 IF】若 ##已知期刊数据## 中无 impactFactor, 标题禁止出现 "IF" / "影响因子" 字样
 
 【本次标题风格】
 ${chosenStyle}

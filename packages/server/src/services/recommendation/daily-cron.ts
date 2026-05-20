@@ -32,7 +32,7 @@ const FRESH_APPEAR_COUNT_MAX = 7;
 // PR #172: 多样性常量
 const KEYWORD_COOLDOWN_DAYS = 30;
 const JOURNAL_MAX_PER_30D = 5;
-const MAX_PER_JOURNAL_24H = 2; // PR #135 anti-cluster 保留
+const MAX_PER_JOURNAL_24H = 1; // PR #183: 批内期刊唯一 (原 PR #135 是 2, 但一批 10 篇应 10 本不同刊)
 const CANDIDATE_POOL_SIZE = 50;
 
 // 学科 day-of-week 轮换 (0=Sun ... 6=Sat)
@@ -185,9 +185,10 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
         limit: 5,
       });
 
-      // 找第一个 未达 24h 限流 且 未达 30d 限流 的 journal
+      // PR #183: 批内期刊唯一 — 找第一个 本批未用过 且 未达 30d 限流 的 journal
       let journalId: string | null = null;
       for (const r of recs) {
+        if (usedJournalIds.has(r.id)) continue; // 本批已用 → 跳过 (唯一性)
         const use24h = journalUseCount24h.get(r.id) ?? 0;
         if (use24h >= MAX_PER_JOURNAL_24H) continue;
         const use30d = await getJournal30dCount(r.id);
@@ -195,13 +196,18 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
         journalId = r.id;
         break;
       }
-      // 全饱和兜底: 仍取 top1
-      if (!journalId) journalId = recs[0]?.id ?? null;
-
-      if (journalId) {
-        journalUseCount24h.set(journalId, (journalUseCount24h.get(journalId) ?? 0) + 1);
-        usedJournalIds.add(journalId);
+      // 兜底: 找本批没用过的 (即使超 30d 限流), 而非强塞 recs[0] 造成批内重复
+      if (!journalId) {
+        journalId = recs.find((r) => !usedJournalIds.has(r.id))?.id ?? null;
       }
+      // 仍无 (该 keyword top5 全被本批用过) → 跳过该 keyword, 唯一性优先于凑满 10 篇
+      if (!journalId) {
+        logger.debug({ keyword: kw.keyword }, "PR #183 该 keyword top5 期刊本批已全用, 跳过保唯一");
+        continue;
+      }
+
+      journalUseCount24h.set(journalId, (journalUseCount24h.get(journalId) ?? 0) + 1);
+      usedJournalIds.add(journalId);
       if (kw.category) usedDisciplines.add(kw.category);
 
       const result = await createBatch({
