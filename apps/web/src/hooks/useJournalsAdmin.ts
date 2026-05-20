@@ -20,6 +20,7 @@ export interface AdminJournal {
   annualVolume?: number | null;
   apcFee?: number | null;
   website?: string | null;
+  coverImageUrl?: string | null; // PR #192: 期刊封面 URL
   isWarningList: boolean;
   warningYear?: string | null;
   // 8 个 jsonb 字段：admin 页只关心是否为 null（覆盖率 dots）
@@ -48,7 +49,7 @@ export interface AdminFilters {
 
 export type EditableField =
   | "discipline" | "partition" | "impactFactor" | "acceptanceRate"
-  | "reviewCycle" | "publisher" | "website" | "annualVolume" | "apcFee";
+  | "reviewCycle" | "publisher" | "website" | "annualVolume" | "apcFee" | "coverImageUrl";
 
 // Day 4 PR-1 + PR-2：admin v2 扩展，7 jsonb 字段走同一 PATCH 接口（backend zod 已校验）
 export type JsonbEditableField =

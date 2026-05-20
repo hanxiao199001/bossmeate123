@@ -196,6 +196,7 @@ function EditForm({ j, onSave }: { j: AdminJournal; onSave: (p: PatchPayload) =>
     reviewCycle: j.reviewCycle ?? "",
     publisher: j.publisher ?? "",
     website: j.website ?? "",
+    coverImageUrl: j.coverImageUrl ?? "",
     annualVolume: j.annualVolume ?? null,
     apcFee: j.apcFee ?? null,
   });
@@ -228,6 +229,13 @@ function EditForm({ j, onSave }: { j: AdminJournal; onSave: (p: PatchPayload) =>
       <Field label="审稿周期" value={form.reviewCycle ?? ""} onChange={(v) => setForm({ ...form, reviewCycle: v })} placeholder="如 4-8周" />
       <Field label="出版社" value={form.publisher ?? ""} onChange={(v) => setForm({ ...form, publisher: v })} />
       <Field label="官网 URL" value={form.website ?? ""} onChange={(v) => setForm({ ...form, website: v })} placeholder="https://..." />
+      {/* PR #192: 重点期刊手动上传封面 — 填图床 URL, 旁边缩略图预览 */}
+      <div className="flex flex-col gap-1">
+        <Field label="封面图 URL" value={form.coverImageUrl ?? ""} onChange={(v) => setForm({ ...form, coverImageUrl: v })} placeholder="图床 URL（jpg/png）" />
+        {form.coverImageUrl ? (
+          <img src={form.coverImageUrl} alt="封面预览" style={{ maxHeight: 80, width: "auto", borderRadius: 4, marginTop: 4, border: "1px solid #e5e7eb" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+        ) : null}
+      </div>
       <NumberField label="年发文量" value={form.annualVolume ?? null} onChange={(v) => setForm({ ...form, annualVolume: v })} step={1} />
       <NumberField label="版面费（USD）" value={form.apcFee ?? null} onChange={(v) => setForm({ ...form, apcFee: v })} step={50} />
       <div className="md:col-span-3 flex justify-end mt-2">
