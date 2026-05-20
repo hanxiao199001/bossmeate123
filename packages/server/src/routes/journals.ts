@@ -137,6 +137,7 @@ const journalPatchSchema = z.object({
   reviewCycle: z.string().max(50).optional().nullable(),
   publisher: z.string().max(200).optional().nullable(),
   website: z.string().url().max(500).optional().nullable(),
+  coverImageUrl: z.string().url().max(500).optional().nullable(), // PR #192: 重点期刊手动上传封面 URL
   annualVolume: z.number().int().min(0).optional().nullable(),
   apcFee: z.number().min(0).optional().nullable(),
   // Day 4 PR-1：3 jsonb 字段（null = 清空）
@@ -278,7 +279,8 @@ export async function journalRoutes(app: FastifyInstance) {
       const [updated] = await db
         .update(journals)
         .set({ ...parsed, updatedAt: new Date() })
-        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        // PR #192: owner/admin 已 gate, 放开改全局期刊 (tenantId=null) — 重点期刊大多全局共享
+        .where(and(eq(journals.id, id), or(eq(journals.tenantId, tenantId), isNull(journals.tenantId))))
         .returning();
       if (!updated) {
         return reply.status(404).send({ code: "NOT_FOUND", message: "期刊不存在或无权限" });
