@@ -65,26 +65,48 @@ export async function recommendJournals(input: RecommendJournalsInput): Promise<
   }
 
   // 2. 候选 journals: confidence>=70 + 全局共享(NULL) 或 自 tenant
-  const candidates = await db
-    .select({
-      id: journals.id,
-      name: journals.name,
-      nameEn: journals.nameEn,
-      issn: journals.issn,
-      impactFactor: journals.impactFactor,
-      partition: journals.partition,
-      discipline: journals.discipline,
-      confidence: journals.confidence,
-    })
+  // PR #184 (5-20): 只推 SCI/SSCI 收录期刊 (运营反馈: 非 SCI 期刊被当 SCI 写).
+  //   判据: jcr_full.wosLevel 含 SCIE/SSCI  OR  impact_factor 非空 (有 IF 基本是 JCR 收录).
+  //   带 fallback: SCI 候选 < limit 时放宽回全部, 避免推荐空转.
+  const baseWhere = and(
+    gte(journals.confidence, 70),
+    or(isNull(journals.tenantId), eq(journals.tenantId, input.tenantId)),
+  );
+  const sciWhere = and(
+    baseWhere,
+    sql`(
+      ${journals.jcrFull}->>'wosLevel' ILIKE '%SCIE%'
+      OR ${journals.jcrFull}->>'wosLevel' ILIKE '%SSCI%'
+      OR ${journals.impactFactor} IS NOT NULL
+    )`,
+  );
+  const selectCols = {
+    id: journals.id,
+    name: journals.name,
+    nameEn: journals.nameEn,
+    issn: journals.issn,
+    impactFactor: journals.impactFactor,
+    partition: journals.partition,
+    discipline: journals.discipline,
+    confidence: journals.confidence,
+  };
+  let candidates = await db
+    .select(selectCols)
     .from(journals)
-    .where(
-      and(
-        gte(journals.confidence, 70),
-        or(isNull(journals.tenantId), eq(journals.tenantId, input.tenantId)),
-      ),
-    )
+    .where(sciWhere)
     .orderBy(desc(journals.confidence))
     .limit(CANDIDATE_POOL);
+
+  // Fallback: SCI 候选不足 limit → 放宽回全部 (宁可推非 SCI, 也不空转)
+  if (candidates.length < limit) {
+    logger.info({ got: candidates.length, limit }, "PR #184 SCI 候选不足, fallback 放宽全部期刊");
+    candidates = await db
+      .select(selectCols)
+      .from(journals)
+      .where(baseWhere)
+      .orderBy(desc(journals.confidence))
+      .limit(CANDIDATE_POOL);
+  }
 
   if (candidates.length === 0) {
     logger.warn({ tenantId: input.tenantId }, "P3 journal-recommender: 0 高可信候选期刊（全 confidence<70）");

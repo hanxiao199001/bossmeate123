@@ -1159,7 +1159,7 @@ export class ArticleSkill implements ISkill {
       : "";
 
     // 5-23 PR #162 Phase 2: 改 "字段缺=未知" → "字段缺=不列出" + 显式 ##未公开字段## 块
-    // 让 AI 清楚哪些字段没数据, 文章中不要提 (或用"据公开资料尚无统一披露" 兜底)
+    // 让 AI 清楚哪些字段没数据, 文章中**完全不要提及** (PR #184 砍兜底话术, 见下方 unknownBlock)
     const knownFields: string[] = [];
     const unknownFields: string[] = [];
     knownFields.push(`- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`);
@@ -1178,8 +1178,28 @@ export class ArticleSkill implements ISkill {
     if ((journal as any).apcFee != null) knownFields.push(`- 版面费 (APC)：$${(journal as any).apcFee}`); else unknownFields.push("版面费");
     knownFields.push(journal.isWarningList ? "- ⚠️ 在中科院预警名单中" : "- 不在中科院预警名单中");
 
+    // PR #184 (5-20): 收录状态注入 — 严格按真实字段, 防止非 SCI 期刊被当 SCI 写
+    const indexStatuses: string[] = [];
+    const wosLevel = journal.promptJcrFull?.wosLevel;
+    if (wosLevel) indexStatuses.push(`WOS ${wosLevel}`); // SCIE / SSCI / ESCI / AHCI
+    const cats = journal.catalogs || [];
+    if (cats.includes("cssci")) indexStatuses.push("CSSCI（南大核心）");
+    if (cats.includes("pku-core")) indexStatuses.push("北大核心");
+    if (cats.includes("cscd")) indexStatuses.push("CSCD（中国科学引文数据库）");
+    if (journal.catalogType === "sci" || journal.catalogType === "sci-core") {
+      if (!wosLevel) indexStatuses.push("SCI 收录");
+    }
+    if (indexStatuses.length > 0) {
+      knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）`);
+    } else {
+      // 无任何权威收录证据 → 明确告诉 AI 不许称 SCI/SSCI
+      knownFields.push(`- 收录情况：无 SCI/SSCI/中文核心 收录证据（**严禁**称其为 "SCI 期刊" / "SSCI 期刊" / "核心期刊" / "顶刊", 只能客观介绍）`);
+    }
+
+    // PR #184: 砍 "据公开资料尚无统一披露" 教唆 (运营反馈这是 AI 感来源).
+    // 缺数据的字段 → 文章里**完全不提**, 而非自暴 "暂无数据".
     const unknownBlock = unknownFields.length > 0
-      ? `\n##未公开字段## (这些字段缺数据, 文章中**不要写具体数字**, 必要时用"据公开资料尚无统一披露"代替)：${unknownFields.join("、")}\n`
+      ? `\n##未公开字段## (以下字段无数据, 文章中**完全不要提及这些字段**, 禁止出现"暂无/未公开/据公开资料尚无/由于缺乏...数据"等任何说法)：${unknownFields.join("、")}\n`
       : "";
 
     // 5-23 PR #167: 4 字段黑名单 — backfill 报告确认这 4 字段 DB 0 源覆盖 (AI 编源 100% 确认)
@@ -1204,14 +1224,18 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.
 若两个字段都 NULL → 文章中**禁止提分区**, 也禁止说"顶刊" / "X区刊"。
 
-## 标题硬约束 (PR #180 + #183)
-1. 标题必须包含期刊英文全名 (如 "${journalName}")
-2. 禁止以下模板式句式: "毕业季还没发SCI?" / "XX值得一投!" / "审稿快、录用率高" / "为何是性价比之王?" / "最火研究方向"
-3. 禁止无数据模糊评价: "录用率高/低" / "审稿快/慢" / "性价比高" (除非有 DB 真数字)
-4. 标题长度 20-50 字
-5. 【防撞车】"本次标题风格"里引号内仅是结构骨架, 严禁照搬其措辞/句式; 必须用全新词汇重新构思
-6. 【年份】如需写年份, 一律用 ${currentYear} (当前年), 禁止写 2025 或其它过往年份
-7. 【无 IF 不提 IF】若 ##已知期刊数据## 中无 impactFactor, 标题禁止出现 "IF" / "影响因子" 字样
+## 标题硬约束 (PR #180 + #183 + #184)
+1. 【期刊名可选】期刊名(${journalName})可放标题也可不放; 若期刊名超过 20 个字符, **优先不放标题**(避免吞掉噱头), 改放副标题/正文。标题要先吸引人, 不是先报刊名。
+2. 【完整性】严禁出现悬空对比 (如 "A vs " 后面没有 B)、截断、半句话。每个标题都必须是完整通顺的一句。
+3. 【中文为主】标题以中文为主, 英文仅限期刊名/必要专业缩写(如 IF、SCI), 不要中英文生硬混杂。
+4. 【要有钩子】标题必须有痛点或悬念, 戳中科研人真实需求 (如 投稿周期、命中率、避坑、选刊纠结、毕业/评职压力), 不要干巴巴罗列参数。
+5. 禁止以下模板式句式: "毕业季还没发SCI?" / "XX值得一投!" / "审稿快、录用率高" / "为何是性价比之王?" / "最火研究方向"
+6. 禁止无数据模糊评价: "录用率高/低" / "审稿快/慢" / "性价比高" (除非有 DB 真数字)
+7. 标题长度 18-40 字 (太长公众号会截断)
+8. 【防撞车】"本次标题风格"里引号内仅是结构骨架, 严禁照搬其措辞/句式; 必须用全新词汇重新构思
+9. 【年份】如需写年份, 一律用 ${currentYear} (当前年), 禁止写 2025 或其它过往年份
+10. 【无 IF 不提 IF】若 ##已知期刊数据## 中无 impactFactor, 标题禁止出现 "IF" / "影响因子" 字样
+11. 【收录状态如实】标题涉及 SCI/SSCI/核心 字样时必须与 "收录情况" 一致, 无收录证据严禁写 "SCI"
 
 【本次标题风格】
 ${chosenStyle}
@@ -1222,12 +1246,17 @@ ${disciplineHint}
 - scopeDescription 要专业但不枯燥，适当加入「热门方向」「近年趋势」等吸引读者的表述
 - editorComment 要极口语化，像和朋友聊天（"说实话这本刊..."、"赶毕业投这个！"）
 
+【正文语言要求】(PR #184)
+- 正文以**中文为主**, 英文只用于期刊名、必要专业术语缩写(IF/SCI/OA 等), 不要整句英文或中英文生硬混杂。
+- 🚫🚫 **严禁元话术**: 绝对不要出现 "由于缺乏...数据" / "无法详细分析" / "暂无统一披露" / "数据未公布" / "缺少相关数据" 这类自暴其短的句子。某项没数据就**直接不写那部分**, 当它不存在, 绝不解释为什么没写。
+
 【深度分析章节】（V7 task #11，4 个独立 HTML 字段）
-🚫 严格禁止基于上方未提及的字段编造数据。如某章节缺关键数据，章节内容降级为 1-2 句通用描述（不要虚构具体数字 / 年份 / 机构名）。
-- ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。无 IF 历史数据时降级为 1-2 句基于当前 IF 的中性描述。
-- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。无 CAR 数据时降级为 1-2 句基于预警名单状态的判断。
-- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊 / 自引率"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet（12.5%）、NEJM（8.3%）引用"）。无引用数据时降级仅描述收稿范围。
-- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。
+🚫 严格禁止基于上方未提及的字段编造数据。
+🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
+- ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
+- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。**无 CAR 数据时返回 null**。
+- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊 / 自引率"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet（12.5%）、NEJM（8.3%）引用"）。**无引用数据时只写收稿范围定位, 绝不提"缺引用数据"**。
+- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。
 
 请输出纯 JSON（不要 markdown）：
 {
@@ -1238,10 +1267,10 @@ ${disciplineHint}
   "highlightTip": "一个划重点提示（20-40字），提炼最核心的投稿建议或数据亮点",
   "ifPrediction": "影响因子走势预测的简短描述，如'预测今年涨至15分'，如果无法预测就返回null",
   "rating": 推荐星级1-5的数字,
-  "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
-  "carRiskAnalysis": "章 2 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
-  "scopeAndCitations": "章 3 — HTML，引用真实数据。无数据则 1-2 句通用描述。",
-  "submissionAdvice": "章 4 — HTML，引用真实数据。"
+  "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无 IF 历史数据则返回 null（禁止写空话）。",
+  "carRiskAnalysis": "章 2 — HTML，引用真实数据。无 CAR 数据则返回 null（禁止写空话）。",
+  "scopeAndCitations": "章 3 — HTML，引用真实数据。无引用数据则只写收稿定位, 禁止提'缺数据'。",
+  "submissionAdvice": "章 4 — HTML，引用真实数据。有几项写几项, 没有的不提。"
 }`;
 
     // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
@@ -1299,7 +1328,7 @@ ${disciplineHint}
           rating: typeof parsed.rating === "number" ? Math.min(5, Math.max(1, parsed.rating)) : 4,
           editorComment: parsed.editorComment || undefined,
           highlightTip: parsed.highlightTip || undefined,
-          // V7：4 新独立章节字段（不合并）。LLM 缺数据时返回 1-2 句通用描述，不阻断流程。
+          // V7：4 新独立章节字段（不合并）。PR #184: LLM 缺数据时返回 null → 整章不渲染（不再写"暂无数据"空话）。
           ifHistoryAnalysis: typeof parsed.ifHistoryAnalysis === "string" ? parsed.ifHistoryAnalysis : undefined,
           carRiskAnalysis: typeof parsed.carRiskAnalysis === "string" ? parsed.carRiskAnalysis : undefined,
           scopeAndCitations: typeof parsed.scopeAndCitations === "string" ? parsed.scopeAndCitations : undefined,
