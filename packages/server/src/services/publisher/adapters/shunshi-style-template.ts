@@ -233,9 +233,20 @@ function renderHeroBlock(journal: JournalInfo): string {
     ? `<div style="display:inline-block;padding:8px 16px;margin-top:12px;background:${RED};color:#fff;border-radius:8px;font-size:18px;font-weight:bold;line-height:1.3;">IF ${esc(String(journal.impactFactor))}</div>`
     : "";
 
-  const coverHtml = cover
-    ? `<img src="${esc(cover)}" alt="${fullName}" style="max-width:100%;height:auto;display:block;margin:0 auto 12px auto;border-radius:6px;" />`
-    : "";
+  // PR #184 (5-20): 封面观感统一 —
+  //   有真封面图 → 渲染 <img>; 无封面图 → 统一品牌化占位卡 (渐变底 + 期刊名大字),
+  //   不再出现"有些带图、有些纯文字"的不一致 (运营反馈).
+  let coverHtml: string;
+  if (cover) {
+    coverHtml = `<img src="${esc(cover)}" alt="${fullName}" style="max-width:100%;height:auto;display:block;margin:0 auto 12px auto;border-radius:6px;" />`;
+  } else {
+    // 占位卡: 渐变背景 + 期刊英文名 (首字母放大), 视觉上与有封面的文章一致
+    coverHtml =
+      `<div style="background:${PLACEHOLDER_BG};border:1px solid ${PLACEHOLDER_BORDER};border-radius:8px;padding:32px 20px;margin:0 auto 12px auto;text-align:center;">` +
+      `<p style="margin:0;font-size:22px;font-weight:bold;color:${BLUE};line-height:1.4;letter-spacing:0.5px;">${fullName}</p>` +
+      (cnName ? `<p style="margin:8px 0 0 0;font-size:14px;color:${TEXT};line-height:1.5;">${cnName}</p>` : "") +
+      `</div>`;
+  }
 
   return `<section style="margin:0 0 22px 0;text-align:center;">` +
     coverHtml +
