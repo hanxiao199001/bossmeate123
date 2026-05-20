@@ -1082,17 +1082,30 @@ export class ArticleSkill implements ISkill {
     const hasIF = journal.impactFactor != null;
     const rateText = journal.acceptanceRate != null ? `录用率${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%` : "";
     const cycleText = journal.reviewCycle ? `审稿${journal.reviewCycle}` : "";
-    // 无 IF 依赖的风格 (所有期刊都可用)
+    // PR #185 (5-20): 标题第二轮 — 加痛点钩子 (运营反馈"标题太干没吸引力").
+    // 钩子戳科研人真实纠结 (该不该投/中国人好发吗/避坑/门槛), 但钩子只能用真实数据,
+    // 严禁为吸睛编造分区/录用率/收录状态 (见标题硬约束).
+    const disc = journal.discipline || "该领域";
+    // ---- 钩子型 (优先, 戳真实纠结) ----
     const titleStyles: string[] = [
-      `学科定位型：突出期刊所属学科和出版社。示例骨架（措辞必须重写，勿照抄）："${journalName}: ${journal.publisher || "国际出版社"}旗下${journal.discipline || "学术"}领域旗舰期刊"`,
-      `横向对比型：与同领域期刊对比突出差异。示例骨架（措辞必须重写，勿照抄）："${journal.discipline || "学术"}领域期刊盘点: ${journalName} 的定位与特色"`,
-      `趋势分析型：结合年度热点。示例骨架（措辞必须重写，勿照抄）："${currentYear}年${journal.discipline || "学术"}研究趋势与 ${journalName} 投稿指南"`,
+      `决策纠结型(钩子)：戳"该不该投"的纠结。示例骨架（措辞必须重写，勿照抄）："${disc}选刊纠结？${journalName} 到底适不适合你投"`,
+      `避坑提醒型(钩子)：帮读者投前排雷。示例骨架（措辞必须重写，勿照抄）："投 ${journalName} 之前，这几件事先搞清楚"`,
+      `适配人群型(钩子)：点出哪类作者适合。示例骨架（措辞必须重写，勿照抄）："什么样的稿子适合投 ${journalName}？一文说清"`,
+      // ---- 信息型 (保留, 多样性) ----
+      `学科盘点型：示例骨架（措辞必须重写，勿照抄）："${disc}领域期刊盘点：${journalName} 的定位与特色"`,
+      `趋势分析型：示例骨架（措辞必须重写，勿照抄）："${currentYear}年${disc}投稿趋势与 ${journalName} 适配人群分析"`,
     ];
     // 含 IF 的风格 — 仅当期刊有真 IF 时启用 (否则会写出 "IF N/A")
     if (hasIF) {
       titleStyles.push(
-        `数据亮点型：以 IF + 期刊英文全名为核心。示例骨架（措辞必须重写，勿照抄）："${journalName} IF ${ifText}: ${journal.discipline || "学术"}领域深度盘点"`,
-        `深度解读型：聚焦期刊特色和数据。示例骨架（措辞必须重写，勿照抄）："${journalName} 全面解读: IF ${ifText}${rateText ? "·" + rateText : ""}${cycleText ? "·" + cycleText : ""}"`,
+        `门槛评估型(钩子)：戳"我够得着吗"。示例骨架（措辞必须重写，勿照抄）："IF ${ifText} 的 ${journalName}，普通课题组冲得动吗"`,
+        `数据亮点型：示例骨架（措辞必须重写，勿照抄）："${journalName} IF ${ifText}：${disc}领域深度盘点"`,
+      );
+    }
+    // 中科院预警名单期刊 — 专属避雷钩子 (基于真实 isWarningList 字段)
+    if (journal.isWarningList) {
+      titleStyles.push(
+        `预警提示型(钩子,仅预警刊)：示例骨架（措辞必须重写，勿照抄）："${journalName} 上了预警名单，现在还能投吗"`,
       );
     }
     const chosenStyle = titleStyles[Math.floor(Math.random() * titleStyles.length)];
@@ -1236,6 +1249,8 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 9. 【年份】如需写年份, 一律用 ${currentYear} (当前年), 禁止写 2025 或其它过往年份
 10. 【无 IF 不提 IF】若 ##已知期刊数据## 中无 impactFactor, 标题禁止出现 "IF" / "影响因子" 字样
 11. 【收录状态如实】标题涉及 SCI/SSCI/核心 字样时必须与 "收录情况" 一致, 无收录证据严禁写 "SCI"
+12. 【钩子要真】标题可以用提问/悬念制造点击欲 (如"该不该投"、"冲得动吗"、"好中吗"), 但**钩子里的任何数据/判断必须真实**: 严禁为吸睛编造分区(如"1区TOP"当 DB 无分区数据)、录用率、收录状态。无数据的就用开放式提问, 不要给假答案。
+13. 【禁夸张营销】禁止"投稿前必看!"、"必看"、"绝了"、"封神" 等标题党词汇
 
 【本次标题风格】
 ${chosenStyle}
