@@ -20,6 +20,7 @@ import argparse
 import re
 import time
 import traceback
+import random
 
 # ============ Scrapling 导入 ============
 
@@ -141,6 +142,82 @@ def search_letpub_by_issn(session, issn: str, use_stealthy: bool = False) -> dic
     except Exception as e:
         print(json.dumps({"error": f"LetPub ISSN search failed: {str(e)}"}), file=sys.stderr)
         return None
+
+
+# ============ PR #187: LetPub 学科列表翻页爬取 (主渠道扩池) ============
+
+# 学科 → LetPub field id (与 letpub-crawler.ts LETPUB_CATEGORY_IDS 同步)
+LETPUB_CATEGORY_IDS = {
+    "medicine": "5", "energy": "8", "computer": "7", "engineering": "4",
+    "economics": "14", "biology": "1", "chemistry": "3", "physics": "9",
+    "materials": "6", "environment": "8", "agriculture": "2",
+    "psychology": "12", "education": "15", "math": "10",
+}
+
+
+def _parse_letpub_list(page) -> list:
+    """解析 LetPub 列表页表格 → [{letpub_id, name, issn, impactFactor, partition, isWarningList}]
+    只提取列表页可靠字段; 全字段后续由 enrichJournal 详情爬取补全."""
+    results = []
+    rows = page.css("tr")
+    for row in rows:
+        link = row.css("a[href*='journalid']")
+        if not link:
+            continue
+        href = link[0].attrib.get("href", "")
+        jid_match = re.search(r"journalid=(\d+)", href)
+        if not jid_match:
+            continue
+        name = (link[0].text or "").strip()
+        if not name or len(name) < 2 or len(name) > 80:
+            continue
+        row_text = row.text or ""
+        issn_m = re.search(r"(\d{4}-\d{3}[\dxX])", row_text)
+        if_m = re.search(r"(\d+\.\d+)", row_text)
+        q_m = re.search(r"Q[1-4]", row_text, re.I)
+        results.append({
+            "letpub_id": jid_match.group(1),
+            "name": name,
+            "issn": issn_m.group(1) if issn_m else None,
+            "impactFactor": float(if_m.group(1)) if if_m else None,
+            "partition": q_m.group(0).upper() if q_m else None,
+            "isWarningList": bool(re.search(r"预警|warning|黑名单", row_text, re.I)),
+            "platform": "letpub",
+        })
+    return results
+
+
+def crawl_letpub_category(session, category_id: str, max_pages: int = 50,
+                          use_stealthy: bool = False, throttle: float = 4.0) -> list:
+    """按学科分类翻页爬 LetPub 期刊列表. 翻到空页或 max_pages 停.
+    限速 throttle + 随机抖动防反爬."""
+    journals = []
+    seen_ids = set()
+    for page_num in range(1, max_pages + 1):
+        search_params = {
+            "searchname": "", "searchissn": "", "searchfield": category_id,
+            "searchopen": "", "searchsub": "", "searchletter": "",
+            "searchsort": "relevance", "searchimpactlow": "", "searchimpacthigh": "",
+            "currentpage": str(page_num),
+        }
+        try:
+            page = _letpub_search_post(session, search_params, use_stealthy)
+        except Exception as e:
+            print(json.dumps({"warning": f"LetPub list page {page_num} failed: {str(e)}"}), file=sys.stderr)
+            break
+        if page.status != 200:
+            break
+        page_journals = _parse_letpub_list(page)
+        # 去重 + 空页判停 (翻到末页后 LetPub 常返回重复第1页或空)
+        new_items = [j for j in page_journals if j["letpub_id"] not in seen_ids]
+        if not new_items:
+            break
+        for j in new_items:
+            seen_ids.add(j["letpub_id"])
+        journals.extend(new_items)
+        print(json.dumps({"progress": f"category={category_id} page={page_num} +{len(new_items)} total={len(journals)}"}), file=sys.stderr)
+        time.sleep(throttle + random.uniform(0, 2))
+    return journals
 
 
 def fetch_letpub_detail(session, journal_id: str, use_stealthy: bool = False) -> dict | None:
@@ -406,8 +483,34 @@ def main():
                         help="使用 StealthySession（需要安装浏览器）")
     parser.add_argument("--letpub-only", action="store_true", help="只爬 LetPub")
     parser.add_argument("--springer-only", action="store_true", help="只爬 Springer")
+    # PR #187: LetPub 学科列表翻页爬取 (主渠道扩池)
+    parser.add_argument("--list-category", help="按学科分类爬列表 (传学科 code 如 medicine, 或 LetPub field id)")
+    parser.add_argument("--max-pages", type=int, default=50, help="列表最大翻页数")
+    parser.add_argument("--throttle", type=float, default=4.0, help="每页间隔秒数 (防反爬)")
 
     args = parser.parse_args()
+
+    # PR #187: 列表爬取模式 — 输出 JSON 数组
+    if args.list_category:
+        if not HAS_SCRAPLING:
+            print(json.dumps({"error": "Scrapling 未安装"}))
+            sys.exit(1)
+        # 学科 code → field id (也支持直接传 id)
+        cat_id = LETPUB_CATEGORY_IDS.get(args.list_category, args.list_category)
+        items = []
+        try:
+            if args.stealthy:
+                with StealthySession(headless=True, solve_cloudflare=True,
+                                     hide_canvas=True, block_webrtc=True) as session:
+                    items = crawl_letpub_category(session, cat_id, args.max_pages, True, args.throttle)
+            else:
+                with FetcherSession(impersonate="chrome") as session:
+                    items = crawl_letpub_category(session, cat_id, args.max_pages, False, args.throttle)
+        except Exception as e:
+            print(json.dumps({"error": f"LetPub list crawl failed: {str(e)}"}), file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps({"category": args.list_category, "count": len(items), "items": items}, ensure_ascii=False))
+        return
 
     if not args.name and not args.issn and not args.keyword:
         print(json.dumps({"error": "请提供 --name, --issn 或 --keyword"}))
