@@ -14,7 +14,7 @@
  */
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
-import { sql, isNull, isNotNull, and } from "drizzle-orm";
+import { sql, isNotNull } from "drizzle-orm";
 import { logger } from "../config/logger.js";
 
 /** 从 if_history jsonb 取最新年 IF. 兼容 {data:[{year,if}]} / [{year,value}] 两种结构. */
@@ -36,12 +36,14 @@ function latestIF(ifHistory: unknown): number | null {
 
 async function main() {
   // 只补 impact_factor 空 + if_history 非空的 (不覆盖已有真值)
+  // PR #197 (5-21): 以 LetPub 为准 — 对所有有 if_history(LetPub) 的期刊, 用最新年 IF 覆盖 impact_factor.
+  //   不再只补 NULL: OpenAlex ingest 填的近似 IF 也要被 LetPub 真值覆盖修正.
   const targets = await db
     .select({ id: journals.id, name: journals.name, ifHistory: journals.ifHistory })
     .from(journals)
-    .where(and(isNull(journals.impactFactor), isNotNull(journals.ifHistory)));
+    .where(isNotNull(journals.ifHistory));
 
-  console.log(`[backfill-if] ${targets.length} 本 impact_factor 空但有 if_history, 开始提取`);
+  console.log(`[backfill-if] ${targets.length} 本有 if_history(LetPub), 用最新年 IF 覆盖 impact_factor (以 LetPub 为准)`);
 
   let updated = 0;
   let noValid = 0;

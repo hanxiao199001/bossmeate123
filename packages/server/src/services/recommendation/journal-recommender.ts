@@ -72,12 +72,16 @@ export async function recommendJournals(input: RecommendJournalsInput): Promise<
     gte(journals.confidence, 70),
     or(isNull(journals.tenantId), eq(journals.tenantId, input.tenantId)),
   );
+  // PR #197 (5-21): 以 LetPub(WOS核心) 为准 — 只推有 LetPub 真实 WOS 等级的期刊 (SCIE/SSCI/ESCI/AHCI).
+  //   去掉 "OR impactFactor 非空": OpenAlex 近似 IF 不准, 不能作为进池依据.
+  //   OpenAlex-only 期刊(无 LetPub JCR)的数据不可信, 不进推荐.
   const sciWhere = and(
     baseWhere,
     sql`(
       ${journals.jcrFull}->>'wosLevel' ILIKE '%SCIE%'
       OR ${journals.jcrFull}->>'wosLevel' ILIKE '%SSCI%'
-      OR ${journals.impactFactor} IS NOT NULL
+      OR ${journals.jcrFull}->>'wosLevel' ILIKE '%ESCI%'
+      OR ${journals.jcrFull}->>'wosLevel' ILIKE '%AHCI%'
     )`,
   );
   const selectCols = {
