@@ -446,11 +446,11 @@ function renderJcrFullPanel(journal: JournalInfo): string {
   const rows: string[] = [];
 
   if (isJcrFull(raw)) {
-    rows.push(jcrRow("WoS Level", raw.wosLevel));
-    rows.push(jcrRow("JIF Subjects", formatJcrSubjects(raw.jifSubjects)));
-    rows.push(jcrRow("JCI Subjects", formatJcrSubjects(raw.jciSubjects)));
-    rows.push(jcrRow("Top Journal", typeof raw.isTopJournal === "boolean" ? (raw.isTopJournal ? "是" : "否") : null));
-    rows.push(jcrRow("Review Journal", typeof raw.isReviewJournal === "boolean" ? (raw.isReviewJournal ? "是" : "否") : null));
+    rows.push(jcrRow("WoS 等级", raw.wosLevel));
+    rows.push(jcrRow("JIF 学科分区", formatJcrSubjects(raw.jifSubjects)));
+    rows.push(jcrRow("JCI 学科分区", formatJcrSubjects(raw.jciSubjects)));
+    rows.push(jcrRow("是否顶刊", typeof raw.isTopJournal === "boolean" ? (raw.isTopJournal ? "是" : "否") : null));
+    rows.push(jcrRow("是否综述刊", typeof raw.isReviewJournal === "boolean" ? (raw.isReviewJournal ? "是" : "否") : null));
   }
   // B.4-1：中文核心目录（CSCD + 北大核心）— 静态目录字段，B.4-2 万方 / B.4-3 CNKI 后再扩
   if (typeof cscd === "string" && cscd.trim()) rows.push(jcrRow("CSCD", cscd));
@@ -470,6 +470,36 @@ function jcrRow(label: string, value: string | null | undefined): string {
   return `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};"><strong>${esc(label)}：</strong>${esc(String(value))}</p>`;
 }
 
+// PR #198 (5-21): JCR 学科名英→中翻译 (高频 JCR subject), 未匹配保留英文. 改善中国用户阅读.
+const JCR_SUBJECT_CN: Record<string, string> = {
+  "MEDICINE, GENERAL & INTERNAL": "医学·综合与内科", "MEDICINE, RESEARCH & EXPERIMENTAL": "医学·研究与实验",
+  "ONCOLOGY": "肿瘤学", "CARDIAC & CARDIOVASCULAR SYSTEMS": "心血管", "CLINICAL NEUROLOGY": "临床神经病学",
+  "SURGERY": "外科学", "IMMUNOLOGY": "免疫学", "INFECTIOUS DISEASES": "传染病学", "PHARMACOLOGY & PHARMACY": "药理学与药学",
+  "PUBLIC, ENVIRONMENTAL & OCCUPATIONAL HEALTH": "公共卫生与环境职业健康", "HEALTH CARE SCIENCES & SERVICES": "卫生保健科学",
+  "NEUROSCIENCES": "神经科学", "PSYCHIATRY": "精神病学", "RADIOLOGY, NUCLEAR MEDICINE & MEDICAL IMAGING": "放射与医学影像",
+  "BIOCHEMISTRY & MOLECULAR BIOLOGY": "生物化学与分子生物学", "CELL BIOLOGY": "细胞生物学", "MICROBIOLOGY": "微生物学",
+  "BIOTECHNOLOGY & APPLIED MICROBIOLOGY": "生物技术与应用微生物", "GENETICS & HEREDITY": "遗传学", "PLANT SCIENCES": "植物科学",
+  "BIOLOGY": "生物学", "ECOLOGY": "生态学", "MARINE & FRESHWATER BIOLOGY": "海洋与淡水生物",
+  "CHEMISTRY, MULTIDISCIPLINARY": "化学·综合", "CHEMISTRY, PHYSICAL": "物理化学", "CHEMISTRY, ANALYTICAL": "分析化学",
+  "CHEMISTRY, ORGANIC": "有机化学", "CHEMISTRY, INORGANIC & NUCLEAR": "无机与核化学", "ELECTROCHEMISTRY": "电化学",
+  "MATERIALS SCIENCE, MULTIDISCIPLINARY": "材料科学·综合", "NANOSCIENCE & NANOTECHNOLOGY": "纳米科学",
+  "POLYMER SCIENCE": "高分子科学", "METALLURGY & METALLURGICAL ENGINEERING": "冶金工程",
+  "ENGINEERING, ELECTRICAL & ELECTRONIC": "工程·电子电气", "ENGINEERING, MECHANICAL": "工程·机械", "ENGINEERING, CHEMICAL": "工程·化工",
+  "ENGINEERING, CIVIL": "工程·土木", "ENGINEERING, ENVIRONMENTAL": "工程·环境", "AUTOMATION & CONTROL SYSTEMS": "自动化与控制",
+  "COMPUTER SCIENCE, ARTIFICIAL INTELLIGENCE": "计算机·人工智能", "COMPUTER SCIENCE, INFORMATION SYSTEMS": "计算机·信息系统",
+  "COMPUTER SCIENCE, THEORY & METHODS": "计算机·理论方法", "TELECOMMUNICATIONS": "电信",
+  "ENERGY & FUELS": "能源与燃料", "ENVIRONMENTAL SCIENCES": "环境科学", "GREEN & SUSTAINABLE SCIENCE & TECHNOLOGY": "绿色可持续科技",
+  "PHYSICS, MULTIDISCIPLINARY": "物理·综合", "PHYSICS, APPLIED": "应用物理", "OPTICS": "光学", "ASTRONOMY & ASTROPHYSICS": "天文与天体物理",
+  "MATHEMATICS": "数学", "MATHEMATICS, APPLIED": "应用数学", "STATISTICS & PROBABILITY": "统计与概率",
+  "ECONOMICS": "经济学", "MANAGEMENT": "管理学", "BUSINESS": "商业", "BUSINESS, FINANCE": "金融",
+  "AGRICULTURE, MULTIDISCIPLINARY": "农业·综合", "FOOD SCIENCE & TECHNOLOGY": "食品科学", "AGRONOMY": "农艺学",
+  "EDUCATION & EDUCATIONAL RESEARCH": "教育学", "PSYCHOLOGY, MULTIDISCIPLINARY": "心理学·综合",
+  "SOCIAL SCIENCES, INTERDISCIPLINARY": "社会科学·交叉", "MULTIDISCIPLINARY SCIENCES": "综合性期刊",
+};
+function translateJcrSubject(s: string): string {
+  return JCR_SUBJECT_CN[s.toUpperCase().trim()] || s; // 未匹配保留英文
+}
+
 function formatJcrSubjects(subj: JcrFullShape["jifSubjects"] | JcrFullShape["jciSubjects"]): string | null {
   if (!Array.isArray(subj) || subj.length === 0) return null;
   if (typeof subj[0] === "string") {
@@ -481,7 +511,7 @@ function formatJcrSubjects(subj: JcrFullShape["jifSubjects"] | JcrFullShape["jci
       if (s.zone) meta.push(s.zone);
       if (s.rank) meta.push(s.rank);
       if (typeof s.percentile === "number") meta.push(`${s.percentile}%`);
-      return `${s.subject}${meta.length > 0 ? `（${meta.join(" · ")}）` : ""}`;
+      return `${translateJcrSubject(s.subject)}${meta.length > 0 ? `（${meta.join(" · ")}）` : ""}`;
     })
     .join("、");
 }
@@ -556,7 +586,7 @@ function renderPublicationCostsBlock(journal: JournalInfo): string {
   const rows: string[] = [];
   rows.push(jcrRow("APC 版面费", apcDisplay));
   rows.push(jcrRow("是否 OA", isOA == null ? null : (isOA ? "是" : "否")));
-  rows.push(jcrRow("Fast Track", isFast == null ? null : (isFast ? "支持" : "不支持")));
+  rows.push(jcrRow("快速通道", isFast == null ? null : (isFast ? "支持" : "不支持")));
 
   // extras 附加费列表
   if (Array.isArray(costs.extras) && costs.extras.length > 0) {
