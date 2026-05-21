@@ -62,6 +62,7 @@ import {
   extractScopeDetailsFromOpenAlex,
   extractPublicationCostsFromOpenAlex,
   extractPublisherFromOpenAlex,
+  extractWebsiteFromOpenAlex,
   extractCitingJournalsTop10,
   extractCarIndexHistory,
 } from "./extractors/openalex-extractor.js";
@@ -299,6 +300,23 @@ export async function enrichJournal(
     } catch (err) {
       errors["publisher"] = err instanceof Error ? err.message : String(err);
       logger.warn({ journalId, err: errors["publisher"] }, "publisher extractor failed");
+    }
+  }
+
+  // PR #201 (5-22): 官网 website 回填（仅当 DB 当前 NULL 才填，不覆盖手维/LetPub 真值）
+  //   来源 OpenAlex homepage_url（事实型 URL，非近似指标）。新 5000 池 website 多为 NULL，
+  //   导致文章里"官网"行被模板藏掉。此回填让文章出现官网链接，免代理。
+  if (!journal.website) {
+    try {
+      const site = extractWebsiteFromOpenAlex(openalex);
+      if (site) {
+        updates.website = site;
+        successFields.push("website");
+        realProvenance.website = "openalex";
+      }
+    } catch (err) {
+      errors["website"] = err instanceof Error ? err.message : String(err);
+      logger.warn({ journalId, err: errors["website"] }, "website extractor failed");
     }
   }
 

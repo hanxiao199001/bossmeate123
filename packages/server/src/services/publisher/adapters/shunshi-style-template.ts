@@ -786,7 +786,8 @@ function renderScopeAndCitations(ai: AIGeneratedContent): string {
 }
 function renderAiSubmissionAdvice(ai: AIGeneratedContent): string {
   // 注意：与区块 17 renderSubmissionAdviceBlock（rule-based 简短）区分
-  return renderDeepAnalysisSection("💡 投稿建议（AI 综合分析）", ai.submissionAdvice);
+  // PR #202: 去 AI 感 — 砍掉"（AI 综合分析）"标签 (暴露机器味, 加重公式感)
+  return renderDeepAnalysisSection("💡 投稿建议", ai.submissionAdvice);
 }
 
 // ============ 区块 16: 综合点评（aiContent.recommendation 摘要） ============

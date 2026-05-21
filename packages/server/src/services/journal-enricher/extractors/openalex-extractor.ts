@@ -142,6 +142,24 @@ export function extractPublisherFromOpenAlex(source: OpenAlexSource | null): str
   return trimmed.length > 0 ? trimmed.slice(0, 200) : null;
 }
 
+/**
+ * PR #201 (5-22): 期刊官网 → journals.website 回填用。
+ * OpenAlex 的 homepage_url 是直接存储的事实型 URL（非算出来的近似指标），
+ * 拿来回填官网链接是准确的、免费的、不耗代理。仅作 fallback：
+ * 待 LetPub「官方投稿网址」(PR #199) 到位后用更权威的提交页升级。
+ * 严格 guard：只接受合法 http(s) URL，排除明显的登录/拦截页。
+ */
+export function extractWebsiteFromOpenAlex(source: OpenAlexSource | null): string | null {
+  if (!source) return null;
+  const url = source.homepage_url;
+  if (typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  // 排除 Springer SSO 登录页等无效落地页（与模板 isSpringerLogin 同口径）
+  if (/idp\.springer\.com/i.test(trimmed)) return null;
+  return trimmed.length > 0 ? trimmed.slice(0, 500) : null;
+}
+
 // ============ B.2.2: citing journals + CAR ============
 
 const MAX_CITING = 10;

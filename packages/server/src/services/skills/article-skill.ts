@@ -1129,6 +1129,30 @@ export class ArticleSkill implements ISkill {
     }
     if (disciplineHint) disciplineHint = `\n学科领域定制要求：${disciplineHint}`;
 
+    // ---- PR #202 (5-22): 叙事主线 — 破除"每篇同骨架"的公式感 ----
+    // 候选主线按"该刊真有什么数据"动态启用 (诚实, 不为多样性编故事), 再随机选一条。
+    // 同一信息让不同期刊从不同视角切入, 多篇文章读起来不雷同。
+    const angleCandidates: Array<{ key: string; hint: string }> = [];
+    const ifHist = (journal.promptIfHistory as unknown[] | undefined) || undefined;
+    if (Array.isArray(ifHist) && ifHist.length >= 3) {
+      angleCandidates.push({ key: "趋势主线", hint: "以 IF/影响力的多年走势为主线开篇切入 (涨/跌/稳), 正文重点讲趋势与拐点, 其余信息作支撑。" });
+    }
+    const apcKnown = (journal as { apcFee?: number | null }).apcFee != null || journal.promptPublicationCosts?.apc != null;
+    const acceptHigh = journal.acceptanceRate != null && (journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100) >= 20;
+    if (apcKnown && (acceptHigh || journal.reviewCycle)) {
+      angleCandidates.push({ key: "性价比主线", hint: "以「投入产出/性价比」为主线 (版面费 vs 录用难度/审稿速度), 帮读者算清这笔账, 不夸大不暗示放水。" });
+    }
+    if (journal.isWarningList || (journal.promptCitingTop10?.selfCitationRate != null && journal.promptCitingTop10.selfCitationRate >= 0.3)) {
+      angleCandidates.push({ key: "避坑主线", hint: "以「投前风险排查」为主线 (预警名单/自引率/分区波动), 客观提示风险, 给出审慎建议, 不制造恐慌。" });
+    }
+    if (journal.discipline && (journal.casPartition || journal.partition)) {
+      angleCandidates.push({ key: "定位主线", hint: "以「这本刊在本学科的定位与适配人群」为主线, 讲清它收什么稿、适合哪类作者, 帮读者判断是否对口。" });
+    }
+    // 兜底主线 (任何刊都成立)
+    angleCandidates.push({ key: "盘点主线", hint: "以「一文看懂这本刊」为主线, 把已知的硬数据 (IF/分区/JCR/刊期等) 串成清晰盘点, 客观陈述。" });
+    const articleAngle = angleCandidates[Math.floor(Math.random() * angleCandidates.length)];
+    const angleHint = `\n【本篇叙事主线】${articleAngle.key} — ${articleAngle.hint}\n  注意: 主线只决定「切入角度和详略」, 不改变数据真实性; 仍严禁编造未提供的数字。`;
+
     // V7（task #11）：sparse null-skip 单字段拼装。某字段缺数据时不出现在 prompt
     // 里 —— 不要给 LLM "我没数据"的明示，避免它根据缺失暗示编造。
     const enrichmentLines: string[] = [];
@@ -1258,6 +1282,7 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
+${angleHint}
 
 【叙事口吻】
 - recommendation 不要写成干巴巴的总结，要有个人观点和态度（像资深编辑而非百科词条）
