@@ -217,6 +217,21 @@ export async function enrichJournal(
   tryExtract("jcr_full", "jcrFull", () => extractJcrFull(letpub));
   if (updates.jcrFull) realProvenance.jcrFull = "letpub";
 
+  // PR #190 (5-20): 存 LetPub 封面 URL (letpub-detail-scraper.parseCoverImage 提取, 之前漏存)
+  tryExtract("cover_image_url", "coverImageUrl", () => (letpub as { coverImageUrl?: string | null } | null)?.coverImageUrl ?? null);
+  if (updates.coverImageUrl) realProvenance.coverImageUrl = "letpub";
+
+  // PR #194 (5-20): 从 LetPub if_history 取最新年 IF 写 impact_factor 单值 (标题/SCI过滤/显示依赖单值, 非数组)
+  tryExtract("impact_factor", "impactFactor", () => {
+    const hist = (letpub as { ifHistory?: Array<{ year?: number; value?: number }> } | null)?.ifHistory;
+    if (!Array.isArray(hist) || hist.length === 0) return null;
+    const valid = hist.filter((r) => typeof r.year === "number" && typeof r.value === "number" && (r.value as number) > 0);
+    if (valid.length === 0) return null;
+    valid.sort((a, b) => (b.year as number) - (a.year as number));
+    return valid[0].value ?? null;
+  });
+  if (updates.impactFactor) realProvenance.impactFactor = "letpub";
+
   // publication_stats: LetPub annualVolume + frequency + OpenAlex Top 机构 (混合源)
   tryExtract("publication_stats", "publicationStats", () => extractPublicationStats({
     letpub,

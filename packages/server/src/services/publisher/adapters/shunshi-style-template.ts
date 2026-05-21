@@ -222,6 +222,27 @@ function greyOrValue(v: unknown, fallback = "未公开"): string {
   return esc(String(v));
 }
 
+// PR #191 (5-20): 学科主题题图 — 封面真图补不全 (LetPub无/Springer仅14%), 改学科配图库.
+// 按 discipline 给配色渐变 + emoji 大图标, 100% 覆盖 + 好看, 公众号 HTML 原生支持.
+function disciplineTheme(discipline: string | null | undefined): { grad: string; icon: string } {
+  const d = (discipline || "").toLowerCase();
+  if (/医|临床|药|medic|clinic|pharma|health/.test(d)) return { grad: "#E53935,#FF8A65", icon: "\u{1FA7A}" };
+  if (/生物|biolog|genetic|cell|分子/.test(d)) return { grad: "#43A047,#A5D6A7", icon: "\u{1F9EC}" };
+  if (/化学|chemi/.test(d)) return { grad: "#8E24AA,#CE93D8", icon: "\u2697\uFE0F" };
+  if (/物理|physic/.test(d)) return { grad: "#1E88E5,#90CAF9", icon: "\u269B\uFE0F" };
+  if (/材料|material/.test(d)) return { grad: "#FB8C00,#FFCC80", icon: "\u{1F52C}" };
+  if (/工程|工科|engineer|机械|电/.test(d)) return { grad: "#3949AB,#9FA8DA", icon: "\u2699\uFE0F" };
+  if (/计算|信息|软件|comput|software|data|人工智能|ai/.test(d)) return { grad: "#00897B,#80CBC4", icon: "\u{1F4BB}" };
+  if (/能源|energy|电力/.test(d)) return { grad: "#F9A825,#FFE082", icon: "\u26A1" };
+  if (/环境|生态|environ|ecolog|climate/.test(d)) return { grad: "#2E7D32,#A5D6A7", icon: "\u{1F33F}" };
+  if (/经济|管理|金融|商|econ|business|manag|finance/.test(d)) return { grad: "#C0A12B,#E6D58A", icon: "\u{1F4CA}" };
+  if (/农|林|食品|agri|food|forest/.test(d)) return { grad: "#6D8C2A,#C5D86D", icon: "\u{1F33E}" };
+  if (/心理|psycho|认知|behav/.test(d)) return { grad: "#AD1457,#F48FB1", icon: "\u{1F9E0}" };
+  if (/教育|educat|teach/.test(d)) return { grad: "#00838F,#80DEEA", icon: "\u{1F4DA}" };
+  if (/数学|统计|math|statis/.test(d)) return { grad: "#283593,#9FA8DA", icon: "\u{1F4D0}" };
+  return { grad: "#455A64,#B0BEC5", icon: "\u{1F4D6}" };
+}
+
 // ============ 区块 1: Hero 首图 ============
 function renderHeroBlock(journal: JournalInfo): string {
   const fullName = esc(journal.nameEn || journal.name);
@@ -240,11 +261,13 @@ function renderHeroBlock(journal: JournalInfo): string {
   if (cover) {
     coverHtml = `<img src="${esc(cover)}" alt="${fullName}" style="max-width:100%;height:auto;display:block;margin:0 auto 12px auto;border-radius:6px;" />`;
   } else {
-    // 占位卡: 渐变背景 + 期刊英文名 (首字母放大), 视觉上与有封面的文章一致
+    // PR #191: 无真封面 → 学科主题题图 (学科色渐变 + 大图标 + 期刊名), 替代纯文字占位卡
+    const theme = disciplineTheme((journal as { discipline?: string | null }).discipline);
     coverHtml =
-      `<div style="background:${PLACEHOLDER_BG};border:1px solid ${PLACEHOLDER_BORDER};border-radius:8px;padding:32px 20px;margin:0 auto 12px auto;text-align:center;">` +
-      `<p style="margin:0;font-size:22px;font-weight:bold;color:${BLUE};line-height:1.4;letter-spacing:0.5px;">${fullName}</p>` +
-      (cnName ? `<p style="margin:8px 0 0 0;font-size:14px;color:${TEXT};line-height:1.5;">${cnName}</p>` : "") +
+      `<div style="background:linear-gradient(135deg,${theme.grad});border-radius:10px;padding:40px 24px;margin:0 auto 12px auto;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,0.12);">` +
+      `<div style="font-size:56px;line-height:1;margin-bottom:14px;">${theme.icon}</div>` +
+      `<p style="margin:0;font-size:22px;font-weight:bold;color:#fff;line-height:1.4;letter-spacing:0.5px;text-shadow:0 1px 3px rgba(0,0,0,0.25);">${fullName}</p>` +
+      (cnName ? `<p style="margin:10px 0 0 0;font-size:15px;color:rgba(255,255,255,0.92);line-height:1.5;">${cnName}</p>` : "") +
       `</div>`;
   }
 
@@ -290,8 +313,21 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
 
 // ============ 区块 3: JCR 分区徽章 ============
 function renderJcrQuartileBlock(journal: JournalInfo): string {
-  const q = journal.partition;
-  const valid = typeof q === "string" && /^Q[1-4]$/i.test(q);
+  let q = journal.partition;
+  let valid = typeof q === "string" && /^Q[1-4]$/i.test(q);
+  // PR #195 (5-20): partition(中科院, 多 NULL) 空时 fallback 到 jcrFull.jifSubjects 最优 zone.
+  if (!valid) {
+    const raw = (journal as { jcrFull?: unknown }).jcrFull;
+    if (isJcrFull(raw) && Array.isArray(raw.jifSubjects)) {
+      const zones = (raw.jifSubjects as Array<{ zone?: string }>)
+        .map((s) => s.zone)
+        .filter((z): z is string => typeof z === "string" && /^Q[1-4]$/i.test(z));
+      if (zones.length > 0) {
+        q = zones.sort()[0].toUpperCase();
+        valid = true;
+      }
+    }
+  }
   const display = valid ? q!.toUpperCase() : "未分区";
   const bg = valid ? RED : "#BDBDBD";
   const tip = valid ? "JCR 分区" : "JCR 分区数据未公布";
@@ -368,6 +404,10 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 
 // ============ 区块 6: CAR 指数历史 ============
 function renderCarHistoryBlock(journal: JournalInfo): string {
+  // PR #196 (5-21): CAR 止血 — carIndexHistory 来自 openalex cn/total 自算, 与 jcarindex 差别大, 暂关 (task #57 接 jcarindex 后恢复).
+  void journal;
+  return "";
+  // eslint-disable-next-line no-unreachable
   const raw = (journal as any).carIndexHistory;
   if (!isCarIndexHistory(raw) || !Array.isArray(raw.data) || raw.data.length === 0) {
     return renderP1Placeholder({
@@ -707,7 +747,9 @@ function renderIfHistoryAnalysis(ai: AIGeneratedContent): string {
   return renderDeepAnalysisSection("📈 IF 趋势深度分析", ai.ifHistoryAnalysis);
 }
 function renderCarRiskAnalysis(ai: AIGeneratedContent): string {
-  return renderDeepAnalysisSection("🇨🇳 国内学者投稿现状", ai.carRiskAnalysis);
+  // PR #196: CAR 止血 — 基于不准的 CAR 数据, 暂关 (task #57 接 jcarindex 后恢复).
+  void ai;
+  return "";
 }
 function renderScopeAndCitations(ai: AIGeneratedContent): string {
   return renderDeepAnalysisSection("🔍 收稿范围 & 引用生态", ai.scopeAndCitations);
