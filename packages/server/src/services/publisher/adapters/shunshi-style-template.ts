@@ -424,7 +424,7 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
   // svg 空（< 2 数据点）→ fallback 老 tag list
   const body = svg
     ? `<div style="margin:6px 0 0 0;">${svg}</div>`
-    : `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${raw.data.map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`).join("")}</div>`;
+    : `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${raw.data.map((r: { year: number; carIndex: number }) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`).join("")}</div>`;
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（中国作者占比）</p>` +
     `<p style="margin:0 0 6px 0;text-align:center;font-size:14px;line-height:1.6;"><span style="color:${riskColor};font-weight:600;">${risk}</span>${warned}</p>` +
