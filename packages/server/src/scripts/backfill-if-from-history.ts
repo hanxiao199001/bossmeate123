@@ -61,7 +61,7 @@ async function main() {
     SELECT COUNT(*) AS total, COUNT(impact_factor) AS has_if
     FROM journals WHERE confidence >= 60
   `);
-  const row = (cov as { rows: Array<{ total: string; has_if: string }> }).rows[0];
+  const row = (cov as unknown as { rows: Array<{ total: string; has_if: string }> }).rows[0];
 
   console.log(`\n========== backfill-if 报告 ==========`);
   console.log(`处理:        ${targets.length}`);
