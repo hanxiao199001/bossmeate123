@@ -88,7 +88,8 @@ async function main() {
       jcrFull: journals.jcrFull,
     })
     .from(journals)
-    .where(or(isNull(journals.discipline), eq(journals.discipline, "")));
+    // PR #193 (5-20): 候选除 NULL/空, 加 'multidisciplinary' 重推错标 (enrich 补 jcr_full 后修正, 真综合刊重判回保持)
+    .where(or(isNull(journals.discipline), eq(journals.discipline, ""), eq(journals.discipline, "multidisciplinary")));
 
   console.log(`[backfill-discipline] 找到 ${candidates.length} 个 discipline=NULL 的期刊`);
 
