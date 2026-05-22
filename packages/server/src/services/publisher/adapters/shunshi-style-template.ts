@@ -948,6 +948,98 @@ function renderCautionsBlock(journal: JournalInfo, aiContent: AIGeneratedContent
     `</section>`;
 }
 
+// ============ 区块 19b: 适合人群画像 (PR #203, 全用可信字段派生) ============
+// 帮读者快速"对号入座": 这本刊适合谁、谨慎给谁。仅用 IF/分区/录用率/版面费/审稿/预警 真值,
+// 不引入任何新数据。无可派生项则整块 skip。
+function renderTargetAudienceBlock(journal: JournalInfo): string {
+  const fit: string[] = [];
+  const careful: string[] = [];
+  const ifv = journal.impactFactor;
+  if (typeof ifv === "number") {
+    if (ifv >= 10) fit.push("追求高影响力成果、评优青/面上或冲高分文章的团队");
+    else if (ifv >= 3) fit.push("常规课题组、有毕业/评职发表需求的硕博");
+    else fit.push("起步阶段、需要稳妥发表积累的作者");
+  }
+  const ar = journal.acceptanceRate;
+  if (typeof ar === "number") {
+    const pct = ar >= 1 ? ar : ar * 100;
+    if (pct >= 40) fit.push("赶毕业、时间紧、希望命中率高一些的作者");
+    else if (pct < 25) careful.push("仅有初步结果、稿件完成度不高的作者（录用率偏低）");
+  }
+  if (journal.reviewCycle && /(1|2|3)\s*(个)?月|fast|快速|周/i.test(journal.reviewCycle)) {
+    fit.push("对审稿速度敏感、需要尽快见刊的作者");
+  }
+  const apc = (journal as any).publicationCosts?.apc ?? journal.apcFee;
+  if (typeof apc === "number") {
+    if (apc >= 2500) careful.push("经费有限的团队（版面费偏高，需提前确认预算）");
+    else if (apc === 0) fit.push("经费有限但希望开放获取的作者（无版面费）");
+  }
+  if (journal.isWarningList) {
+    careful.push("单位/基金有 SCI 硬性考核要求的作者（该刊在预警名单中）");
+  }
+  if (fit.length === 0 && careful.length === 0) return "";
+
+  const renderList = (arr: string[], mark: string, c: string) =>
+    arr.map((t) => `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};">${mark} ${esc(t)}</p>`).join("");
+  let body = "";
+  if (fit.length > 0) body += `<p style="margin:0 0 4px 0;font-size:14px;font-weight:600;color:#388E3C;">适合投：</p>` + renderList(fit, "·", "#388E3C");
+  if (careful.length > 0) body += `<p style="margin:10px 0 4px 0;font-size:14px;font-weight:600;color:#F57C00;">谨慎评估：</p>` + renderList(careful, "·", "#F57C00");
+  return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
+    `<p style="margin:0 0 8px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">👥 适合人群</p>` +
+    body +
+    `</section>`;
+}
+
+// ============ 区块 19c: 投稿时间线 (PR #203, 由审稿周期/刊期派生) ============
+// 把"投稿→初审→录用→见刊"画成预期时间线。仅用 reviewCycle + frequency 真值, 无审稿周期则 skip。
+function renderTimelineBlock(journal: JournalInfo): string {
+  const rc = journal.reviewCycle;
+  if (!rc) return ""; // 审稿周期是时间线的核心锚点, 没有就不渲染 (不编造)
+  const rawStats = (journal as any).publicationStats;
+  const freq = isPublicationStats(rawStats) && typeof rawStats.frequency === "string" ? rawStats.frequency : (journal.frequency || null);
+  const steps: Array<{ label: string; sub: string }> = [
+    { label: "投稿", sub: "提交系统" },
+    { label: "初审 / 外审", sub: esc(rc) },
+    { label: "录用", sub: "完成修回后" },
+    { label: "见刊", sub: freq ? `刊期 ${esc(freq)}` : "排版上线" },
+  ];
+  const cells = steps.map((st, i) =>
+    `<td style="text-align:center;vertical-align:top;padding:0 4px;">` +
+    `<div style="width:22px;height:22px;line-height:22px;margin:0 auto 6px auto;border-radius:50%;background:${BLUE};color:#fff;font-size:12px;font-weight:bold;">${i + 1}</div>` +
+    `<p style="margin:0;font-size:13px;font-weight:600;color:${TEXT};line-height:1.4;">${esc(st.label)}</p>` +
+    `<p style="margin:2px 0 0 0;font-size:12px;color:${MUTED};line-height:1.4;">${st.sub}</p>` +
+    `</td>`,
+  ).join('<td style="vertical-align:top;padding-top:4px;color:#BBB;font-size:14px;">→</td>');
+  return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#F5F9FF;border-radius:6px;">` +
+    `<p style="margin:0 0 12px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">🗓️ 投稿时间线（预期）</p>` +
+    `<table style="width:100%;border-collapse:collapse;"><tr>${cells}</tr></table>` +
+    `<p style="margin:10px 0 0 0;font-size:12px;color:${MUTED};line-height:1.6;">* 时间线为基于审稿周期/刊期的预期参考，实际以期刊系统进度为准。</p>` +
+    `</section>`;
+}
+
+// ============ 区块 19d: 同档期刊对比 (PR #203, 池内同分区/同学科 IF 相近) ============
+// 给读者一个"横向参照": 同档位还有哪些选择, 各自 IF/录用率/版面费如何。全用可信字段, 无 peer 则 skip。
+function renderPeerComparisonBlock(journal: JournalInfo): string {
+  const peers = journal.peerJournals;
+  if (!peers || peers.length === 0) return "";
+  const fmtIF = (v: number | null) => (typeof v === "number" ? v.toFixed(1) : "—");
+  const fmtAR = (v: number | null) => (typeof v === "number" ? `${(v >= 1 ? v : v * 100).toFixed(0)}%` : "—");
+  const fmtAPC = (v: number | null) => (typeof v === "number" ? (v === 0 ? "免费" : `$${v}`) : "—");
+  const th = (t: string) => `<th style="padding:6px 8px;font-size:12px;color:${MUTED};font-weight:600;text-align:left;border-bottom:1px solid #E0E0E0;">${t}</th>`;
+  const td = (t: string, bold = false) => `<td style="padding:6px 8px;font-size:13px;color:${TEXT};border-bottom:1px solid #F0F0F0;${bold ? "font-weight:600;" : ""}">${t}</td>`;
+  const rowSelf =
+    `<tr style="background:#F5F9FF;">` + td(`${esc(journal.nameEn || journal.name)}（本刊）`, true) + td(fmtIF(journal.impactFactor)) + td(fmtAR(journal.acceptanceRate)) + td(fmtAPC((journal as any).apcFee ?? null)) + `</tr>`;
+  const rowsPeer = peers
+    .map((pj) => `<tr>` + td(esc(pj.nameEn || pj.name)) + td(fmtIF(pj.impactFactor)) + td(fmtAR(pj.acceptanceRate)) + td(fmtAPC(pj.apcFee)) + `</tr>`)
+    .join("");
+  return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +
+    `<p style="margin:0 0 12px 0;font-size:16px;font-weight:bold;color:${BLUE};line-height:1.5;">📋 同档期刊对比</p>` +
+    `<table style="width:100%;border-collapse:collapse;"><thead><tr>${th("期刊")}${th("IF")}${th("录用率")}${th("版面费")}</tr></thead>` +
+    `<tbody>${rowSelf}${rowsPeer}</tbody></table>` +
+    `<p style="margin:10px 0 0 0;font-size:12px;color:${MUTED};line-height:1.6;">* 同分区/同学科、影响因子相近的期刊参照，数据均来自权威源；"—"表示该项暂无公开数据。</p>` +
+    `</section>`;
+}
+
 // ============ 区块 20: 营销文案 CTA ============
 function renderMarketingCtaBlock(journal: JournalInfo): string {
   const journalName = esc(journal.nameEn || journal.name);
@@ -1069,6 +1161,9 @@ export async function generateShunshiStyleHtml(
   sections.push(renderSubmissionAdviceBlock(journal));                // 17
   sections.push(renderAdvantagesBlock(journal, aiContent));           // 18
   sections.push(renderCautionsBlock(journal, aiContent));             // 19
+  sections.push(renderTargetAudienceBlock(journal));                  // 19b 🆕 PR #203 适合人群
+  sections.push(renderTimelineBlock(journal));                        // 19c 🆕 PR #203 投稿时间线
+  sections.push(renderPeerComparisonBlock(journal));                  // 19d 🆕 PR #203 同档对比
   sections.push(renderMarketingCtaBlock(journal));                    // 20
   sections.push(renderContactBlock(tenant));                          // 21 🔄 task #35
   sections.push(renderDisclaimerBlock());                             // 22

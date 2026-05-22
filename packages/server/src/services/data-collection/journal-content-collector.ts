@@ -12,7 +12,7 @@
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
-import { eq, and, desc, or, ilike, sql, isNull } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql, isNull, isNotNull, ne } from "drizzle-orm";
 import { createEntry } from "../knowledge/knowledge-service.js";
 import {
   fetchJournalCoverMultiSource,
@@ -53,6 +53,8 @@ export interface JournalInfo {
   jcrSubjects: string | null; // JSON string
   topInstitutions: string | null; // JSON string
   scopeDescription: string | null;
+  // PR #203: 同档期刊对比 (池内同分区/同学科, IF 相近的 2-3 本, 全用可信字段)
+  peerJournals?: Array<{ name: string; nameEn: string | null; impactFactor: number | null; acceptanceRate: number | null; apcFee: number | null; casPartition: string | null }>;
   // V7 新增：LetPub 详情数据（用于生成图表插图）
   ifHistory?: Array<{ year: number; value: number }>;           // 影响因子历年
   pubVolumeHistory?: Array<{ year: number; count: number }>;    // 发文量历年
@@ -499,9 +501,37 @@ export async function collectJournalContent(params: {
       }
     }
 
+    // PR #203: 同档期刊对比 — 拉池内同分区(无分区时同学科)、IF 相近的 2-3 本 (全用可信字段)
+    let peerJournals: JournalInfo["peerJournals"] = [];
+    try {
+      const peerConds: any[] = [];
+      if ((journal as any).casPartition) peerConds.push(eq(journals.casPartition, (journal as any).casPartition));
+      else if (journal.discipline) peerConds.push(eq(journals.discipline, journal.discipline));
+      if (peerConds.length > 0) {
+        const ifv = journal.impactFactor;
+        const peers = await db
+          .select({ name: journals.name, nameEn: journals.nameEn, impactFactor: journals.impactFactor, acceptanceRate: journals.acceptanceRate, apcFee: journals.apcFee, casPartition: journals.casPartition })
+          .from(journals)
+          .where(and(
+            or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)),
+            ne(journals.id, journal.id),
+            isNotNull(journals.impactFactor),
+            ...peerConds,
+          ))
+          .orderBy(
+            ...(typeof ifv === "number" ? [sql`ABS(${journals.impactFactor} - ${ifv})`] : [desc(journals.impactFactor)]),
+          )
+          .limit(3);
+        peerJournals = peers;
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), journalId: journal.id }, "同档期刊对比查询失败");
+    }
+
     journalResults.push({
       name: journal.name,
       nameEn: journal.nameEn,
+      peerJournals,
       issn: journal.issn,
       publisher: journal.publisher,
       discipline: journal.discipline,
