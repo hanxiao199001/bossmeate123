@@ -523,54 +523,10 @@ function formatJcrSubjects(subj: JcrFullShape["jifSubjects"] | JcrFullShape["jci
 
 // ============ 区块 8: 收稿范围详细 ============
 function renderScopeDetailsBlock(journal: JournalInfo): string {
-  const raw = (journal as any).scopeDetails;
-  if (!isScopeDetails(raw) || (!raw.categories && !raw.subjectDistribution && !raw.articleTypes)) {
-    return renderP1Placeholder({
-      title: "收稿范围与学科分布",
-      icon: "🔬",
-      message: "数据采集中",
-      submessage: "学科分布数据完善中",
-    });
-  }
-
-  const blocks: string[] = [];
-
-  // 9 大领域
-  if (Array.isArray(raw.categories) && raw.categories.length > 0) {
-    const tags = raw.categories
-      .map((c) => {
-        const t = typeof c === "string" ? c : c.title;
-        return `<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;background:#E3F2FD;color:${BLUE};border-radius:4px;font-size:13px;line-height:1.6;">${esc(t)}</span>`;
-      })
-      .join("");
-    blocks.push(`<div style="margin:0 0 10px 0;">${tags}</div>`);
-  }
-
-  // 文章类型
-  if (Array.isArray(raw.articleTypes) && raw.articleTypes.length > 0) {
-    blocks.push(`<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};"><strong>接收类型：</strong>${esc(raw.articleTypes.join("、"))}</p>`);
-  }
-
-  // 投稿提示
-  if (raw.submissionNote) {
-    blocks.push(`<p style="margin:0;font-size:13px;line-height:1.7;color:${MUTED};">${esc(raw.submissionNote)}</p>`);
-  }
-
-  if (blocks.length === 0) {
-    return renderP1Placeholder({
-      title: "收稿范围与学科分布",
-      icon: "🔬",
-      message: "数据采集中",
-      submessage: "学科分布数据完善中",
-    });
-  }
-
-  return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 10px 0;font-size:16px;font-weight:bold;color:${RED};text-align:center;line-height:1.5;">收稿范围与学科分布</p>` +
-    `<div style="padding:12px 16px;background:#FAFAFA;border-radius:6px;">` +
-      blocks.join("") +
-    `</div>` +
-    `</section>`;
+  // PR #210 (5-22): 砍 OpenAlex 派生 — scope_details(收稿范围/学科分布)是 OpenAlex concepts,
+  //   噪声极大(医学刊会挂 Economics/Business/Decision Sciences), 老韩定调不准则关停. 整块不渲染.
+  void journal;
+  return "";
 }
 
 // ============ 区块 9: 版面费详细 ============
@@ -678,30 +634,9 @@ function renderTopInstitutionsBlock(journal: JournalInfo): string {
 
 // ============ 区块 13: 引用前 10 期刊 ============
 function renderCitingJournalsPie(journal: JournalInfo): string {
-  const raw = (journal as any).citingJournalsTop10;
-  if (!isCitingJournalsTop10(raw) || raw.topJournals.length === 0) {
-    return renderP1Placeholder({
-      title: "引用前 10 种期刊",
-      icon: "📊",
-      message: "数据采集中",
-      submessage: "Top 期刊排行数据完善中",
-    });
-  }
-  const svg = renderCitingPieChart(
-    raw.topJournals.slice(0, 10),
-    (raw as any).selfCitationRate,
-    (raw as any).selfCitationConfidence,
-  );
-  const body = svg
-    ? `<div style="margin:6px 0 0 0;">${svg}</div>`
-    : `<ol style="margin:0;padding:12px 16px 12px 28px;background:#FAFAFA;border-radius:6px;list-style:none;">${raw.topJournals.slice(0, 10).map((j, i) => {
-        const pct = typeof j.percent === "number" ? `${j.percent}%` : "";
-        return `<li style="margin:0 0 4px 0;font-size:13px;color:${TEXT};line-height:1.6;"><span style="color:${MUTED};">${i + 1}.</span> ${esc(j.name)}${pct ? ` <span style="color:${BLUE};font-weight:600;">${pct}</span>` : ""}</li>`;
-      }).join("")}</ol>`;
-  return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">📊 引用前 ${raw.topJournals.length} 期刊分布</p>` +
-    body +
-    `</section>`;
+  // PR #210 (5-22): 砍 OpenAlex 派生 — 引用前10/自引率同源 OpenAlex 抽样, 不准, 关停.
+  void journal;
+  return "";
 }
 
 // ============ 区块 14: 自引率徽章 ============
@@ -1147,9 +1082,10 @@ export async function generateShunshiStyleHtml(
   const wrapChart = (svg: string) => svg ? `<section style="margin:0 0 18px 0;padding:8px 0;">${svg}</section>` : "";
   if (typesSet.has("accept-rate-bar")) sections.push(wrapChart(renderAcceptRateBarChart(journal.acceptanceRate ?? null)));
   if (typesSet.has("fee-pie")) sections.push(wrapChart(renderFeePieChart(journal.apcFee ?? null)));
-  if (typesSet.has("subject-distribution")) sections.push(wrapChart(renderSubjectDistributionChart(
-    (journal.promptScopeDetails?.subjectDistribution as Array<{ subject: string; percent: number }>) ?? [],
-  )));
+  // PR #210: subject-distribution 图来自 OpenAlex concepts(不准), 不再接入
+  // if (typesSet.has("subject-distribution")) sections.push(wrapChart(renderSubjectDistributionChart(
+  //   (journal.promptScopeDetails?.subjectDistribution as Array<{ subject: string; percent: number }>) ?? [],
+  // )));
   if (typesSet.has("review-cycle-bar")) sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
   sections.push(renderSelfCitationBadge(journal));                    // 14 🆕 (P3)
   sections.push(renderRecommendationScoreBlock(journal));             // 15 🆕

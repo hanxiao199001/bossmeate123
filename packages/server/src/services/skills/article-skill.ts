@@ -1163,19 +1163,9 @@ export class ArticleSkill implements ISkill {
         enrichmentLines.push(`- IF 预测：${JSON.stringify(journal.promptIfPredicted)}`);
       }
     }
-    if (journal.promptCarIndex?.data && journal.promptCarIndex.data.length > 0) {
-      enrichmentLines.push(`- 近 5 年 CAR 指数（中国学者占比）：${JSON.stringify(journal.promptCarIndex.data)}，风险等级：${journal.promptCarIndex.riskLevel || "未知"}${journal.promptCarIndex.isWarningListed ? "，⚠️ 中科院预警名单" : ""}`);
-    }
-    if (journal.promptCitingTop10?.topJournals && journal.promptCitingTop10.topJournals.length > 0) {
-      // PR #206: 自引率不准 (OpenAlex), 不再喂给 AI — 只给引用前 10 期刊 (定位用, 不涉及自引率数值)
-      enrichmentLines.push(`- 引用前 10 期刊：${JSON.stringify(journal.promptCitingTop10.topJournals)}`);
-    }
-    if (journal.promptScopeDetails) {
-      const sd = journal.promptScopeDetails;
-      if (sd.categories && sd.categories.length > 0) enrichmentLines.push(`- 收稿分类：${JSON.stringify(sd.categories)}`);
-      if (sd.articleTypes && sd.articleTypes.length > 0) enrichmentLines.push(`- 接受文章类型：${sd.articleTypes.join("、")}`);
-      if (sd.subjectDistribution && sd.subjectDistribution.length > 0) enrichmentLines.push(`- 学科分布：${JSON.stringify(sd.subjectDistribution)}`);
-    }
+    // PR #210 (5-22): 砍 OpenAlex 派生不准数据 — CAR(中国学者占比)/引用前10/收稿concepts/学科分布
+    //   全部来自 OpenAlex 抽样或 concepts, 准确度极低, 不再喂给 AI(避免它据此编造或扩散噪声).
+    //   保留事实型(IF/分区/版面费/录用率/审稿/JCR) — 见下方各 block.
     if (journal.promptPublicationCosts?.apc != null || journal.promptPublicationCosts?.openAccess != null) {
       const pc = journal.promptPublicationCosts;
       enrichmentLines.push(`- 版面费：${pc.apc != null ? `${pc.apc} ${pc.currency || "USD"}` : "未公开"}${pc.openAccess ? "（开放获取）" : ""}${pc.fastTrack ? "（快速通道）" : ""}`);
@@ -1305,7 +1295,7 @@ ${angleHint}
 🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
 - ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
 - carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。**无 CAR 数据时返回 null**。
-- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet、NEJM 引用"）。🚫 严禁提及/编造"自引率"数值（该数据不准, 已下线）。**无引用数据时只写收稿范围定位, 绝不提"缺引用数据"**。
+- scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
 - submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。
 
 请输出纯 JSON（不要 markdown）：

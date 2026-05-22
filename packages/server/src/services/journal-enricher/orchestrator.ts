@@ -252,21 +252,12 @@ export async function enrichJournal(
     return fallback;
   });
 
-  // scope_details: OpenAlex topics → field rollup
-  tryExtract("scope_details", "scopeDetails", () => extractScopeDetailsFromOpenAlex(openalex));
-  if (updates.scopeDetails) realProvenance.scopeDetails = "openalex";
-
-  // B.2.2: citing journals top 10 + self-cite confidence
-  tryExtract("citing_journals_top10", "citingJournalsTop10", () =>
-    openalex ? extractCitingJournalsTop10(citingRaw, openalex.id) : null,
-  );
-  if (updates.citingJournalsTop10) realProvenance.citingJournalsTop10 = "openalex";
-
-  // B.2.2: CAR 历史 + riskLevel（融合 fenqubiao 预警名单）
-  tryExtract("car_index_history", "carIndexHistory", () =>
-    extractCarIndexHistory(carRaw, warningList, journal.issn),
-  );
-  if (updates.carIndexHistory) realProvenance.carIndexHistory = "openalex+fenqubiao";
+  // PR #210 (5-22): 停抓 OpenAlex 派生不准数据 — scope_details(concepts噪声)/citing(引用)/CAR
+  //   三者准确度极低 (老韩定调), 展示/prompt 已全砍, 这里一并停止抓取/写库, 省 OpenAlex 调用.
+  //   保留 publisher/website 事实型回填 (见下方). 待 ablesci/jcarindex 权威源到位再议 CAR.
+  // tryExtract("scope_details", "scopeDetails", () => extractScopeDetailsFromOpenAlex(openalex));
+  // tryExtract("citing_journals_top10", "citingJournalsTop10", () => openalex ? extractCitingJournalsTop10(citingRaw, openalex.id) : null);
+  // tryExtract("car_index_history", "carIndexHistory", () => extractCarIndexHistory(carRaw, warningList, journal.issn));
 
   // B.4-2: 万方 extract（partial OK）+ cscd / pku 互补（仅 NULL 才填，不覆盖 B.4-1 静态权威）
   let wanfangData: WanfangExtractedShape | null = null;
