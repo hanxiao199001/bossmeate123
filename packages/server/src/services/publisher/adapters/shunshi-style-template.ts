@@ -297,7 +297,11 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
   const isSpringerLogin = journal.website && /idp\.springer\.com/i.test(journal.website);
   if (journal.website && /^https?:\/\//i.test(journal.website) && !isSpringerLogin) {
     const safe = esc(journal.website);
-    const anchorText = journal.website.length > 50 ? "查看官网 →" : safe;
+    // PR #208: 锚文本显示域名 (如 www.cell.com →) 而非笼统"查看官网", 更有信息量且一致.
+    //   超长完整 URL 仍折叠成域名, 短 URL 直接显示。
+    let host = journal.website;
+    try { host = new URL(journal.website).hostname; } catch { /* 非法 URL 已被上面 regex 挡掉, 兜底用原值 */ }
+    const anchorText = `${esc(host)} →`;
     lines.push(`<strong>官网：</strong><a href="${safe}" target="_blank" rel="noopener noreferrer" style="color:${BLUE};text-decoration:none;">${anchorText}</a>`);
   }
   // else: 不渲染"官网："行 (A 方案 — 无真官网就藏按钮, 不引导用户去 Google 搜索)
@@ -701,6 +705,11 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
 
 // ============ 区块 14: 自引率徽章 ============
 function renderSelfCitationBadge(journal: JournalInfo): string {
+  // PR #206 (5-22): 自引率止血 — 与 CAR 同源 (OpenAlex 分层抽样), 实测偏差 2-7pt, 不准.
+  //   暂关显示 (task #57 接权威引用数据后恢复). 与 renderCarRiskAnalysis 止血同口径.
+  void journal;
+  return "";
+  // eslint-disable-next-line no-unreachable
   const raw = (journal as any).citingJournalsTop10;
   if (!isCitingJournalsTop10(raw)) return ""; // P3 隐藏（无引用数据）
   const rate = (raw as any).selfCitationRate;
@@ -893,9 +902,7 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
     const cur = (journal as any).publicationCosts?.currency ?? (journal as any).publicationCosts?.apcFeeCurrency ?? "USD";
     items.push(`APC 版面费约 ${cur} ${apc}，注意预算`);
   }
-  if (typeof journal.selfCitationRate === "number" && journal.selfCitationRate > 0.2) {
-    items.push("自引率偏高，引用本刊文献时酌情把控");
-  }
+  // PR #206: 自引率不准 (OpenAlex), 止血 — 删除据 selfCitationRate 输出的风险项 (原"自引率偏高..."提示).
   if (journal.isWarningList) {
     items.push(`已被列入预警名单（${journal.warningYear || "近期"}），慎重投稿`);
   }

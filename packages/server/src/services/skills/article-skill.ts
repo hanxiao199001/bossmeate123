@@ -1142,8 +1142,8 @@ export class ArticleSkill implements ISkill {
     if (apcKnown && (acceptHigh || journal.reviewCycle)) {
       angleCandidates.push({ key: "性价比主线", hint: "以「投入产出/性价比」为主线 (版面费 vs 录用难度/审稿速度), 帮读者算清这笔账, 不夸大不暗示放水。" });
     }
-    if (journal.isWarningList || (journal.promptCitingTop10?.selfCitationRate != null && journal.promptCitingTop10.selfCitationRate >= 0.3)) {
-      angleCandidates.push({ key: "避坑主线", hint: "以「投前风险排查」为主线 (预警名单/自引率/分区波动), 客观提示风险, 给出审慎建议, 不制造恐慌。" });
+    if (journal.isWarningList) {
+      angleCandidates.push({ key: "避坑主线", hint: "以「投前风险排查」为主线 (预警名单/分区波动), 客观提示风险, 给出审慎建议, 不制造恐慌。" });
     }
     if (journal.discipline && (journal.casPartition || journal.partition)) {
       angleCandidates.push({ key: "定位主线", hint: "以「这本刊在本学科的定位与适配人群」为主线, 讲清它收什么稿、适合哪类作者, 帮读者判断是否对口。" });
@@ -1166,7 +1166,8 @@ export class ArticleSkill implements ISkill {
       enrichmentLines.push(`- 近 5 年 CAR 指数（中国学者占比）：${JSON.stringify(journal.promptCarIndex.data)}，风险等级：${journal.promptCarIndex.riskLevel || "未知"}${journal.promptCarIndex.isWarningListed ? "，⚠️ 中科院预警名单" : ""}`);
     }
     if (journal.promptCitingTop10?.topJournals && journal.promptCitingTop10.topJournals.length > 0) {
-      enrichmentLines.push(`- 引用前 10 期刊：${JSON.stringify(journal.promptCitingTop10.topJournals)}${journal.promptCitingTop10.selfCitationRate != null ? `，自引率：${(journal.promptCitingTop10.selfCitationRate * 100).toFixed(1)}%` : ""}`);
+      // PR #206: 自引率不准 (OpenAlex), 不再喂给 AI — 只给引用前 10 期刊 (定位用, 不涉及自引率数值)
+      enrichmentLines.push(`- 引用前 10 期刊：${JSON.stringify(journal.promptCitingTop10.topJournals)}`);
     }
     if (journal.promptScopeDetails) {
       const sd = journal.promptScopeDetails;
@@ -1230,7 +1231,11 @@ export class ArticleSkill implements ISkill {
       if (!wosLevel) indexStatuses.push("SCI 收录");
     }
     if (indexStatuses.length > 0) {
-      knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）`);
+      // PR #207: SCIE 是 SCI 的现行名称 (Clarivate 2020 起将 SCI 统一更名 SCIE), 二者同义.
+      //   被 SCIE 收录 = 被 SCI 收录, 必须如此表述; 严禁写"SCIE 未被 SCI 收录"误导用户.
+      const hasScie = /\bSCIE?\b/i.test(indexStatuses.join(" "));
+      const scieNote = hasScie ? "（注意：SCIE 是 SCI 的现行官方名称，被 SCIE 收录即被 SCI 收录，应表述为「被 SCI/SCIE 收录」，严禁写「SCIE 未被 SCI 收录」之类误导说法）" : "";
+      knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）${scieNote}`);
     } else {
       // 无任何权威收录证据 → 明确告诉 AI 不许称 SCI/SSCI
       knownFields.push(`- 收录情况：无 SCI/SSCI/中文核心 收录证据（**严禁**称其为 "SCI 期刊" / "SSCI 期刊" / "核心期刊" / "顶刊", 只能客观介绍）`);
@@ -1278,6 +1283,7 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 11. 【收录状态如实】标题涉及 SCI/SSCI/核心 字样时必须与 "收录情况" 一致, 无收录证据严禁写 "SCI"
 12. 【钩子要真】标题可以用提问/悬念制造点击欲 (如"该不该投"、"冲得动吗"、"好中吗"), 但**钩子里的任何数据/判断必须真实**: 严禁为吸睛编造分区(如"1区TOP"当 DB 无分区数据)、录用率、收录状态。无数据的就用开放式提问, 不要给假答案。
 13. 【禁夸张营销/禁虚假宣传】禁止"投稿前必看!"、"必看"、"绝了"、"封神"、"神刊"、"水刊"、"包过"、"白嫖"、"放水"、"零门槛"、"灌水"、"捡漏"、"水王"、"稳过"、"轻松发" 等标题党/夸大/暗示放水词汇 (这类词或夸大或暗示造假, 一律禁用; 可学往期爆款的"提问/悬念/盘点"句式结构, 但不得搬用其夸大用词)
+14. 【SCIE 称谓正确】SCIE (Science Citation Index Expanded) 是 SCI 的现行官方名称 (Clarivate 2020 起 SCI 统称 SCIE), 二者同义。被 SCIE 收录的期刊就是 SCI 期刊, 标题/正文一律可称"SCI"或"SCI(SCIE)"。**严禁**出现"SCIE 期刊未被 SCI 收录""SCIE 不是 SCI"等错误对立表述。
 
 【本次标题风格】
 ${chosenStyle}
@@ -1298,7 +1304,7 @@ ${angleHint}
 🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
 - ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
 - carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。**无 CAR 数据时返回 null**。
-- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊 / 自引率"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet（12.5%）、NEJM（8.3%）引用"）。**无引用数据时只写收稿范围定位, 绝不提"缺引用数据"**。
+- scopeAndCitations（200-400 字）：基于"收稿分类 / 文章类型 / 学科分布"和"引用前 10 期刊"分析期刊定位 + 引用生态。引用具体期刊名（如"主要被 Lancet、NEJM 引用"）。🚫 严禁提及/编造"自引率"数值（该数据不准, 已下线）。**无引用数据时只写收稿范围定位, 绝不提"缺引用数据"**。
 - submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。
 
 请输出纯 JSON（不要 markdown）：
