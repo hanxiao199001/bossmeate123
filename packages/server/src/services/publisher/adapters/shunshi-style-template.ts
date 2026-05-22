@@ -409,31 +409,36 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 
 // ============ 区块 6: CAR 指数历史 ============
 function renderCarHistoryBlock(journal: JournalInfo): string {
-  // PR #196 (5-21): CAR 止血 — carIndexHistory 来自 openalex cn/total 自算, 与 jcarindex 差别大, 暂关 (task #57 接 jcarindex 后恢复).
-  void journal;
-  return "";
-  // eslint-disable-next-line no-unreachable
-  const raw = (journal as any).carIndexHistory;
-  if (!isCarIndexHistory(raw) || !Array.isArray(raw.data) || raw.data.length === 0) {
-    return renderP1Placeholder({
-      title: "CAR 指数（中国作者占比）",
-      icon: "🎯",
-      message: "数据采集中",
-      submessage: "数据完善中，敬请期待",
-    });
-  }
-  const risk = raw.riskLevel === "low" ? "低风险" : raw.riskLevel === "high" ? "高风险" : "中等风险";
-  const riskColor = raw.riskLevel === "low" ? "#388E3C" : raw.riskLevel === "high" ? "#D32F2F" : "#F57C00";
-  const warned = (raw as any).isWarningListed ? `<span style="margin-left:6px;padding:2px 6px;background:#FFEBEE;color:#C62828;border-radius:3px;font-size:11px;">⚠ 中科院预警</span>` : "";
-  const svg = renderCarHistoryLineChart(raw.data, raw.riskLevel ?? "mid");
-  // svg 空（< 2 数据点）→ fallback 老 tag list
-  const body = svg
-    ? `<div style="margin:6px 0 0 0;">${svg}</div>`
-    : `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${raw.data.map((r: { year: number; carIndex: number }) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 8px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong>: ${(r.carIndex * 100).toFixed(2)}%</span>`).join("")}</div>`;
+  // PR #213 (5-22): CAR 显示重启 — 数据源锁死 jcarindex(权威风险库, PR #212 抓取).
+  //   只渲染 source==="jcarindex" 的数据, 绝不显示旧 OpenAlex 自算值(已止血).
+  //   语义(经 jcarindex 页面核实): carIndex 是"CAR 指数(学术诚信风险)", 原值即百分数(0.87→"0.87%"),
+  //   非"中国作者占比", 故不按占比×100. riskRankText(低/中/高)是核心可读信号.
+  const raw = (journal as any).carIndexHistory as
+    | { data?: Array<{ year: number; carIndex: number }>; riskRankText?: string | null; growthRate?: number | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
+    | null;
+  if (!raw || raw.source !== "jcarindex" || !Array.isArray(raw.data) || raw.data.length === 0) return "";
+
+  const rank = raw.riskRankText || "";
+  const riskText = rank === "高" ? "高风险" : rank === "中" ? "中等风险" : rank === "低" ? "低风险" : "";
+  const riskColor = rank === "高" ? "#D32F2F" : rank === "中" ? "#F57C00" : "#388E3C";
+  const sorted = [...raw.data].sort((a, b) => a.year - b.year);
+  const trend = sorted
+    .map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 9px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong> ${r.carIndex.toFixed(2)}%</span>`)
+    .join("");
+  const pa = raw.problemArticles;
+  const problemLine =
+    pa && (typeof pa.current === "number" || typeof pa.last === "number")
+      ? `<p style="margin:8px 0 0 0;text-align:center;font-size:13px;color:${MUTED};line-height:1.6;">问题文章数：今年 ${pa.current ?? "—"} 篇 · 去年 ${pa.last ?? "—"} 篇</p>`
+      : "";
+  const riskLine = riskText
+    ? `<p style="margin:0 0 8px 0;text-align:center;font-size:14px;line-height:1.6;">学术诚信风险：<span style="color:${riskColor};font-weight:700;">${riskText}</span></p>`
+    : "";
   return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（中国作者占比）</p>` +
-    `<p style="margin:0 0 6px 0;text-align:center;font-size:14px;line-height:1.6;"><span style="color:${riskColor};font-weight:600;">${risk}</span>${warned}</p>` +
-    body +
+    `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（学术诚信风险）</p>` +
+    riskLine +
+    `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${trend}</div>` +
+    problemLine +
+    `<p style="margin:8px 0 0 0;text-align:center;font-size:11px;color:${MUTED};line-height:1.5;">数据来源：jcarindex 学术诚信风险指数</p>` +
     `</section>`;
 }
 
@@ -842,6 +847,11 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
   if (journal.isWarningList) {
     items.push(`已被列入预警名单（${journal.warningYear || "近期"}），慎重投稿`);
   }
+  // PR #213: jcarindex 学术诚信风险等级 (中/高) → 避坑项 (规则派生, 数据源 jcarindex 权威)
+  const carRaw = (journal as any).carIndexHistory as { source?: string; riskRankText?: string | null } | null;
+  if (carRaw?.source === "jcarindex" && (carRaw.riskRankText === "中" || carRaw.riskRankText === "高")) {
+    items.push(`jcarindex 学术诚信风险等级「${carRaw.riskRankText}」，投稿前留意论文合规与送审风险`);
+  }
   if (aiContent.recommendation && items.length < 3) {
     const stripped = aiContent.recommendation.replace(/<\/?[a-zA-Z][^>]*>/g, "");
     const sentences = stripped.split(/[。；;\n]+/).map((s) => s.trim());
@@ -1090,7 +1100,7 @@ export async function generateShunshiStyleHtml(
   sections.push(renderJcrQuartileBlock(journal));                     //  3
   if (typesSet.has("if-history-line")) sections.push(renderIfHistoryChart(journal)); //  4 🆕
   sections.push(renderImpactFactorBlock(journal));                    //  5 🔄
-  if (typesSet.has("car-history-line")) sections.push(renderCarHistoryBlock(journal)); //  6 🆕
+  sections.push(renderCarHistoryBlock(journal));                      //  6 🔄 PR #213 (自守门 source=jcarindex)
   sections.push(renderJcrFullPanel(journal));                         //  7 🆕 (P3)
   sections.push(renderScopeDetailsBlock(journal));                    //  8 🆕
   sections.push(renderPublicationCostsBlock(journal));                //  9 🆕

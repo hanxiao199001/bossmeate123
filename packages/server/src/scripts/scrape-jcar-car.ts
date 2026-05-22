@@ -25,8 +25,9 @@ const BASE = "https://www.jcarindex.com";
 const LIST_API = `${BASE}/ifs/public/jcar/getJournalList`;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-// jcarindex 数据年份(最新一版); 用于 car_index_history 的 year 标注。可随其更新调整。
-const JCAR_LATEST_YEAR = 2024;
+// jcarindex CAR Index 最新列年份(经页面核实: 列头 2024/2025/2026, carIndex=最新=2026)。
+//   carIndex→2026, carIndexLastYear→2025, carIndexBeforeLastYear→2024. 随 jcarindex 更新调整。
+const JCAR_LATEST_YEAR = 2026;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
