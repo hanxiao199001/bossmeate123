@@ -1070,7 +1070,8 @@ export class ArticleSkill implements ISkill {
    * （含 prompt_overrides 风格约束 + few-shot 行业样板）。
    */
   async generateJournalAIContent(journal: JournalInfo, q3PromptSuffix: string = ""): Promise<AIGeneratedContent> {
-    const ifText = journal.impactFactor != null ? journal.impactFactor.toFixed(1) : "N/A";
+    // PR #209: IF<=0 是占位值(非真实IF, 如中文法学刊), 一律当"无IF", 防止泄漏成 "IF 0.0"
+    const ifText = (journal.impactFactor != null && journal.impactFactor > 0) ? journal.impactFactor.toFixed(1) : "N/A";
     const journalName = journal.nameEn || journal.name;
 
     // ---- 标题多元化：随机选择句式风格 ----
@@ -1079,7 +1080,7 @@ export class ArticleSkill implements ISkill {
     //                 (2) IF 为 null 的期刊不放含 IF 的风格 (避免 "IF N/A" 裸露标题)
     //                 (3) 砍掉容易撞车的固定营销话术, 示例标注"仅供骨架参考, 措辞须重写"
     const currentYear = new Date().getFullYear();
-    const hasIF = journal.impactFactor != null;
+    const hasIF = journal.impactFactor != null && journal.impactFactor > 0;
     const rateText = journal.acceptanceRate != null ? `录用率${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%` : "";
     const cycleText = journal.reviewCycle ? `审稿${journal.reviewCycle}` : "";
     // PR #185 (5-20): 标题第二轮 — 加痛点钩子 (运营反馈"标题太干没吸引力").

@@ -380,7 +380,8 @@ function renderIfHistoryChart(journal: JournalInfo): string {
 function renderImpactFactorBlock(journal: JournalInfo): string {
   const if_ = journal.impactFactor;
   // PR #146 (5-14): NULL → 整块 skip（跟 PR #135/#136 jcrRow 哲学一致，不显灰"暂无"）
-  if (if_ == null) return "";
+  // PR #209: IF<=0 是占位值(非真实IF), 同样 skip — 防止渲染成"最新影响因子 0"
+  if (if_ == null || if_ <= 0) return "";
 
   // 同比：从 if_history 推算（PR B.10：用 ifHistoryRaw 与 chart 槽位对齐）
   let yoy = "";
@@ -1022,7 +1023,7 @@ function renderTimelineBlock(journal: JournalInfo): string {
 function renderPeerComparisonBlock(journal: JournalInfo): string {
   const peers = journal.peerJournals;
   if (!peers || peers.length === 0) return "";
-  const fmtIF = (v: number | null) => (typeof v === "number" ? v.toFixed(1) : "—");
+  const fmtIF = (v: number | null) => (typeof v === "number" && v > 0 ? v.toFixed(1) : "—"); // PR #209: IF<=0 占位值显示 —
   const fmtAR = (v: number | null) => (typeof v === "number" ? `${(v >= 1 ? v : v * 100).toFixed(0)}%` : "—");
   const fmtAPC = (v: number | null) => (typeof v === "number" ? (v === 0 ? "免费" : `$${v}`) : "—");
   const th = (t: string) => `<th style="padding:6px 8px;font-size:12px;color:${MUTED};font-weight:600;text-align:left;border-bottom:1px solid #E0E0E0;">${t}</th>`;

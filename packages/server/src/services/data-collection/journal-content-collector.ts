@@ -12,7 +12,7 @@
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
-import { eq, and, desc, or, ilike, sql, isNull, isNotNull, ne } from "drizzle-orm";
+import { eq, and, desc, or, ilike, sql, isNull, isNotNull, ne, gt } from "drizzle-orm";
 import { createEntry } from "../knowledge/knowledge-service.js";
 import {
   fetchJournalCoverMultiSource,
@@ -516,6 +516,7 @@ export async function collectJournalContent(params: {
             or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)),
             ne(journals.id, journal.id),
             isNotNull(journals.impactFactor),
+            gt(journals.impactFactor, 0), // PR #209: 排除 IF=0 占位值的期刊
             ...peerConds,
           ))
           .orderBy(
