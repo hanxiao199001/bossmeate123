@@ -51,7 +51,12 @@ async function main() {
     const iff = latestIF(j.ifHistory);
     if (iff == null) { noValid += 1; continue; }
     try {
-      await db.update(journals).set({ impactFactor: iff }).where(sql`${journals.id} = ${j.id}`);
+      // PR #209 (5-22): 覆盖 IF 时同步标记来源 — JSONB 合并只加 impactFactor 键, 不动其它已有来源.
+      //   修历史欠账: 之前 backfill 只写值没写 provenance, 导致"IF 来源分布"查出来全是 NULL.
+      await db.update(journals).set({
+        impactFactor: iff,
+        fieldProvenance: sql`COALESCE(${journals.fieldProvenance}, '{}'::jsonb) || '{"impactFactor":"letpub"}'::jsonb`,
+      }).where(sql`${journals.id} = ${j.id}`);
       updated += 1;
     } catch (err) {
       logger.warn({ err: String(err), name: j.name }, "[backfill-if] update 失败");
