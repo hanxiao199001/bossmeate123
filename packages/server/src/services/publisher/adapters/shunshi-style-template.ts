@@ -976,6 +976,26 @@ function renderPeerComparisonBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
+// ============ PR #205: 版式差异化 — 编辑型板块簇确定性重排 ============
+// 用期刊 ISSN/刊名做种子, 同一刊顺序稳定可复现, 不同刊顺序不同 → 多篇文章不雷同.
+// 只重排"编辑型/分析型"次级板块, 核心可信块(题图/IF/JCR)保持置顶不动.
+function journalLayoutSeed(journal: JournalInfo): number {
+  const str = journal.issn || journal.nameEn || journal.name || "x";
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) & 0x7fffffff;
+  return h || 1;
+}
+function seededOrder<T>(items: T[], seed: number): T[] {
+  const arr = [...items];
+  let s = seed || 1;
+  for (let i = arr.length - 1; i > 0; i--) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff; // LCG 确定性
+    const j = s % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // ============ 区块 20: 营销文案 CTA ============
 function renderMarketingCtaBlock(journal: JournalInfo): string {
   const journalName = esc(journal.nameEn || journal.name);
@@ -1096,11 +1116,15 @@ export async function generateShunshiStyleHtml(
   sections.push(renderAiSubmissionAdvice(aiContent));                 // 15d 🆕 V7
   sections.push(renderSummaryBlock(aiContent));                       // 16
   sections.push(renderSubmissionAdviceBlock(journal));                // 17
-  sections.push(renderAdvantagesBlock(journal, aiContent));           // 18
-  sections.push(renderCautionsBlock(journal, aiContent));             // 19
-  sections.push(renderTargetAudienceBlock(journal));                  // 19b 🆕 PR #203 适合人群
-  sections.push(renderTimelineBlock(journal));                        // 19c 🆕 PR #203 投稿时间线
-  sections.push(renderPeerComparisonBlock(journal));                  // 19d 🆕 PR #203 同档对比
+  // PR #205: 编辑型板块簇按期刊种子确定性重排 (18/19/19b/19c/19d), 多篇文章版式不雷同
+  const editorialCluster = seededOrder([
+    renderAdvantagesBlock(journal, aiContent),    // 18 优势
+    renderCautionsBlock(journal, aiContent),      // 19 注意
+    renderTargetAudienceBlock(journal),           // 19b 适合人群
+    renderTimelineBlock(journal),                 // 19c 投稿时间线
+    renderPeerComparisonBlock(journal),           // 19d 同档对比
+  ], journalLayoutSeed(journal));
+  for (const blk of editorialCluster) sections.push(blk);
   sections.push(renderMarketingCtaBlock(journal));                    // 20
   sections.push(renderContactBlock(tenant));                          // 21 🔄 task #35
   sections.push(renderDisclaimerBlock());                             // 22
