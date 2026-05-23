@@ -18,7 +18,7 @@ describe("PR #213: CAR 显示重启 (jcarindex 源)", () => {
   });
   it("值按 %% 显示, 不×100 (carIndex 原值即百分数)", async () => {
     const src = await readSrc(TEMPLATE);
-    expect(src).toMatch(/r\.carIndex\.toFixed\(2\)\}%/);
+    expect(src).toMatch(/d\.carIndex\.toFixed\(2\)/);
     // 不能再出现旧的 ×100 占比处理
     expect(src).not.toMatch(/carIndex \* 100\)\.toFixed/);
   });

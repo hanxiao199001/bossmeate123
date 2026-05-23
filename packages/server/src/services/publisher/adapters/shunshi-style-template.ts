@@ -409,50 +409,63 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 
 // ============ 区块 6: CAR 指数历史 ============
 function renderCarHistoryBlock(journal: JournalInfo): string {
-  // PR #213/#214 (5-22): CAR 显示 — 数据源锁死 jcarindex(权威风险库). 折线图形式(图二).
+  // PR #213/#215 (5-22): CAR 显示 — 数据源锁死 jcarindex(权威风险库). 表格+文字说明形式(图三).
   //   语义(页面核实): carIndex 是"CAR 指数(学术诚信风险)", 原值即百分数(0.87→"0.87%"), 非占比, 不×100.
-  //   carIndex===0 视为"当年未公布"剔除(避免假"0%"). ≥2 点画折线, 1 点回退文字, 0 点只显风险等级.
+  //   文字说明为规则生成(非 AI), 风险结论以 jcarindex sciRiskRank 为准, 不自行重算. carIndex===0 标"未公布".
   const raw = (journal as any).carIndexHistory as
-    | { data?: Array<{ year: number; carIndex: number }>; riskLevel?: "low" | "mid" | "high"; riskRankText?: string | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
+    | { data?: Array<{ year: number; carIndex: number }>; riskRankText?: string | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
     | null;
   if (!raw || raw.source !== "jcarindex") return "";
 
+  const rows = (Array.isArray(raw.data) ? raw.data : []).slice().sort((a, b) => a.year - b.year);
+  const known = rows.filter((d) => typeof d.carIndex === "number" && d.carIndex > 0);
   const rank = raw.riskRankText || "";
   const riskText = rank === "高" ? "高风险" : rank === "中" ? "中等风险" : rank === "低" ? "低风险" : "";
   const riskColor = rank === "高" ? "#D32F2F" : rank === "中" ? "#F57C00" : "#388E3C";
-  const riskLevel = raw.riskLevel || (rank === "高" ? "high" : rank === "中" ? "mid" : "low");
-  // 剔除 carIndex===0(未公布)
-  const pts = (Array.isArray(raw.data) ? raw.data : [])
-    .filter((d) => typeof d.carIndex === "number" && d.carIndex > 0)
-    .sort((a, b) => a.year - b.year);
-  // 既无风险等级也无有效数据点 → 整块不渲染
-  if (!riskText && pts.length === 0) return "";
+  // 既无有效数据点也无风险等级 → 不渲染
+  if (known.length === 0 && !riskText) return "";
 
-  const riskLine = riskText
-    ? `<p style="margin:0 0 10px 0;text-align:center;font-size:14px;line-height:1.6;">学术诚信风险：<span style="color:${riskColor};font-weight:700;">${riskText}</span></p>`
-    : "";
+  // ---- 文字说明 (规则生成, 结论以 jcarindex 风险等级为准) ----
+  const yearPhrase = known.map((d) => `${d.year} 年 ${d.carIndex.toFixed(2)}%`).join("、");
+  const conclusion =
+    rank === "高" ? "属高风险刊，建议谨慎评估或避开"
+    : rank === "中" ? "属中等风险，投稿前留意论文合规与送审"
+    : rank === "低" ? "属低风险，相对安全，可放心投稿"
+    : "风险等级暂未公布";
+  const intro =
+    `<p style="margin:0 0 12px 0;font-size:14px;line-height:1.8;color:${TEXT};">` +
+    `<strong style="color:${BLUE};">CAR 指数（学术诚信风险）：</strong>据 jcarindex 查询，该刊${known.length > 0 ? ` ${yearPhrase}` : "近年 CAR 指数暂未公布"}。CAR 指数 &lt;5% 为低风险；该刊风险等级为 <span style="color:${riskColor};font-weight:700;">${riskText || "未知"}</span>，${conclusion}。` +
+    `</p>`;
 
-  let bodyView = "";
-  if (pts.length >= 2) {
-    // 折线图(图二): percentMode=true → 标签按原值显示 %
-    bodyView = `<div style="margin:6px 0 0 0;">${renderCarHistoryLineChart(pts, riskLevel, true)}</div>`;
-  } else if (pts.length === 1) {
-    const r = pts[0];
-    bodyView = `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;"><span style="display:inline-block;padding:4px 10px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:13px;"><strong>${r.year}</strong> CAR 指数 ${r.carIndex.toFixed(2)}%</span></div>`;
+  // ---- 表格 (年份 × CAR 指数, 0 值标"未公布") ----
+  let table = "";
+  if (rows.length > 0) {
+    const headCells = rows.map((d) => `<th style="padding:7px 10px;font-size:13px;color:#fff;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,0.25);">${d.year}</th>`).join("");
+    const valCells = rows
+      .map((d) => {
+        const v = typeof d.carIndex === "number" && d.carIndex > 0 ? `${d.carIndex.toFixed(2)}%` : `<span style="color:${MUTED};">未公布</span>`;
+        return `<td style="padding:7px 10px;font-size:13px;color:${TEXT};text-align:center;border-right:1px solid #EEE;border-bottom:1px solid #EEE;">${v}</td>`;
+      })
+      .join("");
+    table =
+      `<table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;">` +
+      `<thead><tr style="background:${BLUE};"><th style="padding:7px 10px;font-size:13px;color:#fff;font-weight:600;text-align:left;border-right:1px solid rgba(255,255,255,0.25);">CAR 指数</th>${headCells}</tr></thead>` +
+      `<tbody><tr><td style="padding:7px 10px;font-size:13px;color:${MUTED};border-right:1px solid #EEE;border-bottom:1px solid #EEE;">年度</td>${valCells}</tr></tbody>` +
+      `</table>`;
   }
 
   const pa = raw.problemArticles;
   const problemLine =
     pa && (typeof pa.current === "number" || typeof pa.last === "number")
-      ? `<p style="margin:8px 0 0 0;text-align:center;font-size:13px;color:${MUTED};line-height:1.6;">问题文章数：今年 ${pa.current ?? "—"} 篇 · 去年 ${pa.last ?? "—"} 篇</p>`
+      ? `<p style="margin:10px 0 0 0;text-align:center;font-size:13px;color:${MUTED};line-height:1.6;">问题文章数：今年 ${pa.current ?? "—"} 篇 · 去年 ${pa.last ?? "—"} 篇</p>`
       : "";
 
   return `<section style="margin:0 0 22px 0;">` +
-    `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（学术诚信风险）</p>` +
-    riskLine +
-    bodyView +
+    `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（学术诚信风险）</p>` +
+    intro +
+    table +
     problemLine +
-    `<p style="margin:8px 0 0 0;text-align:center;font-size:11px;color:${MUTED};line-height:1.5;">CAR 指数 &lt;5% 为低风险 · 数据来源：jcarindex 学术诚信风险指数</p>` +
+    `<p style="margin:8px 0 0 0;text-align:center;font-size:11px;color:${MUTED};line-height:1.5;">数据来源：jcarindex 学术诚信风险指数</p>` +
     `</section>`;
 }
 
