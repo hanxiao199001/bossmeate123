@@ -14,7 +14,7 @@ const TEMPLATE = "../services/publisher/adapters/shunshi-style-template.ts";
 describe("PR #213: CAR 显示重启 (jcarindex 源)", () => {
   it("只渲染 source===jcarindex, 否则不显示", async () => {
     const src = await readSrc(TEMPLATE);
-    expect(src).toMatch(/if \(!raw \|\| raw\.source !== "jcarindex" \|\|[\s\S]{0,80}?return "";/);
+    expect(src).toMatch(/if \(!raw \|\| raw\.source !== "jcarindex"\) return "";/);
   });
   it("值按 %% 显示, 不×100 (carIndex 原值即百分数)", async () => {
     const src = await readSrc(TEMPLATE);

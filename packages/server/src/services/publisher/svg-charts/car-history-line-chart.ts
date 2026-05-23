@@ -35,6 +35,8 @@ const RISK_BAND: Record<"low" | "mid" | "high", { fill: string; label: string; l
 export function renderCarHistoryLineChart(
   data: ReadonlyArray<{ year: number; carIndex: number }>,
   riskLevel: "low" | "mid" | "high",
+  // PR #214: jcarindex 的 carIndex 原值即百分数(0.87→"0.87%"); percentMode=true 时标签不再×100.
+  percentMode = false,
 ): string {
   if (!Array.isArray(data) || data.length < 2) return "";
   const points = [...data]
@@ -67,7 +69,7 @@ export function renderCarHistoryLineChart(
   const valueLabels = xy
     .map(
       (p) =>
-        `<text x="${p.x.toFixed(1)}" y="${(p.y - 8).toFixed(1)}" text-anchor="middle" font-size="11" fill="${TEXT_COLOR}" font-weight="bold">${(p.v * 100).toFixed(2)}%</text>`,
+        `<text x="${p.x.toFixed(1)}" y="${(p.y - 8).toFixed(1)}" text-anchor="middle" font-size="11" fill="${TEXT_COLOR}" font-weight="bold">${(percentMode ? p.v : p.v * 100).toFixed(2)}%</text>`,
     )
     .join("");
   const xLabels = xy
@@ -83,7 +85,7 @@ export function renderCarHistoryLineChart(
     })
     .join("");
   const yAxisLabels =
-    `<text x="${xLeft - 6}" y="${yTop + 4}" text-anchor="end" font-size="10" fill="${MUTED}">${(vMax * 100).toFixed(1)}%</text>` +
+    `<text x="${xLeft - 6}" y="${yTop + 4}" text-anchor="end" font-size="10" fill="${MUTED}">${(percentMode ? vMax : vMax * 100).toFixed(2)}%</text>` +
     `<text x="${xLeft - 6}" y="${yBottom + 4}" text-anchor="end" font-size="10" fill="${MUTED}">0%</text>`;
 
   // 风险带：整个绘图区背景半透明色 + 右上角 riskLevel 文字标签

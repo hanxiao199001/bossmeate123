@@ -409,36 +409,50 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 
 // ============ 区块 6: CAR 指数历史 ============
 function renderCarHistoryBlock(journal: JournalInfo): string {
-  // PR #213 (5-22): CAR 显示重启 — 数据源锁死 jcarindex(权威风险库, PR #212 抓取).
-  //   只渲染 source==="jcarindex" 的数据, 绝不显示旧 OpenAlex 自算值(已止血).
-  //   语义(经 jcarindex 页面核实): carIndex 是"CAR 指数(学术诚信风险)", 原值即百分数(0.87→"0.87%"),
-  //   非"中国作者占比", 故不按占比×100. riskRankText(低/中/高)是核心可读信号.
+  // PR #213/#214 (5-22): CAR 显示 — 数据源锁死 jcarindex(权威风险库). 折线图形式(图二).
+  //   语义(页面核实): carIndex 是"CAR 指数(学术诚信风险)", 原值即百分数(0.87→"0.87%"), 非占比, 不×100.
+  //   carIndex===0 视为"当年未公布"剔除(避免假"0%"). ≥2 点画折线, 1 点回退文字, 0 点只显风险等级.
   const raw = (journal as any).carIndexHistory as
-    | { data?: Array<{ year: number; carIndex: number }>; riskRankText?: string | null; growthRate?: number | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
+    | { data?: Array<{ year: number; carIndex: number }>; riskLevel?: "low" | "mid" | "high"; riskRankText?: string | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
     | null;
-  if (!raw || raw.source !== "jcarindex" || !Array.isArray(raw.data) || raw.data.length === 0) return "";
+  if (!raw || raw.source !== "jcarindex") return "";
 
   const rank = raw.riskRankText || "";
   const riskText = rank === "高" ? "高风险" : rank === "中" ? "中等风险" : rank === "低" ? "低风险" : "";
   const riskColor = rank === "高" ? "#D32F2F" : rank === "中" ? "#F57C00" : "#388E3C";
-  const sorted = [...raw.data].sort((a, b) => a.year - b.year);
-  const trend = sorted
-    .map((r) => `<span style="display:inline-block;margin:0 6px 4px 0;padding:3px 9px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:12px;line-height:1.6;"><strong>${r.year}</strong> ${r.carIndex.toFixed(2)}%</span>`)
-    .join("");
+  const riskLevel = raw.riskLevel || (rank === "高" ? "high" : rank === "中" ? "mid" : "low");
+  // 剔除 carIndex===0(未公布)
+  const pts = (Array.isArray(raw.data) ? raw.data : [])
+    .filter((d) => typeof d.carIndex === "number" && d.carIndex > 0)
+    .sort((a, b) => a.year - b.year);
+  // 既无风险等级也无有效数据点 → 整块不渲染
+  if (!riskText && pts.length === 0) return "";
+
+  const riskLine = riskText
+    ? `<p style="margin:0 0 10px 0;text-align:center;font-size:14px;line-height:1.6;">学术诚信风险：<span style="color:${riskColor};font-weight:700;">${riskText}</span></p>`
+    : "";
+
+  let bodyView = "";
+  if (pts.length >= 2) {
+    // 折线图(图二): percentMode=true → 标签按原值显示 %
+    bodyView = `<div style="margin:6px 0 0 0;">${renderCarHistoryLineChart(pts, riskLevel, true)}</div>`;
+  } else if (pts.length === 1) {
+    const r = pts[0];
+    bodyView = `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;"><span style="display:inline-block;padding:4px 10px;background:#F5F5F5;color:${TEXT};border-radius:4px;font-size:13px;"><strong>${r.year}</strong> CAR 指数 ${r.carIndex.toFixed(2)}%</span></div>`;
+  }
+
   const pa = raw.problemArticles;
   const problemLine =
     pa && (typeof pa.current === "number" || typeof pa.last === "number")
       ? `<p style="margin:8px 0 0 0;text-align:center;font-size:13px;color:${MUTED};line-height:1.6;">问题文章数：今年 ${pa.current ?? "—"} 篇 · 去年 ${pa.last ?? "—"} 篇</p>`
       : "";
-  const riskLine = riskText
-    ? `<p style="margin:0 0 8px 0;text-align:center;font-size:14px;line-height:1.6;">学术诚信风险：<span style="color:${riskColor};font-weight:700;">${riskText}</span></p>`
-    : "";
+
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">🎯 CAR 指数（学术诚信风险）</p>` +
     riskLine +
-    `<div style="padding:10px 12px;background:#FAFAFA;border-radius:6px;text-align:center;">${trend}</div>` +
+    bodyView +
     problemLine +
-    `<p style="margin:8px 0 0 0;text-align:center;font-size:11px;color:${MUTED};line-height:1.5;">数据来源：jcarindex 学术诚信风险指数</p>` +
+    `<p style="margin:8px 0 0 0;text-align:center;font-size:11px;color:${MUTED};line-height:1.5;">CAR 指数 &lt;5% 为低风险 · 数据来源：jcarindex 学术诚信风险指数</p>` +
     `</section>`;
 }
 
