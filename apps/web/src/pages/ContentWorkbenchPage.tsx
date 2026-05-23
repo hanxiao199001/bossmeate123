@@ -277,7 +277,7 @@ export default function ContentWorkbenchPage() {
         {/* MIDDLE — 5-23 PR #161 dual mode: 多选 → 批量预览 / 单选 → 文章预览 */}
         <main className="flex-1 flex flex-col overflow-hidden">
           {isMultiSelectMode ? (
-            <BatchPreviewSummary selectedIds={selectedIds} items={items} />
+            <BatchPreviewSummary selectedIds={selectedIds} items={items} onItemClick={(id) => navigate(`/content/${id}`)} />
           ) : (
             <ContentPreviewPane content={preview} loading={previewLoading} />
           )}

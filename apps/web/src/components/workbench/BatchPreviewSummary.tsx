@@ -6,9 +6,11 @@ import type { WorkbenchListItem } from "./ContentListItem";
 export interface BatchPreviewSummaryProps {
   selectedIds: Set<string>;
   items: WorkbenchListItem[];
+  /** 5-23: 点击单篇 → 跳转到该文章 (传 navigate(`/content/${id}`)) */
+  onItemClick?: (id: string) => void;
 }
 
-export default function BatchPreviewSummary({ selectedIds, items }: BatchPreviewSummaryProps) {
+export default function BatchPreviewSummary({ selectedIds, items, onItemClick }: BatchPreviewSummaryProps) {
   const selected = items.filter((it) => selectedIds.has(it.id));
 
   return (
@@ -28,7 +30,15 @@ export default function BatchPreviewSummary({ selectedIds, items }: BatchPreview
               .join(" · ");
             return (
               <li key={it.id} className="text-gray-900 py-1">
-                <span className="font-medium">{it.title || "(无标题)"}</span>
+                <button
+                  type="button"
+                  onClick={() => onItemClick?.(it.id)}
+                  disabled={!onItemClick}
+                  title="点击查看该文章"
+                  className="text-left font-medium text-blue-600 hover:text-blue-800 hover:underline disabled:text-gray-900 disabled:no-underline disabled:cursor-default"
+                >
+                  {it.title || "(无标题)"}
+                </button>
                 {meta && <span className="text-xs text-gray-500 ml-2">{meta}</span>}
               </li>
             );
