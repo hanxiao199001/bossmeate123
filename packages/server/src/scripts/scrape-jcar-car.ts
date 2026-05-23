@@ -49,6 +49,7 @@ interface JcarRecord {
   sciRiskRankLastYear?: string | null;
   curYearProblemArticleCount?: number | null;
   lastYearProblemArticleCount?: number | null;
+  linkOfficialWebsite?: string | null;
 }
 
 /** 启动时 GET 首页拿 JSESSIONID (模拟真实浏览器会话, 进一步降低被拦概率) */
@@ -109,7 +110,7 @@ async function main() {
   const limit = limitArg >= 0 ? parseInt(process.argv[limitArg + 1], 10) : 0;
 
   let targets = await db
-    .select({ id: journals.id, name: journals.name, issn: journals.issn })
+    .select({ id: journals.id, name: journals.name, issn: journals.issn, website: journals.website })
     .from(journals)
     .where(isNotNull(journals.issn));
   if (limit > 0) targets = targets.slice(0, limit);
@@ -120,6 +121,7 @@ async function main() {
   let updated = 0;
   let noHit = 0;
   let errors = 0;
+  let siteFilled = 0; // PR #216: 顺手回填的官网数
   for (let i = 0; i < targets.length; i++) {
     const j = targets[i];
     const issn = (j.issn || "").trim();
@@ -136,6 +138,15 @@ async function main() {
           }).where(sql`${journals.id} = ${j.id}`);
           updated += 1;
         } else { noHit += 1; }
+        // PR #216: 顺手回填残留官网 (仅当 DB website 为 NULL, 不覆盖真值; jcarindex linkOfficialWebsite)
+        const site = (rec.linkOfficialWebsite || "").trim();
+        if (!j.website && /^https?:\/\//i.test(site) && !/idp\.springer\.com/i.test(site)) {
+          await db.update(journals).set({
+            website: site.slice(0, 500),
+            fieldProvenance: sql`COALESCE(${journals.fieldProvenance}, '{}'::jsonb) || '{"website":"jcarindex"}'::jsonb`,
+          }).where(sql`${journals.id} = ${j.id}`);
+          siteFilled += 1;
+        }
       }
     } catch (err) {
       errors += 1;
@@ -150,6 +161,7 @@ async function main() {
   console.log(`\n========== jcar CAR 抓取报告 ==========`);
   console.log(`处理:        ${targets.length}`);
   console.log(`CAR 成功写入: ${updated}`);
+  console.log(`顺手补官网:   ${siteFilled}`);
   console.log(`未命中:      ${noHit}`);
   console.log(`错误:        ${errors}`);
   console.log(`======================================`);
