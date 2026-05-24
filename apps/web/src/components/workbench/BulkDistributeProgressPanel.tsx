@@ -1,11 +1,11 @@
 /**
- * 5-23 PR #161 — 批量发布进度面板 (SSE 实时).
- *
- * EventSource 订阅 GET /admin/bulk-distribute/:batchId/stream
- * events: progress (实时计数) / done (含 durationMs)
- * 完成后 [关闭] 按钮, 失败 list 展开折叠.
+ * 5-23 PR #161 — 批量发布进度面板.
+ * PR #219 (5-23): 从 SSE(EventSource) 改为轮询 —— EventSource 不能带 Authorization 头,
+ *   而后端 @fastify/jwt 只认 Bearer 头, 导致 SSE 必 401 断连("SSE 连接断开")。
+ *   改用 api.get 轮询 GET /admin/bulk-distribute/:batchId (走 Bearer 头), 1.5s 一次, 完成即停。
  */
 import { useEffect, useState, useRef } from "react";
+import { api } from "../../utils/api";
 
 interface ProgressData {
   batchId: string;
@@ -36,7 +36,6 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
   const [error, setError] = useState<string | null>(null);
   const [showFailedList, setShowFailedList] = useState(false);
   const failuresRef = useRef<Array<{ contentId: string; accountId: string; error: string }>>([]);
-  const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     if (!batchId) return;
@@ -45,36 +44,38 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
     setError(null);
     failuresRef.current = [];
 
-    // 用相对路径走 vite proxy / nginx
-    const es = new EventSource(`/api/v1/admin/bulk-distribute/${batchId}/stream`, { withCredentials: true });
-    esRef.current = es;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let errCount = 0;
 
-    es.addEventListener("progress", (e: MessageEvent) => {
+    const poll = async () => {
       try {
-        const d = JSON.parse(e.data) as ProgressData;
+        const res = await api.get<ProgressData & { finished: boolean; durationMs: number | null }>(
+          `/admin/bulk-distribute/${batchId}`,
+        );
+        const d = res.data;
+        if (!d) throw new Error("无进度数据");
+        errCount = 0;
         setProgress(d);
         if (d.lastFailed && !failuresRef.current.some((f) => f.contentId === d.lastFailed!.contentId && f.accountId === d.lastFailed!.accountId)) {
           failuresRef.current.push(d.lastFailed);
         }
-      } catch { /* parse 失败忽略 */ }
-    });
-
-    es.addEventListener("done", (e: MessageEvent) => {
-      try {
-        const d = JSON.parse(e.data) as DoneData;
-        setDone(d);
-        es.close();
-      } catch { /* */ }
-    });
-
-    es.onerror = () => {
-      setError("SSE 连接断开 (可能服务器重启或网络异常)");
-      es.close();
+        if (d.finished) {
+          setDone({ batchId, success: d.success, failed: d.failed, skipped: d.skipped, durationMs: d.durationMs ?? 0 });
+          return; // 完成, 停止轮询
+        }
+      } catch {
+        errCount += 1;
+        // 容忍偶发抖动; 连续 5 次失败才报错 (batch 过期 10 分钟也会落这里)
+        if (errCount >= 5) { setError("无法获取批量发布进度 (请刷新页面重试)"); return; }
+      }
+      if (!stopped) timer = setTimeout(poll, 1500);
     };
+    poll();
 
     return () => {
-      es.close();
-      esRef.current = null;
+      stopped = true;
+      if (timer) clearTimeout(timer);
     };
   }, [batchId]);
 

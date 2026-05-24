@@ -545,6 +545,28 @@ export async function adminRoutes(app: FastifyInstance) {
    *   done:     { batchId, success, failed, skipped, durationMs }
    * 心跳每 15s `: ping\n\n` 防中间件超时断连.
    */
+  /**
+   * GET /admin/bulk-distribute/:batchId — 进度状态 (轮询用).
+   * PR #219: SSE 的 EventSource 不能带 Authorization 头, 而 @fastify/jwt 只认 Bearer 头,
+   *   导致 SSE 必 401 断连("SSE 连接断开")。改用普通 GET + 前端轮询: 走 api 客户端带 Bearer 头, 稳定。
+   */
+  app.get("/bulk-distribute/:batchId", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const { batchId } = request.params as { batchId: string };
+    const progress = getBulkProgress(batchId);
+    if (!progress) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "batch 不存在或已过期 (10 分钟)" });
+    }
+    const finished = !!progress.finishedAt;
+    return {
+      code: "OK",
+      data: {
+        ...serializeProgress(progress),
+        finished,
+        durationMs: finished ? progress.finishedAt! - progress.startedAt : null,
+      },
+    };
+  });
+
   // 5-19 PR #171: SSE stream admin only (跟随 POST /bulk-distribute 同权限)
   app.get("/bulk-distribute/:batchId/stream", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const { batchId } = request.params as { batchId: string };
