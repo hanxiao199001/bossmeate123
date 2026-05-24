@@ -12,12 +12,13 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, gte, or, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { journals, contents, platformAccounts } from "../models/schema.js";
+import { journals, contents, platformAccounts, tenants } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
 import { recommendJournals } from "../services/recommendation/journal-recommender.js";
 import { selectCandidates, DISCIPLINE_ROTATION, getJournal30dCount } from "../services/recommendation/daily-cron.js";
+import { ALL_DISCIPLINES } from "../services/content-engine/topic-recommender.js";
 import { keywords as keywordsTable } from "../models/schema.js";
 import { inArray } from "drizzle-orm";
 import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.js";
@@ -565,6 +566,47 @@ export async function adminRoutes(app: FastifyInstance) {
         durationMs: finished ? progress.finishedAt! - progress.startedAt : null,
       },
     };
+  });
+
+  /**
+   * PR #223: 每日推荐配置 — 每学科篇数 (dailyQuota).
+   *   存 SYSTEM 租户 config.automationConfig.dailyQuota. daily-cron 据此选刊 (PR #222).
+   *   GET 返回当前配额 + 全学科列表(供 UI); PATCH 写入(校验学科 code + 单学科≤50 + 总数≤100).
+   */
+  app.get("/daily-recommendation-config", { preHandler: adminOnlyMiddleware }, async () => {
+    const [t] = await db
+      .select({ config: tenants.config })
+      .from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID))
+      .limit(1);
+    const quota = (t?.config as { automationConfig?: { dailyQuota?: Record<string, number> } } | null)?.automationConfig?.dailyQuota;
+    return { code: "OK", data: { quota: quota || {}, disciplines: ALL_DISCIPLINES } };
+  });
+
+  app.patch("/daily-recommendation-config", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body as { quota?: Record<string, unknown> } | null) || {};
+    const validCodes = new Set<string>(ALL_DISCIPLINES.map((d) => d.code));
+    const clean: Record<string, number> = {};
+    for (const [k, v] of Object.entries(body.quota || {})) {
+      if (!validCodes.has(k)) continue; // 只接受已知学科 code
+      const n = Math.floor(Number(v));
+      if (Number.isFinite(n) && n > 0) clean[k] = Math.min(n, 50); // 单学科上限 50 防滥用
+    }
+    const total = Object.values(clean).reduce((a, b) => a + b, 0);
+    if (total > 100) {
+      return reply.code(400).send({ code: "QUOTA_TOO_LARGE", message: `每日总数 ${total} 超上限 100` });
+    }
+    const [t] = await db
+      .select({ config: tenants.config })
+      .from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID))
+      .limit(1);
+    const cfg = (t?.config as Record<string, unknown>) || {};
+    const auto = (cfg.automationConfig as Record<string, unknown>) || {};
+    cfg.automationConfig = { ...auto, dailyQuota: clean };
+    await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    logger.info({ quota: clean, total }, "PR #223 每日推荐配额已更新");
+    return { code: "OK", data: { quota: clean, total } };
   });
 
   // 5-19 PR #171: SSE stream admin only (跟随 POST /bulk-distribute 同权限)

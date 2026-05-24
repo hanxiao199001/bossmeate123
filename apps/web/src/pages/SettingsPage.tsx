@@ -62,6 +62,11 @@ export default function SettingsPage() {
   const [prefSaving, setPrefSaving] = useState(false);
   const [prefResult, setPrefResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // PR #224: 每日推荐配额 (每学科篇数)
+  const [quota, setQuota] = useState<Record<string, number>>({});
+  const [quotaSaving, setQuotaSaving] = useState(false);
+  const [quotaResult, setQuotaResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   // T4-3-5: 模板偏好统计
   const [templatePrefs, setTemplatePrefs] = useState<TemplatePreferenceItem[]>([]);
   const [templateTotalSelections, setTemplateTotalSelections] = useState(0);
@@ -136,6 +141,26 @@ export default function SettingsPage() {
       setPrefResult({ ok: false, msg: err?.message || "保存失败" });
     } finally {
       setPrefSaving(false);
+    }
+  };
+
+  // PR #224: 加载/保存 每日推荐配额
+  useEffect(() => {
+    api.get<{ quota: Record<string, number> }>("/admin/daily-recommendation-config")
+      .then((res) => setQuota(res.data?.quota || {}))
+      .catch(() => { /* 非 admin 或无配置, 忽略 */ });
+  }, []);
+
+  const handleSaveQuota = async () => {
+    setQuotaSaving(true);
+    setQuotaResult(null);
+    try {
+      const res = await api.patch<{ total: number }>("/admin/daily-recommendation-config", { quota });
+      setQuotaResult({ ok: true, msg: `已保存, 每日共 ${res.data?.total ?? 0} 篇, 次日推荐生效` });
+    } catch (err: any) {
+      setQuotaResult({ ok: false, msg: err?.message || "保存失败" });
+    } finally {
+      setQuotaSaving(false);
     }
   };
 
@@ -304,6 +329,50 @@ export default function SettingsPage() {
                 )}
               </div>
             </div>
+          )}
+        </div>
+
+        {/* PR #224: 每日推荐数量与各学科篇数 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center text-xl">{"📅"}</div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">每日推荐数量与配额</h2>
+              <p className="text-sm text-gray-500">设置每天自动生成多少篇、各学科各几篇。每学科填篇数(0=不推), 总数=各篇数之和。留空全为 0 则回退默认(按星期轮转 10 篇)。</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {ALL_DISCIPLINES.map((d) => (
+              <div key={d.code} className="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
+                <span className="text-sm text-gray-700">{d.label}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={quota[d.code] ?? 0}
+                  onChange={(e) => {
+                    const n = Math.max(0, Math.min(50, Math.floor(Number(e.target.value) || 0)));
+                    setQuota((q) => ({ ...q, [d.code]: n }));
+                  }}
+                  className="w-16 text-center border border-gray-300 rounded px-2 py-1 text-sm"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center justify-between">
+            <span className="text-sm text-gray-600">
+              每日总计：<strong className="text-amber-600">{ALL_DISCIPLINES.reduce((sum, d) => sum + (quota[d.code] || 0), 0)}</strong> 篇
+            </span>
+            <button
+              onClick={handleSaveQuota}
+              disabled={quotaSaving}
+              className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50"
+            >
+              {quotaSaving ? "保存中..." : "保存配额"}
+            </button>
+          </div>
+          {quotaResult && (
+            <div className={`mt-3 text-sm ${quotaResult.ok ? "text-green-600" : "text-red-600"}`}>{quotaResult.msg}</div>
           )}
         </div>
 

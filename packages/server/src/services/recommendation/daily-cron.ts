@@ -15,9 +15,9 @@
  *
  * 调度: scheduler.ts 注册 cron '0 3 * * *' Asia/Shanghai (每日 03:00 BJ)。
  */
-import { desc, sql, inArray } from "drizzle-orm";
+import { desc, sql, inArray, eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { keywords as keywordsTable, contents } from "../../models/schema.js";
+import { keywords as keywordsTable, contents, tenants } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
@@ -106,51 +106,82 @@ export async function selectCandidates(opts: {
     .limit(poolSize);
 }
 
+/**
+ * PR #222: 读 SYSTEM 租户配置的每学科篇数 dailyQuota={medicine:3,...}。
+ * 返回清洗后的正整数 map; 未配置/空 → null (回退星期轮转 + BATCH_SIZE)。
+ */
+export async function getDailyQuota(): Promise<Record<string, number> | null> {
+  try {
+    const [t] = await db
+      .select({ config: tenants.config })
+      .from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID))
+      .limit(1);
+    const raw = (t?.config as { automationConfig?: { dailyQuota?: Record<string, unknown> } } | null)?.automationConfig?.dailyQuota;
+    if (raw && typeof raw === "object") {
+      const clean: Record<string, number> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const n = Math.floor(Number(v));
+        if (Number.isFinite(n) && n > 0) clean[k] = n;
+      }
+      if (Object.keys(clean).length > 0) return clean;
+    }
+  } catch (err) {
+    logger.warn({ err: String(err) }, "PR #222 读 dailyQuota 失败, 回退默认");
+  }
+  return null;
+}
+
 export async function runDailyRecommendation(): Promise<DailyRecommendationResult> {
   const startedAt = new Date().toISOString();
   logger.info({ size: RECOMMENDATION_BATCH_SIZE }, "PR #130 daily-recommendation cron 开始");
 
   const dayOfWeek = new Date().getDay();
-  const todayDisciplines = DISCIPLINE_ROTATION[dayOfWeek] ?? [];
+  // PR #222: 优先用配置的每学科篇数 (dailyQuota); 没配则回退星期轮转。
+  const quota = await getDailyQuota();
+  const todayDisciplines = quota ? Object.keys(quota) : (DISCIPLINE_ROTATION[dayOfWeek] ?? []);
+  const targetTotal = quota ? Object.values(quota).reduce((a, b) => a + b, 0) : RECOMMENDATION_BATCH_SIZE;
+  const poolSize = quota ? Math.max(CANDIDATE_POOL_SIZE, targetTotal * 8) : CANDIDATE_POOL_SIZE;
+  const perDisc = new Map<string, number>(); // PR #222: 每学科已入队数, 用于配额封顶
 
   // ---- Step 1: 选候选 keywords (学科 + cooldown) ----
   let fallbackLevel = 0;
   let candidates = await selectCandidates({
     disciplines: todayDisciplines.length > 0 ? todayDisciplines : null,
     cooldownDays: KEYWORD_COOLDOWN_DAYS,
-    poolSize: CANDIDATE_POOL_SIZE,
+    poolSize,
   });
 
   // Fallback A: 学科放宽 → 全学科
-  if (candidates.length < RECOMMENDATION_BATCH_SIZE && todayDisciplines.length > 0) {
+  if (candidates.length < targetTotal && todayDisciplines.length > 0) {
     fallbackLevel = 1;
     logger.info({ fallbackLevel, got: candidates.length }, "PR #172 fallback A: 学科放宽到全学科");
     candidates = await selectCandidates({
       disciplines: null,
       cooldownDays: KEYWORD_COOLDOWN_DAYS,
-      poolSize: CANDIDATE_POOL_SIZE,
+      poolSize,
     });
   }
 
   // Fallback B: cooldown 放宽 30d → 14d
-  if (candidates.length < RECOMMENDATION_BATCH_SIZE) {
+  if (candidates.length < targetTotal) {
     fallbackLevel = 2;
     logger.info({ fallbackLevel, got: candidates.length }, "PR #172 fallback B: cooldown 放宽到 14 天");
     candidates = await selectCandidates({
       disciplines: null,
       cooldownDays: 14,
-      poolSize: CANDIDATE_POOL_SIZE,
+      poolSize,
     });
   }
 
   // Fallback C: cooldown 放宽到 0 (无 cooldown)
-  if (candidates.length < RECOMMENDATION_BATCH_SIZE) {
+  if (candidates.length < targetTotal) {
     fallbackLevel = 3;
     logger.info({ fallbackLevel, got: candidates.length }, "PR #172 fallback C: 无 cooldown");
     candidates = await selectCandidates({
       disciplines: null,
       cooldownDays: 0,
-      poolSize: CANDIDATE_POOL_SIZE,
+      poolSize,
     });
   }
 
@@ -176,7 +207,12 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   if (fallbackLevel >= 3) journalMaxPer30d = 10;
 
   for (const kw of candidates) {
-    if (batchIds.length >= RECOMMENDATION_BATCH_SIZE) break;
+    if (batchIds.length >= targetTotal) break;
+    // PR #222: 配额模式 — 跳过不在配额内的学科 / 该学科已满额
+    if (quota) {
+      const cat = kw.category ?? "";
+      if (!quota[cat] || (perDisc.get(cat) ?? 0) >= quota[cat]) continue;
+    }
 
     try {
       const recs = await recommendJournals({
@@ -217,6 +253,7 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
         rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template: "A", priority: 3 }],
       });
       batchIds.push(result.batchId);
+      if (kw.category) perDisc.set(kw.category, (perDisc.get(kw.category) ?? 0) + 1); // PR #222
       selectedKeywordIds.push(kw.id);
       logger.debug({ keyword: kw.keyword, journalId, batchId: result.batchId }, "PR #172 keyword enqueued");
     } catch (err) {
