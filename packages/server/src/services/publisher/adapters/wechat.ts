@@ -68,12 +68,12 @@ export class WechatAdapter implements PlatformAdapter {
         if (coverImageUrl) {
           thumbMediaId = await this.createCoverWithJournalImage(coverImageUrl, token);
         } else {
-          thumbMediaId = await this.createGradientThumb(token);
+          thumbMediaId = await this.createGradientThumb(token, title);
         }
       } catch (err) {
         logger.warn({ err: err instanceof Error ? err.message : err }, "封面生成失败，回退");
         try {
-          thumbMediaId = await this.createGradientThumb(token);
+          thumbMediaId = await this.createGradientThumb(token, title);
         } catch {
           thumbMediaId = await this.getOrCreateThumb(token, credentials);
         }
@@ -274,7 +274,34 @@ export class WechatAdapter implements PlatformAdapter {
    * 微信会自动在封面上叠加文章标题，不需要我们画文字
    * 无中文字体依赖，服务器无字体也能正常生成
    */
-  private async createGradientThumb(token: string): Promise<string> {
+  /**
+   * PR #220 (5-23): 无期刊封面图时的兜底横版封面 (900×383)。
+   *   原来纯渐变(空白蓝卡, 观感像空的)。现在把文章标题换行居中印上去, 永不空白。
+   *   title 来自 publish param, 含期刊名+钩子, 卡片即使没真封面也有信息、不空。
+   */
+  private async createGradientThumb(token: string, title?: string): Promise<string> {
+    // 标题按 ~12 视宽/行 折行 (CJK 计 1, 拉丁计 0.55), 最多 3 行, 超出加省略号
+    const wrapTitle = (t: string, perLine = 12, maxLines = 3): string[] => {
+      const lines: string[] = [];
+      let cur = "", w = 0;
+      for (const ch of t.trim()) {
+        const cw = /[\u4e00-\u9fa5\uff00-\uffef]/.test(ch) ? 1 : 0.55;
+        if (w + cw > perLine) { lines.push(cur); cur = ""; w = 0; if (lines.length >= maxLines) break; }
+        cur += ch; w += cw;
+      }
+      if (cur && lines.length < maxLines) lines.push(cur);
+      if (lines.length === maxLines && cur && t.length > lines.join("").length) {
+        lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + "…";
+      }
+      return lines;
+    };
+    const escXml = (x: string) => x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+    const lines = title ? wrapTitle(title) : [];
+    const lineH = 62;
+    const startY = Math.round(383 / 2 - ((lines.length - 1) * lineH) / 2) + 14;
+    const titleSvg = lines
+      .map((ln, i) => `<text x="80" y="${startY + i * lineH}" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="46" font-weight="bold" fill="#FFFFFF">${escXml(ln)}</text>`)
+      .join("");
     const svg = `<svg width="900" height="383" xmlns="http://www.w3.org/2000/svg">
   <defs><linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
     <stop offset="0%" style="stop-color:#0D47A1"/>
@@ -285,9 +312,9 @@ export class WechatAdapter implements PlatformAdapter {
   <circle cx="750" cy="80" r="150" fill="rgba(255,255,255,0.05)"/>
   <circle cx="800" cy="120" r="100" fill="rgba(255,255,255,0.03)"/>
   <circle cx="150" cy="300" r="200" fill="rgba(255,255,255,0.03)"/>
-  <rect x="50" y="140" width="5" height="100" rx="2.5" fill="#FFD54F"/>
+  <rect x="50" y="${Math.max(60, startY - 50)}" width="6" height="${Math.max(80, lines.length * lineH)}" rx="3" fill="#FFD54F"/>
   <rect x="0" y="370" width="900" height="13" fill="rgba(255,215,84,0.3)"/>
-  <rect x="830" y="340" width="40" height="3" rx="1.5" fill="#FFD54F" opacity="0.5"/>
+  ${titleSvg}
 </svg>`;
 
     const jpegBuf = await sharp(Buffer.from(svg))
