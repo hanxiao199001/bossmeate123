@@ -23,6 +23,7 @@ import { logger } from "../config/logger.js";
 
 const BASE = "https://www.jcarindex.com";
 const LIST_API = `${BASE}/ifs/public/jcar/getJournalList`;
+const JCAR_COVER_BASE = `${BASE}/cover/journal_image/`; // PR #221: 封面图前缀 (经页面核实)
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 // jcarindex CAR Index 最新列年份(经页面核实: 列头 2024/2025/2026, carIndex=最新=2026)。
@@ -50,6 +51,7 @@ interface JcarRecord {
   curYearProblemArticleCount?: number | null;
   lastYearProblemArticleCount?: number | null;
   linkOfficialWebsite?: string | null;
+  cover?: string | null; // 封面文件名, 拼 JCAR_COVER_BASE 得完整 URL
 }
 
 /** 启动时 GET 首页拿 JSESSIONID (模拟真实浏览器会话, 进一步降低被拦概率) */
@@ -110,7 +112,7 @@ async function main() {
   const limit = limitArg >= 0 ? parseInt(process.argv[limitArg + 1], 10) : 0;
 
   let targets = await db
-    .select({ id: journals.id, name: journals.name, issn: journals.issn, website: journals.website })
+    .select({ id: journals.id, name: journals.name, issn: journals.issn, website: journals.website, coverImageUrl: journals.coverImageUrl })
     .from(journals)
     .where(isNotNull(journals.issn));
   if (limit > 0) targets = targets.slice(0, limit);
@@ -122,6 +124,7 @@ async function main() {
   let noHit = 0;
   let errors = 0;
   let siteFilled = 0; // PR #216: 顺手回填的官网数
+  let coverFilled = 0; // PR #221: 顺手回填的封面数
   for (let i = 0; i < targets.length; i++) {
     const j = targets[i];
     const issn = (j.issn || "").trim();
@@ -147,6 +150,16 @@ async function main() {
           }).where(sql`${journals.id} = ${j.id}`);
           siteFilled += 1;
         }
+        // PR #221: 顺手回填真封面 (仅当 DB coverImageUrl 为 NULL; jcarindex cover 文件名拼前缀)
+        const cover = (rec.cover || "").trim();
+        if (!j.coverImageUrl && /\.(jpg|jpeg|png|webp|gif)$/i.test(cover)) {
+          await db.update(journals).set({
+            coverImageUrl: `${JCAR_COVER_BASE}${cover}`,
+            coverImageSource: "jcarindex",
+            fieldProvenance: sql`COALESCE(${journals.fieldProvenance}, '{}'::jsonb) || '{"coverImageUrl":"jcarindex"}'::jsonb`,
+          }).where(sql`${journals.id} = ${j.id}`);
+          coverFilled += 1;
+        }
       }
     } catch (err) {
       errors += 1;
@@ -162,6 +175,7 @@ async function main() {
   console.log(`处理:        ${targets.length}`);
   console.log(`CAR 成功写入: ${updated}`);
   console.log(`顺手补官网:   ${siteFilled}`);
+  console.log(`顺手补封面:   ${coverFilled}`);
   console.log(`未命中:      ${noHit}`);
   console.log(`错误:        ${errors}`);
   console.log(`======================================`);
