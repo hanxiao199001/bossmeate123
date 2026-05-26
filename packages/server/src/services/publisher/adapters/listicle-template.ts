@@ -127,8 +127,13 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
     if (journal.apcFee && journal.apcFee > 1500) {
       fb.push(`APC 费用约 ${journal.apcFee} 美元，注意预算`);
     }
-    if (journal.selfCitationRate && journal.selfCitationRate > 0.2) {
-      fb.push(`自引率偏高，引用本刊文献时酌情把控`);
+    // PR #234 (5-23): 兼容双单位 — ratio (0-1) 或 绝对百分点 (>1); 风险阈值统一为 pct >= 20.
+    {
+      const r = journal.selfCitationRate;
+      if (typeof r === "number" && r > 0 && r <= 100) {
+        const pct = r > 1 ? r : r * 100;
+        if (pct >= 20) fb.push(`自引率偏高，引用本刊文献时酌情把控`);
+      }
     }
     if (journal.isWarningList) {
       fb.push(`已被列入预警名单（${journal.warningYear || "近期"}），慎重投稿`);

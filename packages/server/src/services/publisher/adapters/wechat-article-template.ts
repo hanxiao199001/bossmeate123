@@ -596,11 +596,18 @@ export function renderSelfCitation(journal: JournalInfo, theme: ThemeColors): st
   if (journal.selfCitationRate == null) return "";
 
   const rate = journal.selfCitationRate;
-  const safe = rate < 20;
+  // PR #234 (5-23): 兼容双单位 (同 video/card-generator pctStr): v > 1 视为绝对百分点, v ≤ 1 视为 ratio.
+  //   原 \`${rate.toFixed(1)}%\` 只对绝对百分点正确, 对 ablesci ratio (0.058) 会渲染 0.1%.
+  if (rate <= 0 || rate > 100) {
+    if (rate > 100) console.warn(`[selfCitationRate/wechat] 越界 rate=${rate}, journal=${journal.name ?? "?"} — 跳过 (PR #234)`);
+    return "";
+  }
+  const pct = rate > 1 ? rate : rate * 100;
+  const safe = pct < 20;
 
   return sectionTitle("自引率", "📊", theme) +
     `<section style="margin:8px 0;padding:12px 16px;background:#FAFAFA;border-left:4px solid ${theme.accent};border-radius:0 8px 8px 0;">` +
-    `<p style="margin:0;font-size:15px;line-height:1.8;">${esc(journal.nameEn || journal.name)} 自引率为 <strong>${rate.toFixed(1)}%</strong>，${safe ? `处于安全范围，可放心投稿。` : `偏高，投稿时需关注。`}</p>` +
+    `<p style="margin:0;font-size:15px;line-height:1.8;">${esc(journal.nameEn || journal.name)} 自引率为 <strong>${pct.toFixed(1)}%</strong>，${safe ? `处于安全范围，可放心投稿。` : `偏高，投稿时需关注。`}</p>` +
     `</section>`;
 }
 

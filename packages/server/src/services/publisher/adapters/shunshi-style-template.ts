@@ -673,11 +673,19 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
 
 // ============ 区块 14: 自引率徽章 ============
 function renderSelfCitationBadge(journal: JournalInfo): string {
-  // PR #227 (5-23): 自引率重启 — 数据源锁 ablesci (PR #226 已清除非 ablesci 旧值,
-  //   故任何非 null selfCitationRate 都来自 ablesci, 安全渲染). AI prose 仍止血(防幻觉).
+  // PR #227 (5-23): 自引率重启 — 数据源 ablesci (PR #226 清非 ablesci 残留).
+  // PR #234 (5-23): 修 580% bug — DB 自引率历史上两种单位并存:
+  //   - ablesci 写入: 0-1 ratio (e.g. 0.058)
+  //   - LetPub 旧写入: 绝对百分点 (e.g. 5.80, 没归一化)
+  //   兼容算法 (同 video/card-generator pctStr): v > 1 视为绝对百分点直用, v ≤ 1 视为 ratio ×100.
+  //   边界: v > 100 是脏数据 (人工字段误填等), 不渲染.
   const rate = journal.selfCitationRate;
   if (typeof rate !== "number" || rate <= 0) return "";
-  const pct = rate * 100;
+  if (rate > 100) {
+    console.warn(`[selfCitationRate/shunshi] 越界 rate=${rate}, journal=${journal.name ?? "?"} — 跳过 (PR #234)`);
+    return "";
+  }
+  const pct = rate > 1 ? rate : rate * 100;
   const risk = pct < 5 ? "低" : pct < 15 ? "中" : "高";
   const color = pct < 5 ? "#388E3C" : pct < 15 ? "#F57C00" : "#D32F2F";
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
