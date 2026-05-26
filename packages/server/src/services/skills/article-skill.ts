@@ -355,7 +355,7 @@ export class ArticleSkill implements ISkill {
           validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
           // PR #241 (5-23): 视频脚本独立字段, 不进 article.body. bridge 取此字段给 DVH 朗读;
           //   缺则 fallback 到 extractNarration(title + body 前 80 字).
-          videoScript: parsed.videoScript,
+          videoScript: primary.videoScript,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -1065,7 +1065,7 @@ export class ArticleSkill implements ISkill {
 
     logger.info({ journal: journal.name, title: aiContent.title, templateId: template!.id }, "V6 期刊推荐文章生成完成");
 
-    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues };
+    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues, videoScript: aiContent.videoScript };
   }
 
   /**
