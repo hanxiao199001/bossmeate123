@@ -52,6 +52,7 @@ interface JcarRecord {
   lastYearProblemArticleCount?: number | null;
   linkOfficialWebsite?: string | null;
   cover?: string | null; // 封面文件名, 拼 JCAR_COVER_BASE 得完整 URL
+  publisher?: string | null; // 出版商/学会名, 通常比 OpenAlex 的平台名更准
 }
 
 /** 启动时 GET 首页拿 JSESSIONID (模拟真实浏览器会话, 进一步降低被拦概率) */
@@ -112,7 +113,7 @@ async function main() {
   const limit = limitArg >= 0 ? parseInt(process.argv[limitArg + 1], 10) : 0;
 
   let targets = await db
-    .select({ id: journals.id, name: journals.name, issn: journals.issn, website: journals.website, coverImageUrl: journals.coverImageUrl })
+    .select({ id: journals.id, name: journals.name, issn: journals.issn, website: journals.website, coverImageUrl: journals.coverImageUrl, publisher: journals.publisher, fieldProvenance: journals.fieldProvenance })
     .from(journals)
     .where(isNotNull(journals.issn));
   if (limit > 0) targets = targets.slice(0, limit);
@@ -125,6 +126,7 @@ async function main() {
   let errors = 0;
   let siteFilled = 0; // PR #216: 顺手回填的官网数
   let coverFilled = 0; // PR #221: 顺手回填的封面数
+  let pubFilled = 0; // PR #231: 顺手回填/升级的 publisher 数
   for (let i = 0; i < targets.length; i++) {
     const j = targets[i];
     const issn = (j.issn || "").trim();
@@ -160,6 +162,18 @@ async function main() {
           }).where(sql`${journals.id} = ${j.id}`);
           coverFilled += 1;
         }
+        // PR #231: 顺手回填 publisher — jcarindex 通常给学会名(AAA), 比 OpenAlex 平台名(Wiley) 准.
+        //   只覆盖 source=openalex 或 NULL (无 provenance) 的; manual/letpub 等不动, 防误覆盖人工校正值.
+        const newPub = (rec.publisher || "").trim();
+        const currentPubSrc = (j.fieldProvenance as { publisher?: string } | null)?.publisher;
+        const canOverwritePub = !currentPubSrc || currentPubSrc === "openalex";
+        if (newPub.length > 0 && newPub.length < 200 && canOverwritePub && newPub !== j.publisher) {
+          await db.update(journals).set({
+            publisher: newPub,
+            fieldProvenance: sql`COALESCE(${journals.fieldProvenance}, '{}'::jsonb) || '{"publisher":"jcarindex"}'::jsonb`,
+          }).where(sql`${journals.id} = ${j.id}`);
+          pubFilled += 1;
+        }
       }
     } catch (err) {
       errors += 1;
@@ -176,6 +190,7 @@ async function main() {
   console.log(`CAR 成功写入: ${updated}`);
   console.log(`顺手补官网:   ${siteFilled}`);
   console.log(`顺手补封面:   ${coverFilled}`);
+  console.log(`顺手升级出版商: ${pubFilled}`);
   console.log(`未命中:      ${noHit}`);
   console.log(`错误:        ${errors}`);
   console.log(`======================================`);
