@@ -219,7 +219,8 @@ export const journals = pgTable(
     partition: varchar("partition", { length: 20 }), // 分区: Q1 | Q2 | Q3 | Q4
     impactFactor: real("impact_factor"), // 影响因子
     annualVolume: integer("annual_volume"), // 年发文量
-    acceptanceRate: real("acceptance_rate"), // 录用率
+    acceptanceRate: real("acceptance_rate"), // 录用率 (0-1 ratio, LetPub 精确值; ablesci 不给精确数, 见 acceptanceDifficulty)
+    acceptanceDifficulty: varchar("acceptance_difficulty", { length: 20 }), // PR #235: 投稿难度模糊词 (容易/较易/中等/较难/困难), 来自 ablesci
     reviewCycle: varchar("review_cycle", { length: 50 }), // 审稿周期
     isWarningList: boolean("is_warning_list").notNull().default(false), // 是否在中科院预警名单
     warningYear: varchar("warning_year", { length: 10 }), // 预警年份

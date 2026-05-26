@@ -35,6 +35,7 @@ export interface JournalInfo {
   partition: string | null;
   impactFactor: number | null;
   acceptanceRate: number | null;
+  acceptanceDifficulty: string | null; // PR #235: ablesci 模糊词 (容易/较易/中等/较难/困难)
   reviewCycle: string | null;
   annualVolume: number | null;
   isWarningList: boolean;
@@ -549,6 +550,7 @@ export async function collectJournalContent(params: {
       website: (journal as any).website || null,
       apcFee: (journal as any).apcFee || null,
       selfCitationRate: (journal as any).selfCitationRate || null,
+      acceptanceDifficulty: (journal as any).acceptanceDifficulty || null, // PR #235
       casPartition: (journal as any).casPartition || null,
       casPartitionNew: (journal as any).casPartitionNew || null,
       jcrSubjects: (journal as any).jcrSubjects || null,

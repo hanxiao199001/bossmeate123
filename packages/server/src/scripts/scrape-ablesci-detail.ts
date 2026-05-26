@@ -5,7 +5,12 @@
  *   ablesci 详情页 (PR #226 已稳定走) 同时含「平均审稿速度」「平均录用比例」字段.
  *   合并为多字段 scraper, 一次详情页拉 3 字段, 礼貌限速不变(~1.6s/本).
  *
- * 关系: 取代 scrape-ablesci-selfcite.ts (单字段, 保留兼容用法). 跑这个的好处:
+ * 关系: 取代 scrape-ablesci-selfcite.ts (单字段, 保留兼容用法). 探针结果 (PR #235):
+ *   - 自引率: 精确数字 ✅
+ *   - 审稿周期: 文本如"平均24月" ✅
+ *   - 录用率: 模糊词"较易/较难" ⚠️ — 写新列 acceptance_difficulty (varchar 20), 不污染 acceptance_rate (real)
+ *
+ * 字段写入:
  *   - 自引率: 同 PR #226 parser, 0-1 ratio 写入 (用 field_provenance.selfCitationRate=ablesci)
  *   - 录用率: parse "录用比例/录用率: X%" → 0-1 ratio (acceptance_rate real 列)
  *   - 审稿周期: parse "审稿速度/审稿周期: 平均 X 月/周/天" → 原文文本 (review_cycle varchar)
@@ -80,16 +85,33 @@ function parseSelfCitation(text: string): number | null {
   return pct / 100;
 }
 
-/** 详情页 → 录用率 (0-1 ratio).
- *  常见词: 录用比例/录用率/接受率/接受比例 + "约 50%"|"50%"|"50.0%" 等.
- */
+/** 详情页 → 录用率精确百分比 (0-1 ratio). 大多 ablesci 刊给不出, 见 parseAcceptanceDifficulty 兜底. */
 function parseAcceptanceRate(text: string): number | null {
-  // 优先匹配显式百分号; 次选"约 X" 形态(也强制带%)
   const m = text.match(/(?:录用比例|录用率|接受率|接受比例)[\s:：]*[约也]?[\s]*([0-9]+\.?[0-9]*)\s*%/);
   if (!m) return null;
   const pct = parseFloat(m[1]);
   if (!Number.isFinite(pct) || pct < 0 || pct > 100) return null;
   return pct / 100;
+}
+
+/** 详情页 → 投稿难度模糊词 (容易/较易/中等/较难/困难).
+ *  PR #235: ablesci 不给精确数, 但给"较易/较难"等定性词, 仍对学者有价值.
+ *  返回标准化 5 档之一, 或 null.
+ */
+function parseAcceptanceDifficulty(text: string): string | null {
+  // 抓"录用比例/录用率/投稿难度/录用难度: <词>", 词可能是 容易/较易/中等/较难/困难/极难
+  const m = text.match(/(?:录用比例|录用率|接受率|接受比例|投稿难度|录用难度)[\s:：]*([极]?[容较中]?[易难等中容])/);
+  if (!m) return null;
+  const raw = m[1].trim();
+  // 标准化到 5 档 (含极难)
+  const map: Record<string, string> = {
+    "易": "容易", "容易": "容易",
+    "较易": "较易",
+    "中": "中等", "中等": "中等",
+    "较难": "较难",
+    "难": "困难", "困难": "困难", "极难": "极难",
+  };
+  return map[raw] || raw.slice(0, 20);
 }
 
 /** 详情页 → 审稿周期 (原文短文本, 截 ≤ 48 字符).
@@ -131,10 +153,12 @@ async function probeOne(issn: string): Promise<void> {
   // 三字段匹配结果
   const sc = parseSelfCitation(text);
   const ar = parseAcceptanceRate(text);
+  const ad = parseAcceptanceDifficulty(text);
   const rc = parseReviewCycle(text);
   console.log(`[probe] detailId=${r.id}`);
   console.log(`[probe] 自引率: ${sc != null ? (sc * 100).toFixed(2) + "% (ratio=" + sc + ")" : "(未抓到)"}`);
-  console.log(`[probe] 录用率: ${ar != null ? (ar * 100).toFixed(2) + "% (ratio=" + ar + ")" : "(未抓到)"}`);
+  console.log(`[probe] 录用率(精确): ${ar != null ? (ar * 100).toFixed(2) + "% (ratio=" + ar + ")" : "(未抓到)"}`);
+  console.log(`[probe] 投稿难度(模糊): ${ad != null ? `"${ad}"` : "(未抓到)"}`);
   console.log(`[probe] 审稿周期: ${rc != null ? `"${rc}"` : "(未抓到)"}`);
   // dump 三字段周围上下文 (前后 50 字), 方便我调整 parser
   for (const key of ["自引率", "录用比例", "录用率", "审稿速度", "审稿周期"]) {
@@ -174,6 +198,12 @@ async function main() {
     WHERE review_cycle IS NOT NULL
       AND (field_provenance IS NULL OR field_provenance->>'reviewCycle' IS NULL);
   `);
+  // PR #235: acceptance_difficulty 新列, 第一次跑无需清 (列为空); 仅保持 idempotent.
+  await db.execute(sql`
+    UPDATE journals SET acceptance_difficulty = NULL
+    WHERE acceptance_difficulty IS NOT NULL
+      AND (field_provenance IS NULL OR field_provenance->>'acceptanceDifficulty' IS NULL);
+  `);
 
   let targets = await db
     .select({
@@ -182,6 +212,7 @@ async function main() {
       issn: journals.issn,
       selfCitationRate: journals.selfCitationRate,
       acceptanceRate: journals.acceptanceRate,
+      acceptanceDifficulty: journals.acceptanceDifficulty,
       reviewCycle: journals.reviewCycle,
       fieldProvenance: journals.fieldProvenance,
     })
@@ -194,6 +225,7 @@ async function main() {
   let updated = 0;
   let scFilled = 0;
   let arFilled = 0;
+  let adFilled = 0;
   let rcFilled = 0;
   let noHit = 0;
   let errors = 0;
@@ -212,13 +244,14 @@ async function main() {
         const text = $.text().replace(/\s+/g, " ");
         const sc = parseSelfCitation(text);
         const ar = parseAcceptanceRate(text);
+        const ad = parseAcceptanceDifficulty(text);
         const rc = parseReviewCycle(text);
 
         if (DEBUG) {
-          console.log(`[ablesci-detail][debug] ${issn} ${j.name}: sc=${sc != null ? (sc * 100).toFixed(2) + "%" : "(无)"} ar=${ar != null ? (ar * 100).toFixed(2) + "%" : "(无)"} rc=${rc != null ? `"${rc}"` : "(无)"}`);
+          console.log(`[ablesci-detail][debug] ${issn} ${j.name}: sc=${sc != null ? (sc * 100).toFixed(2) + "%" : "(无)"} ar=${ar != null ? (ar * 100).toFixed(2) + "%" : "(无)"} ad=${ad != null ? `"${ad}"` : "(无)"} rc=${rc != null ? `"${rc}"` : "(无)"}`);
         }
 
-        const prov = j.fieldProvenance as { selfCitationRate?: string; acceptanceRate?: string; reviewCycle?: string } | null;
+        const prov = j.fieldProvenance as { selfCitationRate?: string; acceptanceRate?: string; acceptanceDifficulty?: string; reviewCycle?: string } | null;
         let anyWrite = false;
 
         // 自引率: 同 PR #226 策略 (覆盖非 ablesci/非 manual)
@@ -237,6 +270,14 @@ async function main() {
           }).where(sql`${journals.id} = ${j.id}`);
           arFilled += 1; anyWrite = true;
         }
+        // PR #235: 投稿难度模糊词 (ablesci 主路径; 不覆盖 manual/letpub)
+        if (ad != null && (!prov?.acceptanceDifficulty || prov.acceptanceDifficulty === "openalex")) {
+          await db.update(journals).set({
+            acceptanceDifficulty: ad,
+            fieldProvenance: sql`COALESCE(${journals.fieldProvenance}, '{}'::jsonb) || '{"acceptanceDifficulty":"ablesci"}'::jsonb`,
+          }).where(sql`${journals.id} = ${j.id}`);
+          adFilled += 1; anyWrite = true;
+        }
         // 审稿周期: 同上, 不覆盖 manual/letpub
         if (rc != null && (!prov?.reviewCycle || prov.reviewCycle === "openalex")) {
           await db.update(journals).set({
@@ -254,14 +295,15 @@ async function main() {
       await sleep(2500);
     }
     await sleep(800);
-    if ((i + 1) % 100 === 0) console.log(`[ablesci-detail] 进度 ${i + 1}/${targets.length} (写入 ${updated}, 自引${scFilled}/录用${arFilled}/审稿${rcFilled}, 未命中 ${noHit}, 错 ${errors})`);
+    if ((i + 1) % 100 === 0) console.log(`[ablesci-detail] 进度 ${i + 1}/${targets.length} (写入 ${updated}, 自引${scFilled}/录用${arFilled}/难度${adFilled}/审稿${rcFilled}, 未命中 ${noHit}, 错 ${errors})`);
   }
 
   console.log(`\n========== ablesci 详情多字段抓取报告 ==========`);
   console.log(`处理:            ${targets.length}`);
   console.log(`至少一字段写入:  ${updated}`);
   console.log(`  - 自引率:      ${scFilled}`);
-  console.log(`  - 录用率:      ${arFilled}`);
+  console.log(`  - 录用率精确:  ${arFilled}`);
+  console.log(`  - 投稿难度:    ${adFilled}`);
   console.log(`  - 审稿周期:    ${rcFilled}`);
   console.log(`未命中:          ${noHit}`);
   console.log(`错误:            ${errors}`);

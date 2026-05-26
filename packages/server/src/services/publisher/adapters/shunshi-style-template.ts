@@ -789,10 +789,10 @@ function renderSummaryBlock(aiContent: AIGeneratedContent): string {
 // ============ 区块 17: 投稿建议 / 难度评级 ============
 function renderSubmissionAdviceBlock(journal: JournalInfo): string {
   const ar = journal.acceptanceRate;
+  const ad = (journal as { acceptanceDifficulty?: string | null }).acceptanceDifficulty || null; // PR #235
   const rc = journal.reviewCycle;
-  // PR #146 (5-14): ar+rc 都空才 skip 整块（"投稿建议"是核心区块，任一字段有值就渲染，
-  // 缺的那个内部 greyOrValue 兜底）
-  if (ar == null && rc == null) return "";
+  // PR #146 (5-14): ar+rc 都空才 skip 整块. PR #235: ad 也算"有值".
+  if (ar == null && ad == null && rc == null) return "";
 
   let difficulty = "难度待评估";
   let color = MUTED;
@@ -800,9 +800,17 @@ function renderSubmissionAdviceBlock(journal: JournalInfo): string {
     if (ar >= 0.45) { difficulty = "录用率较高，相对友好"; color = "#388E3C"; }
     else if (ar >= 0.25) { difficulty = "录用率中等，准备充分可冲"; color = "#F57C00"; }
     else { difficulty = "录用率较低，需高质量稿件"; color = "#D32F2F"; }
+  } else if (ad) {
+    // PR #235 fallback: ablesci 模糊词 → 同 5 档颜色映射
+    if (ad === "容易") { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = "#388E3C"; }
+    else if (ad === "较易") { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = "#66BB6A"; }
+    else if (ad === "中等") { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = "#F57C00"; }
+    else if (ad === "较难") { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = "#E64A19"; }
+    else if (ad === "困难" || ad === "极难") { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = "#D32F2F"; }
+    else { difficulty = `投稿难度：${ad}（ablesci 评级）`; color = MUTED; }
   }
 
-  const arDisplay = ar != null ? `${(ar * 100).toFixed(0)}%` : null;
+  const arDisplay = ar != null ? `${(ar * 100).toFixed(0)}%` : (ad ? `${ad}（定性，非精确比例）` : null);
   const rcDisplay = rc || null;
 
   return `<section style="margin:0 0 22px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;">` +

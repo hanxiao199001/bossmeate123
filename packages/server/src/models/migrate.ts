@@ -767,6 +767,13 @@ BEGIN
   ) THEN
     ALTER TABLE journals ADD COLUMN pku_core_level VARCHAR(30);
   END IF;
+  -- PR #235 (5-23): ablesci 录用率只给"较易/较难"模糊词, 加新列共存精确 acceptance_rate
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'journals' AND column_name = 'acceptance_difficulty'
+  ) THEN
+    ALTER TABLE journals ADD COLUMN acceptance_difficulty VARCHAR(20);
+  END IF;
 END $$;
 
 -- ============ PR B.12: journals 改全局共享 reference data ============

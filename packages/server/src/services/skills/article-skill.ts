@@ -1201,8 +1201,11 @@ export class ArticleSkill implements ISkill {
     // PR #232 (5-23): 分区/新锐分区字段加 [原文搬运] 标记 — 防 AI 改数字(3→2)/改顺序("3区材料科学"→"材料科学2区").
     if (journal.casPartition || journal.partition) knownFields.push(`- 分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
     if (journal.casPartitionNew) knownFields.push(`- 新锐分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartitionNew}`); else unknownFields.push("新锐分区"); // PR #229: 空也声明, 防 AI 编造; PR #232: 加原文搬运标记
+    // PR #235 (5-23): 录用率两路径 — LetPub 48 本给精确 %, ablesci ~2200 本给模糊词 (容易/较易/中等/较难/困难).
     if (journal.acceptanceRate != null) {
       knownFields.push(`- 录用率：${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%`);
+    } else if ((journal as { acceptanceDifficulty?: string | null }).acceptanceDifficulty) {
+      knownFields.push(`- 投稿难度：${(journal as { acceptanceDifficulty: string }).acceptanceDifficulty}（ablesci 定性评价, 非精确录用率）`);
     } else { unknownFields.push("录用率"); }
     if (journal.reviewCycle) knownFields.push(`- 审稿周期：${journal.reviewCycle}`); else unknownFields.push("审稿周期");
     if (journal.publisher) knownFields.push(`- 出版商：${journal.publisher}`); else unknownFields.push("出版商");
