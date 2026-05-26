@@ -1207,7 +1207,19 @@ export class ArticleSkill implements ISkill {
     if (journal.publisher) knownFields.push(`- 出版商：${journal.publisher}`); else unknownFields.push("出版商");
     if ((journal as any).foundingYear) knownFields.push(`- 创刊年：${(journal as any).foundingYear}`); else unknownFields.push("创刊年");
     if ((journal as any).country) knownFields.push(`- 出版国：${(journal as any).country}`); else unknownFields.push("出版国");
-    if ((journal as any).apcFee != null) knownFields.push(`- 版面费 (APC)：$${(journal as any).apcFee}`); else unknownFields.push("版面费");
+    // PR #228 (5-23): APC 双路径合一 — apcFee 列空但 publicationCosts.apc(JSONB) 有值的情况, 也算"已知"。
+    //   原 bug: knownFields 只看 apcFee, 把 APC 塞进 ##未公开字段## 列表;
+    //   而 enrichmentLines 看 publicationCosts.apc, 又告诉 AI "版面费 3350 USD"。
+    //   AI 看到矛盾, 选信"未公开"那边写"未公开具体金额"。
+    const apcKnown_pc = (journal as { apcFee?: number | null }).apcFee ?? journal.promptPublicationCosts?.apc ?? null;
+    const apcCurrency_pc = journal.promptPublicationCosts?.currency || "USD";
+    if (apcKnown_pc != null && apcKnown_pc > 0) {
+      knownFields.push(`- 版面费 (APC)：${apcCurrency_pc} ${apcKnown_pc}`);
+    } else if (apcKnown_pc === 0) {
+      knownFields.push(`- 版面费 (APC)：免费 (无 APC)`);
+    } else {
+      unknownFields.push("版面费");
+    }
     knownFields.push(journal.isWarningList ? "- ⚠️ 在中科院预警名单中" : "- 不在中科院预警名单中");
 
     // PR #184 (5-20): 收录状态注入 — 严格按真实字段, 防止非 SCI 期刊被当 SCI 写
@@ -1297,7 +1309,7 @@ ${angleHint}
 - ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
 - carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。**无 CAR 数据时返回 null**。
 - scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
-- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。
+- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。🚫 **若上方数据中已给出 APC 具体金额, 必须按该金额表述(如"APC 约 USD 3350"), 严禁写"未公开/未披露/未明确/通常 OA 期刊版面费较高"这类模糊或泛化说法**(数据明摆着却说"未公开"是误导)。
 
 请输出纯 JSON（不要 markdown）：
 {
