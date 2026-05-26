@@ -1199,7 +1199,7 @@ export class ArticleSkill implements ISkill {
     // ifText 在前面构造 (来自 journal.impactFactor 或 ifHistory), 非 "未知" 才算 known
     if (ifText && !ifText.includes("未知")) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
     if (journal.casPartition || journal.partition) knownFields.push(`- 分区：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
-    if (journal.casPartitionNew) knownFields.push(`- 新锐分区：${journal.casPartitionNew}`);
+    if (journal.casPartitionNew) knownFields.push(`- 新锐分区：${journal.casPartitionNew}`); else unknownFields.push("新锐分区"); // PR #229: 空也声明, 防 AI 编造
     if (journal.acceptanceRate != null) {
       knownFields.push(`- 录用率：${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%`);
     } else { unknownFields.push("录用率"); }
@@ -1288,6 +1288,7 @@ ${unknownBlock}${blacklistBlock}${enrichmentBlock}
 12. 【钩子要真】标题可以用提问/悬念制造点击欲 (如"该不该投"、"冲得动吗"、"好中吗"), 但**钩子里的任何数据/判断必须真实**: 严禁为吸睛编造分区(如"1区TOP"当 DB 无分区数据)、录用率、收录状态。无数据的就用开放式提问, 不要给假答案。
 13. 【禁夸张营销/禁虚假宣传】禁止"投稿前必看!"、"必看"、"绝了"、"封神"、"神刊"、"水刊"、"包过"、"白嫖"、"放水"、"零门槛"、"灌水"、"捡漏"、"水王"、"稳过"、"轻松发" 等标题党/夸大/暗示放水词汇 (这类词或夸大或暗示造假, 一律禁用; 可学往期爆款的"提问/悬念/盘点"句式结构, 但不得搬用其夸大用词)
 14. 【SCIE 称谓正确】SCIE (Science Citation Index Expanded) 是 SCI 的现行官方名称 (Clarivate 2020 起 SCI 统称 SCIE), 二者同义。被 SCIE 收录的期刊就是 SCI 期刊, 标题/正文一律可称"SCI"或"SCI(SCIE)"。**严禁**出现"SCIE 期刊未被 SCI 收录""SCIE 不是 SCI"等错误对立表述。
+15. 【禁编造分区/TOP】(PR #229) 任何"几区/Q几/TOP 期刊/大类学科(医学/生物学/工程)"等分区标签 **必须严格来自上方"##已知期刊数据##"中"分区"或"新锐分区"字段**。**两字段都不在或在 ##未公开字段##** 时, 文章里**绝对不能**写"X区"/"Q几"/"TOP"/"大类是X"等任何具体分区表述(包括"投稿建议基于已知数据"这种行内总结)。AI 从训练记忆里调出的分区是禁止的——即便你"知道"这本刊是几区,在我们 DB 没有的情况下也不能写。
 
 【本次标题风格】
 ${chosenStyle}
@@ -1330,7 +1331,7 @@ ${angleHint}
     const baseSystemPrompt = `你是学术期刊分析专家，输出严格JSON格式。
 
 ##硬规则##
-1. 文章中所有具体数字必须来自 user 消息 ##已知期刊数据## 段, 严禁从训练记忆调任何数字 / 年份 / 国家 / 价格
+1. 文章中所有具体数字 **以及分区/学科标签** 必须来自 user 消息 ##已知期刊数据## 段, 严禁从训练记忆调任何数字 / 年份 / 国家 / 价格 / **分区(如"1区"/"Q1"/"医学1区TOP"/"生物学1区TOP")** / **学科大类(如"医学"/"生物学"/"工程技术")** / TOP 标记 / SCIE/SSCI 收录状态等任何具体数据点
 2. 未在 ##已知期刊数据## 出现的字段, 严禁虚构, 用兜底语代替
 3. **特别注意 — 以下 4 字段是 BossMate database 没有的数据 (backfill 实测 0 源覆盖):**
    - **创刊年**: 禁止提具体年份, 若必须涉及用"历史悠久的"等模糊词
