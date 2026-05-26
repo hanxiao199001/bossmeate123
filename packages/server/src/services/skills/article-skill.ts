@@ -98,6 +98,7 @@ interface GeneratedArticle {
   summary: string;
   tags: string[];
   wordCount: number;
+  videoScript?: string; // PR #241: 视频脚本独立字段
 }
 
 interface QualityReport {
@@ -355,7 +356,7 @@ export class ArticleSkill implements ISkill {
           validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
           // PR #241 (5-23): 视频脚本独立字段, 不进 article.body. bridge 取此字段给 DVH 朗读;
           //   缺则 fallback 到 extractNarration(title + body 前 80 字).
-          videoScript: primary.videoScript,
+          videoScript: article.videoScript,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -978,6 +979,7 @@ export class ArticleSkill implements ISkill {
       summary: `期刊推荐：${journal.nameEn || journal.name}，IF ${journal.impactFactor || "N/A"}，${journal.casPartition || journal.partition || ""}`,
       tags: ["期刊推荐", journal.discipline || "学术", journal.partition || ""].filter(Boolean),
       wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
+      videoScript: aiContent.videoScript,
     };
 
     // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)
@@ -1065,7 +1067,7 @@ export class ArticleSkill implements ISkill {
 
     logger.info({ journal: journal.name, title: aiContent.title, templateId: template!.id }, "V6 期刊推荐文章生成完成");
 
-    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues, videoScript: aiContent.videoScript };
+    return { article, quality, outline, bodyHasWarnings: hasFactWarnings, bodyFactIssues: factIssues };
   }
 
   /**
