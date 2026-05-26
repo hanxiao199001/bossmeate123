@@ -609,7 +609,7 @@ export class ArticleSkill implements ISkill {
           abbreviation: null, foundingYear: null, country: null,
           website: null, apcFee: null, selfCitationRate: null,
           casPartition: null, casPartitionNew: null, jcrSubjects: null,
-          topInstitutions: null, scopeDescription: null,
+          topInstitutions: null, scopeDescription: null, acceptanceDifficulty: null,
           synthetic: true, // 标记为 AI 合成数据
         };
         finalJournalData = {
@@ -729,6 +729,7 @@ export class ArticleSkill implements ISkill {
         jcrSubjects: parsed.jcrSubjects ? JSON.stringify(parsed.jcrSubjects) : null,
         topInstitutions: parsed.topInstitutions ? JSON.stringify(parsed.topInstitutions) : null,
         scopeDescription: null,
+        acceptanceDifficulty: null,
       };
 
       // 尝试抓取封面图
