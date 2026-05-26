@@ -12,7 +12,8 @@ export interface DvhQueryResult {
 }
 
 const POLL_INTERVAL_MS = 5000;
-const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+// PR #238 (5-23): timeout 从 5min 延到 10min — 阿里云 2D 数字人长文本(>500字)渲染常超 5min.
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryResult> {
   const dvhTenantId = process.env.DVH_TENANT_ID;
@@ -22,29 +23,42 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
   const client = createDvhClient();
   const runtime = new $Util.RuntimeOptions({});
   const startedAt = Date.now();
+  let pollCount = 0;
+  let lastStatus = "";
 
   while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+    pollCount += 1;
     const req = new $avatar20220130.GetVideoTaskInfoRequest({
       tenantId: parseInt(dvhTenantId, 10),
       app: new $avatar20220130.GetVideoTaskInfoRequestApp({ appId }),
       taskUuid,
     });
     const resp = await client.getVideoTaskInfoWithOptions(req, runtime);
-    if (resp.body?.success === false) throw new Error(`DVH query failed: ${resp.body.code} ${resp.body.message}`);
+    if (resp.body?.success === false) {
+      logger.warn({ taskUuid, code: resp.body.code, message: resp.body.message, pollCount }, "dvh.query.api_failed");
+      throw new Error(`DVH query failed: ${resp.body.code} ${resp.body.message}`);
+    }
 
-    const status = resp.body?.data?.status?.toUpperCase();
+    const status = (resp.body?.data?.status ?? "").toUpperCase();
+    // PR #238: 状态变化或每 6 次 poll(30s)记一次日志, 方便追长任务进度.
+    if (status !== lastStatus || pollCount % 6 === 0) {
+      logger.info({ taskUuid, status, pollCount, elapsedMs: Date.now() - startedAt }, "dvh.query.poll");
+      lastStatus = status;
+    }
     if (status === "SUCCESS" || status === "SUCCEEDED") {
       const r = resp.body?.data?.taskResult;
       if (!r?.videoUrl) throw new Error(`DVH succeeded but no videoUrl: ${JSON.stringify(resp.body)}`);
       const totalMs = Date.now() - startedAt;
-      logger.info({ taskUuid, videoUrl: r.videoUrl, videoDuration: r.videoDuration, totalMs }, "dvh.query.ok");
+      logger.info({ taskUuid, videoUrl: r.videoUrl, videoDuration: r.videoDuration, totalMs, pollCount }, "dvh.query.ok");
       return { videoUrl: r.videoUrl, durationMs: (r.videoDuration ?? 0) * 1000, totalMs };
     }
     if (status === "FAIL" || status === "FAILED" || status === "FAILURE") {
       const r = resp.body?.data?.taskResult;
+      logger.warn({ taskUuid, failCode: r?.failCode, failReason: r?.failReason, pollCount }, "dvh.query.task_failed");
       throw new Error(`DVH task failed: ${r?.failCode} ${r?.failReason}`);
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
-  throw new Error(`DVH query timeout ${POLL_TIMEOUT_MS}ms taskUuid=${taskUuid}`);
+  logger.warn({ taskUuid, pollCount, lastStatus, timeoutMs: POLL_TIMEOUT_MS }, "dvh.query.timeout");
+  throw new Error(`DVH query timeout ${POLL_TIMEOUT_MS}ms taskUuid=${taskUuid} lastStatus=${lastStatus} polls=${pollCount}`);
 }
