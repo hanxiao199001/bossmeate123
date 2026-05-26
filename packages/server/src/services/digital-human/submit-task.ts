@@ -31,10 +31,13 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
   const client = createDvhClient();
   // PR #243: 背景图选型 — per-template > env 全局 > undefined (走 DVH 默认黑底)
   const backgroundImageUrl = mapping.backgroundUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
+  // PR #244 (5-23): title 截 ≤ 60 字 (阿里云 DVH 限 64 字, 留 4 字 buffer)
+  //   article.title 通常 18-40 字 (PR #185 限制), 但含长期刊名+钩子组合可能超 60.
+  const safeTitle = ((opts.title || `BossMate DVH ${opts.templateId}`) as string).slice(0, 60);
   const req = new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequest({
     tenantId: parseInt(dvhTenantId, 10),
     app: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestApp({ appId }),
-    title: opts.title || `BossMate DVH ${opts.templateId}`,
+    title: safeTitle,
     text: opts.text,
     avatarInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAvatarInfo({ code: mapping.avatarCode }),
     audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({ voice: mapping.voiceCode }),
