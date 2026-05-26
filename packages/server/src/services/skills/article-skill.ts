@@ -355,7 +355,7 @@ export class ArticleSkill implements ISkill {
           validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
           // PR #241 (5-23): 视频脚本独立字段, 不进 article.body. bridge 取此字段给 DVH 朗读;
           //   缺则 fallback 到 extractNarration(title + body 前 80 字).
-          videoScript: aiContent.videoScript,
+          videoScript: parsed.videoScript,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
