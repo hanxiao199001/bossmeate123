@@ -40,10 +40,12 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
     }
 
     // PR #239 (5-23): 阿里云 GetVideoTaskInfo 实测返回 status=数字 (1 排队 / 2 渲染 / 3 完成 / 4+ 失败).
-    //   PR #238 旧代码只判 "SUCCESS"/"SUCCEEDED" 字符串, 漏过数字 3 导致 5-10min timeout. 兼容双轨.
+    //   PR #240 (5-23): 实测 status 是**字符串** "3" (而非数字 3), PR #239 用 typeof === "number"
+    //     拿到 NaN 又漏过. 改 Number(rawStatus) 通吃数字 + 数字字符串.
     const rawStatus = resp.body?.data?.status;
     const statusStr = String(rawStatus ?? "").toUpperCase();
-    const statusNum = typeof rawStatus === "number" ? rawStatus : Number.NaN;
+    const statusNumRaw = Number(rawStatus);
+    const statusNum = Number.isFinite(statusNumRaw) ? statusNumRaw : Number.NaN;
     // PR #238: 状态变化或每 6 次 poll(30s)记一次日志, 方便追长任务进度.
     if (statusStr !== lastStatus || pollCount % 6 === 0) {
       logger.info({ taskUuid, status: rawStatus, statusStr, statusNum, pollCount, elapsedMs: Date.now() - startedAt }, "dvh.query.poll");
