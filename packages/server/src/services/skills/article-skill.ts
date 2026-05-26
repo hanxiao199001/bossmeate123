@@ -1234,10 +1234,11 @@ export class ArticleSkill implements ISkill {
       if (!wosLevel) indexStatuses.push("SCI 收录");
     }
     if (indexStatuses.length > 0) {
-      // PR #207: SCIE 是 SCI 的现行名称 (Clarivate 2020 起将 SCI 统一更名 SCIE), 二者同义.
-      //   被 SCIE 收录 = 被 SCI 收录, 必须如此表述; 严禁写"SCIE 未被 SCI 收录"误导用户.
-      const hasScie = /\bSCIE?\b/i.test(indexStatuses.join(" "));
-      const scieNote = hasScie ? "（注意：SCIE 是 SCI 的现行官方名称，被 SCIE 收录即被 SCI 收录，应表述为「被 SCI/SCIE 收录」，严禁写「SCIE 未被 SCI 收录」之类误导说法）" : "";
+      // PR #207/#230: 反误导 — 不仅 SCIE, 还要覆盖 SSCI/AHCI/ESCI; 不仅"SCIE 不是 SCI",
+      //   还要强力禁"未被 SCI/SSCI 收录"这类否定句(SSCI 收录刊曾被 AI 写成"未被 SSCI 收录"误导用户).
+      const wosMatched = indexStatuses.join(" ").match(/\b(SCIE|SSCI|AHCI|ESCI)\b/i);
+      const wosTag = wosMatched ? wosMatched[1].toUpperCase() : "";
+      const scieNote = wosTag ? `（**关键约束**：该刊被 ${wosTag} 收录, 这就是被 SCI/SSCI 收录的官方证据。文章正文**绝对禁止**写"未被 SCI 收录"/"未被 SSCI 收录"/"非 SCI 期刊"/"非 SSCI 期刊"等任何否定收录的句子, 也禁止写"投稿前请确认单位/学校是否认可此类期刊"这类暗示未收录的话术。${wosTag.startsWith("SCIE") || wosTag === "SCIE" ? "另: SCIE 是 SCI 的现行官方名称, 二者同义。" : ""}）` : "";
       knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）${scieNote}`);
     } else {
       // PR #225 (5-23): 软化 — wosLevel 字段空≠真未被收录(LetPub 数据可能未覆盖到该刊)。
