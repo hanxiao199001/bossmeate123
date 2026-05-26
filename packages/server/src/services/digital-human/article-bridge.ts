@@ -23,8 +23,21 @@ export interface DvhBridgeOptions {
   journalId?: string;
 }
 
-function extractNarration(title: string, body: string | null): string {
-  const plain = (body || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+/**
+ * 抽取朗读文本.
+ * PR #241 (5-23): 优先 article.metadata.videoScript (AI 专为视频写的脚本, 100-150 字钩子+数据+CTA).
+ *   没有 fallback 到 title + body 前 80 字 (V1 简陋兜底).
+ */
+function extractNarration(article: { title: string | null; body: string | null; metadata: unknown }): string {
+  // PR #241 v2: 优先 videoScript (目标 90 秒视频, 250-350 字; 阈值 100 字过滤太短的兜底数据)
+  const meta = article.metadata as { videoScript?: string } | null;
+  const vs = meta?.videoScript;
+  if (typeof vs === "string" && vs.trim().length >= 100) {
+    return vs.trim().slice(0, 600);
+  }
+  // Fallback: 老逻辑 title + body 前 80 字
+  const title = article.title ?? "";
+  const plain = (article.body || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
   return `${title}。${plain.slice(0, 80)}。`.slice(0, 200);
 }
 
@@ -63,7 +76,8 @@ export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<voi
       return;
     }
     const title = article.title ?? "BossMate";
-    const narration = extractNarration(title, article.body);
+    // PR #241: extractNarration 改签 — 传 article 让其内部判断 metadata.videoScript 优先
+    const narration = extractNarration(article);
     const mapping = TEMPLATE_AVATAR_VOICE_MAP[templateId];
     const produced = await produceVideo(narration, title, templateId, tenantId);
 

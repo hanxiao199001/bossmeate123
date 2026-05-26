@@ -140,6 +140,8 @@ export interface AIGeneratedContent {
   rating?: number;          // 推荐星级 1-5
   editorComment?: string;   // 小编点评（口语化一句话）
   highlightTip?: string;    // 划重点提示
+  // PR #241 (5-23): 视频脚本独立字段, 不参与图文渲染, 仅供 DVH 数字人朗读 (发抖音/视频号).
+  videoScript?: string;     // PR #241 v2: 250-350 字纯文本 (目标 90 秒视频), 5 段式: 钩子+定位+数据+人群+CTA
   // V7（task #11）：4 个深度分析章节，由 8 enricher 字段真数据驱动 LLM 生成。
   // 4 字段独立（不合并），与 T4-2-2/T4-2-3 section-level AI 改段对齐 —— 局部更新
   // 不需要走 LCS diff 整段。sparse 数据下某字段缺失则 prompt 不传 → LLM 输出

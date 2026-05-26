@@ -353,6 +353,9 @@ export class ArticleSkill implements ISkill {
           // 5-23 PR #162 Phase 4-lite: body fact check 结果, feed-service 据 hasWarnings filter
           hasWarnings: !!bodyHasWarnings,
           validatorIssues: bodyFactIssues && bodyFactIssues.length > 0 ? bodyFactIssues : undefined,
+          // PR #241 (5-23): 视频脚本独立字段, 不进 article.body. bridge 取此字段给 DVH 朗读;
+          //   缺则 fallback 到 extractNarration(title + body 前 80 字).
+          videoScript: aiContent.videoScript,
         },
       },
       // T4-1b: 副版本数组（variants=1 时为 undefined，向后兼容）
@@ -1326,6 +1329,18 @@ ${angleHint}
 - scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
 - submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。🚫 **若上方数据中已给出 APC 具体金额, 必须按该金额表述(如"APC 约 USD 3350"), 严禁写"未公开/未披露/未明确/通常 OA 期刊版面费较高"这类模糊或泛化说法**(数据明摆着却说"未公开"是误导)。
 
+【videoScript】 (PR #241, 5-23) 数字人朗读脚本, 独立于图文, 发抖音/视频号:
+- 长度: **250-350 字** 纯文本 (中文 TTS 约 4 字/秒, 目标视频时长 1 分半 / 90 秒). **严禁 HTML / markdown / 表情符号**.
+- 结构: **五段式**必须遵守, 段间用句号自然衔接, 不要标题不要分点:
+  1. **开场钩子** (15-25 字 / 5 秒): 痛点提问 / 反常识 / 数字冲击. 例: "IF 5.2 想冲又怕被拒?" / "这本 SCI 接受率高得离谱."
+  2. **期刊定位** (40-60 字 / 12-18 秒): 期刊名 + 学科 + IF + 分区. 直接报 ##已知期刊数据## 中分区原文 (PR #232 约束). 例: "今天聊聊 X 期刊, 是公共卫生与环境职业健康方向的 SCI 双收录, 影响因子 X 分, 中科院 X 区."
+  3. **投稿数据** (80-110 字 / 25-30 秒): 引用 3-5 个真实数据点. 优选顺序: 录用率/投稿难度 → 审稿周期 → APC → CAR 风险/自引率. 口语化数字 ("差不多三个月" 比 "约 12 周" 好). 例: "投稿这块说几个关键的: 录用率网友反馈是较易, 审稿差不多 3 个月走完, APC 大概 1490 美元, 学术诚信风险低. 整体比同档同类的便宜不少."
+  4. **适合人群** (60-90 字 / 18-25 秒): 哪类作者适合冲, 哪类要避开. 基于 IF/分区/学科匹配讲. 例: "适合什么人投呢? 第一就是赶毕业的硕博, 因为审稿快; 第二是科室刚起步的, 录用率友好不容易被毙; 第三是做 X 方向的, 期刊 scope 对得上. 但如果你做的是 Y 这种偏冷方向, scope 不太匹配, 谨慎投."
+  5. **行动号召** (25-40 字 / 7-12 秒): 关注 + 评论 + 私信组合, 一条不超过两个动作. 例: "想了解更多 SCI 选刊关注我, 投稿前不确定的私信问. 这刊到底冲不冲? 评论区聊聊."
+- 数据约束 (同图文正文): 分区必须原文搬运 (PR #232); 收录状态如实, 不写"未被 SCI 收录" 否定句 (PR #230/#233); 没的数据不编造 (PR #229); APC 有就报数字, 没有不编 (PR #228); 严禁"必看/封神/包过/水刊"等夸张词.
+- 缺关键数据 → 该段聚焦学科 + scope, 但整体长度仍要 250+ 字, 不要写"暂无数据".
+- 风格: 像 B 站知识区博主拆解, 不是新闻播报. 口语化 + 短句 + 节奏感.
+
 请输出纯 JSON（不要 markdown）：
 {
   "title": "按照上面指定的标题风格生成的标题",
@@ -1338,7 +1353,8 @@ ${angleHint}
   "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无 IF 历史数据则返回 null（禁止写空话）。",
   "carRiskAnalysis": "章 2 — HTML，引用真实数据。无 CAR 数据则返回 null（禁止写空话）。",
   "scopeAndCitations": "章 3 — HTML，引用真实数据。无引用数据则只写收稿定位, 禁止提'缺数据'。",
-  "submissionAdvice": "章 4 — HTML，引用真实数据。有几项写几项, 没有的不提。"
+  "submissionAdvice": "章 4 — HTML，引用真实数据。有几项写几项, 没有的不提。",
+  "videoScript": "数字人朗读脚本，纯文本无 HTML，**250-350 字**(目标 90 秒视频)。五段式：开场钩子(15-25) + 期刊定位(40-60) + 投稿数据(80-110) + 适合人群(60-90) + 行动号召(25-40)。仅供 DVH 视频朗读，不进图文。"
 }`;
 
     // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
@@ -1401,6 +1417,10 @@ ${angleHint}
           carRiskAnalysis: typeof parsed.carRiskAnalysis === "string" ? parsed.carRiskAnalysis : undefined,
           scopeAndCitations: typeof parsed.scopeAndCitations === "string" ? parsed.scopeAndCitations : undefined,
           submissionAdvice: typeof parsed.submissionAdvice === "string" ? parsed.submissionAdvice : undefined,
+          // PR #241: 视频脚本独立字段, 不进图文 body, 仅供 article-bridge 取出给 DVH 朗读.
+          videoScript: typeof parsed.videoScript === "string" && parsed.videoScript.trim().length > 0
+            ? parsed.videoScript.trim().slice(0, 600)  // PR #241 v2: 上限 600 字 (目标 250-350, buffer 至 600 防 AI 略超)
+            : undefined,
         };
       }
     } catch (err) {
