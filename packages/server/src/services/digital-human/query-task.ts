@@ -39,23 +39,29 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
       throw new Error(`DVH query failed: ${resp.body.code} ${resp.body.message}`);
     }
 
-    const status = (resp.body?.data?.status ?? "").toUpperCase();
+    // PR #239 (5-23): 阿里云 GetVideoTaskInfo 实测返回 status=数字 (1 排队 / 2 渲染 / 3 完成 / 4+ 失败).
+    //   PR #238 旧代码只判 "SUCCESS"/"SUCCEEDED" 字符串, 漏过数字 3 导致 5-10min timeout. 兼容双轨.
+    const rawStatus = resp.body?.data?.status;
+    const statusStr = String(rawStatus ?? "").toUpperCase();
+    const statusNum = typeof rawStatus === "number" ? rawStatus : Number.NaN;
     // PR #238: 状态变化或每 6 次 poll(30s)记一次日志, 方便追长任务进度.
-    if (status !== lastStatus || pollCount % 6 === 0) {
-      logger.info({ taskUuid, status, pollCount, elapsedMs: Date.now() - startedAt }, "dvh.query.poll");
-      lastStatus = status;
+    if (statusStr !== lastStatus || pollCount % 6 === 0) {
+      logger.info({ taskUuid, status: rawStatus, statusStr, statusNum, pollCount, elapsedMs: Date.now() - startedAt }, "dvh.query.poll");
+      lastStatus = statusStr;
     }
-    if (status === "SUCCESS" || status === "SUCCEEDED") {
+    // 成功: 字符串 SUCCESS/SUCCEEDED  或  数字 3
+    if (statusStr === "SUCCESS" || statusStr === "SUCCEEDED" || statusNum === 3) {
       const r = resp.body?.data?.taskResult;
       if (!r?.videoUrl) throw new Error(`DVH succeeded but no videoUrl: ${JSON.stringify(resp.body)}`);
       const totalMs = Date.now() - startedAt;
       logger.info({ taskUuid, videoUrl: r.videoUrl, videoDuration: r.videoDuration, totalMs, pollCount }, "dvh.query.ok");
       return { videoUrl: r.videoUrl, durationMs: (r.videoDuration ?? 0) * 1000, totalMs };
     }
-    if (status === "FAIL" || status === "FAILED" || status === "FAILURE") {
+    // 失败: 字符串 FAIL/FAILED/FAILURE  或  数字 ≥4 (阿里云用数字 4+ 表失败, 待真实样本确认)
+    if (statusStr === "FAIL" || statusStr === "FAILED" || statusStr === "FAILURE" || (Number.isFinite(statusNum) && statusNum >= 4)) {
       const r = resp.body?.data?.taskResult;
-      logger.warn({ taskUuid, failCode: r?.failCode, failReason: r?.failReason, pollCount }, "dvh.query.task_failed");
-      throw new Error(`DVH task failed: ${r?.failCode} ${r?.failReason}`);
+      logger.warn({ taskUuid, status: rawStatus, failCode: r?.failCode, failReason: r?.failReason, pollCount }, "dvh.query.task_failed");
+      throw new Error(`DVH task failed: status=${rawStatus} ${r?.failCode ?? ""} ${r?.failReason ?? ""}`);
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
