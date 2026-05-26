@@ -115,10 +115,13 @@ export function validateAIContent(
   // ---- 10. 出版商名称一致性 ----
   validatePublisherName(corrected, journal, issues);
 
+  // ---- 11. 收录状态自相矛盾 (PR #233) ----
+  validateIndexStatusContradiction(corrected, journal, issues);
+
   // 统计
   const stats = {
-    totalChecks: issues.length > 0 ? issues.length : 10, // 至少跑了 10 项检查
-    passedChecks: 10 - issues.length,
+    totalChecks: issues.length > 0 ? issues.length : 11, // 至少跑了 11 项检查
+    passedChecks: 11 - issues.length,
     correctedChecks: issues.filter(i => i.autoCorrected).length,
     blockedChecks: issues.filter(i => i.severity === "error" && !i.autoCorrected).length,
   };
@@ -579,6 +582,56 @@ function isModalContext(text: string, idx: number, windowSize = 15): boolean {
   const start = Math.max(0, idx - windowSize);
   const end = Math.min(text.length, idx + windowSize);
   return MODAL_PHRASES.test(text.slice(start, end));
+}
+
+/**
+ * Step 11 — 收录状态自相矛盾 (PR #233, 5-23).
+ *
+ * 案例: ANZJPH wos_level="SCIE, SSCI" 双收录, AI 写"目前没有被 SCI/SSCI 收录,
+ *   投稿前务必确认单位是否认可" — 既违反 DB 真值, 又有误导风险.
+ * 修法: DB 已知 SCIE/SSCI/AHCI/ESCI 收录时, 扫 corrected 所有文本字段, 命中
+ *   "未被|非|目前没有|尚未" + "SCI/SSCI/...收录|期刊" 禁词 → error issue (无法 auto-correct).
+ *   走 hasWarnings=true → feed-service 把文章排除推荐池 (老韩肉眼可查).
+ */
+function validateIndexStatusContradiction(
+  corrected: AIGeneratedContent,
+  journal: JournalInfo,
+  issues: ValidationIssue[]
+): void {
+  const wosLevel = journal.promptJcrFull?.wosLevel || "";
+  const hasWosIndex = /\b(SCIE|SSCI|AHCI|ESCI)\b/i.test(wosLevel);
+  if (!hasWosIndex) return; // DB 没明确收录证据, 跳过 (PR #225 路径自有 prompt 约束)
+
+  // 禁词正则: 否定收录 + 暗示未收录的话术
+  const banPatterns: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /(未被|没有被|尚未被|目前没有被|不被|未获)\s*(SCI|SSCI|SCIE|AHCI|ESCI|核心|JCR)\s*(收录|检索|纳入)?/i, label: "否定收录句" },
+    { pattern: /非\s*(SCI|SSCI|SCIE|AHCI|ESCI|核心)\s*(期刊|刊)/i, label: "非SCI类期刊表述" },
+    { pattern: /投稿前.{0,10}?确认.{0,10}?单位.{0,10}?(是否)?认可/i, label: "暗示未收录的认可话术" },
+  ];
+
+  const textFields: Array<keyof AIGeneratedContent> = [
+    "title", "recommendation", "scopeDescription", "editorComment", "highlightTip",
+    "ifHistoryAnalysis", "carRiskAnalysis", "scopeAndCitations", "submissionAdvice",
+  ];
+
+  for (const field of textFields) {
+    const text = corrected[field];
+    if (typeof text !== "string" || !text) continue;
+    for (const { pattern, label } of banPatterns) {
+      const m = text.match(pattern);
+      if (m) {
+        issues.push({
+          severity: "error",
+          field: String(field),
+          message: `${label}: 该刊 DB wosLevel="${wosLevel}" 是 SCIE/SSCI 已收录权威证据, AI 仍写出"${m[0]}". (PR #233 拦截)`,
+          aiValue: m[0],
+          realValue: wosLevel,
+          autoCorrected: false, // 无法自动修, 整篇排除推荐池
+        });
+        break; // 一字段一次告警即可
+      }
+    }
+  }
 }
 
 export function extractClaimedFacts(body: string): ClaimedFact[] {

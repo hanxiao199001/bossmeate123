@@ -1235,11 +1235,13 @@ export class ArticleSkill implements ISkill {
       if (!wosLevel) indexStatuses.push("SCI 收录");
     }
     if (indexStatuses.length > 0) {
-      // PR #207/#230: 反误导 — 不仅 SCIE, 还要覆盖 SSCI/AHCI/ESCI; 不仅"SCIE 不是 SCI",
-      //   还要强力禁"未被 SCI/SSCI 收录"这类否定句(SSCI 收录刊曾被 AI 写成"未被 SSCI 收录"误导用户).
-      const wosMatched = indexStatuses.join(" ").match(/\b(SCIE|SSCI|AHCI|ESCI)\b/i);
-      const wosTag = wosMatched ? wosMatched[1].toUpperCase() : "";
-      const scieNote = wosTag ? `（**关键约束**：该刊被 ${wosTag} 收录, 这就是被 SCI/SSCI 收录的官方证据。文章正文**绝对禁止**写"未被 SCI 收录"/"未被 SSCI 收录"/"非 SCI 期刊"/"非 SSCI 期刊"等任何否定收录的句子, 也禁止写"投稿前请确认单位/学校是否认可此类期刊"这类暗示未收录的话术。${wosTag.startsWith("SCIE") || wosTag === "SCIE" ? "另: SCIE 是 SCI 的现行官方名称, 二者同义。" : ""}）` : "";
+      // PR #207/#230/#233: 反误导 — 覆盖 SCIE/SSCI/AHCI/ESCI; 强力禁"未被 SCI/SSCI 收录"等否定句.
+      //   PR #233 (5-23): 双收录场景 (wosLevel="SCIE, SSCI") 之前只匹配首个=SCIE, 漏掉 SSCI 标签
+      //   导致 AI 误以为 SSCI 是"未明确"标签, 写出"未被 SSCI 收录". 改 matchAll 列全所有命中等级.
+      const wosAllMatches = Array.from(indexStatuses.join(" ").matchAll(/\b(SCIE|SSCI|AHCI|ESCI)\b/gi));
+      const wosTags = Array.from(new Set(wosAllMatches.map((m) => m[1].toUpperCase())));
+      const wosTagsJoin = wosTags.join("/");
+      const scieNote = wosTags.length > 0 ? `（**关键约束**：该刊被 ${wosTagsJoin} 收录(WoS 等级官方证据)。文章正文**绝对禁止**写"未被 SCI 收录"/"未被 SSCI 收录"/"非 SCI 期刊"/"非 SSCI 期刊"/"目前没有被 SCI/SSCI 收录"等任何否定收录的句子, 也禁止写"投稿前请确认单位/学校是否认可此类期刊"这类暗示未收录的话术。${wosTags.includes("SCIE") ? "另: SCIE 是 SCI 的现行官方名称, 二者同义。" : ""}${wosTags.length > 1 ? `该刊为多重收录(${wosTagsJoin}), 文中可如实表述为"${wosTagsJoin} 双重/多重收录"。` : ""}）` : "";
       knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）${scieNote}`);
     } else {
       // PR #225 (5-23): 软化 — wosLevel 字段空≠真未被收录(LetPub 数据可能未覆盖到该刊)。
