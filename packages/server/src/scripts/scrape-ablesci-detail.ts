@@ -103,13 +103,20 @@ function parseAcceptanceRate(text: string): number | null {
 
 /** 详情页 → 投稿难度模糊词 (容易/较易/中等/较难/困难).
  *  PR #235: ablesci 不给精确数, 但给"较易/较难"等定性词, 仍对学者有价值.
+ *  PR #236 (5-23): 修 — ablesci HTML 是"录用比例 → 网友分享经验：→ 较易" 三段结构,
+ *    我原 regex 要求字段名后紧邻难度词, 漏中介短语. 改用 [\s\S]{0,40}? 非贪婪允许中介内容.
+ *    后视 [边界字符|$] 限定避免"较易于"等长词误抓.
  *  返回标准化 5 档之一, 或 null.
  */
 function parseAcceptanceDifficulty(text: string): string | null {
-  // 抓"录用比例/录用率/投稿难度/录用难度: <词>", 词可能是 容易/较易/中等/较难/困难/极难
-  const m = text.match(/(?:录用比例|录用率|接受率|接受比例|投稿难度|录用难度)[\s:：]*([极]?[容较中]?[易难等中容])/);
+  // 字段名 + 0-40 字符中介 (如"网友分享经验：" / "经验:") + 难度词 + 边界
+  const m = text.match(
+    /(?:录用比例|录用率|接受率|接受比例|投稿难度|录用难度)[\s\S]{0,40}?([极]?[容较中]?(?:易|难|等|中|容))(?=[\s,，。;；、]|$)/
+  );
   if (!m) return null;
   const raw = m[1].trim();
+  // 排除数字段误抓 (例如 "约 50%" 不应匹配, regex 已防, 此处兜底)
+  if (/[0-9%]/.test(raw)) return null;
   // 标准化到 5 档 (含极难)
   const map: Record<string, string> = {
     "易": "容易", "容易": "容易",
