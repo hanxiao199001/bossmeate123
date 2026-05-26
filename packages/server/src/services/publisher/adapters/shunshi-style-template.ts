@@ -673,28 +673,17 @@ function renderCitingJournalsPie(journal: JournalInfo): string {
 
 // ============ 区块 14: 自引率徽章 ============
 function renderSelfCitationBadge(journal: JournalInfo): string {
-  // PR #206 (5-22): 自引率止血 — 与 CAR 同源 (OpenAlex 分层抽样), 实测偏差 2-7pt, 不准.
-  //   暂关显示 (task #57 接权威引用数据后恢复). 与 renderCarRiskAnalysis 止血同口径.
-  void journal;
-  return "";
-  // eslint-disable-next-line no-unreachable
-  const raw = (journal as any).citingJournalsTop10;
-  if (!isCitingJournalsTop10(raw)) return ""; // P3 隐藏（无引用数据）
-  const rate = (raw as any).selfCitationRate;
-  const conf = (raw as any).selfCitationConfidence;
-  // confidence='low'（top-N=100 sample COVID 噪声）→ 不渲染数值，留 P1 占位
-  // task #50 升级 medium 后自动展示
-  if (typeof rate !== "number" || conf === "low") {
-    return `<section style="margin:0 0 18px 0;text-align:center;padding:10px 14px;background:#FAFAFA;border-radius:6px;">` +
-      `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.6;">自引率数据采集中</p>` +
-      `</section>`;
-  }
+  // PR #227 (5-23): 自引率重启 — 数据源锁 ablesci (PR #226 已清除非 ablesci 旧值,
+  //   故任何非 null selfCitationRate 都来自 ablesci, 安全渲染). AI prose 仍止血(防幻觉).
+  const rate = journal.selfCitationRate;
+  if (typeof rate !== "number" || rate <= 0) return "";
   const pct = rate * 100;
   const risk = pct < 5 ? "低" : pct < 15 ? "中" : "高";
   const color = pct < 5 ? "#388E3C" : pct < 15 ? "#F57C00" : "#D32F2F";
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">自引率</p>` +
     `<p style="margin:0;font-size:20px;font-weight:bold;color:${color};line-height:1.4;">${pct.toFixed(1)}% · ${risk}风险</p>` +
+    `<p style="margin:4px 0 0 0;font-size:11px;color:${MUTED};line-height:1.5;">数据来源：ablesci</p>` +
     `</section>`;
 }
 
