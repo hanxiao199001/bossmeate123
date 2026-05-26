@@ -43,16 +43,23 @@ const DEBUG = process.argv.includes("--debug");
 const PROBE = process.argv.includes("--probe");
 
 async function fetchHtml(path: string): Promise<string> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: {
-      "user-agent": UA,
-      "accept-language": "zh-CN,zh;q=0.9",
-      referer: `${BASE}/journal`,
-      accept: "text/html,application/xhtml+xml",
-    },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000); // 15s 超时
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      headers: {
+        "user-agent": UA,
+        "accept-language": "zh-CN,zh;q=0.9",
+        referer: `${BASE}/journal`,
+        accept: "text/html,application/xhtml+xml",
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** 搜索结果页 → 含 ISSN 那行的详情 id */
