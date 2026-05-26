@@ -14,6 +14,9 @@ export interface AvatarVoiceMapping {
   voiceCode: string; // TTS 发音人 Code (DVH API: AudioInfo.Voice)
   voiceLabel: string;
   templateLabel: string;
+  // PR #243 (5-23): 背景图 OSS URL (DVH API: VideoInfo.backgroundImageUrl).
+  //   缺省 → 用 env DVH_DEFAULT_BG_URL → 仍缺 → DVH 默认黑底.
+  backgroundUrl?: string;
 }
 
 export const TEMPLATE_AVATAR_VOICE_MAP: Record<TemplateId, AvatarVoiceMapping> = {

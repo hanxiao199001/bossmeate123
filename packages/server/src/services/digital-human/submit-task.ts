@@ -29,6 +29,8 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
   if (!mapping) throw new Error(`DVH templateId 不存在: ${opts.templateId}`);
 
   const client = createDvhClient();
+  // PR #243: 背景图选型 — per-template > env 全局 > undefined (走 DVH 默认黑底)
+  const backgroundImageUrl = mapping.backgroundUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
   const req = new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequest({
     tenantId: parseInt(dvhTenantId, 10),
     app: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestApp({ appId }),
@@ -36,8 +38,15 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     text: opts.text,
     avatarInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAvatarInfo({ code: mapping.avatarCode }),
     audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({ voice: mapping.voiceCode }),
-    videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({ isAlpha: false, subtitleEmbedded: false }),
+    videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
+      isAlpha: false,
+      subtitleEmbedded: false,
+      ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
+    }),
   });
+  if (backgroundImageUrl) {
+    logger.debug({ templateId: opts.templateId, backgroundImageUrl }, "dvh.submit.with_bg");
+  }
 
   const startedAt = Date.now();
   const resp = await client.submitTextTo2DAvatarVideoTaskWithOptions(req, new $Util.RuntimeOptions({}));
