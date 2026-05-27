@@ -43,7 +43,9 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({ voice: mapping.voiceCode }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,
-      subtitleEmbedded: false,
+      // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号竖屏完播率刚需.
+      //   默认样式 (字体/颜色/位置) 看效果, 不满意再加 subtitleStyle 调.
+      subtitleEmbedded: true,
       ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
     }),
   });
