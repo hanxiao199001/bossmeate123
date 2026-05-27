@@ -53,13 +53,15 @@ export interface SubtitleAssStyle {
 
 const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
   fontName: "Noto Sans CJK SC",
-  fontSize: 18,
+  // PR #253 (5-24): 字号 18 在 1080×1920 视觉太小, 改 28 (抖音/视频号 1080p 爆款常用尺寸).
+  fontSize: 28,
   primaryColour: "&H00FFFFFF&",  // 白字
   outlineColour: "&H00000000&",  // 黑边
   outline: 2,
   shadow: 0,
   alignment: 2,                   // 居中下方
-  marginV: 80,
+  // PR #253: marginV 80 距底边太近 (会被抖音 UI 遮挡), 改 200 (距底 ~10% 安全区).
+  marginV: 200,
 };
 
 function buildForceStyle(style: SubtitleAssStyle): string {
