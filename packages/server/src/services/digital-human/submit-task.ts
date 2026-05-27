@@ -48,13 +48,9 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,
-      // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
-      subtitleEmbedded: true,
-      // PR #250: size + y 自定义. 颜色阿里云不接受任何格式 (#/6位/8位均报错), 用默认.
-      subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
-        size: 64,
-        y: 1450,
-      }),
+      // PR #252 (5-24): 关闭 DVH 内嵌字幕 — 阿里云颜色不可控 (PR #251 试过 6 种格式).
+      //   改 ffmpeg 后处理: 拿 taskResult.subtitlesUrl (SRT) 用自定义样式 burn-in.
+      subtitleEmbedded: false,
       ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
     }),
   });

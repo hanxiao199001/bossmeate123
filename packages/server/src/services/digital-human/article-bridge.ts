@@ -11,6 +11,7 @@ import { isRealMode } from "./client.js";
 import { submitDvhTask } from "./submit-task.js";
 import { queryDvhTaskUntilDone } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
+import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
 
 export interface DvhBridgeOptions {
@@ -49,7 +50,19 @@ async function produceVideo(text: string, title: string, templateId: TemplateId,
   try {
     const submit = await submitDvhTask({ text, templateId, tenantId, title });
     const query = await queryDvhTaskUntilDone(submit.taskUuid);
-    return { videoUrl: query.videoUrl, taskUuid: submit.taskUuid, durationMs: query.durationMs, realMode: true };
+    // PR #252 (5-24): ffmpeg burn-in 自定义字幕 (取代 DVH 默认黑色不可改字幕).
+    //   失败时 postprocessVideoWithSubtitle 内部 fallback 原 videoUrl, 不阻塞链路.
+    const pp = await postprocessVideoWithSubtitle({
+      videoUrl: query.videoUrl,
+      subtitlesUrl: query.subtitlesUrl ?? "",
+      taskUuid: submit.taskUuid,
+    });
+    return {
+      videoUrl: pp.videoUrl,
+      taskUuid: submit.taskUuid,
+      durationMs: query.durationMs,
+      realMode: true,
+    };
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, templateId }, "dvh.bridge.real_failed_fallback_mock");
     const m = getMockDvhFixture(templateId);

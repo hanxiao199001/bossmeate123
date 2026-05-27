@@ -9,6 +9,8 @@ export interface DvhQueryResult {
   videoUrl: string;
   durationMs: number;
   totalMs: number;
+  // PR #252: SRT 字幕 URL (DVH 返回, ffmpeg 后处理用)
+  subtitlesUrl?: string;
 }
 
 const POLL_INTERVAL_MS = 5000;
@@ -56,8 +58,13 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
       const r = resp.body?.data?.taskResult;
       if (!r?.videoUrl) throw new Error(`DVH succeeded but no videoUrl: ${JSON.stringify(resp.body)}`);
       const totalMs = Date.now() - startedAt;
-      logger.info({ taskUuid, videoUrl: r.videoUrl, videoDuration: r.videoDuration, totalMs, pollCount }, "dvh.query.ok");
-      return { videoUrl: r.videoUrl, durationMs: (r.videoDuration ?? 0) * 1000, totalMs };
+      logger.info({ taskUuid, videoUrl: r.videoUrl, subtitlesUrl: r.subtitlesUrl, videoDuration: r.videoDuration, totalMs, pollCount }, "dvh.query.ok");
+      return {
+        videoUrl: r.videoUrl,
+        durationMs: (r.videoDuration ?? 0) * 1000,
+        totalMs,
+        subtitlesUrl: r.subtitlesUrl, // PR #252: SRT 字幕给 ffmpeg
+      };
     }
     // 失败: 字符串 FAIL/FAILED/FAILURE  或  数字 ≥4 (阿里云用数字 4+ 表失败, 待真实样本确认)
     if (statusStr === "FAIL" || statusStr === "FAILED" || statusStr === "FAILURE" || (Number.isFinite(statusNum) && statusNum >= 4)) {
