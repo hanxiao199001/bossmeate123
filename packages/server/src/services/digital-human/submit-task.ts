@@ -45,16 +45,8 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
       isAlpha: false,
       // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
       subtitleEmbedded: true,
-      // PR #246 (5-24): 字幕样式 — 默认黑字小号+贴底, 改为白字黑描边+大号+上移.
-      //   color=#FFFFFF (白底), outlineColor=#000000 (黑描边模拟加粗, 任何背景都清晰).
-      //   size=64 (1080p 推荐 48-72, 64 显眼但不撑满屏).
-      //   y=1500 (1920 总高的 78%, 屏幕中下方, 不贴底边避免被抖音 UI 遮挡).
-      subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
-        color: "FFFFFF",
-        outlineColor: "000000",
-        size: 64,
-        y: 1500,
-      }),
+      // PR #246: 字幕样式暂用默认 (阿里云 DVH 颜色格式不接受 #FFFFFF / FFFFFF, 待查文档)
+      // TODO: 查阿里云 DVH subtitleStyle 支持的颜色格式后恢复自定义
       ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
     }),
   });
