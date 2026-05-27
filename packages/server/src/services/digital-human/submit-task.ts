@@ -45,8 +45,11 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
       isAlpha: false,
       // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
       subtitleEmbedded: true,
-      // PR #246: 字幕样式暂用默认 (阿里云 DVH 颜色格式不接受 #FFFFFF / FFFFFF, 待查文档)
-      // TODO: 查阿里云 DVH subtitleStyle 支持的颜色格式后恢复自定义
+      // PR #247: 字幕 y 上移 + size. 颜色暂用默认 (阿里云不接受 #FFFFFF/FFFFFF 格式).
+      subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
+        size: 64,
+        y: 1300,
+      }),
       ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
     }),
   });
