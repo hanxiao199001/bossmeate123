@@ -40,13 +40,20 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     title: safeTitle,
     text: opts.text,
     avatarInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAvatarInfo({ code: mapping.avatarCode }),
-    audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({ voice: mapping.voiceCode }),
+    audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({
+      voice: mapping.voiceCode,
+      // PR #250 (5-24): 语速 1.3 倍 (老韩反馈默认语速太慢). 阿里云 speechRate 范围 -500~500 (0=1.0x),
+      //   150 ≈ 1.3x. 听感觉太快/太慢再微调.
+      speechRate: 150,
+    }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,
       // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
       subtitleEmbedded: true,
-      // PR #248: 字幕 size+y 自定义. 颜色用默认 (阿里云不接受任何自定义颜色格式).
+      // PR #250: 黄字黑边 (6 位 hex) + size 64 + y 1450
       subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
+        color: "FFFF00",
+        outlineColor: "000000",
         size: 64,
         y: 1450,
       }),
