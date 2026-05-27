@@ -50,10 +50,8 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
       isAlpha: false,
       // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
       subtitleEmbedded: true,
-      // PR #250: 黄字黑边 (6 位 hex) + size 64 + y 1450
+      // PR #250: size + y 自定义. 颜色阿里云不接受任何格式 (#/6位/8位均报错), 用默认.
       subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
-        color: "FFFF00",
-        outlineColor: "000000",
         size: 64,
         y: 1450,
       }),
