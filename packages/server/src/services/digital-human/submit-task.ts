@@ -43,9 +43,18 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({ voice: mapping.voiceCode }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,
-      // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号竖屏完播率刚需.
-      //   默认样式 (字体/颜色/位置) 看效果, 不满意再加 subtitleStyle 调.
+      // PR #245 (5-24): 开启字幕 — TTS 文本自动渲成字幕条嵌入视频, 抖音/视频号完播率刚需.
       subtitleEmbedded: true,
+      // PR #246 (5-24): 字幕样式 — 默认黑字小号+贴底, 改为白字黑描边+大号+上移.
+      //   color=#FFFFFF (白底), outlineColor=#000000 (黑描边模拟加粗, 任何背景都清晰).
+      //   size=64 (1080p 推荐 48-72, 64 显眼但不撑满屏).
+      //   y=1500 (1920 总高的 78%, 屏幕中下方, 不贴底边避免被抖音 UI 遮挡).
+      subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
+        color: "#FFFFFF",
+        outlineColor: "#000000",
+        size: 64,
+        y: 1500,
+      }),
       ...(backgroundImageUrl ? { backgroundImageUrl } : {}),  // PR #243
     }),
   });
