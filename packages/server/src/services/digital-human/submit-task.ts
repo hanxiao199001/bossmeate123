@@ -50,8 +50,8 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
       //   size=64 (1080p 推荐 48-72, 64 显眼但不撑满屏).
       //   y=1500 (1920 总高的 78%, 屏幕中下方, 不贴底边避免被抖音 UI 遮挡).
       subtitleStyle: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfoSubtitleStyle({
-        color: "#FFFFFF",
-        outlineColor: "#000000",
+        color: "FFFFFF",
+        outlineColor: "000000",
         size: 64,
         y: 1500,
       }),
