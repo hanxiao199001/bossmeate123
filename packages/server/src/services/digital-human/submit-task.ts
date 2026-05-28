@@ -49,9 +49,10 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     avatarInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAvatarInfo({ code: mapping.avatarCode }),
     audioInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestAudioInfo({
       voice: mapping.voiceCode,
-      // PR #250 (5-24): 语速 1.3 倍 (老韩反馈默认语速太慢). 阿里云 speechRate 范围 -500~500 (0=1.0x),
-      //   150 ≈ 1.3x. 听感觉太快/太慢再微调.
-      speechRate: 150,
+      // PR #250 (5-24): 语速 1.3 倍 (老韩反馈默认语速太慢). 阿里云 speechRate 范围 -500~500 (0=1.0x).
+      // PR #259 (5-28): 1.3x 老韩反馈太快, 降到 1.1x 中等节奏 (抖音口播常见档位).
+      //   150 → 50. 听感觉再微调 (太慢回 75/100, 太快降到 25/0).
+      speechRate: 50,
     }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,
