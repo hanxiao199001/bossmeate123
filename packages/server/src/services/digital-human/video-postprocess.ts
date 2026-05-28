@@ -55,7 +55,7 @@ const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
   fontName: "Noto Sans CJK SC",
   // PR #253 (5-24): 字号 18 在 1080×1920 视觉太小, 改 28.
   // PR #254 (5-24): 28 仍偏小, 再 +2 到 30.
-  fontSize: 32, // PR #255: 30 仍小, +2 到 32 (抖音爆款常见尺寸)
+  fontSize: 42, // PR #256: 老韩拍 40+, 一步到位 42
   primaryColour: "&H00FFFFFF&",  // 白字
   outlineColour: "&H00000000&",  // 黑边
   outline: 2,
