@@ -49,6 +49,7 @@ export interface SubtitleAssStyle {
   shadow?: number;         // 阴影, 默认 0 (描边足够清晰, 不需要阴影)
   alignment?: number;      // 1-9 九宫格位置, 默认 2 (居中下方); 5 居中, 8 居中上方
   marginV?: number;        // 距底部/顶部边距, 默认 80
+  bold?: 0 | 1;            // 加粗, 默认 1
 }
 
 const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
@@ -63,6 +64,7 @@ const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
   alignment: 2,                   // 居中下方
   // PR #253: marginV 80 距底边太近 (会被抖音 UI 遮挡), 改 200 (距底 ~10% 安全区).
   marginV: 200,
+  bold: 1,  // PR #257: 抖音爆款常态粗体
 };
 
 function buildForceStyle(style: SubtitleAssStyle): string {
@@ -76,6 +78,7 @@ function buildForceStyle(style: SubtitleAssStyle): string {
     `Shadow=${merged.shadow}`,
     `Alignment=${merged.alignment}`,
     `MarginV=${merged.marginV}`,
+    `Bold=${merged.bold}`,
     `BorderStyle=1`,  // 1 = outline only, 3 = box bg (BossMate 用 outline)
   ].join(",");
 }
