@@ -113,8 +113,10 @@ export async function enrichJournal(
   const wanfangPerioId = ((journal.metadata as Record<string, any> | null)?.wanfang?.perioId ?? null) as string | null;
   // PR #107 / PR #166: 6 源 (letpub/doaj/openalex/fenqubiao/wanfang/crossref) — scimago 已砍
   // PR #165: 用 timed() 包每源, 收集 per-source duration + status 给 journal_enrichment_log
+  // PR #260: 全局熔断 — ENRICH_SKIP_LETPUB=true 时跳过 LetPub (反爬封 IP 时无需重新部署即可止血)
+  const skipLetpub = options?.skipLetpub || process.env.ENRICH_SKIP_LETPUB === "true";
   const [letpubTimed, doajTimed, openalexTimed, fenqubiaoTimed, wanfangTimed, crossrefTimed] = await Promise.all([
-    timed("letpub", options?.skipLetpub ? Promise.resolve(null) : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn })),
+    timed("letpub", skipLetpub ? Promise.resolve(null) : fetchLetpubDetail({ journalName: selectQueryName(journal), issn: journal.issn })),
     timed("doaj", options?.skipDoaj ? Promise.resolve(null) : fetchDoajByIssn(journal.issn)),
     timed("openalex", options?.skipOpenAlex ? Promise.resolve(null) : fetchOpenAlexJournal(journal.issn)),
     timed("fenqubiao", options?.skipFenqubiao ? Promise.resolve(null) : fetchFenqubiaoWarningList()),

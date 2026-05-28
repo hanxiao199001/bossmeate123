@@ -143,13 +143,14 @@ async function main() {
   console.log(`==================================`);
 
   // --enrich: 对新入库期刊跑交叉验证 (慢 + 限速防反爬)
+  // PR #260: 强制 skipLetpub — 列表爬刚猛打过 LetPub, enrich 阶段绝不再打 LetPub (反爬铁律: 列表爬与 LetPub-enrich 绝不同进程). 改走 OpenAlex/DOAJ/万方等其他源升分.
   if (opts.enrich && insertedIds.length > 0) {
     console.log(`\n[ingest-letpub] 开始 enrich ${insertedIds.length} 本 (预计 ${Math.ceil(insertedIds.length * 5 / 60)} 分钟)`);
     let enriched = 0;
     let enrichFailed = 0;
     for (let i = 0; i < insertedIds.length; i++) {
       try {
-        await enrichJournal(insertedIds[i]);
+        await enrichJournal(insertedIds[i], { skipLetpub: true });
         enriched += 1;
       } catch (err) {
         enrichFailed += 1;
