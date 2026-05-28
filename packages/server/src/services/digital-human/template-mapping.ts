@@ -21,10 +21,13 @@ export interface AvatarVoiceMapping {
 
 export const TEMPLATE_AVATAR_VOICE_MAP: Record<TemplateId, AvatarVoiceMapping> = {
   A_academic: {
-    avatarCode: "CH_2d_h3UlWl4iAGZZcTqY",
-    avatarLabel: "紫灵礼服站姿",
-    voiceCode: "aijia",
-    voiceLabel: "艾佳-标准女声",
+    // PR #258 (5-28): academic 模板换形象+声音.
+    //   原 紫灵礼服站姿+艾佳: 礼服画风太娱乐, 与学术违和; aijia 播音腔 AI 感重.
+    //   新 馨馨坐姿西装+艾夏: 西装坐姿正式职业感, aixia "客服数字人" 版本嘴型契合度更高.
+    avatarCode: "CH_2d_MHBF8Br0ld8W8yoi",
+    avatarLabel: "馨馨-西装坐姿",
+    voiceCode: "aixia",
+    voiceLabel: "艾夏-亲和女声",
     templateLabel: "A 学术",
   },
   B_marketing: {

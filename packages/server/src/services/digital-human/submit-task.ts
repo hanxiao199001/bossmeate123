@@ -1,6 +1,13 @@
 /**
  * DVH SubmitTextTo2DAvatarVideoTask wrapper.
  * 业务级失败 (body.success===false, 5-13 实测 10010003 无访问权限) 抛错给 bridge 决定 fallback。
+ *
+ * 【成本】(2026-05 实测账单, 阿里云后付费实例 32254)
+ *   单价: 0.165 元/秒 (按生成视频实际秒数计费, 无起步价 / 无最小段)
+ *   45 秒 ≈ 7.43 元 / 60 秒 ≈ 9.90 元 / 90 秒 ≈ 14.85 元
+ *   形象+声音商用授权已一次性付清, 边际成本 = DVH 合成 + ~0.16 元 LLM 写脚本 + ~0.01 元 OSS
+ *   省钱主杠杆: 缩短视频时长 (脚本字数 → 视频秒数 → 成本线性下降)
+ *   如果阿里云后续调价 / 改资源包 / 改计费方式, 同步更新这里 + memory: dvh-aliyun-virtual-human.md
  */
 import * as $Util from "@alicloud/tea-util";
 import { createDvhClient, $avatar20220130 } from "./client.js";
