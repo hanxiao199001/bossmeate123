@@ -13,7 +13,8 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
-import { decryptCredentials } from "../../utils/crypto.js";
+import { decryptCredentials, encryptCredentials } from "../../utils/crypto.js";
+import { logger } from "../../config/logger.js";
 
 export interface LoadedAccount {
   id: string;
@@ -86,4 +87,88 @@ export function decryptCredentialField(raw: unknown): Record<string, any> {
     return JSON.parse(plain);
   }
   return (raw as Record<string, any>) ?? {};
+}
+
+/**
+ * 把 patch 合并进账号已解密的 credentials, 重新 AES-GCM 加密写回 platform_accounts.credentials.
+ *
+ * 用途: token 刷新后持久化新 token (而非每次发布重新 fetch — 浪费配额, 且 OAuth 平台会丢 refresh_token).
+ *   - wechat: { accessToken, tokenExpiresAt }
+ *   - douyin OAuth: { accessToken, refreshToken, tokenExpiresAt, openId }
+ *
+ * patch 只覆盖传入字段, 其余 credentials 字段保留 (如 appId/appSecret/clientKey).
+ * 返回合并后的明文 credentials, 调用方可直接拿新 token 继续用.
+ */
+export async function persistAccountCredentials(
+  accountId: string,
+  tenantId: string,
+  patch: Record<string, any>,
+): Promise<Record<string, any>> {
+  const [row] = await db
+    .select()
+    .from(platformAccounts)
+    .where(and(eq(platformAccounts.id, accountId), eq(platformAccounts.tenantId, tenantId)))
+    .limit(1);
+  if (!row) throw new Error(`persistAccountCredentials: platform_account 不存在 ${accountId}`);
+
+  const current = decryptCredentialField(row.credentials);
+  const merged = { ...current, ...patch };
+  // 与 routes/accounts.ts 存储约定一致: 加密串写进 jsonb 列.
+  const encrypted = encryptCredentials(JSON.stringify(merged));
+
+  await db
+    .update(platformAccounts)
+    .set({ credentials: encrypted as any, updatedAt: new Date() })
+    .where(and(eq(platformAccounts.id, accountId), eq(platformAccounts.tenantId, tenantId)));
+
+  logger.info({ accountId, platform: row.platform, fields: Object.keys(patch) }, "platform_account.credentials.persisted");
+  return merged;
+}
+
+export interface RefreshedToken {
+  accessToken: string;
+  /** token 有效期 (秒). 据此算 tokenExpiresAt 落库. */
+  expiresInSec: number;
+  /** 一并持久化的其他字段 (如 OAuth refresh_token / openId). */
+  extra?: Record<string, any>;
+}
+
+/**
+ * 通用"取有效 access_token"模式 — 各平台 token 刷新复用此骨架, 只需提供 refresh() 实现.
+ *
+ * 逻辑: credentials.accessToken 还剩 > skewMs 就直接返回 (命中缓存);
+ *   否则调 refresh() 拿新 token → 算 tokenExpiresAt → persistAccountCredentials 落库 → 返回新 token.
+ *
+ * refresh() 由各平台实现:
+ *   - wechat: GET /cgi-bin/token?grant_type=client_credential (拿 access_token + expires_in)
+ *   - douyin: POST /oauth/refresh_token/ (用 refresh_token 换新 access_token)
+ */
+export async function ensureFreshAccessToken(opts: {
+  accountId: string;
+  tenantId: string;
+  credentials: Record<string, any>;
+  refresh: () => Promise<RefreshedToken>;
+  /** 提前量, 默认 5 分钟 — 剩余有效期低于此值就刷新, 避免临界过期. */
+  skewMs?: number;
+}): Promise<string> {
+  const { accountId, tenantId, credentials, refresh } = opts;
+  const skewMs = opts.skewMs ?? 5 * 60 * 1000;
+
+  const cached = credentials.accessToken as string | undefined;
+  const expiresRaw = credentials.tokenExpiresAt as string | number | undefined;
+  if (cached && expiresRaw !== undefined && expiresRaw !== null) {
+    const exp = new Date(expiresRaw).getTime();
+    if (Number.isFinite(exp) && exp - Date.now() > skewMs) {
+      return cached;
+    }
+  }
+
+  const fresh = await refresh();
+  const tokenExpiresAt = new Date(Date.now() + fresh.expiresInSec * 1000).toISOString();
+  await persistAccountCredentials(accountId, tenantId, {
+    accessToken: fresh.accessToken,
+    tokenExpiresAt,
+    ...(fresh.extra ?? {}),
+  });
+  return fresh.accessToken;
 }
