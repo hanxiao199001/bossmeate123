@@ -24,6 +24,10 @@ export interface DouyinCaption {
 
 const TITLE_MAX = 55;
 const HASHTAG_MAX = 6;
+const MAX_VARIANTS = 10;
+// PR #265: 同一视频发多号时, 用前缀/引导语池 + 话题轮转造差异, 避免同质化降权
+const HOOK_PREFIXES = ["", "干货丨", "实测丨", "建议收藏丨", "亲历丨", "避坑丨", "重磅丨", "科普丨", "经验丨", "提醒丨"];
+const LEAD_POOL = ["关注我，了解更多投稿干货", "想发这本期刊的扣1", "全程干货，建议收藏", "评论区聊聊你的投稿经历", "关注追更，少走弯路", "有问题评论区问我", "收藏起来慢慢看", "点赞过百出下期"];
 
 function assembleFullText(c: { hookTitle: string; hashtags: string[]; lead: string }): string {
   const tags = c.hashtags
@@ -139,4 +143,113 @@ export async function generateDouyinCaption(opts: {
 
   logger.info({ contentId: opts.contentId, hashtags: caption.hashtags.length }, "douyin.caption.generated");
   return caption;
+}
+
+
+/** PR #265: 规则版变体 — 前缀 + 话题轮转 + 引导语池, 保证 N 套互不雷同 */
+function ruleVariant(base: { title: string; journalName?: string; discipline?: string }, i: number): DouyinCaption {
+  const prefix = HOOK_PREFIXES[i % HOOK_PREFIXES.length];
+  const baseTitle = base.title || `${base.journalName ?? "学术期刊"}投稿攻略`;
+  const hookTitle = `${prefix}${baseTitle}`.slice(0, TITLE_MAX);
+  const seeds = [base.discipline, base.journalName, "学术", "科研", "论文发表", "期刊投稿", "SCI", "读研"].filter(Boolean) as string[];
+  const rotated = seeds.map((_, k) => seeds[(k + i) % seeds.length]);
+  const hashtags = Array.from(new Set(rotated.map((t) => t.replace(/^#/, "").trim()).filter(Boolean))).slice(0, HASHTAG_MAX);
+  const lead = LEAD_POOL[i % LEAD_POOL.length];
+  const caption: DouyinCaption = { hookTitle, hashtags, lead, fullText: "", generatedAt: new Date().toISOString() };
+  caption.fullText = assembleFullText(caption);
+  return caption;
+}
+
+async function callLlmForVariants(args: {
+  title: string; videoScript: string; journalName?: string; discipline?: string; count: number;
+}): Promise<DouyinCaption[]> {
+  const provider = getProviders().cheap[0];
+  if (!provider) throw new Error("无可用 LLM provider");
+  const ctx = [
+    args.journalName ? `期刊：${args.journalName}` : "",
+    args.discipline ? `学科：${args.discipline}` : "",
+    args.title ? `原标题：${args.title}` : "",
+    args.videoScript ? `视频脚本：${args.videoScript.slice(0, 300)}` : "",
+  ].filter(Boolean).join("\n");
+
+  const sys = `你是抖音矩阵运营专家。同一条学术期刊推广视频要发到 ${args.count} 个不同抖音号，需要 ${args.count} 套**互不雷同**的文案，避免平台判定同质化降权。
+**只输出纯 JSON 数组**（不要 markdown）：
+[{"hookTitle":"钩子标题 ≤25字","hashtags":["话题1","话题2","话题3"],"lead":"引导语 ≤30字"}, ...]
+要求：
+- 共 ${args.count} 套，每套的钩子角度、话题组合、引导语都要明显不同（不要只换标点）
+- hookTitle 口语化有钩子，≤25 字；hashtags 3-6 个纯词不带#；lead ≤30 字`;
+
+  const resp = await provider.chat({
+    messages: [{ role: "system", content: sys }, { role: "user", content: ctx || args.title || "学术期刊推广视频" }],
+    temperature: 0.9,
+    maxTokens: Math.min(250 * args.count, 2400),
+  });
+  const text = resp.content.trim().replace(/^```json\s*|\s*```$/g, "");
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed)) throw new Error("LLM 变体返回非数组");
+  return parsed.map((v: { hookTitle?: string; hashtags?: unknown; lead?: string }) => {
+    const hookTitle = String(v.hookTitle ?? args.title ?? "").slice(0, TITLE_MAX);
+    const hashtags = Array.isArray(v.hashtags)
+      ? v.hashtags.map((t) => String(t).replace(/^#/, "").trim()).filter(Boolean).slice(0, HASHTAG_MAX)
+      : [];
+    const lead = String(v.lead ?? "").slice(0, 60);
+    const caption: DouyinCaption = { hookTitle, hashtags, lead, fullText: "", generatedAt: new Date().toISOString() };
+    caption.fullText = assembleFullText(caption);
+    return caption;
+  }).filter((c) => c.hookTitle);
+}
+
+/**
+ * PR #265: 给视频生成 N 套差异化抖音文案 (发到 N 个矩阵号, 避免同质化降权).
+ * LLM 不足 count 时用规则变体补齐; 结果缓存进 metadata.douyinCaptionVariants.
+ */
+export async function generateDouyinCaptionVariants(opts: {
+  contentId: string; tenantId: string; count: number; force?: boolean;
+}): Promise<DouyinCaption[]> {
+  const count = Math.min(Math.max(Math.floor(opts.count) || 1, 1), MAX_VARIANTS);
+  const [content] = await db
+    .select()
+    .from(contents)
+    .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)))
+    .limit(1);
+  if (!content) throw new Error(`generateDouyinCaptionVariants: content 不存在 ${opts.contentId}`);
+
+  const meta = (content.metadata as Record<string, any>) ?? {};
+  const cached = meta.douyinCaptionVariants as DouyinCaption[] | undefined;
+  if (!opts.force && Array.isArray(cached) && cached.length >= count) return cached.slice(0, count);
+
+  const title = content.title ?? "";
+  const videoScript = (typeof meta.videoScript === "string" && meta.videoScript) || content.body || "";
+  let journalName: string | undefined;
+  let discipline: string | undefined;
+  const journalId = meta.journalId as string | undefined;
+  if (journalId) {
+    const [j] = await db
+      .select({ name: journals.name, discipline: journals.discipline })
+      .from(journals)
+      .where(eq(journals.id, journalId))
+      .limit(1);
+    journalName = j?.name ?? undefined;
+    discipline = j?.discipline ?? undefined;
+  }
+
+  let variants: DouyinCaption[] = [];
+  try {
+    variants = await callLlmForVariants({ title, videoScript, journalName, discipline, count });
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err, contentId: opts.contentId }, "douyin.caption.variants_llm_failed_fallback");
+  }
+  // 不足 count 用规则变体补齐 (从 LLM 已产数量续号, 保证差异)
+  for (let i = variants.length; i < count; i++) {
+    variants.push(ruleVariant({ title, journalName, discipline }, i));
+  }
+  variants = variants.slice(0, count);
+
+  await db
+    .update(contents)
+    .set({ metadata: { ...meta, douyinCaptionVariants: variants }, updatedAt: new Date() })
+    .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)));
+
+  logger.info({ contentId: opts.contentId, count: variants.length }, "douyin.caption.variants_generated");
+  return variants;
 }

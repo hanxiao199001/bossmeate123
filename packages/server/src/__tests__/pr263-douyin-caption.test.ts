@@ -35,7 +35,7 @@ vi.mock("../services/ai/provider-factory.js", () => ({
   getProviders: () => ({ cheap: [{ chat: chatMock }], expensive: [{ chat: chatMock }] }),
 }));
 
-const { generateDouyinCaption } = await import("../services/publisher/douyin-caption.js");
+const { generateDouyinCaption, generateDouyinCaptionVariants } = await import("../services/publisher/douyin-caption.js");
 
 beforeEach(() => {
   selectCall = 0;
@@ -73,6 +73,52 @@ describe("PR #263: generateDouyinCaption", () => {
     contentRow = { id: "c3", tenantId: "t1", title: "t", body: "", metadata: { douyinCaption: cached } };
     const cap = await generateDouyinCaption({ contentId: "c3", tenantId: "t1" });
     expect(cap).toEqual(cached);
+    expect(chatMock).not.toHaveBeenCalled();
+    expect(capturedSet.value).toBeUndefined();
+  });
+});
+
+describe("PR #265: generateDouyinCaptionVariants (多号差异化)", () => {
+  it("LLM 返回 N 套 → 解析为 N 个互不相同的文案, 写回 metadata", async () => {
+    contentRow = { id: "v1", tenantId: "t1", title: "投稿攻略", body: "", metadata: {} };
+    chatMock.mockResolvedValue({ content: JSON.stringify([
+      { hookTitle: "标题A 录用率翻倍", hashtags: ["科研", "SCI"], lead: "关注我" },
+      { hookTitle: "标题B 避坑指南", hashtags: ["论文", "读研"], lead: "收藏起来" },
+      { hookTitle: "标题C 审稿内幕", hashtags: ["投稿", "学术"], lead: "评论区聊" },
+    ]) });
+    const vs = await generateDouyinCaptionVariants({ contentId: "v1", tenantId: "t1", count: 3 });
+    expect(vs.length).toBe(3);
+    expect(new Set(vs.map((v) => v.hookTitle)).size).toBe(3); // 互不相同
+    expect(vs[0].fullText).toContain("#科研");
+    expect(capturedSet.value.metadata.douyinCaptionVariants.length).toBe(3);
+  });
+
+  it("LLM 只给 1 套但要 3 套 → 规则变体补齐到 3, 且各不相同", async () => {
+    contentRow = { id: "v2", tenantId: "t1", title: "某期刊投稿", body: "", metadata: {} };
+    chatMock.mockResolvedValue({ content: JSON.stringify([{ hookTitle: "唯一一套", hashtags: ["科研"], lead: "关注" }]) });
+    const vs = await generateDouyinCaptionVariants({ contentId: "v2", tenantId: "t1", count: 3 });
+    expect(vs.length).toBe(3);
+    expect(new Set(vs.map((v) => v.hookTitle)).size).toBe(3);
+  });
+
+  it("LLM 全失败 → 3 套规则变体, fullText 均非空且标题不同", async () => {
+    contentRow = { id: "v3", tenantId: "t1", title: "投稿干货", body: "", metadata: {} };
+    chatMock.mockRejectedValue(new Error("llm down"));
+    const vs = await generateDouyinCaptionVariants({ contentId: "v3", tenantId: "t1", count: 3 });
+    expect(vs.length).toBe(3);
+    expect(vs.every((v) => v.fullText.length > 0)).toBe(true);
+    expect(new Set(vs.map((v) => v.hookTitle)).size).toBe(3);
+  });
+
+  it("缓存命中 (variants 数 >= count 且非 force) → 不调 LLM 不写库", async () => {
+    const cachedVs = [
+      { hookTitle: "c1", hashtags: ["a"], lead: "l", fullText: "c1\nl\n#a", generatedAt: "2026" },
+      { hookTitle: "c2", hashtags: ["b"], lead: "l", fullText: "c2\nl\n#b", generatedAt: "2026" },
+      { hookTitle: "c3", hashtags: ["c"], lead: "l", fullText: "c3\nl\n#c", generatedAt: "2026" },
+    ];
+    contentRow = { id: "v4", tenantId: "t1", title: "t", body: "", metadata: { douyinCaptionVariants: cachedVs } };
+    const vs = await generateDouyinCaptionVariants({ contentId: "v4", tenantId: "t1", count: 3 });
+    expect(vs).toEqual(cachedVs);
     expect(chatMock).not.toHaveBeenCalled();
     expect(capturedSet.value).toBeUndefined();
   });

@@ -15,7 +15,7 @@ import {
 // PR #131 (5-12): system tenant article 全 user 可读（类似 PR #115 journals 全局共享 idiom）
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { auditContent } from "../services/risk-control/audit-content.js";
-import { generateDouyinCaption } from "../services/publisher/douyin-caption.js";
+import { generateDouyinCaption, generateDouyinCaptionVariants } from "../services/publisher/douyin-caption.js";
 
 /** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
 const READABLE_TENANT_FILTER = (tenantId: string) =>
@@ -980,6 +980,25 @@ export async function contentRoutes(app: FastifyInstance) {
       return { code: "OK", data: caption };
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.route_failed");
+      return reply.code(404).send({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "生成失败" });
+    }
+  });
+
+  /**
+   * POST /content/:id/douyin-caption-variants — 生成 N 套差异化文案 (发 N 个矩阵号防同质化降权).
+   * body/query: count (1-10, 默认 3); ?force=true 重新生成.
+   */
+  app.post("/:id/douyin-caption-variants", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const q = request.query as { force?: string; count?: string };
+    const b = (request.body ?? {}) as { count?: number };
+    const count = b.count ?? (q.count ? parseInt(q.count, 10) : 3);
+    const force = q.force === "true";
+    try {
+      const variants = await generateDouyinCaptionVariants({ contentId: id, tenantId: request.tenantId, count, force });
+      return { code: "OK", data: variants };
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.variants_route_failed");
       return reply.code(404).send({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "生成失败" });
     }
   });
