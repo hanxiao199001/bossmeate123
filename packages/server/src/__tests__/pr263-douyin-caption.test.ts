@@ -123,3 +123,12 @@ describe("PR #265: generateDouyinCaptionVariants (多号差异化)", () => {
     expect(capturedSet.value).toBeUndefined();
   });
 });
+
+describe("PR #269: 文案生成租户过滤 (含系统推荐租户)", () => {
+  it("content 读取用 READABLE 过滤 (含 SYSTEM_RECOMMENDATION_TENANT_ID), 与详情页一致", async () => {
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile(new URL("../services/publisher/douyin-caption.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/SYSTEM_RECOMMENDATION_TENANT_ID/);
+    expect(src).toMatch(/or\(eq\(contents\.tenantId, opts\.tenantId\), eq\(contents\.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID\)\)/);
+  });
+});

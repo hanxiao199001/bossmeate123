@@ -8,8 +8,9 @@
  * 复用 getProviders LLM (DeepSeek 主 / Qwen 备, 红线#3 锁), 失败规则兜底,
  * 结果缓存进 content.metadata.douyinCaption (force=true 可重生成).
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { db } from "../../models/db.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { contents, journals } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { getProviders } from "../ai/provider-factory.js";
@@ -105,7 +106,8 @@ export async function generateDouyinCaption(opts: {
   const [content] = await db
     .select()
     .from(contents)
-    .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)))
+    // PR #269: 与详情页 READABLE 过滤一致 — 允许系统推荐租户内容 (全用户可读), 否则推荐池视频生成文案报"不存在"
+    .where(and(eq(contents.id, opts.contentId), or(eq(contents.tenantId, opts.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID))))
     .limit(1);
   if (!content) throw new Error(`generateDouyinCaption: content 不存在 ${opts.contentId}`);
 
@@ -210,7 +212,8 @@ export async function generateDouyinCaptionVariants(opts: {
   const [content] = await db
     .select()
     .from(contents)
-    .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)))
+    // PR #269: 与详情页 READABLE 过滤一致 — 允许系统推荐租户内容 (全用户可读), 否则推荐池视频生成文案报"不存在"
+    .where(and(eq(contents.id, opts.contentId), or(eq(contents.tenantId, opts.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID))))
     .limit(1);
   if (!content) throw new Error(`generateDouyinCaptionVariants: content 不存在 ${opts.contentId}`);
 
