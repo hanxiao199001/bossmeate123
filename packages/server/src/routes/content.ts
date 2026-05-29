@@ -15,6 +15,7 @@ import {
 // PR #131 (5-12): system tenant article 全 user 可读（类似 PR #115 journals 全局共享 idiom）
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { auditContent } from "../services/risk-control/audit-content.js";
+import { generateDouyinCaption } from "../services/publisher/douyin-caption.js";
 
 /** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
 const READABLE_TENANT_FILTER = (tenantId: string) =>
@@ -964,6 +965,22 @@ export async function contentRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error({ err, contentId: id }, "PR #133 POST /:id/skip 失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "跳过操作失败" });
+    }
+  });
+
+  /**
+   * POST /content/:id/douyin-caption — 生成抖音半自动发布文案包 (钩子标题+话题+引导语).
+   * 抖音第三方无自动发布通道, 文案包供前端一键复制后人工粘贴发布. ?force=true 重新生成.
+   */
+  app.post("/:id/douyin-caption", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const force = (request.query as { force?: string })?.force === "true";
+    try {
+      const caption = await generateDouyinCaption({ contentId: id, tenantId: request.tenantId, force });
+      return { code: "OK", data: caption };
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.route_failed");
+      return reply.code(404).send({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "生成失败" });
     }
   });
 }
