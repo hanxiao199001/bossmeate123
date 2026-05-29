@@ -179,6 +179,10 @@ export default function ContentDetailPage() {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
 
+  // PR #264: 抖音半自动发布助手 (文案包 + 一键复制)
+  const [douyinCaption, setDouyinCaption] = useState<{ hookTitle: string; hashtags: string[]; lead: string; fullText: string } | null>(null);
+  const [douyinLoading, setDouyinLoading] = useState(false);
+
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
   // T4-2-3: 编辑历史 Drawer（task #21）+ refresh nonce 在 applyRewrite 后递增触发刷新
@@ -359,6 +363,36 @@ export default function ContentDetailPage() {
       setSelectedAccountIds(prev =>
         Array.from(new Set([...prev, ...platformAccountIds]))
       );
+    }
+  };
+
+  // PR #264: 生成/重生成 抖音文案包
+  const handleGenerateDouyinCaption = async (force = false) => {
+    if (!content) return;
+    setDouyinLoading(true);
+    try {
+      const res = await api.post<{ hookTitle: string; hashtags: string[]; lead: string; fullText: string }>(
+        `/content/${content.id}/douyin-caption${force ? "?force=true" : ""}`,
+        {}
+      );
+      if (res.data) {
+        setDouyinCaption(res.data);
+        if (force) toast.success("已重新生成文案");
+      }
+    } catch {
+      toast.error("文案生成失败，请重试");
+    } finally {
+      setDouyinLoading(false);
+    }
+  };
+
+  // 复制文本到剪贴板
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label}已复制`);
+    } catch {
+      toast.error("复制失败，请手动选择复制");
     }
   };
 
@@ -1107,6 +1141,50 @@ export default function ContentDetailPage() {
                             大小 {((content.metadata as any).sizeBytes ? ((content.metadata as any).sizeBytes / 1024 / 1024).toFixed(1) + "MB" : "未知")}
                           </p>
                         )}
+                        {/* PR #264: 抖音半自动发布助手 — 文案包 + 一键复制 */}
+                        <div className="mt-4 p-4 bg-white rounded-lg text-left">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-semibold text-gray-800">🎵 抖音发布助手</span>
+                            {douyinCaption && (
+                              <button
+                                onClick={() => handleGenerateDouyinCaption(true)}
+                                disabled={douyinLoading}
+                                className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                              >🔄 重新生成</button>
+                            )}
+                          </div>
+                          {!douyinCaption ? (
+                            <button
+                              onClick={() => handleGenerateDouyinCaption(false)}
+                              disabled={douyinLoading}
+                              className="w-full py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
+                            >{douyinLoading ? "生成中…" : "✨ 生成抖音文案"}</button>
+                          ) : (
+                            <>
+                              <textarea
+                                readOnly
+                                value={douyinCaption.fullText}
+                                rows={5}
+                                className="w-full text-sm p-2 border border-gray-200 rounded-lg bg-gray-50 resize-none"
+                              />
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <button
+                                  onClick={() => copyToClipboard(douyinCaption.fullText, "文案")}
+                                  className="px-3 py-1.5 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700"
+                                >📋 复制文案</button>
+                                <button
+                                  onClick={() => copyToClipboard(content.body || "", "视频链接")}
+                                  className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                                >🔗 复制视频链接</button>
+                              </div>
+                              <ol className="mt-3 text-xs text-gray-500 list-decimal list-inside space-y-0.5">
+                                <li>下载视频到手机（上方「下载视频」或复制链接在手机打开）</li>
+                                <li>打开抖音 → ＋ → 选择该视频</li>
+                                <li>粘贴文案 → 发布（多个号重复粘贴即可）</li>
+                              </ol>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (
