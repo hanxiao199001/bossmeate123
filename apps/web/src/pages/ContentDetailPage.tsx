@@ -185,6 +185,7 @@ export default function ContentDetailPage() {
   const [douyinLoading, setDouyinLoading] = useState(false);
   const [variantCount, setVariantCount] = useState(3);
   const [douyinPosted, setDouyinPosted] = useState<boolean[]>([]);
+  const [showDouyinQr, setShowDouyinQr] = useState(false); // PR #267: 扫码下载视频到手机
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
@@ -1179,11 +1180,29 @@ export default function ContentDetailPage() {
                             <>
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs text-gray-500">{douyinVariants.length} 套互不雷同文案，每个号用一套（防同质化降权）</span>
-                                <button
-                                  onClick={() => copyToClipboard(content.body || "", "视频链接")}
-                                  className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
-                                >🔗 复制视频链接</button>
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={() => copyToClipboard(content.body || "", "视频链接")}
+                                    className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                                  >🔗 复制视频链接</button>
+                                  <button
+                                    onClick={() => setShowDouyinQr((v) => !v)}
+                                    className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                                  >📱 {showDouyinQr ? "收起" : "扫码下载"}</button>
+                                </div>
                               </div>
+                              {showDouyinQr && content.body && (
+                                <div className="mb-3 flex flex-col items-center gap-1 p-3 bg-gray-50 rounded-lg">
+                                  <img
+                                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(content.body)}`}
+                                    alt="视频下载二维码"
+                                    width={180}
+                                    height={180}
+                                    className="rounded bg-white p-1"
+                                  />
+                                  <span className="text-xs text-gray-500">手机扫码打开视频 → 长按/下载保存到相册</span>
+                                </div>
+                              )}
                               <div className="space-y-3 max-h-[420px] overflow-y-auto">
                                 {douyinVariants.map((v, i) => (
                                   <div key={i} className={`border rounded-lg p-3 ${douyinPosted[i] ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
