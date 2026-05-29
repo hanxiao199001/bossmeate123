@@ -61,7 +61,9 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
       logger.info({ taskUuid, videoUrl: r.videoUrl, subtitlesUrl: r.subtitlesUrl, videoDuration: r.videoDuration, totalMs, pollCount }, "dvh.query.ok");
       return {
         videoUrl: r.videoUrl,
-        durationMs: (r.videoDuration ?? 0) * 1000,
+        // PR #268 (5-29): 阿里云 videoDuration 实测就是**毫秒** (0:39 视频返回 39040). 原 *1000 导致 1000 倍放大
+        //   (前端显示 39040s). 直接当 ms 用.
+        durationMs: r.videoDuration ?? 0,
         totalMs,
         subtitlesUrl: r.subtitlesUrl, // PR #252: SRT 字幕给 ffmpeg
       };
