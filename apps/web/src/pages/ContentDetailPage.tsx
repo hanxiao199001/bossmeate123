@@ -179,9 +179,12 @@ export default function ContentDetailPage() {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
 
-  // PR #264: 抖音半自动发布助手 (文案包 + 一键复制)
-  const [douyinCaption, setDouyinCaption] = useState<{ hookTitle: string; hashtags: string[]; lead: string; fullText: string } | null>(null);
+  // PR #264/#266: 抖音半自动发布助手 (多号差异化文案 + 复制 + 发布勾选)
+  type DyVariant = { hookTitle: string; hashtags: string[]; lead: string; fullText: string };
+  const [douyinVariants, setDouyinVariants] = useState<DyVariant[] | null>(null);
   const [douyinLoading, setDouyinLoading] = useState(false);
+  const [variantCount, setVariantCount] = useState(3);
+  const [douyinPosted, setDouyinPosted] = useState<boolean[]>([]);
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
@@ -366,17 +369,18 @@ export default function ContentDetailPage() {
     }
   };
 
-  // PR #264: 生成/重生成 抖音文案包
+  // PR #266: 生成 N 套差异化抖音文案 (发 N 个矩阵号, 防同质化降权)
   const handleGenerateDouyinCaption = async (force = false) => {
     if (!content) return;
     setDouyinLoading(true);
     try {
-      const res = await api.post<{ hookTitle: string; hashtags: string[]; lead: string; fullText: string }>(
-        `/content/${content.id}/douyin-caption${force ? "?force=true" : ""}`,
+      const res = await api.post<DyVariant[]>(
+        `/content/${content.id}/douyin-caption-variants?count=${variantCount}${force ? "&force=true" : ""}`,
         {}
       );
       if (res.data) {
-        setDouyinCaption(res.data);
+        setDouyinVariants(res.data);
+        setDouyinPosted(new Array(res.data.length).fill(false));
         if (force) toast.success("已重新生成文案");
       }
     } catch {
@@ -1141,11 +1145,11 @@ export default function ContentDetailPage() {
                             大小 {((content.metadata as any).sizeBytes ? ((content.metadata as any).sizeBytes / 1024 / 1024).toFixed(1) + "MB" : "未知")}
                           </p>
                         )}
-                        {/* PR #264: 抖音半自动发布助手 — 文案包 + 一键复制 */}
+                        {/* PR #264/#266: 抖音半自动发布助手 — 多号差异化文案 + 复制 + 发布勾选 */}
                         <div className="mt-4 p-4 bg-white rounded-lg text-left">
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-sm font-semibold text-gray-800">🎵 抖音发布助手</span>
-                            {douyinCaption && (
+                            {douyinVariants && (
                               <button
                                 onClick={() => handleGenerateDouyinCaption(true)}
                                 disabled={douyinLoading}
@@ -1153,34 +1157,63 @@ export default function ContentDetailPage() {
                               >🔄 重新生成</button>
                             )}
                           </div>
-                          {!douyinCaption ? (
-                            <button
-                              onClick={() => handleGenerateDouyinCaption(false)}
-                              disabled={douyinLoading}
-                              className="w-full py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
-                            >{douyinLoading ? "生成中…" : "✨ 生成抖音文案"}</button>
+                          {!douyinVariants ? (
+                            <div className="flex items-center gap-2">
+                              <label className="text-sm text-gray-600">发</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={10}
+                                value={variantCount}
+                                onChange={(e) => setVariantCount(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                                className="w-14 px-2 py-1 text-sm border border-gray-200 rounded"
+                              />
+                              <label className="text-sm text-gray-600">个号</label>
+                              <button
+                                onClick={() => handleGenerateDouyinCaption(false)}
+                                disabled={douyinLoading}
+                                className="ml-auto px-4 py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
+                              >{douyinLoading ? "生成中…" : "✨ 生成差异化文案"}</button>
+                            </div>
                           ) : (
                             <>
-                              <textarea
-                                readOnly
-                                value={douyinCaption.fullText}
-                                rows={5}
-                                className="w-full text-sm p-2 border border-gray-200 rounded-lg bg-gray-50 resize-none"
-                              />
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                <button
-                                  onClick={() => copyToClipboard(douyinCaption.fullText, "文案")}
-                                  className="px-3 py-1.5 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700"
-                                >📋 复制文案</button>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs text-gray-500">{douyinVariants.length} 套互不雷同文案，每个号用一套（防同质化降权）</span>
                                 <button
                                   onClick={() => copyToClipboard(content.body || "", "视频链接")}
-                                  className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                                  className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
                                 >🔗 复制视频链接</button>
+                              </div>
+                              <div className="space-y-3 max-h-[420px] overflow-y-auto">
+                                {douyinVariants.map((v, i) => (
+                                  <div key={i} className={`border rounded-lg p-3 ${douyinPosted[i] ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                                        <input
+                                          type="checkbox"
+                                          checked={douyinPosted[i] || false}
+                                          onChange={(e) => setDouyinPosted((prev) => prev.map((f, k) => (k === i ? e.target.checked : f)))}
+                                        />
+                                        号 {i + 1}{douyinPosted[i] ? " · 已发" : ""}
+                                      </label>
+                                      <button
+                                        onClick={() => copyToClipboard(v.fullText, `号${i + 1}文案`)}
+                                        className="text-xs px-2.5 py-1 bg-pink-600 text-white rounded hover:bg-pink-700"
+                                      >📋 复制</button>
+                                    </div>
+                                    <textarea
+                                      readOnly
+                                      value={v.fullText}
+                                      rows={4}
+                                      className="w-full text-xs p-2 border border-gray-100 rounded bg-gray-50 resize-none"
+                                    />
+                                  </div>
+                                ))}
                               </div>
                               <ol className="mt-3 text-xs text-gray-500 list-decimal list-inside space-y-0.5">
                                 <li>下载视频到手机（上方「下载视频」或复制链接在手机打开）</li>
-                                <li>打开抖音 → ＋ → 选择该视频</li>
-                                <li>粘贴文案 → 发布（多个号重复粘贴即可）</li>
+                                <li>每个号：打开抖音 → ＋ → 选视频 → 复制对应「号N文案」粘贴 → 发布</li>
+                                <li>发完一个勾一个，避免漏发 / 重发</li>
                               </ol>
                             </>
                           )}
