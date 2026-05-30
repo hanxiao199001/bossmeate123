@@ -58,6 +58,7 @@ const journalSearchSchema = z.object({
   ifMax: z.coerce.number().optional(),
   jcrSubject: z.string().optional(),
   wosLevel: z.enum(["all", "scie", "ssci"]).default("all"),
+  catalog: z.enum(["pku-core", "cssci", "cssci-ext", "cscd", "sci-core"]).optional(), // PR-C2 中文核心目录
   sortBy: z.enum(["if_desc", "if_asc", "name"]).default("if_desc"),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -95,7 +96,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/journals/search", async (request, reply) => {
     try {
       const q = journalSearchSchema.parse(request.query);
-      const conditions: string[] = ["confidence >= 70"];
+      // PR-C2: 选了核心目录时放宽 confidence 门槛 (中文核心刊 conf=55, 目录归属本身即权威背书)
+      const conditions: string[] = [q.catalog ? "confidence >= 50" : "confidence >= 70"];
 
       if (q.name) conditions.push(`(name_en ILIKE '%${q.name.replace(/'/g, "''")}%' OR name ILIKE '%${q.name.replace(/'/g, "''")}%')`);
       if (q.issn) conditions.push(`issn = '${q.issn.replace(/'/g, "''")}'`);
@@ -105,6 +107,7 @@ export async function adminRoutes(app: FastifyInstance) {
       if (q.jcrSubject) conditions.push(`jcr_full::text ILIKE '%${q.jcrSubject.replace(/'/g, "''")}%'`);
       if (q.wosLevel === "scie") conditions.push(`jcr_full->>'wosLevel' = 'SCIE'`);
       if (q.wosLevel === "ssci") conditions.push(`jcr_full->>'wosLevel' = 'SSCI'`);
+      if (q.catalog) conditions.push(`catalogs @> '["${q.catalog}"]'::jsonb`);
 
       const orderBy = q.sortBy === "if_asc" ? "impact_factor ASC NULLS LAST"
         : q.sortBy === "name" ? "name_en ASC"
@@ -117,6 +120,7 @@ export async function adminRoutes(app: FastifyInstance) {
       const rows = await db.execute(sql`
         SELECT id, name, name_en, issn, impact_factor, partition, discipline,
                acceptance_rate, review_cycle, apc_fee, is_warning_list,
+               pku_core_level, cscd_level, catalogs,
                jcr_full->>'wosLevel' AS wos_level, confidence
         FROM journals WHERE ${sql.raw(where)}
         ORDER BY ${sql.raw(orderBy)}

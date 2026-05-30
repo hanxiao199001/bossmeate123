@@ -10,6 +10,7 @@ import { api } from "../../utils/api";
 type Template = "A" | "B" | "C" | "E";
 type SortBy = "if_desc" | "if_asc" | "name";
 type WosLevel = "all" | "scie" | "ssci";
+type Catalog = "" | "pku-core" | "cssci" | "cssci-ext" | "cscd" | "sci-core";
 
 const DISCIPLINE_FILTER_OPTIONS = [
   { value: "", label: "全部" },
@@ -60,6 +61,7 @@ export default function JournalFilterTab({
   const [ifMax, setIfMax] = useState("");
   const [jcrSubject, setJcrSubject] = useState("");
   const [wosLevel, setWosLevel] = useState<WosLevel>("all");
+  const [catalog, setCatalog] = useState<Catalog>(""); // PR-C2 核心目录
   const [sortBy, setSortBy] = useState<SortBy>("if_desc");
   const [template, setTemplate] = useState<Template>("A");
 
@@ -81,6 +83,7 @@ export default function JournalFilterTab({
       if (ifMax) params.set("ifMax", ifMax);
       if (jcrSubject) params.set("jcrSubject", jcrSubject);
       if (wosLevel !== "all") params.set("wosLevel", wosLevel);
+      if (catalog) params.set("catalog", catalog);
       params.set("sortBy", sortBy);
       params.set("limit", "30");
 
@@ -94,7 +97,7 @@ export default function JournalFilterTab({
     } finally {
       setLoading(false);
     }
-  }, [nameQuery, issnQuery, discipline, ifMin, ifMax, jcrSubject, wosLevel, sortBy]);
+  }, [nameQuery, issnQuery, discipline, ifMin, ifMax, jcrSubject, wosLevel, catalog, sortBy]);
 
   useEffect(() => {
     const timer = setTimeout(doSearch, 300);
@@ -111,7 +114,7 @@ export default function JournalFilterTab({
 
   const clearFilters = () => {
     setNameQuery(""); setIssnQuery(""); setDiscipline(""); setIfMin(""); setIfMax("");
-    setJcrSubject(""); setWosLevel("all"); setSortBy("if_desc");
+    setJcrSubject(""); setWosLevel("all"); setCatalog(""); setSortBy("if_desc");
   };
 
   const handleSubmit = () => {
@@ -160,8 +163,8 @@ export default function JournalFilterTab({
         </div>
       </div>
 
-      {/* Filter row 3: JCR subject + SCI + sort */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Filter row 3: JCR subject + SCI + 核心目录 + sort */}
+      <div className="grid grid-cols-4 gap-2">
         <div>
           <label className="block text-[11px] text-gray-500 mb-1">JCR 小类</label>
           <input type="text" value={jcrSubject} onChange={(e) => setJcrSubject(e.target.value)}
@@ -175,6 +178,18 @@ export default function JournalFilterTab({
             <option value="all">不限</option>
             <option value="scie">SCIE</option>
             <option value="ssci">SSCI</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] text-gray-500 mb-1">核心目录</label>
+          <select value={catalog} onChange={(e) => setCatalog(e.target.value as Catalog)} disabled={generating}
+            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white">
+            <option value="">不限</option>
+            <option value="pku-core">北大核心</option>
+            <option value="cssci">CSSCI</option>
+            <option value="cssci-ext">CSSCI扩展</option>
+            <option value="cscd">CSCD</option>
+            <option value="sci-core">科技核心</option>
           </select>
         </div>
         <div>
