@@ -98,20 +98,38 @@ async function runFFmpeg(inputMp4: string, srtPath: string, outputMp4: string, s
   return new Promise((resolve, reject) => {
     const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
+    let done = false;
+    // PR-F: 超时护栏 — 卡死的 ffmpeg 会占满并发槽 + 残留子进程, 超时 SIGKILL.
+    const settle = (cb: () => void) => { if (done) return; done = true; clearTimeout(timer); cb(); };
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      settle(() => reject(new Error(`ffmpeg 超时 ${env.DVH_FFMPEG_TIMEOUT_MS}ms, 已 SIGKILL`)));
+    }, env.DVH_FFMPEG_TIMEOUT_MS);
     proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    proc.on("error", (err) => reject(new Error(`ffmpeg spawn 失败: ${err.message}`)));
-    proc.on("close", (code) => {
+    proc.on("error", (err) => settle(() => reject(new Error(`ffmpeg spawn 失败: ${err.message}`))));
+    proc.on("close", (code) => settle(() => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exit ${code}\n${stderr.slice(-2000)}`));
-    });
+    }));
   });
 }
 
 async function downloadToFile(url: string, filePath: string): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  await writeFile(filePath, buf);
+  // PR-F: 超时 + 大小上限 — 防卡死/超大文件撑爆内存.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), env.DVH_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`);
+    const maxBytes = env.DVH_DOWNLOAD_MAX_MB * 1024 * 1024;
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared && declared > maxBytes) throw new Error(`文件过大 ${(declared / 1024 / 1024).toFixed(0)}MB > ${env.DVH_DOWNLOAD_MAX_MB}MB`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) throw new Error(`文件过大 ${(buf.length / 1024 / 1024).toFixed(0)}MB > ${env.DVH_DOWNLOAD_MAX_MB}MB`);
+    await writeFile(filePath, buf);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
