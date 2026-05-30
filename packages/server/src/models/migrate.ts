@@ -10,6 +10,7 @@
 import pg from "pg";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { MIGRATIONS } from "./migrations.js";
 
 /**
  * 解析 migrate 入参（task #57）。
@@ -1128,6 +1129,44 @@ CREATE INDEX IF NOT EXISTS idx_contents_pinned ON contents(pinned) WHERE pinned 
 CREATE INDEX IF NOT EXISTS idx_contents_created_status ON contents(created_at, status);
 `;
 
+/**
+ * 版本化迁移 runner: schema_migrations 记账, 只跑未应用过的, 事务包裹。
+ * dry-run 只打印待应用条目, 不建表不执行。
+ */
+export async function runTrackedMigrations(client: pg.Client, dryRun: boolean): Promise<void> {
+  let applied = new Set<string>();
+  try {
+    const r = await client.query("SELECT version FROM schema_migrations");
+    applied = new Set((r.rows as Array<{ version: string }>).map((x) => x.version));
+  } catch {
+    // schema_migrations 尚未创建 (首次) → 视为全部待应用
+  }
+  const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
+  if (pending.length === 0) {
+    logger.info("✅ 无待应用迁移 (schema_migrations 已是最新)");
+    return;
+  }
+  if (dryRun) {
+    console.log(`=== ${pending.length} 条待应用迁移 (dry-run, 不执行) ===`);
+    for (const m of pending) console.log(`  [${m.version}] ${m.description}\n${m.sql.trim()}`);
+    return;
+  }
+  await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())");
+  for (const m of pending) {
+    await client.query("BEGIN");
+    try {
+      await client.query(m.sql);
+      await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [m.version]);
+      await client.query("COMMIT");
+      logger.info({ version: m.version }, `✅ 迁移已应用: ${m.description}`);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      logger.fatal({ err, version: m.version }, `❌ 迁移失败并回滚: ${m.version}`);
+      throw err;
+    }
+  }
+}
+
 async function migrate() {
   const { dryRun } = parseMigrateArgs(process.argv.slice(2));
   if (dryRun) {
@@ -1146,10 +1185,14 @@ async function migrate() {
       console.log("---");
       console.log(SQL_CREATE_TABLES);
       console.log("---");
+      console.log("--- 版本化迁移 (schema_migrations 追踪) ---");
+      await runTrackedMigrations(client, true);
       console.log("No changes made to database.");
     } else {
       await client.query(SQL_CREATE_TABLES);
-      logger.info("✅ 数据库迁移完成，所有表已创建");
+      logger.info("✅ 基础表已确保 (SQL_CREATE_TABLES)");
+      await runTrackedMigrations(client, false);
+      logger.info("✅ 数据库迁移完成");
     }
   } catch (err) {
     logger.fatal(err, "❌ 数据库迁移失败");
