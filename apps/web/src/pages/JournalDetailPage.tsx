@@ -27,6 +27,9 @@ interface JournalDetail {
   impactFactor: number | null;
   foundingYear: number | null;
   country: string | null;
+  pkuCoreLevel: string | null;
+  cscdLevel: string | null;
+  catalogs: string[] | null;
   website: string | null;
   dataSource: string | null;
   sourceUrl: string | null;
@@ -102,6 +105,24 @@ export default function JournalDetailPage() {
       <section className="border rounded-lg p-5 bg-white">
         <h1 className="text-2xl font-bold text-gray-900">{j.name}</h1>
         {j.nameEn && <div className="text-sm text-gray-500 mt-1">{j.nameEn}</div>}
+        {/* PR-C1: 中文核心目录徽章 (北大核心/CSSCI/CSCD/科技核心) */}
+        {(() => {
+          const cats = Array.isArray(j.catalogs) ? j.catalogs : [];
+          const badges: Array<{ label: string; cls: string }> = [];
+          if (cats.includes("pku-core") || j.pkuCoreLevel) badges.push({ label: "北大核心", cls: "bg-red-100 text-red-700" });
+          if (cats.includes("cssci")) badges.push({ label: "CSSCI", cls: "bg-purple-100 text-purple-700" });
+          if (cats.includes("cssci-ext")) badges.push({ label: "CSSCI扩展", cls: "bg-purple-50 text-purple-600" });
+          if (j.cscdLevel) badges.push({ label: `CSCD${j.cscdLevel}`, cls: "bg-green-100 text-green-700" });
+          else if (cats.includes("cscd")) badges.push({ label: "CSCD", cls: "bg-green-100 text-green-700" });
+          if (cats.includes("sci-core")) badges.push({ label: "科技核心", cls: "bg-blue-100 text-blue-700" });
+          return badges.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {badges.map((b) => (
+                <span key={b.label} className={`px-2 py-0.5 rounded text-xs font-medium ${b.cls}`}>{b.label}</span>
+              ))}
+            </div>
+          ) : null;
+        })()}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">
           <Field label="影响因子" value={j.impactFactor && j.impactFactor > 0 ? j.impactFactor : null} />
           <Field label="JCR 分区" value={j.partition} />
