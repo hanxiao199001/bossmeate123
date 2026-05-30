@@ -28,6 +28,8 @@ export function normName(name: string): string {
   s = s.replace(/（/g, "(").replace(/）/g, ")").replace(/，/g, ",").replace(/•/g, "·");
   s = s.replace(/\s+/g, "");
   s = s.replace(/^[《\s]+|[》\s]+$/g, "");
+  // PR-C3: 统一 ".XX版" → "(XX版)" — 北大核心用括号、CSSCI 用点号, 防同刊重复入库
+  s = s.replace(/\.([一-龥A-Za-z0-9]+版)\)?$/, "($1)");
   return s;
 }
 
