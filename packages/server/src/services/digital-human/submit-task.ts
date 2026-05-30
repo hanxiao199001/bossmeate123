@@ -13,6 +13,7 @@ import * as $Util from "@alicloud/tea-util";
 import { createDvhClient, $avatar20220130 } from "./client.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 
 export interface DvhSubmitOptions {
   text: string;
@@ -52,7 +53,7 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
       // PR #250 (5-24): 语速 1.3 倍 (老韩反馈默认语速太慢). 阿里云 speechRate 范围 -500~500 (0=1.0x).
       // PR #259 (5-28): 1.3x 老韩反馈太快, 降到 1.1x 中等节奏 (抖音口播常见档位).
       //   150 → 50. 听感觉再微调 (太慢回 75/100, 太快降到 25/0).
-      speechRate: 50,
+      speechRate: env.DVH_SPEECH_RATE, // PR-E: 配置化 (原硬编码 50≈1.1x)
     }),
     videoInfo: new $avatar20220130.SubmitTextTo2DAvatarVideoTaskRequestVideoInfo({
       isAlpha: false,

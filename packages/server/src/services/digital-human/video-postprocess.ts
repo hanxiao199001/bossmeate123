@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
+import { env } from "../../config/env.js";
 
 export interface PostprocessOptions {
   videoUrl: string;         // DVH 原始 mp4 OSS URL
@@ -52,19 +53,17 @@ export interface SubtitleAssStyle {
   bold?: 0 | 1;            // 加粗, 默认 1
 }
 
+// PR-E: 字幕样式配置化 — 全部读 env (DVH_SUBTITLE_*), 改 .env 重启 pm2 即可调, 不用改码部署. 仅影响新生成视频.
 const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
-  fontName: "Noto Sans CJK SC",
-  // PR #253 (5-24): 字号 18 在 1080×1920 视觉太小, 改 28.
-  // PR #254 (5-24): 28 仍偏小, 再 +2 到 30.
-  fontSize: 42, // PR #256: 老韩拍 40+, 一步到位 42
-  primaryColour: "&H00FFFFFF&",  // 白字
-  outlineColour: "&H00000000&",  // 黑边
-  outline: 2,
+  fontName: env.DVH_SUBTITLE_FONT_NAME,
+  fontSize: env.DVH_SUBTITLE_FONT_SIZE,
+  primaryColour: env.DVH_SUBTITLE_PRIMARY_COLOUR,
+  outlineColour: env.DVH_SUBTITLE_OUTLINE_COLOUR,
+  outline: env.DVH_SUBTITLE_OUTLINE,
   shadow: 0,
-  alignment: 2,                   // 居中下方
-  // PR #253: marginV 80 距底边太近 (会被抖音 UI 遮挡), 改 200 (距底 ~10% 安全区).
-  marginV: 200,
-  bold: 1,  // PR #257: 抖音爆款常态粗体
+  alignment: env.DVH_SUBTITLE_ALIGNMENT,
+  marginV: env.DVH_SUBTITLE_MARGIN_V,
+  bold: (env.DVH_SUBTITLE_BOLD ? 1 : 0) as 0 | 1,
 };
 
 function buildForceStyle(style: SubtitleAssStyle): string {

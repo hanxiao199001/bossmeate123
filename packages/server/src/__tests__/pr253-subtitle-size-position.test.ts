@@ -1,29 +1,17 @@
 /**
- * 5-24 PR #253 — 字幕字号 18→28 + marginV 80→200.
- * 反馈: 1080×1920 视频里 size=18 视觉太小, marginV=80 距底太近.
+ * PR #253 → PR-E 更新: 字幕字号/位置已配置化 (env.DVH_SUBTITLE_*).
+ * 原断言 fontSize=28 / marginV=200 硬编码已废, 改读 env (默认值在 config/env.ts).
  */
 import { describe, it, expect } from "vitest";
-
 async function readSrc(rel: string): Promise<string> {
   const fs = await import("node:fs/promises");
   return fs.readFile(new URL(rel, import.meta.url), "utf8");
 }
-const POSTPROCESS = "../services/digital-human/video-postprocess.ts";
-
-describe("PR #253: 字号 + 位置调整", () => {
-  it("fontSize 改为 28", async () => {
-    const src = await readSrc(POSTPROCESS);
-    expect(src).toMatch(/fontSize: 28/);
-    expect(src).not.toMatch(/fontSize: 18/);
-  });
-  it("marginV 改为 200", async () => {
-    const src = await readSrc(POSTPROCESS);
-    expect(src).toMatch(/marginV: 200/);
-    expect(src).not.toMatch(/marginV: 80,/);
-  });
-  it("PR #253 注释解释 1080p 抖音爆款经验", async () => {
-    const src = await readSrc(POSTPROCESS);
-    expect(src).toMatch(/PR #253/);
-    expect(src).toMatch(/1080p 爆款常用尺寸/);
+describe("PR-E: 字幕字号/位置配置化", () => {
+  it("video-postprocess fontSize/marginV 读 env", async () => {
+    const src = await readSrc("../services/digital-human/video-postprocess.ts");
+    expect(src).toMatch(/fontSize: env\.DVH_SUBTITLE_FONT_SIZE/);
+    expect(src).toMatch(/marginV: env\.DVH_SUBTITLE_MARGIN_V/);
+    expect(src).not.toMatch(/fontSize: 42/);
   });
 });

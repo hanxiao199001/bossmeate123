@@ -40,14 +40,14 @@ describe("PR #252: query-task 透传 subtitlesUrl", () => {
 describe("PR #252: video-postprocess 模块", () => {
   it("默认 ASS style: 白字黑边", async () => {
     const src = await readSrc(POSTPROCESS);
-    expect(src).toMatch(/primaryColour: "&H00FFFFFF&"/);
-    expect(src).toMatch(/outlineColour: "&H00000000&"/);
+    expect(src).toMatch(/primaryColour: env\.DVH_SUBTITLE_PRIMARY_COLOUR/);
+    expect(src).toMatch(/outlineColour: env\.DVH_SUBTITLE_OUTLINE_COLOUR/);
   });
-  it("默认字体 Noto Sans CJK SC + size 18 + alignment 2 (居中下方)", async () => {
+  it("默认 ASS style 全读 env (PR-E 配置化)", async () => {
     const src = await readSrc(POSTPROCESS);
-    expect(src).toMatch(/fontName: "Noto Sans CJK SC"/);
-    expect(src).toMatch(/fontSize: 18/);
-    expect(src).toMatch(/alignment: 2/);
+    expect(src).toMatch(/fontName: env\.DVH_SUBTITLE_FONT_NAME/);
+    expect(src).toMatch(/fontSize: env\.DVH_SUBTITLE_FONT_SIZE/);
+    expect(src).toMatch(/alignment: env\.DVH_SUBTITLE_ALIGNMENT/);
   });
   it("ffmpeg subtitles 滤镜 + libx264 编码", async () => {
     const src = await readSrc(POSTPROCESS);

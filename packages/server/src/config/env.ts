@@ -81,6 +81,17 @@ const envSchema = z.object({
   SPRINGER_API_KEY: z.string().optional(),
   SPRINGER_PROXY: z.string().optional(), // 代理地址（如 http://127.0.0.1:7890）
 
+  // DVH 数字人字幕 + 语速 (PR-E 配置化: 改 .env 重启 pm2 即可生效, 不用改码部署; 仅影响新生成视频)
+  DVH_SPEECH_RATE: z.coerce.number().default(50),                       // 阿里云 -500~500, 0=1.0x, 50≈1.1x
+  DVH_SUBTITLE_FONT_NAME: z.string().default("Noto Sans CJK SC"),       // 中文字体
+  DVH_SUBTITLE_FONT_SIZE: z.coerce.number().default(60),                // 字号 (原硬编码 42, 嫌小提到 60; 还小继续调大)
+  DVH_SUBTITLE_PRIMARY_COLOUR: z.string().default("&H00FFFFFF&"),       // 字色 ASS &HAABBGGRR& (白)
+  DVH_SUBTITLE_OUTLINE_COLOUR: z.string().default("&H00000000&"),       // 描边色 (黑)
+  DVH_SUBTITLE_OUTLINE: z.coerce.number().default(2),                   // 描边宽度
+  DVH_SUBTITLE_ALIGNMENT: z.coerce.number().default(2),                 // 1-9 九宫格, 2=居中下方, 8=居中上方
+  DVH_SUBTITLE_MARGIN_V: z.coerce.number().default(200),               // 距底/顶边距 (避抖音 UI 遮挡)
+  DVH_SUBTITLE_BOLD: z.coerce.number().default(1),                      // 0/1 粗体
+
   // CORS
   // PR #108（5-9 hotfix 永久）：default 含 boss-mates.com 防新部署忘加 .env 导致跨域白屏。
   // 5-9 prod 事故 root cause：.env 缺 ALLOWED_ORIGINS → fallback 仅 localhost → 浏览器 CORS reject。
