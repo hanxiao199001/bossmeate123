@@ -76,6 +76,13 @@ export function getDefaultTemplateId(): string {
   return DEFAULT_TEMPLATE_ID;
 }
 
+/** PR-G: 主版本模板轮换 — 无显式选择时在已注册模板间随机, 避免内容全是默认 shunshi 一个样。 */
+export function pickRotatingTemplateId(random: () => number = Math.random): string {
+  const ts = listTemplates();
+  if (ts.length === 0) return DEFAULT_TEMPLATE_ID;
+  return ts[Math.floor(random() * ts.length)]!.id;
+}
+
 // === 注册内置模板 ===
 
 registerTemplate({

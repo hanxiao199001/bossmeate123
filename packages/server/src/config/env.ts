@@ -95,6 +95,9 @@ const envSchema = z.object({
   DVH_DOWNLOAD_TIMEOUT_MS: z.coerce.number().default(60000),            // PR-F: 下载 mp4/srt 超时(1min)
   DVH_DOWNLOAD_MAX_MB: z.coerce.number().default(600),                  // PR-F: 下载大小上限(MB)
 
+  // 文章排版库 (PR-G)
+  ARTICLE_TEMPLATE_ROTATION: z.string().default("true"),                // 主版本模板轮换: true=4模板随机, false=固定默认 shunshi
+
   // CORS
   // PR #108（5-9 hotfix 永久）：default 含 boss-mates.com 防新部署忘加 .env 导致跨域白屏。
   // 5-9 prod 事故 root cause：.env 缺 ALLOWED_ORIGINS → fallback 仅 localhost → 浏览器 CORS reject。

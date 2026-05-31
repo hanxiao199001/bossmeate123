@@ -18,7 +18,8 @@ import { modelRouter } from "../ai/model-router.js";
 import { publishToAccounts, type PublishResult } from "../publisher/index.js";
 import { collectJournalContent, type CollectionResult, type JournalInfo } from "../data-collection/journal-content-collector.js";
 import { generateJournalArticleHtml, generateJournalSectionHtml, type AIGeneratedContent } from "./journal-template.js";
-import { getTemplate, getDefaultTemplateId } from "./template-registry.js";
+import { getTemplate, getDefaultTemplateId, pickRotatingTemplateId } from "./template-registry.js";
+import { env } from "../../config/env.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
@@ -240,7 +241,8 @@ export class ArticleSkill implements ISkill {
         logger.warn({ err }, "P6 preference 读失败，走 default");
       }
     }
-    explicitTemplateId = explicitTemplateId ?? getDefaultTemplateId();
+    // PR-G: 无显式模板/偏好时, 在已注册模板间轮换 (env ARTICLE_TEMPLATE_ROTATION=false 则固定默认 shunshi).
+    explicitTemplateId = explicitTemplateId ?? (env.ARTICLE_TEMPLATE_ROTATION === "false" ? getDefaultTemplateId() : pickRotatingTemplateId());
 
     // T4-3-4: variants > 1 时，副版本按租户偏好分配不同模板；variants=1 行为不变
     const templateIds: string[] =
