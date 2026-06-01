@@ -64,9 +64,22 @@ function sectionTag(num: number, name: string): string {
 function miniHeading(text: string): string {
   return `<p style="margin:18px 0 6px 0;font-size:16px;font-weight:bold;color:${C.heading};">◦ ${esc(text)}</p>`;
 }
-function cover(url?: string | null): string {
-  if (!url) return "";
-  return `<section style="margin:12px 0;text-align:center;"><img src="${esc(url)}" style="max-width:100%;width:auto;height:auto;border-radius:8px;display:block;margin:0 auto;" /></section>`;
+// 封面渐变色池 (无封面时按 index 取色, 生成"刊名占位封面卡")
+const COVER_GRADIENTS = [
+  ["#F6D78A", "#EBB661"], ["#A8C5E8", "#6E97C9"], ["#B5E0C9", "#73B894"],
+  ["#E8B5C5", "#C97394"], ["#D6C5E8", "#9B73C9"], ["#E8D0A8", "#C9A461"],
+];
+function cover(url: string | null | undefined, name: string, index: number): string {
+  if (url) {
+    return `<section style="margin:12px 0;text-align:center;"><img src="${esc(url)}" style="max-width:100%;width:auto;height:auto;border-radius:8px;display:block;margin:0 auto;" /></section>`;
+  }
+  // 无封面 → 渐变色占位封面卡 (刊名居中, 体面不空白)
+  const [c1, c2] = COVER_GRADIENTS[index % COVER_GRADIENTS.length];
+  const clean = esc(name.replace(/[《》]/g, ""));
+  return `<section style="margin:12px 0;">` +
+    `<section style="height:150px;border-radius:8px;background:${c1};background:linear-gradient(135deg,${c1},${c2});text-align:center;">` +
+    `<p style="margin:0;padding:58px 16px;font-size:22px;font-weight:bold;color:#fff;letter-spacing:2px;line-height:1.3;">${clean}</p>` +
+    `</section></section>`;
 }
 
 export function generateJournalRoundupHtml(data: RoundupData): string {
@@ -81,7 +94,7 @@ export function generateJournalRoundupHtml(data: RoundupData): string {
   // 各刊盘点
   for (const it of data.items) {
     out.push(sectionTag(it.index, it.name));
-    out.push(cover(it.coverUrl));
+    out.push(cover(it.coverUrl, it.name, it.index));
     out.push(miniHeading("期刊简介"));
     out.push(p(it.intro));
     out.push(miniHeading("投稿经验"));
