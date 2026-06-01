@@ -14,8 +14,10 @@
 #   4. 末尾断言 server HEAD == origin/main HEAD，不一致 fail（杜绝 false-green）
 set -euo pipefail
 
-SERVER="ubuntu@122.152.234.155"
-REMOTE_PATH="/home/projects/bossmate"
+# PR-H: 部署目标可配置 — 迁移到老板新机时只需 export BOSSMATE_DEPLOY_SERVER=ubuntu@119.91.52.13
+#       (或直接改下面默认值), 不用动脚本逻辑。REMOTE_PATH 同理。
+SERVER="${BOSSMATE_DEPLOY_SERVER:-ubuntu@122.152.234.155}"
+REMOTE_PATH="${BOSSMATE_REMOTE_PATH:-/home/projects/bossmate}"
 BRANCH="main"
 START=$(date +%s)
 DEPLOY_PATH="unset"

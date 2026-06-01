@@ -64,3 +64,10 @@ data/
 .deploy-backups/
 .review-stash/
 scripts/dvh-prototype-*.ts
+
+# PR-H: 已废弃的旧部署脚本 (被 scripts/deploy-with-fallback.sh 取代)
+deploy-crawlers.py
+deploy-topic.py
+deploy-v2.py
+.clean-main/
+.review-stash/
