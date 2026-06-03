@@ -28,6 +28,8 @@ import { bulkDistributeQueue, initBulkProgress, getBulkProgress, type BulkProgre
 import { contentPublishLog } from "../models/schema.js";
 import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
+import { initialStatusFields } from "../services/articles/state-machine.js";
+import { generateRoundupArticle } from "../services/content-engine/roundup-generator.js";
 
 // PR #173: "一键 N 篇" 模式 — count 替代 topic+journalId
 const generateArticleSchema = z.object({
@@ -675,6 +677,35 @@ export async function adminRoutes(app: FastifyInstance) {
 
     // fastify 异步 handler 默认会自动 reply, 这里手动 hijack
     return reply;
+  });
+
+  /**
+   * POST /admin/roundup — 多刊盘点文章生成 (学同行风格).
+   * body: { journalIds?: string[], discipline?, catalog?, count?, audience }
+   * 生成 → 存 article 草稿 → 返回 contentId + title (去内容详情页查看/发布)。
+   */
+  app.post("/roundup", async (request, reply) => {
+    try {
+      const b = (request.body ?? {}) as { journalIds?: string[]; discipline?: string; catalog?: string; count?: number; audience?: string };
+      const audience = (b.audience || "").trim() || "普通院校教师";
+      const { title, html } = await generateRoundupArticle({
+        tenantId: request.tenantId, journalIds: b.journalIds, discipline: b.discipline,
+        catalog: b.catalog, count: b.count, audience,
+      });
+      const [row] = await db.insert(contents).values({
+        tenantId: request.tenantId,
+        userId: request.user.userId,
+        type: "article",
+        title,
+        body: html,
+        ...initialStatusFields("draft"),
+        metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds: b.journalIds ?? null, discipline: b.discipline ?? null },
+      }).returning({ id: contents.id });
+      return { code: "OK", data: { contentId: row?.id, title } };
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "admin.roundup_failed");
+      return reply.code(400).send({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "盘点生成失败" });
+    }
   });
 }
 
