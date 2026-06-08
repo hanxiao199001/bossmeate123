@@ -321,6 +321,9 @@ export async function enrichJournal(
       carRiskLevel: null, // B.2.2 才有
       jcrFull: (updates.jcrFull as any) || null,
       publicationCosts: (updates.publicationCosts as any) || null,
+      pkuCoreLevel: (journal as any).pkuCoreLevel ?? null,
+      cscdLevel: (journal as any).cscdLevel ?? null,
+      catalogs: Array.isArray((journal as any).catalogs) ? (journal as any).catalogs : null,
     });
     updates.recommendationScore = score;
     successFields.push("recommendation_score");

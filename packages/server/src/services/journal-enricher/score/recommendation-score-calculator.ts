@@ -27,9 +27,41 @@ export interface ScoreInput {
   jcrFull?: JcrFullShape | null;
   /** 本 PR 新写入的 publication_costs */
   publicationCosts?: PublicationCostsShape | null;
+  /** 中文核心信号（无国际指标时据此打分，避免中文核心刊一律 2 星）*/
+  pkuCoreLevel?: string | null;        // 北大核心
+  cscdLevel?: string | null;           // CSCD: 含"核心"=核心库, 否则扩展库
+  catalogs?: string[] | null;          // 含 cssci / cssci-ext / sci-core 等
+}
+
+/**
+ * 纯中文核心刊评分（无 IF/分区时）。按目录强度:北大核心/CSSCI/CSCD 重权, 科技核心轻权。
+ * 返回 null = 无任何中文核心信号(交回国际公式走 default)。
+ */
+function domesticScore(input: ScoreInput): number | null {
+  const cats = Array.isArray(input.catalogs) ? input.catalogs : [];
+  let s = 2;
+  let has = false;
+  if (input.pkuCoreLevel) { s += 1.5; has = true; }                 // 北大核心
+  if (cats.includes("cssci")) { s += 2; has = true; }               // CSSCI 来源刊
+  else if (cats.includes("cssci-ext")) { s += 1; has = true; }      // CSSCI 扩展版
+  if (input.cscdLevel) { s += /核心/.test(input.cscdLevel) ? 1.5 : 0.75; has = true; } // CSCD 核心库/扩展库
+  if (cats.includes("sci-core")) { s += 0.5; has = true; }          // 科技核心(统计源)
+  if (!has) return null;
+  return Math.max(1, Math.min(5, Math.round(s)));
 }
 
 export function calculateRecommendationScore(input: ScoreInput): number {
+  // 无国际指标(IF/分区/Top)时, 用中文核心目录维度评分, 避免中文核心刊一律落到 2 星
+  const hasIntl =
+    typeof input.impactFactor === "number" ||
+    !!(input.jcrQuartile && input.jcrQuartile.trim()) ||
+    input.jcrFull?.isTopJournal === true ||
+    input.jcrFull?.isReviewJournal === true;
+  if (!hasIntl) {
+    const dom = domesticScore(input);
+    if (dom != null) return dom;
+  }
+
   // IF 维度
   const if_ = typeof input.impactFactor === "number" ? input.impactFactor : null;
   const ifScore = if_ == null ? 2 : if_ >= 50 ? 5 : if_ >= 20 ? 4 : if_ >= 10 ? 3 : if_ >= 5 ? 2 : 1;
