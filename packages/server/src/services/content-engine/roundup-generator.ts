@@ -3,7 +3,7 @@
  * 选刊: journalIds 指定 / 或按 discipline(+catalog) 自动选(按录用率排序, 对普通作者友好)。
  * 复用 getProviders (DeepSeek/Qwen, 红线#3)。
  */
-import { and, eq, desc, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
@@ -44,7 +44,7 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   if (opts.discipline) conds.push(sql`${journals.discipline} ILIKE ${"%" + opts.discipline + "%"}`);
   if (opts.catalog) conds.push(sql`${journals.catalogs} @> ${JSON.stringify([opts.catalog])}::jsonb`);
   return (await db.select(COLS).from(journals).where(and(...conds))
-    .orderBy(desc(journals.acceptanceRate)).limit(opts.count ?? 3)) as JRow[];
+    .orderBy(sql`${journals.acceptanceRate} DESC NULLS LAST`).limit(opts.count ?? 3)) as JRow[];
 }
 
 function catalogLabels(j: JRow): string {
@@ -82,9 +82,11 @@ async function callLlm(js: JRow[], audience: string): Promise<Partial<RoundupDat
   ).join("\n") + `\n\n目标人群: ${audience}`;
   const resp = await provider.chat({
     messages: [{ role: "system", content: sys }, { role: "user", content: user }],
-    temperature: 0.8, maxTokens: 2600,
+    temperature: 0.8, maxTokens: Math.min(8000, 1400 + js.length * 700),
   });
-  const text = resp.content.trim().replace(/^```json\s*|\s*```$/g, "");
+  let text = resp.content.trim().replace(/^```json\s*/i, "").replace(/```\s*$/g, "").trim();
+  const first = text.indexOf("{"), last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) text = text.slice(first, last + 1);
   return JSON.parse(text);
 }
 
