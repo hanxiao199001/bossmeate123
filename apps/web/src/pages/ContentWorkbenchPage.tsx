@@ -23,6 +23,7 @@ import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAu
 import WorkbenchTopBar from "../components/workbench/WorkbenchTopBar";
 import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
 import ManualGenerateVideoModal from "../components/workbench/ManualGenerateVideoModal";
+import RoundupGenerateModal from "../components/workbench/RoundupGenerateModal";
 import BatchPreviewSummary from "../components/workbench/BatchPreviewSummary";
 import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
 import BulkDistributeProgressPanel from "../components/workbench/BulkDistributeProgressPanel";
@@ -55,7 +56,7 @@ export default function ContentWorkbenchPage() {
   const isAdmin = userRole === "owner" || userRole === "admin";
   void isAdmin; // 留 dormant 防 lint 警告 (未来 bulk UI 可启用)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [generateModal, setGenerateModal] = useState<"article" | "video" | null>(null);
+  const [generateModal, setGenerateModal] = useState<"article" | "video" | "roundup" | null>(null);
   const toggleMultiSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -250,6 +251,7 @@ export default function ContentWorkbenchPage() {
         selectedCount={selectedIds.size}
         onClickGenerateArticle={() => setGenerateModal("article")}
         onClickGenerateVideo={() => setGenerateModal("video")}
+        onClickGenerateRoundup={() => setGenerateModal("roundup")}
         onClickClearSelection={() => setSelectedIds(new Set())}
       />
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
@@ -325,6 +327,11 @@ export default function ContentWorkbenchPage() {
       {/* 5-23 PR #161 — 手动生成 modal (admin only) */}
       <ManualGenerateModal
         open={generateModal === "article"}
+        onClose={() => setGenerateModal(null)}
+        onComplete={handleGenerateComplete}
+      />
+      <RoundupGenerateModal
+        open={generateModal === "roundup"}
         onClose={() => setGenerateModal(null)}
         onComplete={handleGenerateComplete}
       />

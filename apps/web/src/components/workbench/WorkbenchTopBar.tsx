@@ -8,6 +8,7 @@ export interface WorkbenchTopBarProps {
   selectedCount: number;
   onClickGenerateArticle: () => void;
   onClickGenerateVideo: () => void;
+  onClickGenerateRoundup: () => void;
   onClickClearSelection?: () => void;
 }
 
@@ -15,6 +16,7 @@ export default function WorkbenchTopBar({
   selectedCount,
   onClickGenerateArticle,
   onClickGenerateVideo,
+  onClickGenerateRoundup,
   onClickClearSelection,
 }: WorkbenchTopBarProps) {
   return (
@@ -31,6 +33,12 @@ export default function WorkbenchTopBar({
           className="px-3 py-1.5 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 active:scale-95 transition-all"
         >
           🎬 生成视频
+        </button>
+        <button
+          onClick={onClickGenerateRoundup}
+          className="px-3 py-1.5 text-sm font-medium bg-teal-600 text-white rounded-lg hover:bg-teal-700 active:scale-95 transition-all"
+        >
+          📚 多刊盘点
         </button>
       </div>
 
