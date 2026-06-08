@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { platformAccounts } from "../models/schema.js";
+import { platformAccounts, contentPublishLog } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
@@ -278,10 +278,18 @@ export async function accountRoutes(app: FastifyInstance) {
     try {
       const { id } = request.params as { id: string };
 
-      const [deleted] = await db
-        .delete(platformAccounts)
-        .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, request.tenantId)))
-        .returning();
+      // 先删依赖的发布日志(content_publish_log.account_id FK NOT NULL 无级联, 否则删账号被外键挡 500),
+      // 再删账号 — 同一事务保证原子性。
+      const deleted = await db.transaction(async (tx) => {
+        await tx
+          .delete(contentPublishLog)
+          .where(and(eq(contentPublishLog.accountId, id), eq(contentPublishLog.tenantId, request.tenantId)));
+        const [d] = await tx
+          .delete(platformAccounts)
+          .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, request.tenantId)))
+          .returning();
+        return d;
+      });
 
       if (!deleted) {
         return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
