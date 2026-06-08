@@ -160,6 +160,8 @@ export const __testSchemas = {
   journalPatchSchema,
 };
 
+import { journalScopeCondition } from "../services/recommendation/journal-scope.js";
+
 export async function journalRoutes(app: FastifyInstance) {
   // ============ 获取期刊列表（筛选+排序）============
   app.get("/journals", async (request, reply) => {
@@ -172,6 +174,7 @@ export async function journalRoutes(app: FastifyInstance) {
         warningOnly,    // 只看预警期刊
         safeOnly,       // 只看非预警期刊
         keyword,        // 搜索关键词（期刊名/ISSN）
+        scope,          // PR-K 期刊定位: domestic | international (空=不限)
         sortBy,         // 排序字段: views | if | acceptance
         page = 1,
         pageSize = 20,
@@ -186,6 +189,8 @@ export async function journalRoutes(app: FastifyInstance) {
       if (ifMax) conditions.push(lte(journals.impactFactor, parseFloat(ifMax)));
       if (warningOnly === "true") conditions.push(eq(journals.isWarningList, true));
       if (safeOnly === "true") conditions.push(eq(journals.isWarningList, false));
+      const scopeCond = journalScopeCondition(scope);
+      if (scopeCond) conditions.push(scopeCond);
       if (keyword) {
         conditions.push(
           sql`(${ilike(journals.name, `%${keyword}%`)} OR ${ilike(journals.nameEn, `%${keyword}%`)} OR ${journals.issn} = ${keyword})`

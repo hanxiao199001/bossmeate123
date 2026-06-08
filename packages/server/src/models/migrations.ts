@@ -25,4 +25,11 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_journals_cscd ON journals (cscd_level) WHERE cscd_level IS NOT NULL;
     `,
   },
+  {
+    version: "002_platform_accounts_journal_scope",
+    description: "PR-K: 账号期刊定位字段 journal_scope (domestic/international/both)",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS journal_scope varchar(20) NOT NULL DEFAULT 'both';
+    `,
+  },
 ];

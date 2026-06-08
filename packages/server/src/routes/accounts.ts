@@ -24,6 +24,7 @@ const createAccountSchema = z.object({
   credentials: z.record(z.any()),
   groupName: z.string().optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
+  journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
 });
 
 const updateAccountSchema = z.object({
@@ -33,6 +34,7 @@ const updateAccountSchema = z.object({
   status: z.enum(["active", "disabled"]).optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
   templateId: z.string().uuid().nullable().optional(), // PR Q.2: 绑定模板（NULL=用全局默认）
+  journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
 });
 
 const publishSchema = z.object({
@@ -138,6 +140,7 @@ export async function accountRoutes(app: FastifyInstance) {
           accountName: body.accountName,
           credentials: encryptedCreds as any,
           groupName: body.groupName,
+          journalScope: body.journalScope ?? "both",
           isVerified: false,
           // 默认 draft_only（保守兜底），仅当前端显式选择"已认证"时才存 full
           capability: body.capability ?? "draft_only",
@@ -208,6 +211,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.status) updateData.status = body.status;
       if (body.capability) updateData.capability = body.capability;
       if (body.templateId !== undefined) updateData.templateId = body.templateId;
+      if (body.journalScope) updateData.journalScope = body.journalScope;
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {

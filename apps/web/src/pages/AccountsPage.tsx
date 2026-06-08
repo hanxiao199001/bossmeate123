@@ -10,6 +10,7 @@ interface Account {
   accountName: string;
   credentials: Record<string, unknown>;
   groupName?: string;
+  journalScope?: string; // PR-K 期刊定位 domestic/international/both
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
@@ -92,6 +93,7 @@ export default function AccountsPage() {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [accountName, setAccountName] = useState("");
   const [groupName, setGroupName] = useState("");
+  const [journalScope, setJournalScope] = useState("both"); // PR-K 期刊定位
   const [isCertified, setIsCertified] = useState(false); // 已认证(full capability)
   const [adding, setAdding] = useState(false);
   const [addMsg, setAddMsg] = useState("");
@@ -160,6 +162,7 @@ export default function AccountsPage() {
         accountName: accountName.trim(),
         credentials: formData,
         groupName: groupName.trim() || undefined,
+        journalScope,
         // 仅微信需要这个字段；默认 draft_only 保守兜底
         capability: selectedPlatform === "wechat" && isCertified ? "full" : "draft_only",
       });
@@ -202,6 +205,15 @@ export default function AccountsPage() {
   };
 
   // 删除账号
+const handleScopeChange = async (accountId: string, scope: string) => {
+    try {
+      await api.patch(`/accounts/${accountId}`, { journalScope: scope });
+      fetchAccounts();
+    } catch {
+      // 静默, 失败保持原值
+    }
+  };
+
   const handleDelete = async (accountId: string) => {
     if (!confirm("确定要删除这个账号吗？")) return;
 
@@ -329,6 +341,21 @@ export default function AccountsPage() {
                   placeholder="例如：医学"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
+              </div>
+
+              {/* PR-K: 期刊定位 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">期刊定位</label>
+                <select
+                  value={journalScope}
+                  onChange={(e) => setJournalScope(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="both">两者都做（不限）</option>
+                  <option value="domestic">只做国内核心</option>
+                  <option value="international">只做国外期刊</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-400">生成内容时自动只选该定位的期刊</p>
               </div>
             </div>
 
@@ -490,6 +517,16 @@ export default function AccountsPage() {
                                   {account.groupName}
                                 </span>
                               )}
+                              <select
+                                value={account.journalScope || "both"}
+                                onChange={(e) => handleScopeChange(account.id, e.target.value)}
+                                title="期刊定位"
+                                className="text-xs px-2 py-0.5 rounded-full border border-teal-200 bg-teal-50 text-teal-700 focus:outline-none cursor-pointer"
+                              >
+                                <option value="both">两者都做</option>
+                                <option value="domestic">国内核心</option>
+                                <option value="international">国外期刊</option>
+                              </select>
                             </div>
                             <div className="flex items-center gap-3 text-xs text-gray-500">
                               <span>创建于 {new Date(account.createdAt).toLocaleDateString("zh-CN")}</span>

@@ -686,11 +686,11 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.post("/roundup", async (request, reply) => {
     try {
-      const b = (request.body ?? {}) as { journalIds?: string[]; discipline?: string; catalog?: string; count?: number; audience?: string };
+      const b = (request.body ?? {}) as { journalIds?: string[]; discipline?: string; catalog?: string; count?: number; audience?: string; scope?: string };
       const audience = (b.audience || "").trim() || "普通院校教师";
       const { title, html } = await generateRoundupArticle({
         tenantId: request.tenantId, journalIds: b.journalIds, discipline: b.discipline,
-        catalog: b.catalog, count: b.count, audience,
+        catalog: b.catalog, count: b.count, audience, scope: b.scope,
       });
       const [row] = await db.insert(contents).values({
         tenantId: request.tenantId,

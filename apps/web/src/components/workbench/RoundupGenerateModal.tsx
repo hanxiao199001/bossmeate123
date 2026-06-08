@@ -45,6 +45,7 @@ interface RoundupGenerateModalProps {
 export default function RoundupGenerateModal({ open, onClose, onComplete }: RoundupGenerateModalProps) {
   const [discipline, setDiscipline] = useState("");
   const [catalog, setCatalog] = useState<Catalog>("");
+  const [scope, setScope] = useState("");  // PR-K 期刊定位 domestic/international (空=不限)
   const [count, setCount] = useState(5);
   const [audience, setAudience] = useState("普通院校教师");
   const [phase, setPhase] = useState<"idle" | "generating" | "error">("idle");
@@ -68,6 +69,7 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
         discipline: discipline || undefined,
         catalog: catalog || undefined,
         count,
+        scope: scope || undefined,
         audience: audience.trim() || "普通院校教师",
       });
       const data = (res.data as any)?.data ?? res.data;
@@ -107,6 +109,21 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
                 className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white disabled:opacity-50">
                 {CATALOG_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
+            </div>
+          </div>
+
+          {/* PR-K 期刊定位 */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">期刊定位</label>
+            <div className="flex gap-1.5">
+              {([["", "不限"], ["domestic", "国内核心"], ["international", "国外期刊"]] as const).map(([v, lbl]) => (
+                <button key={v} onClick={() => !generating && setScope(v)} disabled={generating}
+                  className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+                    scope === v ? "border-teal-500 bg-teal-50 text-teal-700" : "border-gray-200 text-gray-600 hover:border-gray-300"
+                  } ${generating ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
+                  {lbl}
+                </button>
+              ))}
             </div>
           </div>
 

@@ -9,6 +9,7 @@ import { journals } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { getProviders } from "../ai/provider-factory.js";
 import { generateJournalRoundupHtml, type RoundupData } from "../publisher/adapters/journal-roundup-template.js";
+import { journalScopeCondition } from "../recommendation/journal-scope.js";
 
 interface JRow {
   id: string; name: string | null; discipline: string | null;
@@ -27,6 +28,7 @@ export interface RoundupOptions {
   journalIds?: string[];        // 手动指定 (按顺序)
   discipline?: string;          // 自动选: 学科
   catalog?: string;             // 自动选: 核心目录 pku-core/cssci/cscd
+  scope?: string;               // PR-K 期刊定位 domestic/international (空=不限)
   count?: number;               // 自动选数量, 默认 3
   audience: string;             // 目标人群, 如 "普通院校教师评职称"
 }
@@ -43,6 +45,8 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   ];
   if (opts.discipline) conds.push(sql`${journals.discipline} ILIKE ${"%" + opts.discipline + "%"}`);
   if (opts.catalog) conds.push(sql`${journals.catalogs} @> ${JSON.stringify([opts.catalog])}::jsonb`);
+  const scopeCond = journalScopeCondition(opts.scope);
+  if (scopeCond) conds.push(scopeCond);
   return (await db.select(COLS).from(journals).where(and(...conds))
     .orderBy(sql`${journals.acceptanceRate} DESC NULLS LAST`).limit(opts.count ?? 3)) as JRow[];
 }
