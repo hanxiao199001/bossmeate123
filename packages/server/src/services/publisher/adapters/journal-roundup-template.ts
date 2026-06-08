@@ -102,21 +102,28 @@ export function generateJournalRoundupHtml(data: RoundupData): string {
     if (it.directions && it.directions.length) out.push(bullets(it.directions));
   }
   // 为什么适合
+  // 微信安全: 编号块(居中+inline-block角标)后必须先跟一个 <section> 块, 否则微信会把紧随的 <p> 挤成一字一列。
   if (data.whyTitle) {
     out.push(sectionTag(data.items.length + 1, data.whyTitle));
+    out.push(`<section style="margin:0;">`);
     for (const para of data.whyParas ?? []) out.push(p(para));
     if (data.whyBullets?.length) out.push(bullets(data.whyBullets));
+    out.push(`</section>`);
   }
   // 误区
   if (data.pitfallTitle) {
     out.push(sectionTag(data.items.length + 2, data.pitfallTitle));
+    out.push(`<section style="margin:0;">`);
     for (const para of data.pitfallParas ?? []) out.push(p(para));
     for (const pt of data.pitfallPoints ?? []) out.push(pointer(pt));
+    out.push(`</section>`);
   }
   // 提醒
   if (data.reminderTitle) {
     out.push(sectionTag(data.items.length + 3, data.reminderTitle));
+    out.push(`<section style="margin:0;">`);
     for (const para of data.reminderParas ?? []) out.push(p(para));
+    out.push(`</section>`);
   }
   // CTA
   if (data.ctaLines?.length) {
