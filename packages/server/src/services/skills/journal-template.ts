@@ -269,8 +269,8 @@ export function analyzeSellingPoints(j: JournalInfo): SellingPoint[] {
     points.push({ type: "no_apc", score: isDomestic ? 65 : 55, headline: isDomestic ? "无版面费或版面费低，投稿成本友好" : "无需版面费，零成本发表" });
   }
 
-  // 不在预警名单
-  if (!j.isWarningList) {
+  // 不在预警名单 — 仅国际刊(预警名单不覆盖国内刊, 对国内刊不出此正面结论)
+  if (!j.isWarningList && !isDomestic) {
     points.push({ type: "safe_warning", score: 40, headline: "不在预警名单，安全放心" });
   }
 
@@ -1171,6 +1171,9 @@ function buildWarningSection(j: JournalInfo): string {
 </div>`;
   }
 
+  // 国内刊不在国际预警名单适用范围 → 不渲染该板块(避免"可放心投稿"的无依据断言)
+  const inScope = !!(j.impactFactor || j.partition || (j as any).jcrFull);
+  if (!inScope) return "";
   return `
 <div style="margin-bottom:24px;">
   ${sectionTitle("预警名单", undefined)}

@@ -1232,7 +1232,10 @@ export class ArticleSkill implements ISkill {
     } else {
       unknownFields.push("版面费");
     }
-    knownFields.push(journal.isWarningList ? "- ⚠️ 在中科院预警名单中" : "- 不在中科院预警名单中");
+    // 预警名单只覆盖国际(SCI)刊; 国内刊不在其适用范围, 不做"不在预警名单"的正面断言(避免误导)
+    const inWarnScope = journal.isWarningList || typeof journal.impactFactor === "number" || !!journal.partition || !!(journal as any).jcrFull;
+    if (journal.isWarningList) knownFields.push("- ⚠️ 在中科院预警名单中");
+    else if (inWarnScope) knownFields.push("- 不在中科院预警名单中");
 
     // PR #184 (5-20): 收录状态注入 — 严格按真实字段, 防止非 SCI 期刊被当 SCI 写
     const indexStatuses: string[] = [];

@@ -591,10 +591,12 @@ function renderPublicationCostsBlock(journal: JournalInfo): string {
     rows.push(jcrRow("附加费", null));
   }
 
+  const body = rows.join("");
+  if (!body) return ""; // 无任何版面费数据 → 整块隐藏, 不显示空框
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 10px 0;font-size:18px;font-weight:bold;color:${BLUE};text-align:center;line-height:1.5;">版面费</p>` +
     `<div style="padding:12px 16px;background:#FAFAFA;border-radius:6px;">` +
-      rows.join("") +
+      body +
     `</div>` +
     `</section>`;
 }
@@ -847,8 +849,16 @@ function deriveAdvantages(journal: JournalInfo, aiContent: AIGeneratedContent): 
     items.push("JCR Top 期刊标记，权威认可");
   }
 
-  // AI recommendation 切句补强（剔除 HTML/Markdown 字面量）
-  if (aiContent.recommendation && items.length < 5) {
+  // 中文核心目录 → 国内认可度优势（规则派生, 不复述综合点评）
+  const cats = Array.isArray((journal as any).catalogs) ? ((journal as any).catalogs as string[]) : [];
+  if ((journal as any).pkuCoreLevel) items.push("北大核心收录，国内职称评审广泛认可");
+  if (cats.includes("cssci")) items.push("CSSCI 来源期刊，人文社科高认可度");
+  else if (cats.includes("cssci-ext")) items.push("CSSCI 扩展版收录");
+  if ((journal as any).cscdLevel) items.push(`CSCD${/核心/.test(String((journal as any).cscdLevel)) ? "核心库" : "扩展库"}收录，自然科学规范认可`);
+  if (cats.includes("sci-core")) items.push("中国科技核心（统计源）期刊");
+
+  // AI recommendation 切句补强（仅当无任何规则项时兜底, 避免复述综合点评造成重复）
+  if (aiContent.recommendation && items.length === 0) {
     const stripped = aiContent.recommendation
       .replace(/<\/?[a-zA-Z][^>]*>/g, "")
       .replace(/\*\*([^*\n]+)\*\*/g, "$1");
