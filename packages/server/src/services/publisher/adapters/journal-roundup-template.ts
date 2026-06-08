@@ -9,6 +9,13 @@ function esc(s: string | null | undefined): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// 防御: 调用方若把段落字段传成字符串(LLM 偶发), for-of 会逐字裂段 → 统一转数组。
+function arr(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+  if (typeof v === "string" && v) return [v];
+  return [];
+}
+
 const C = {
   num: "#F2C94C",      // 编号角标 橙黄
   numText: "#fff",
@@ -89,8 +96,8 @@ export function generateJournalRoundupHtml(data: RoundupData): string {
   out.push(`<h1 style="margin:8px 0;font-size:22px;font-weight:bold;line-height:1.5;color:#111;">${esc(data.title)}</h1>`);
   if (data.authorMeta) out.push(`<p style="margin:0 0 18px 0;font-size:13px;color:${C.sub};">${esc(data.authorMeta)}</p>`);
   // 痛点开场
-  for (const para of data.openingParas) out.push(p(para));
-  if (data.openingQuestions) for (const q of data.openingQuestions) out.push(pointer(q));
+  for (const para of arr(data.openingParas)) out.push(p(para));
+  for (const q of arr(data.openingQuestions)) out.push(pointer(q));
   // 各刊盘点
   for (const it of data.items) {
     out.push(sectionTag(it.index, it.name));
@@ -98,37 +105,37 @@ export function generateJournalRoundupHtml(data: RoundupData): string {
     out.push(miniHeading("期刊简介"));
     out.push(p(it.intro));
     out.push(miniHeading("投稿经验"));
-    for (const para of it.experienceParas) out.push(p(para));
-    if (it.directions && it.directions.length) out.push(bullets(it.directions));
+    for (const para of arr(it.experienceParas)) out.push(p(para));
+    if (arr(it.directions).length) out.push(bullets(arr(it.directions)));
   }
   // 为什么适合
   // 微信安全: 编号块(居中+inline-block角标)后必须先跟一个 <section> 块, 否则微信会把紧随的 <p> 挤成一字一列。
   if (data.whyTitle) {
     out.push(sectionTag(data.items.length + 1, data.whyTitle));
     out.push(`<section style="margin:0;">`);
-    for (const para of data.whyParas ?? []) out.push(p(para));
-    if (data.whyBullets?.length) out.push(bullets(data.whyBullets));
+    for (const para of arr(data.whyParas)) out.push(p(para));
+    if (arr(data.whyBullets).length) out.push(bullets(arr(data.whyBullets)));
     out.push(`</section>`);
   }
   // 误区
   if (data.pitfallTitle) {
     out.push(sectionTag(data.items.length + 2, data.pitfallTitle));
     out.push(`<section style="margin:0;">`);
-    for (const para of data.pitfallParas ?? []) out.push(p(para));
-    for (const pt of data.pitfallPoints ?? []) out.push(pointer(pt));
+    for (const para of arr(data.pitfallParas)) out.push(p(para));
+    for (const pt of arr(data.pitfallPoints)) out.push(pointer(pt));
     out.push(`</section>`);
   }
   // 提醒
   if (data.reminderTitle) {
     out.push(sectionTag(data.items.length + 3, data.reminderTitle));
     out.push(`<section style="margin:0;">`);
-    for (const para of data.reminderParas ?? []) out.push(p(para));
+    for (const para of arr(data.reminderParas)) out.push(p(para));
     out.push(`</section>`);
   }
   // CTA
   if (data.ctaLines?.length) {
     out.push(`<section style="margin:28px 0 8px 0;padding:18px;background:${C.bg};border-radius:10px;">`);
-    for (const line of data.ctaLines) out.push(`<p style="margin:8px 0;font-size:15px;line-height:1.7;color:${C.body};">✅ ${esc(line)}</p>`);
+    for (const line of arr(data.ctaLines)) out.push(`<p style="margin:8px 0;font-size:15px;line-height:1.7;color:${C.body};">✅ ${esc(line)}</p>`);
     out.push(`</section>`);
   }
   out.push(`</section>`);

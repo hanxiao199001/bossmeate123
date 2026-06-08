@@ -61,6 +61,13 @@ function catalogLabels(j: JRow): string {
   if (cats.includes("sci-core")) labels.push("科技核心");
   return labels.join("/") || "核心期刊";
 }
+// LLM 偶尔把段落字段返成"字符串"而非"字符串数组"; 直接 for-of 字符串会逐字符迭代 → 每个字一个 <p>。
+// 统一归一化: 数组→清洗; 字符串→单段; 其它→空。
+function toArr(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim());
+  if (typeof v === "string" && v.trim()) return [v.trim()];
+  return [];
+}
 function wrapName(n: string | null): string {
   const s = (n ?? "").trim();
   if (!s) return "《期刊》";
@@ -126,24 +133,29 @@ export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData
 
   const items = js.map((j, i) => {
     const it = parsed!.items![i] ?? { intro: "", experienceParas: [] };
+    const exp = toArr(it.experienceParas);
     return {
       index: i + 1, name: wrapName(j.name), coverUrl: j.coverImageUrl,
-      intro: it.intro || `${wrapName(j.name)}，${catalogLabels(j)}。`,
-      experienceParas: it.experienceParas?.length ? it.experienceParas : [`审稿周期 ${j.reviewCycle ?? "以官网为准"}。`],
-      directions: it.directions ?? [],
+      intro: (typeof it.intro === "string" && it.intro.trim()) ? it.intro.trim() : `${wrapName(j.name)}，${catalogLabels(j)}。`,
+      experienceParas: exp.length ? exp : [`审稿周期 ${j.reviewCycle ?? "以官网为准"}。`],
+      directions: toArr(it.directions),
     };
   });
+  const whyParas = toArr(parsed.whyParas);
+  const pitfallParas = toArr(parsed.pitfallParas), pitfallPoints = toArr(parsed.pitfallPoints);
+  const reminderParas = toArr(parsed.reminderParas);
   return {
-    title: parsed.title || `${opts.audience}发核心，这${js.length}本可以重点关注`,
-    openingParas: parsed.openingParas ?? [],
-    openingQuestions: parsed.openingQuestions,
+    title: (typeof parsed.title === "string" && parsed.title.trim()) ? parsed.title.trim() : `${opts.audience}发核心，这${js.length}本可以重点关注`,
+    openingParas: toArr(parsed.openingParas),
+    openingQuestions: toArr(parsed.openingQuestions),
     items,
-    whyTitle: "为什么这几本更适合？", whyParas: parsed.whyParas, whyBullets: parsed.whyBullets,
-    pitfallTitle: parsed.pitfallParas?.length ? "很多人发不了核心，问题其实在这" : undefined,
-    pitfallParas: parsed.pitfallParas, pitfallPoints: parsed.pitfallPoints,
-    reminderTitle: parsed.reminderParas?.length ? "最后一句最重要的提醒" : undefined,
-    reminderParas: parsed.reminderParas,
-    ctaLines: parsed.ctaLines,
+    whyTitle: whyParas.length || toArr(parsed.whyBullets).length ? "为什么这几本更适合？" : undefined,
+    whyParas, whyBullets: toArr(parsed.whyBullets),
+    pitfallTitle: pitfallParas.length || pitfallPoints.length ? "很多人发不了核心，问题其实在这" : undefined,
+    pitfallParas, pitfallPoints,
+    reminderTitle: reminderParas.length ? "最后一句最重要的提醒" : undefined,
+    reminderParas,
+    ctaLines: toArr(parsed.ctaLines),
   };
 }
 
