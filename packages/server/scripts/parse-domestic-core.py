@@ -49,6 +49,34 @@ def parse_cscd(text, year):
                             "cscdLevel": m2.group(2), "catalog": "cscd", "catalogYear": year})
     return out
 
+def parse_kjhx(text, year):
+    """科技核心(统计源) ISTIC PDF (pdftotext -layout) → 行格式 "CODE 期刊名称"。
+    跳过重复页眉/页脚; 处理刊名跨行续接; catalog=sci-core。"""
+    out = []
+    code_re = re.compile(r'^([A-Z]{1,2}[A-Z0-9]\d{1,2})\s+(.+)$')
+    skip = ("中国科技核心期刊目录", "自然科学卷", "社会科学卷",
+            "中国科学技术信息研究所", "期刊名称", "code")
+    cur = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if any(sub in line for sub in skip):
+            cur = None
+            continue
+        m = code_re.match(line)
+        if m:
+            cur = {"name": m.group(2).strip(), "discipline": None,
+                   "disciplineCode": m.group(1), "catalog": "sci-core", "catalogYear": year}
+            out.append(cur)
+        elif cur is not None:
+            cur["name"] = (cur["name"] + " " + line).strip()  # 续接跨行刊名
+    seen, uniq = set(), []
+    for r in out:
+        if r["name"] and r["name"] not in seen:
+            seen.add(r["name"]); uniq.append(r)
+    return uniq
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "html":
@@ -57,7 +85,10 @@ if __name__ == "__main__":
     elif mode == "cscd":
         raw, year, outp = sys.argv[2:5]
         data = parse_cscd(open(raw, encoding="utf-8", errors="replace").read(), year)
+    elif mode == "kjhx":
+        raw, year, outp = sys.argv[2:5]
+        data = parse_kjhx(open(raw, encoding="utf-8", errors="replace").read(), year)
     else:
-        sys.exit("mode 必须是 html 或 cscd")
+        sys.exit("mode 必须是 html / cscd / kjhx")
     json.dump(data, open(outp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"解析 {len(data)} 条 → {outp}")

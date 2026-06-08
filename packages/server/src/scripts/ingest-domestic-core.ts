@@ -1,7 +1,7 @@
 /**
  * 中文核心目录 upsert ingest（北大核心 / CSSCI / CSSCI扩展 / CSCD → journals 池）。
  *
- * 数据源: src/data/{pku-core,cssci,cssci-ext,cscd}-2023.json（parse-domestic-core.py 产出）。
+ * 数据源: src/data/{pku-core,cssci,cssci-ext,cscd,sci-core}-2023.json（parse-domestic-core.py 产出）。
  * 匹配: 有 ISSN(CSCD) 先按 ISSN 精确匹配, 否则按刊名归一化匹配池中 journals。
  *   命中 → 追加 catalogs[] + 设 pkuCoreLevel/cscdLevel/catalogYear（COALESCE 不覆盖已有 issn/discipline）。
  *   未命中 → 新建 journal 行（tenantId=null 全局共享, source='domestic-catalog', confidence=55）。
@@ -63,6 +63,15 @@ function load(name: string): CatRow[] {
   return JSON.parse(readFileSync(resolve(DATA, name), "utf8"));
 }
 
+function loadOptional(name: string): CatRow[] {
+  try {
+    return load(name);
+  } catch {
+    console.warn(`[ingest] 跳过缺失目录文件: ${name} (先跑 scripts/build-sci-core.sh 生成)`);
+    return [];
+  }
+}
+
 async function main() {
   const apply = process.argv.includes("--apply");
   const files: Record<string, CatRow[]> = {
@@ -70,6 +79,7 @@ async function main() {
     "cssci": load("cssci-2023.json"),
     "cssci-ext": load("cssci-ext-2023.json"),
     "cscd": load("cscd-2023.json"),
+    "sci-core": loadOptional("sci-core-2023.json"),
   };
   const merged = mergeCatalogs(files);
   console.log(`[domestic-core] 合并后唯一中文核心刊: ${merged.size}`);
