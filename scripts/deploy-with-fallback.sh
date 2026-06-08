@@ -75,6 +75,9 @@ pnpm --filter @bossmate/server build 2>&1 | tail -3
 # PR Q.0/Q.2/Q.3/Q.4/Q.7 前端改动从未自动 deploy 到服务器）。nginx serve
 # /home/projects/bossmate/apps/web/dist；build 后新 hash 文件自动 serve，浏览器硬刷可见。
 pnpm --filter @bossmate/web build 2>&1 | tail -3
+# PR-K: 版本化迁移随部署自动跑（migrate() = SQL_CREATE_TABLES 幂等 + runTrackedMigrations 只跑未应用、事务包裹）。
+# 必须在 restart 前：新代码引用新列时列得先存在。pipefail 下迁移失败会中止部署（不会 false-green）。
+pnpm --filter @bossmate/server db:migrate 2>&1 | tail -15
 pm2 restart bossmate-server --update-env
 EOF
 
