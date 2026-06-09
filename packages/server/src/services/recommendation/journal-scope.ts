@@ -14,11 +14,12 @@ export function journalScopeCondition(scope?: string | null): SQL | null {
     return sql`(${journals.catalogs} IS NOT NULL AND jsonb_array_length(${journals.catalogs}) > 0)`;
   }
   if (scope === "international") {
-    // 真·国外刊: 有 JCR 分区(Q1-Q4), 或 有 IF 且不带任何中文核心标签。
-    // (中文核心刊在库里也常有"复合影响因子", 不能只看 IF, 否则中华医学杂志/北大学报会被误判为国外刊)
+    // 真·国外刊 = 不带任何中文核心标签, 且有国际指标(IF 或分区)。与"国内核心"互斥。
+    // (中文核心刊库里也常有复合IF和分区值, 所以必须先排除"带中文核心标签"的, 才不会把
+    //  中华医学杂志/CSSCI/科技核心这些误判成国外刊)
     return sql`(
-      ${journals.partition} IS NOT NULL
-      OR (${journals.impactFactor} IS NOT NULL AND (${journals.catalogs} IS NULL OR jsonb_array_length(${journals.catalogs}) = 0))
+      (${journals.catalogs} IS NULL OR jsonb_array_length(${journals.catalogs}) = 0)
+      AND (${journals.impactFactor} IS NOT NULL OR ${journals.partition} IS NOT NULL)
     )`;
   }
   return null;
