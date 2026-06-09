@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { toast } from "../components/Toast";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
@@ -199,6 +200,7 @@ export default function AccountsPage() {
       }
     } catch (err) {
       console.error("验证失败", err);
+      toast.error((err as any)?.response?.data?.message || "验证失败，请稍后重试");
     } finally {
       setVerifying(prev => ({ ...prev, [accountId]: false }));
     }
@@ -223,6 +225,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
       fetchAccounts();
     } catch (err) {
       console.error("删除失败", err);
+      toast.error((err as any)?.response?.data?.message || "删除失败，请稍后重试");
     } finally {
       setDeleting(prev => ({ ...prev, [accountId]: false }));
     }

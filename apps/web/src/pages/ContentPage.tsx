@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { toast } from "../components/Toast";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
@@ -218,6 +219,7 @@ export default function ContentPage() {
       fetchStats();
     } catch (err) {
       console.error("删除失败", err);
+      toast.error((err as any)?.response?.data?.message || "删除失败，请稍后重试");
     }
   };
 
@@ -229,6 +231,7 @@ export default function ContentPage() {
       fetchStats();
     } catch (err) {
       console.error("状态更新失败", err);
+      toast.error((err as any)?.response?.data?.message || "状态更新失败");
     }
   };
 

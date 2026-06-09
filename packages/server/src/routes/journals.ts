@@ -200,11 +200,11 @@ export async function journalRoutes(app: FastifyInstance) {
       // 排序
       let orderClause;
       switch (sortBy) {
-        case "views": orderClause = desc(journals.letpubViews); break;
-        case "if": orderClause = desc(journals.impactFactor); break;
-        case "acceptance": orderClause = desc(journals.acceptanceRate); break;
-        case "peer": orderClause = desc(journals.peerWriteCount); break;
-        default: orderClause = desc(journals.letpubViews);
+        case "views": orderClause = sql`${journals.letpubViews} DESC NULLS LAST`; break;
+        case "if": orderClause = sql`${journals.impactFactor} DESC NULLS LAST`; break;
+        case "acceptance": orderClause = sql`${journals.acceptanceRate} DESC NULLS LAST`; break;
+        case "peer": orderClause = sql`${journals.peerWriteCount} DESC NULLS LAST`; break;
+        default: orderClause = sql`${journals.letpubViews} DESC NULLS LAST`;
       }
 
       const pageNum = parseInt(String(page), 10) || 1;
