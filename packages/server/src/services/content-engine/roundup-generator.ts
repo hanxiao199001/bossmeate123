@@ -41,7 +41,12 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   }
   const conds = [
     eq(journals.status, "active"),
-    sql`${journals.catalogs} IS NOT NULL AND jsonb_array_length(${journals.catalogs}) > 0`,
+    // 够格盘点的刊: 有中文核心标签 或 有国际指标(IF/分区)。否则池里无信号的裸刊会混进来。
+    // (原来只要求"有中文核心标签", 与"国外期刊"定位矛盾 → 选国外刊时 0 结果)
+    sql`(
+      (${journals.catalogs} IS NOT NULL AND jsonb_array_length(${journals.catalogs}) > 0)
+      OR ${journals.impactFactor} IS NOT NULL OR ${journals.partition} IS NOT NULL
+    )`,
   ];
   if (opts.discipline) conds.push(sql`${journals.discipline} ILIKE ${"%" + opts.discipline + "%"}`);
   if (opts.catalog) conds.push(sql`${journals.catalogs} @> ${JSON.stringify([opts.catalog])}::jsonb`);
