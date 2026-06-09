@@ -86,6 +86,9 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
   const accountScope = selectedAccount?.journalScope;
   const scopeLocked = accountScope === "domestic" || accountScope === "international";
   const effectiveScope = scopeLocked ? (accountScope as string) : scope;
+  // 核心目录只对国内核心有意义; 定位=国外期刊时禁用并锁成"不限"(国外刊无中文核心标签, 否则求交集选不到刊)
+  const catalogDisabled = effectiveScope === "international";
+  const effectiveCatalog = catalogDisabled ? "" : catalog;
 
   const reset = () => {
     setPhase("idle"); setError(null); setDoneMsg(""); setLastContentId("");
@@ -102,7 +105,7 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
     try {
       const res = await api.post("/admin/roundup", {
         discipline: discipline || undefined,
-        catalog: catalog || undefined,
+        catalog: effectiveCatalog || undefined,
         count,
         scope: effectiveScope || undefined,
         audience: audience.trim() || "普通院校教师",
@@ -187,10 +190,11 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1.5">核心目录</label>
-              <select value={catalog} onChange={(e) => setCatalog(e.target.value as Catalog)} disabled={generating}
+              <select value={effectiveCatalog} onChange={(e) => setCatalog(e.target.value as Catalog)} disabled={generating || catalogDisabled}
                 className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white disabled:opacity-50">
                 {CATALOG_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
+              {catalogDisabled && <p className="mt-1 text-[11px] text-gray-400">国外期刊无中文核心目录</p>}
             </div>
           </div>
 
