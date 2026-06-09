@@ -976,9 +976,11 @@ export async function contentRoutes(app: FastifyInstance) {
    */
   app.post("/:id/douyin-caption", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const force = (request.query as { force?: string })?.force === "true";
+    const q = request.query as { force?: string; platform?: string };
+    const force = q?.force === "true";
+    const platform = q?.platform === "wechat_video" ? "wechat_video" as const : "douyin" as const;
     try {
-      const caption = await generateDouyinCaption({ contentId: id, tenantId: request.tenantId, force });
+      const caption = await generateDouyinCaption({ contentId: id, tenantId: request.tenantId, force, platform });
       return { code: "OK", data: caption };
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.route_failed");
@@ -992,12 +994,13 @@ export async function contentRoutes(app: FastifyInstance) {
    */
   app.post("/:id/douyin-caption-variants", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const q = request.query as { force?: string; count?: string };
-    const b = (request.body ?? {}) as { count?: number };
+    const q = request.query as { force?: string; count?: string; platform?: string };
+    const b = (request.body ?? {}) as { count?: number; platform?: string };
     const count = b.count ?? (q.count ? parseInt(q.count, 10) : 3);
     const force = q.force === "true";
+    const platform = (b.platform ?? q.platform) === "wechat_video" ? "wechat_video" as const : "douyin" as const;
     try {
-      const variants = await generateDouyinCaptionVariants({ contentId: id, tenantId: request.tenantId, count, force });
+      const variants = await generateDouyinCaptionVariants({ contentId: id, tenantId: request.tenantId, count, force, platform });
       return { code: "OK", data: variants };
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.variants_route_failed");

@@ -30,6 +30,37 @@ const MAX_VARIANTS = 10;
 const HOOK_PREFIXES = ["", "干货丨", "实测丨", "建议收藏丨", "亲历丨", "避坑丨", "重磅丨", "科普丨", "经验丨", "提醒丨"];
 const LEAD_POOL = ["关注我，了解更多投稿干货", "想发这本期刊的扣1", "全程干货，建议收藏", "评论区聊聊你的投稿经历", "关注追更，少走弯路", "有问题评论区问我", "收藏起来慢慢看", "点赞过百出下期"];
 
+type VideoPlatform = "douyin" | "wechat_video";
+const WV_LEAD_POOL = ["点赞+在看，支持一下", "关注我们的视频号，持续更新", "想了解更多，私信或评论", "收藏起来，投稿少走弯路", "转发给需要的同门", "关注追更，干货不断"];
+function captionField(p: VideoPlatform): string { return p === "wechat_video" ? "wechatVideoCaption" : "douyinCaption"; }
+function variantsField(p: VideoPlatform): string { return p === "wechat_video" ? "wechatVideoCaptionVariants" : "douyinCaptionVariants"; }
+function captionSys(p: VideoPlatform): string {
+  if (p === "wechat_video") return `你是微信视频号运营专家。视频号偏微信生态、稳重专业、不浮夸。给定一条学术期刊推广视频的信息，写一份视频号发布文案包。
+**只输出纯 JSON**（不要 markdown 包裹）：
+{"hookTitle":"标题 ≤30字","hashtags":["话题1","话题2"],"lead":"1句引导语 ≤30字"}
+要求：
+- hookTitle 专业可信、有信息量，≤30 字，避免抖音式夸张钩子
+- hashtags 1-3 个，纯词不带 # 号，贴近学科与"投稿/发表/科研"
+- lead 引导点赞在看或关注，≤30 字`;
+  return `你是抖音爆款文案专家。给定一条学术期刊推广视频的信息，写一份抖音发布文案包。
+**只输出纯 JSON**（不要 markdown 包裹）：
+{"hookTitle":"钩子标题 ≤25字","hashtags":["话题1","话题2","话题3"],"lead":"1句引导语 ≤30字"}
+要求：
+- hookTitle 有钩子/悬念/数字，口语化，≤25 字
+- hashtags 3-6 个，纯词不带 # 号，贴近学科与"投稿/发表/科研"主题
+- lead 引导关注或互动，≤30 字`;
+}
+function variantsSys(p: VideoPlatform, count: number): string {
+  const plat = p === "wechat_video" ? "视频号" : "抖音";
+  const style = p === "wechat_video" ? "专业稳重、微信生态风、话题1-3个" : "口语化有钩子、话题3-6个";
+  return `你是${plat}矩阵运营专家。同一条学术期刊推广视频要发到 ${count} 个不同${plat}号，需要 ${count} 套**互不雷同**的文案，避免平台判定同质化降权。
+**只输出纯 JSON 数组**（不要 markdown）：
+[{"hookTitle":"标题","hashtags":["话题1","话题2"],"lead":"引导语 ≤30字"}, ...]
+要求：
+- 共 ${count} 套，每套的角度、话题组合、引导语都要明显不同（不要只换标点）
+- 风格：${style}；hashtags 纯词不带#；lead ≤30 字`;
+}
+
 function assembleFullText(c: { hookTitle: string; hashtags: string[]; lead: string }): string {
   const tags = c.hashtags
     .map((t) => `#${String(t).replace(/^#/, "").trim()}`)
@@ -38,11 +69,11 @@ function assembleFullText(c: { hookTitle: string; hashtags: string[]; lead: stri
   return [c.hookTitle, c.lead, tags].filter(Boolean).join("\n");
 }
 
-function ruleFallback(args: { title: string; journalName?: string; discipline?: string }): DouyinCaption {
+function ruleFallback(args: { title: string; journalName?: string; discipline?: string; platform: VideoPlatform }): DouyinCaption {
   const hookTitle = (args.title || `${args.journalName ?? "学术期刊"}投稿攻略`).slice(0, TITLE_MAX);
   const seeds = [args.discipline, args.journalName, "学术", "科研", "论文发表", "期刊投稿"].filter(Boolean) as string[];
   const hashtags = Array.from(new Set(seeds.map((s) => s.replace(/^#/, "").trim()).filter(Boolean))).slice(0, HASHTAG_MAX);
-  const lead = "关注我，了解更多投稿干货";
+  const lead = args.platform === "wechat_video" ? WV_LEAD_POOL[0] : "关注我，了解更多投稿干货";
   const caption: DouyinCaption = { hookTitle, hashtags, lead, fullText: "", generatedAt: new Date().toISOString() };
   caption.fullText = assembleFullText(caption);
   return caption;
@@ -53,6 +84,7 @@ async function callLlmForCaption(args: {
   videoScript: string;
   journalName?: string;
   discipline?: string;
+  platform: VideoPlatform;
 }): Promise<DouyinCaption> {
   const provider = getProviders().cheap[0];
   if (!provider) throw new Error("无可用 LLM provider");
@@ -64,13 +96,7 @@ async function callLlmForCaption(args: {
     args.videoScript ? `视频脚本：${args.videoScript.slice(0, 400)}` : "",
   ].filter(Boolean).join("\n");
 
-  const sys = `你是抖音爆款文案专家。给定一条学术期刊推广视频的信息，写一份抖音发布文案包。
-**只输出纯 JSON**（不要 markdown 包裹）：
-{"hookTitle":"钩子标题 ≤25字","hashtags":["话题1","话题2","话题3"],"lead":"1句引导语 ≤30字"}
-要求：
-- hookTitle 有钩子/悬念/数字，口语化，≤25 字
-- hashtags 3-6 个，纯词不带 # 号，贴近学科与"投稿/发表/科研"主题
-- lead 引导关注或互动，≤30 字`;
+  const sys = captionSys(args.platform);
 
   const resp = await provider.chat({
     messages: [
@@ -102,7 +128,10 @@ export async function generateDouyinCaption(opts: {
   contentId: string;
   tenantId: string;
   force?: boolean;
+  platform?: VideoPlatform;
 }): Promise<DouyinCaption> {
+  const platform: VideoPlatform = opts.platform ?? "douyin";
+  const field = captionField(platform);
   const [content] = await db
     .select()
     .from(contents)
@@ -112,7 +141,7 @@ export async function generateDouyinCaption(opts: {
   if (!content) throw new Error(`generateDouyinCaption: content 不存在 ${opts.contentId}`);
 
   const meta = (content.metadata as Record<string, any>) ?? {};
-  const existing = meta.douyinCaption as DouyinCaption | undefined;
+  const existing = meta[field] as DouyinCaption | undefined;
   if (!opts.force && existing?.fullText) return existing;
 
   const title = content.title ?? "";
@@ -132,15 +161,15 @@ export async function generateDouyinCaption(opts: {
 
   let caption: DouyinCaption | null = null;
   try {
-    caption = await callLlmForCaption({ title, videoScript, journalName, discipline });
+    caption = await callLlmForCaption({ title, videoScript, journalName, discipline, platform });
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, contentId: opts.contentId }, "douyin.caption.llm_failed_fallback");
   }
-  if (!caption) caption = ruleFallback({ title, journalName, discipline });
+  if (!caption) caption = ruleFallback({ title, journalName, discipline, platform });
 
   await db
     .update(contents)
-    .set({ metadata: { ...meta, douyinCaption: caption }, updatedAt: new Date() })
+    .set({ metadata: { ...meta, [field]: caption }, updatedAt: new Date() })
     .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)));
 
   logger.info({ contentId: opts.contentId, hashtags: caption.hashtags.length }, "douyin.caption.generated");
@@ -149,21 +178,21 @@ export async function generateDouyinCaption(opts: {
 
 
 /** PR #265: 规则版变体 — 前缀 + 话题轮转 + 引导语池, 保证 N 套互不雷同 */
-function ruleVariant(base: { title: string; journalName?: string; discipline?: string }, i: number): DouyinCaption {
+function ruleVariant(base: { title: string; journalName?: string; discipline?: string; platform: VideoPlatform }, i: number): DouyinCaption {
   const prefix = HOOK_PREFIXES[i % HOOK_PREFIXES.length];
   const baseTitle = base.title || `${base.journalName ?? "学术期刊"}投稿攻略`;
   const hookTitle = `${prefix}${baseTitle}`.slice(0, TITLE_MAX);
   const seeds = [base.discipline, base.journalName, "学术", "科研", "论文发表", "期刊投稿", "SCI", "读研"].filter(Boolean) as string[];
   const rotated = seeds.map((_, k) => seeds[(k + i) % seeds.length]);
   const hashtags = Array.from(new Set(rotated.map((t) => t.replace(/^#/, "").trim()).filter(Boolean))).slice(0, HASHTAG_MAX);
-  const lead = LEAD_POOL[i % LEAD_POOL.length];
+  const lead = (base.platform === "wechat_video" ? WV_LEAD_POOL : LEAD_POOL)[i % (base.platform === "wechat_video" ? WV_LEAD_POOL.length : LEAD_POOL.length)];
   const caption: DouyinCaption = { hookTitle, hashtags, lead, fullText: "", generatedAt: new Date().toISOString() };
   caption.fullText = assembleFullText(caption);
   return caption;
 }
 
 async function callLlmForVariants(args: {
-  title: string; videoScript: string; journalName?: string; discipline?: string; count: number;
+  title: string; videoScript: string; journalName?: string; discipline?: string; count: number; platform: VideoPlatform;
 }): Promise<DouyinCaption[]> {
   const provider = getProviders().cheap[0];
   if (!provider) throw new Error("无可用 LLM provider");
@@ -174,12 +203,7 @@ async function callLlmForVariants(args: {
     args.videoScript ? `视频脚本：${args.videoScript.slice(0, 300)}` : "",
   ].filter(Boolean).join("\n");
 
-  const sys = `你是抖音矩阵运营专家。同一条学术期刊推广视频要发到 ${args.count} 个不同抖音号，需要 ${args.count} 套**互不雷同**的文案，避免平台判定同质化降权。
-**只输出纯 JSON 数组**（不要 markdown）：
-[{"hookTitle":"钩子标题 ≤25字","hashtags":["话题1","话题2","话题3"],"lead":"引导语 ≤30字"}, ...]
-要求：
-- 共 ${args.count} 套，每套的钩子角度、话题组合、引导语都要明显不同（不要只换标点）
-- hookTitle 口语化有钩子，≤25 字；hashtags 3-6 个纯词不带#；lead ≤30 字`;
+  const sys = variantsSys(args.platform, args.count);
 
   const resp = await provider.chat({
     messages: [{ role: "system", content: sys }, { role: "user", content: ctx || args.title || "学术期刊推广视频" }],
@@ -206,8 +230,10 @@ async function callLlmForVariants(args: {
  * LLM 不足 count 时用规则变体补齐; 结果缓存进 metadata.douyinCaptionVariants.
  */
 export async function generateDouyinCaptionVariants(opts: {
-  contentId: string; tenantId: string; count: number; force?: boolean;
+  contentId: string; tenantId: string; count: number; force?: boolean; platform?: VideoPlatform;
 }): Promise<DouyinCaption[]> {
+  const platform: VideoPlatform = opts.platform ?? "douyin";
+  const vfield = variantsField(platform);
   const count = Math.min(Math.max(Math.floor(opts.count) || 1, 1), MAX_VARIANTS);
   const [content] = await db
     .select()
@@ -218,7 +244,7 @@ export async function generateDouyinCaptionVariants(opts: {
   if (!content) throw new Error(`generateDouyinCaptionVariants: content 不存在 ${opts.contentId}`);
 
   const meta = (content.metadata as Record<string, any>) ?? {};
-  const cached = meta.douyinCaptionVariants as DouyinCaption[] | undefined;
+  const cached = meta[vfield] as DouyinCaption[] | undefined;
   if (!opts.force && Array.isArray(cached) && cached.length >= count) return cached.slice(0, count);
 
   const title = content.title ?? "";
@@ -238,19 +264,19 @@ export async function generateDouyinCaptionVariants(opts: {
 
   let variants: DouyinCaption[] = [];
   try {
-    variants = await callLlmForVariants({ title, videoScript, journalName, discipline, count });
+    variants = await callLlmForVariants({ title, videoScript, journalName, discipline, count, platform });
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, contentId: opts.contentId }, "douyin.caption.variants_llm_failed_fallback");
   }
   // 不足 count 用规则变体补齐 (从 LLM 已产数量续号, 保证差异)
   for (let i = variants.length; i < count; i++) {
-    variants.push(ruleVariant({ title, journalName, discipline }, i));
+    variants.push(ruleVariant({ title, journalName, discipline, platform }, i));
   }
   variants = variants.slice(0, count);
 
   await db
     .update(contents)
-    .set({ metadata: { ...meta, douyinCaptionVariants: variants }, updatedAt: new Date() })
+    .set({ metadata: { ...meta, [vfield]: variants }, updatedAt: new Date() })
     .where(and(eq(contents.id, opts.contentId), eq(contents.tenantId, opts.tenantId)));
 
   logger.info({ contentId: opts.contentId, count: variants.length }, "douyin.caption.variants_generated");
