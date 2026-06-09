@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, and, desc, sql, count, or, isNull, inArray, gte, lt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
-import { contents, productionRecords, bossEdits, journals } from "../models/schema.js";
+import { contents, productionRecords, bossEdits, journals, platformAccounts, contentPublishLog } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import {
   ARTICLE_STATUSES,
@@ -1005,6 +1005,80 @@ export async function contentRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, contentId: id }, "douyin.caption.variants_route_failed");
       return reply.code(404).send({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "生成失败" });
+    }
+  });
+
+  /**
+   * PR-P1: 半自动发布记录 (抖音/视频号矩阵号人工发布).
+   * GET /content/:id/manual-publish-log — 该内容各账号的已发状态 (刷新不丢)。
+   */
+  app.get("/:id/manual-publish-log", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const rows = await db
+        .select({
+          accountId: contentPublishLog.accountId,
+          status: contentPublishLog.status,
+          initiatedBy: contentPublishLog.initiatedBy,
+          updatedAt: contentPublishLog.updatedAt,
+        })
+        .from(contentPublishLog)
+        .where(and(eq(contentPublishLog.contentId, id), eq(contentPublishLog.tenantId, request.tenantId)));
+      return { code: "OK", data: rows };
+    } catch (err) {
+      logger.error({ err, contentId: id }, "获取半自动发布记录失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * PR-P1: POST /content/:id/manual-publish-log { accountId, posted }
+   * 勾选"已发"→ upsert 一条 success/manual; 取消勾选 → 删该行。
+   * (content_publish_log 有 (contentId, accountId) 唯一索引, 与自动发布共用一张表/防重发)
+   */
+  app.post("/:id/manual-publish-log", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { accountId?: string; posted?: boolean };
+    if (!body.accountId) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "accountId 必填" });
+    }
+    try {
+      // 账号必须属于本租户 (防越权给别人账号记发布)
+      const [acct] = await db
+        .select({ id: platformAccounts.id })
+        .from(platformAccounts)
+        .where(and(eq(platformAccounts.id, body.accountId), eq(platformAccounts.tenantId, request.tenantId)))
+        .limit(1);
+      if (!acct) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+      }
+      if (body.posted) {
+        await db
+          .insert(contentPublishLog)
+          .values({
+            tenantId: request.tenantId,
+            contentId: id,
+            accountId: body.accountId,
+            status: "success",
+            initiatedBy: "manual",
+          })
+          .onConflictDoUpdate({
+            target: [contentPublishLog.contentId, contentPublishLog.accountId],
+            set: { status: "success", initiatedBy: "manual", updatedAt: new Date() },
+          });
+      } else {
+        await db
+          .delete(contentPublishLog)
+          .where(and(
+            eq(contentPublishLog.contentId, id),
+            eq(contentPublishLog.accountId, body.accountId),
+            eq(contentPublishLog.tenantId, request.tenantId),
+          ));
+      }
+      return { code: "OK", data: { accountId: body.accountId, posted: !!body.posted } };
+    } catch (err) {
+      logger.error({ err, contentId: id }, "记录半自动发布失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
   });
 }

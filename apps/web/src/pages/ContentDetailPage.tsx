@@ -75,6 +75,7 @@ interface Account {
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
+  createdAt?: string;
 }
 
 interface PublishResult {
@@ -188,6 +189,9 @@ export default function ContentDetailPage() {
   const [showDouyinQr, setShowDouyinQr] = useState(false); // PR #267: 扫码下载视频到手机
   // PR-M2: 视频平台文案切换 (抖音/视频号同一助手通吃)
   const [captionPlatform, setCaptionPlatform] = useState<"douyin" | "wechat_video">("douyin");
+  // PR-P1: 矩阵账号联动 — 助手读真实抖音/视频号账号, 每套文案绑定账号, "已发"写 content_publish_log
+  const [matrixAccounts, setMatrixAccounts] = useState<Account[]>([]);
+  const [matrixPosted, setMatrixPosted] = useState<Record<string, boolean>>({});
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
@@ -344,6 +348,44 @@ export default function ContentDetailPage() {
     }
   }, [showPublishPanel, fetchAccounts]);
 
+  // PR-P1: 视频内容 → 拉当前平台矩阵账号 + 已发记录 (刷新不丢)
+  useEffect(() => {
+    if (!id || content?.type !== "video") return;
+    (async () => {
+      try {
+        const [accRes, logRes] = await Promise.all([
+          api.get<Account[]>(`/accounts?platform=${captionPlatform}`),
+          api.get<{ accountId: string; status: string }[]>(`/content/${id}/manual-publish-log`),
+        ]);
+        const accs = (Array.isArray(accRes.data) ? accRes.data : [])
+          .filter((a) => a.status !== "disabled")
+          .sort((a, b) =>
+            (a.createdAt || "").localeCompare(b.createdAt || "") ||
+            a.accountName.localeCompare(b.accountName)
+          );
+        setMatrixAccounts(accs);
+        const map: Record<string, boolean> = {};
+        for (const row of logRes.data || []) {
+          if (row.status === "success") map[row.accountId] = true;
+        }
+        setMatrixPosted(map);
+      } catch (err) {
+        console.error("获取矩阵账号失败", err);
+      }
+    })();
+  }, [id, content?.type, captionPlatform]);
+
+  // PR-P1: 勾/取消"已发" — 落库, 失败回滚
+  const toggleMatrixPosted = async (accountId: string, posted: boolean) => {
+    setMatrixPosted((prev) => ({ ...prev, [accountId]: posted }));
+    try {
+      await api.post(`/content/${id}/manual-publish-log`, { accountId, posted });
+    } catch {
+      setMatrixPosted((prev) => ({ ...prev, [accountId]: !posted }));
+      toast.error("记录失败，请重试");
+    }
+  };
+
   // 切换账号选择
   const toggleAccountSelection = (accountId: string) => {
     setSelectedAccountIds(prev =>
@@ -377,8 +419,10 @@ export default function ContentDetailPage() {
     if (!content) return;
     setDouyinLoading(true);
     try {
+      // PR-P1: 有矩阵账号 → 每个账号一套文案; 无账号回退手填数量
+      const effectiveCount = matrixAccounts.length > 0 ? Math.min(matrixAccounts.length, 10) : variantCount;
       const res = await api.post<DyVariant[]>(
-        `/content/${content.id}/douyin-caption-variants?count=${variantCount}&platform=${captionPlatform}${force ? "&force=true" : ""}`,
+        `/content/${content.id}/douyin-caption-variants?count=${effectiveCount}&platform=${captionPlatform}${force ? "&force=true" : ""}`,
         {}
       );
       if (res.data) {
@@ -778,6 +822,8 @@ export default function ContentDetailPage() {
                       toutiao: "📱",
                       zhihu: "🔍",
                       xiaohongshu: "📕",
+                      douyin: "🎵",
+                      wechat_video: "📹",
                     };
                     const platformNames: Record<string, string> = {
                       wechat: "微信公众号",
@@ -785,6 +831,8 @@ export default function ContentDetailPage() {
                       toutiao: "头条号",
                       zhihu: "知乎",
                       xiaohongshu: "小红书",
+                      douyin: "抖音",
+                      wechat_video: "视频号",
                     };
 
                     const allSelected = platformAccounts.every(acc =>
@@ -1172,27 +1220,54 @@ export default function ContentDetailPage() {
                             </div>
                           </div>
                           {!douyinVariants ? (
-                            <div className="flex items-center gap-2">
-                              <label className="text-sm text-gray-600">发</label>
-                              <input
-                                type="number"
-                                min={1}
-                                max={10}
-                                value={variantCount}
-                                onChange={(e) => setVariantCount(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
-                                className="w-14 px-2 py-1 text-sm border border-gray-200 rounded"
-                              />
-                              <label className="text-sm text-gray-600">个号</label>
-                              <button
-                                onClick={() => handleGenerateDouyinCaption(false)}
-                                disabled={douyinLoading}
-                                className="ml-auto px-4 py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
-                              >{douyinLoading ? "生成中…" : "✨ 生成差异化文案"}</button>
-                            </div>
+                            matrixAccounts.length > 0 ? (
+                              /* PR-P1: 已加账号 → 按账号数生成, 每号一套 */
+                              <div>
+                                <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                                  <span className="text-sm text-gray-600">
+                                    {matrixAccounts.length} 个{captionPlatform === "wechat_video" ? "视频号" : "抖音"}账号:
+                                  </span>
+                                  {matrixAccounts.map((a) => (
+                                    <span key={a.id} className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full">
+                                      {a.accountName}
+                                    </span>
+                                  ))}
+                                  <Link to="/accounts" className="text-xs text-blue-600 hover:underline">管理</Link>
+                                </div>
+                                <button
+                                  onClick={() => handleGenerateDouyinCaption(false)}
+                                  disabled={douyinLoading}
+                                  className="w-full px-4 py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
+                                >{douyinLoading ? "生成中…" : `✨ 为 ${Math.min(matrixAccounts.length, 10)} 个账号生成差异化文案`}</button>
+                              </div>
+                            ) : (
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <label className="text-sm text-gray-600">发</label>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={10}
+                                    value={variantCount}
+                                    onChange={(e) => setVariantCount(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                                    className="w-14 px-2 py-1 text-sm border border-gray-200 rounded"
+                                  />
+                                  <label className="text-sm text-gray-600">个号</label>
+                                  <button
+                                    onClick={() => handleGenerateDouyinCaption(false)}
+                                    disabled={douyinLoading}
+                                    className="ml-auto px-4 py-2 text-sm bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50"
+                                  >{douyinLoading ? "生成中…" : "✨ 生成差异化文案"}</button>
+                                </div>
+                                <p className="mt-1.5 text-xs text-gray-400">
+                                  提示: 到 <Link to="/accounts" className="text-blue-600 hover:underline">账号管理</Link> 添加{captionPlatform === "wechat_video" ? "视频号" : "抖音"}矩阵号后, 文案会自动绑定账号、"已发"状态永久保存
+                                </p>
+                              </div>
+                            )
                           ) : (
                             <>
                               <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs text-gray-500">{douyinVariants.length} 套互不雷同文案，每个号用一套（防同质化降权）</span>
+                                <span className="text-xs text-gray-500">{douyinVariants.length} 套互不雷同文案{matrixAccounts.length > 0 ? "，已按账号一一绑定" : "，每个号用一套"}（防同质化降权）</span>
                                 <div className="flex gap-1.5">
                                   <button
                                     onClick={() => copyToClipboard(content.body || "", "视频链接")}
@@ -1217,19 +1292,28 @@ export default function ContentDetailPage() {
                                 </div>
                               )}
                               <div className="space-y-3 max-h-[420px] overflow-y-auto">
-                                {douyinVariants.map((v, i) => (
-                                  <div key={i} className={`border rounded-lg p-3 ${douyinPosted[i] ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
+                                {douyinVariants.map((v, i) => {
+                                  // PR-P1: 第 i 套文案绑定第 i 个矩阵账号; 无账号回退"号 N"(本地勾选)
+                                  const acct = matrixAccounts[i];
+                                  const label = acct ? acct.accountName : `号 ${i + 1}`;
+                                  const posted = acct ? !!matrixPosted[acct.id] : douyinPosted[i] || false;
+                                  return (
+                                  <div key={acct?.id ?? i} className={`border rounded-lg p-3 ${posted ? "border-green-300 bg-green-50" : "border-gray-200"}`}>
                                     <div className="flex items-center justify-between mb-1">
                                       <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
                                         <input
                                           type="checkbox"
-                                          checked={douyinPosted[i] || false}
-                                          onChange={(e) => setDouyinPosted((prev) => prev.map((f, k) => (k === i ? e.target.checked : f)))}
+                                          checked={posted}
+                                          onChange={(e) =>
+                                            acct
+                                              ? toggleMatrixPosted(acct.id, e.target.checked)
+                                              : setDouyinPosted((prev) => prev.map((f, k) => (k === i ? e.target.checked : f)))
+                                          }
                                         />
-                                        号 {i + 1}{douyinPosted[i] ? " · 已发" : ""}
+                                        {label}{posted ? " · 已发" : ""}
                                       </label>
                                       <button
-                                        onClick={() => copyToClipboard(v.fullText, `号${i + 1}文案`)}
+                                        onClick={() => copyToClipboard(v.fullText, `「${label}」文案`)}
                                         className="text-xs px-2.5 py-1 bg-pink-600 text-white rounded hover:bg-pink-700"
                                       >📋 复制</button>
                                     </div>
@@ -1240,11 +1324,12 @@ export default function ContentDetailPage() {
                                       className="w-full text-xs p-2 border border-gray-100 rounded bg-gray-50 resize-none"
                                     />
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                               <ol className="mt-3 text-xs text-gray-500 list-decimal list-inside space-y-0.5">
                                 <li>下载视频到手机（上方「下载视频」或复制链接在手机打开）</li>
-                                <li>每个号：打开{captionPlatform === "wechat_video" ? "视频号" : "抖音"} → ＋ → 选视频 → 复制对应「号N文案」粘贴 → 发布</li>
+                                <li>每个号：打开{captionPlatform === "wechat_video" ? "视频号" : "抖音"} → ＋ → 选视频 → 复制对应账号的文案粘贴 → 发布</li>
                                 <li>发完一个勾一个，避免漏发 / 重发</li>
                               </ol>
                             </>
@@ -1284,10 +1369,10 @@ export default function ContentDetailPage() {
               {content.platforms.map((p, i) => (
                 <div key={i} className="flex items-center gap-3 text-sm">
                   <span className="text-gray-400">
-                    {{ wechat: "💬", douyin: "🎵", xiaohongshu: "📱" }[p.platform] || "🌐"}
+                    {{ wechat: "💬", douyin: "🎵", xiaohongshu: "📕", wechat_video: "📹" }[p.platform] || "🌐"}
                   </span>
                   <span className="font-medium text-gray-700">
-                    {{ wechat: "微信公众号", douyin: "抖音", xiaohongshu: "小红书" }[p.platform] || p.platform}
+                    {{ wechat: "微信公众号", douyin: "抖音", xiaohongshu: "小红书", wechat_video: "视频号" }[p.platform] || p.platform}
                   </span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     p.status === "published" ? "bg-green-100 text-green-700" :
