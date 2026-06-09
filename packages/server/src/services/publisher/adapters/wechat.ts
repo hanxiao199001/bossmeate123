@@ -63,10 +63,17 @@ export class WechatAdapter implements PlatformAdapter {
       // 2. 封面（thumb_media_id）
       // 优先：用期刊封面图做横版封面（900×383，期刊图居中+渐变背景）
       // 降级：纯渐变背景，微信自动叠加文章标题
+      const journalCovers: string[] = Array.isArray((params as any).metadata?.journalCovers)
+        ? ((params as any).metadata.journalCovers as string[]).filter((u) => typeof u === "string" && /^https?:\/\//.test(u))
+        : [];
       let thumbMediaId: string;
       try {
-        if (coverImageUrl) {
+        if (journalCovers.length > 1) {
+          thumbMediaId = await this.createCoverWithMultipleJournals(journalCovers, token); // 多本刊封面横拼
+        } else if (coverImageUrl) {
           thumbMediaId = await this.createCoverWithJournalImage(coverImageUrl, token);
+        } else if (journalCovers.length === 1) {
+          thumbMediaId = await this.createCoverWithJournalImage(journalCovers[0], token);
         } else {
           thumbMediaId = await this.createGradientThumb(token, title);
         }
@@ -265,6 +272,59 @@ export class WechatAdapter implements PlatformAdapter {
     if (data.errcode) {
       throw new Error(`封面素材上传失败: ${data.errcode} ${data.errmsg}`);
     }
+    return data.media_id;
+  }
+
+  /**
+   * 多本期刊封面横向拼接成横版首图（900×383，渐变底 + N 张封面横排居中）。
+   * 用于多刊盘点: 把文章里所有有封面的刊拼进首图。下载失败的跳过; 仅 1 张时退回单图(更大更好看)。
+   */
+  private async createCoverWithMultipleJournals(urls: string[], token: string): Promise<string> {
+    const pick = urls.slice(0, 4); // 最多 4 张, 否则太小看不清
+    const bufs: Buffer[] = [];
+    for (const u of pick) {
+      try {
+        const b = await fetchImageBuffer(u);
+        if (b && b.byteLength >= 500) bufs.push(Buffer.from(b));
+      } catch { /* 跳过下载失败的封面 */ }
+    }
+    if (bufs.length === 0) throw new Error("多刊封面全部下载失败");
+    if (bufs.length === 1) return this.createCoverWithJournalImage(pick[0]!, token);
+
+    const W = 900, H = 383, n = bufs.length, colW = Math.floor(W / n);
+    const bgSvg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" style="stop-color:#0D47A1"/><stop offset="50%" style="stop-color:#1565C0"/><stop offset="100%" style="stop-color:#1A237E"/>
+  </linearGradient></defs>
+  <rect width="${W}" height="${H}" fill="url(#bg)"/>
+  <rect x="0" y="${H - 13}" width="${W}" height="13" fill="rgba(255,215,84,0.3)"/>
+</svg>`;
+    const bgBuf = await sharp(Buffer.from(bgSvg)).png().toBuffer();
+
+    const composites: sharp.OverlayOptions[] = [];
+    for (let i = 0; i < n; i++) {
+      let cov = await sharp(bufs[i]!)
+        .resize({ height: 300, width: colW - 24, fit: "inside", withoutEnlargement: false })
+        .png().toBuffer();
+      cov = await sharp(cov)
+        .extend({ top: 4, bottom: 4, left: 4, right: 4, background: { r: 255, g: 255, b: 255, alpha: 0.9 } })
+        .png().toBuffer();
+      const m = await sharp(cov).metadata();
+      const cw = m.width || colW - 16, ch = m.height || 300;
+      const left = i * colW + Math.round((colW - cw) / 2);
+      const top = Math.round((H - ch) / 2);
+      composites.push({ input: cov, left: Math.max(0, left), top: Math.max(0, top) });
+    }
+    const jpegBuf = await sharp(bgBuf).composite(composites).jpeg({ quality: 88 }).toBuffer();
+    logger.info({ size: jpegBuf.byteLength, count: n }, "多刊封面横拼首图完成");
+
+    const formData = new FormData();
+    const blob = new Blob([new Uint8Array(jpegBuf)], { type: "image/jpeg" });
+    formData.append("media", blob, "cover.jpg");
+    const url = `${WX_API}/material/add_material?access_token=${token}&type=image`;
+    const resp = await fetch(url, { method: "POST", body: formData });
+    const data = await resp.json() as any;
+    if (data.errcode) throw new Error(`多刊封面上传失败: ${data.errcode} ${data.errmsg}`);
     return data.media_id;
   }
 

@@ -165,7 +165,8 @@ export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData
 }
 
 /** 一步到位: 生成盘点 → 渲染 HTML。 */
-export async function generateRoundupArticle(opts: RoundupOptions): Promise<{ title: string; html: string }> {
+export async function generateRoundupArticle(opts: RoundupOptions): Promise<{ title: string; html: string; journalCovers: string[] }> {
   const data = await generateRoundup(opts);
-  return { title: data.title, html: generateJournalRoundupHtml(data) };
+  const journalCovers = data.items.map((it) => it.coverUrl).filter((u): u is string => !!u && /^https?:\/\//.test(u));
+  return { title: data.title, html: generateJournalRoundupHtml(data), journalCovers };
 }

@@ -688,7 +688,7 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const b = (request.body ?? {}) as { journalIds?: string[]; discipline?: string; catalog?: string; count?: number; audience?: string; scope?: string };
       const audience = (b.audience || "").trim() || "普通院校教师";
-      const { title, html } = await generateRoundupArticle({
+      const { title, html, journalCovers } = await generateRoundupArticle({
         tenantId: request.tenantId, journalIds: b.journalIds, discipline: b.discipline,
         catalog: b.catalog, count: b.count, audience, scope: b.scope,
       });
@@ -699,7 +699,7 @@ export async function adminRoutes(app: FastifyInstance) {
         title,
         body: html,
         ...initialStatusFields("draft"),
-        metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds: b.journalIds ?? null, discipline: b.discipline ?? null },
+        metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds: b.journalIds ?? null, discipline: b.discipline ?? null, journalCovers },
       }).returning({ id: contents.id });
       return { code: "OK", data: { contentId: row?.id, title } };
     } catch (err) {
