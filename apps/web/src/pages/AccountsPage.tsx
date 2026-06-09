@@ -30,6 +30,9 @@ const PLATFORM_INFO: Record<string, { name: string; icon: string; color: string 
   wechat_video: { name: "视频号", icon: "📹", color: "bg-green-100 text-green-600" },
 };
 
+// PR-P2: 半自动平台 — 第三方无稳定发布 API, 内容人工发布, 凭证选填(账号=矩阵号标签)
+const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
+
 const CREDENTIAL_FIELDS: Record<string, Array<{ key: string; label: string; type: "input" | "textarea" | "password"; placeholder: string; required: boolean }>> = {
   wechat: [
     { key: "appId", label: "AppID", type: "input", placeholder: "微信公众号AppID", required: true },
@@ -147,9 +150,8 @@ export default function AccountsPage() {
       return;
     }
 
-    const SEMI_AUTO = new Set(["douyin", "wechat_video", "xiaohongshu"]);
     const fields = CREDENTIAL_FIELDS[selectedPlatform] || [];
-    if (!SEMI_AUTO.has(selectedPlatform)) {
+    if (!SEMI_AUTO_PLATFORMS.has(selectedPlatform)) {
       for (const field of fields) {
         if (field.required && !formData[field.key]?.trim()) {
           setAddMsg(`请填写 ${field.label}`);
@@ -161,10 +163,14 @@ export default function AccountsPage() {
     setAdding(true);
     setAddMsg("");
     try {
+      // PR-P2: 只提交非空凭证 — 空字符串占位会让后端误判"有凭证"走 API 验证, 半自动账号被标"验证失败"
+      const nonEmptyCreds = Object.fromEntries(
+        Object.entries(formData).filter(([, v]) => v && v.trim())
+      );
       const res = await api.post<Account>("/accounts", {
         platform: selectedPlatform,
         accountName: accountName.trim(),
-        credentials: formData,
+        credentials: nonEmptyCreds,
         groupName: groupName.trim() || undefined,
         journalScope,
         // 仅微信需要这个字段；默认 draft_only 保守兜底
@@ -368,12 +374,45 @@ const handleScopeChange = async (accountId: string, scope: string) => {
             {/* 动态凭证字段 */}
             <div className="space-y-4 mb-6">
               <div className="border-t border-gray-200 pt-4">
+                {/* PR-P2: 半自动平台凭证整区折叠为"选填", 默认收起 — 只填账号名即可直接添加 */}
+                {SEMI_AUTO_PLATFORMS.has(selectedPlatform) ? (
+                  <>
+                    <p className="text-xs text-amber-600 mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      半自动平台：内容由系统生成、人工发布，<b>无需凭证</b>，只填账号名即可添加（账号作矩阵号标签使用）。
+                    </p>
+                    <details className="group">
+                      <summary className="text-sm text-gray-500 cursor-pointer select-none hover:text-gray-700">
+                        ▸ 开放平台 API 凭证（选填，以备将来自动发布）
+                      </summary>
+                      <div className="space-y-3 mt-3">
+                        {(CREDENTIAL_FIELDS[selectedPlatform] || []).map((field) => (
+                          <div key={field.key}>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">{field.label}</label>
+                            {field.type === "textarea" ? (
+                              <textarea
+                                value={formData[field.key] || ""}
+                                onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                                placeholder={field.placeholder}
+                                rows={3}
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                              />
+                            ) : (
+                              <input
+                                type={field.type}
+                                value={formData[field.key] || ""}
+                                onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                                placeholder={field.placeholder}
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </>
+                ) : (
+                <>
                 <h4 className="text-sm font-medium text-gray-700 mb-3">凭证信息</h4>
-                {["douyin", "wechat_video", "xiaohongshu"].includes(selectedPlatform) && (
-                  <p className="text-xs text-amber-600 mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    半自动平台：内容由系统生成、人工发布，<b>凭证可不填</b>，账号仅作矩阵号标签使用。如有开放平台 API 凭证可选填，以备将来。
-                  </p>
-                )}
                 <div className="space-y-3">
                   {(CREDENTIAL_FIELDS[selectedPlatform] || []).map((field) => (
                     <div key={field.key}>
@@ -400,6 +439,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                     </div>
                   ))}
                 </div>
+                </>
+                )}
               </div>
             </div>
 

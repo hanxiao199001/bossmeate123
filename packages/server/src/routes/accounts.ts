@@ -150,7 +150,10 @@ export async function accountRoutes(app: FastifyInstance) {
       // 半自动平台(抖音/视频号/小红书): 第三方无稳定发布 API, 内容人工发布。账号只是矩阵"名字标签",
       // 无凭证时跳过 API 验证、直接视为就绪(有凭证仍正常验证)。
       const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
-      const hasCreds = body.credentials && Object.keys(body.credentials).length > 0;
+      // PR-P2: "有凭证"按值判断 — 前端可能提交 {clientKey:"",...} 空占位, 只看 key 数会误判去走 API 验证
+      const hasCreds = body.credentials && Object.values(body.credentials).some(
+        (v) => (typeof v === "string" ? v.trim().length > 0 : v != null)
+      );
       let verifyResult: { valid: boolean; error?: string } = { valid: false, error: "解密失败" };
       if (SEMI_AUTO_PLATFORMS.has(body.platform) && !hasCreds) {
         verifyResult = { valid: true }; // 半自动无凭证 → 就绪(人工发布)
@@ -340,7 +343,14 @@ export async function accountRoutes(app: FastifyInstance) {
         });
       }
 
-      const result = await verifyAccountCredentials(account.platform, credentialsForVerify);
+      // PR-P2: 半自动平台空凭证 → 直接就绪(人工发布不需要 API), 也让存量"验证失败"账号一键修复
+      const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
+      const credsEmpty = !Object.values(credentialsForVerify).some(
+        (v) => (typeof v === "string" ? v.trim().length > 0 : v != null)
+      );
+      const result = SEMI_AUTO_PLATFORMS.has(account.platform) && credsEmpty
+        ? { valid: true }
+        : await verifyAccountCredentials(account.platform, credentialsForVerify);
 
       // 更新验证状态
       await db
