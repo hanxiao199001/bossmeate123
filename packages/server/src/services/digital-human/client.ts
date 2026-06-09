@@ -28,8 +28,8 @@ function unwrapCtor<T>(mod: T): any {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createDvhClient(): any {
-  const akId = process.env.ALIYUN_ACCESS_KEY_ID;
-  const akSecret = process.env.ALIYUN_ACCESS_KEY_SECRET;
+  const akId = process.env.ALIYUN_ACCESS_KEY_ID ?? process.env.ALIYUN_AK_ID;
+  const akSecret = process.env.ALIYUN_ACCESS_KEY_SECRET ?? process.env.ALIYUN_AK_SECRET;
   if (!akId || !akSecret) throw new Error("DVH: ALIYUN_ACCESS_KEY_ID / SECRET 缺失");
   const CredentialCtor = unwrapCtor(Credential);
   const AvatarClientCtor = unwrapCtor(avatar20220130);

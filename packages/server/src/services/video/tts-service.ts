@@ -16,6 +16,10 @@
 import { execSync } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
+
+// P2: 阿里云密钥跨命名兜底 — DVH 用 ALIYUN_ACCESS_KEY_*, TTS 历史用 ALIYUN_AK_*, 等价, 配任一对即可。
+const ALIYUN_AK_ID = env.ALIYUN_ACCESS_KEY_ID ?? env.ALIYUN_AK_ID;
+const ALIYUN_AK_SECRET = env.ALIYUN_ACCESS_KEY_SECRET ?? env.ALIYUN_AK_SECRET;
 import { logger } from "../../config/logger.js";
 import { rateLimiter } from "../rate-limiter/index.js";
 import { storage } from "../storage/index.js";
@@ -99,7 +103,7 @@ export class TTSService {
 
     let audio: Buffer;
     const hasAliyunCreds =
-      env.ALIYUN_AK_ID && env.ALIYUN_AK_SECRET && env.ALIYUN_NLS_APPKEY;
+      ALIYUN_AK_ID && ALIYUN_AK_SECRET && env.ALIYUN_NLS_APPKEY;
     const hasStaticToken = env.TTS_API_KEY && env.ALIYUN_NLS_APPKEY;
 
     if (this.provider === "aliyun" && (hasAliyunCreds || hasStaticToken)) {
@@ -144,10 +148,10 @@ export class TTSService {
     this.tokenPromise = (async () => {
       try {
         // 优先用 AccessKey 动态换取；fallback 到静态 TTS_API_KEY（调试用）
-        if (env.ALIYUN_AK_ID && env.ALIYUN_AK_SECRET) {
+        if (ALIYUN_AK_ID && ALIYUN_AK_SECRET) {
           const { token, expireAt } = await fetchNlsToken(
-            env.ALIYUN_AK_ID,
-            env.ALIYUN_AK_SECRET
+            ALIYUN_AK_ID,
+            ALIYUN_AK_SECRET
           );
           this.tokenCache = { token, expireAt };
           logger.info(

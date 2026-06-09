@@ -136,6 +136,16 @@ const envSchema = z.object({
   ALIYUN_AK_ID: z.string().optional(),
   ALIYUN_AK_SECRET: z.string().optional(),
   ALIYUN_NLS_APPKEY: z.string().optional(),
+  // 阿里云访问密钥别名: DVH 用 ACCESS_KEY 命名、TTS 历史用 AK 命名 — 等价, 代码已跨兜底, 配任一对即可。
+  ALIYUN_ACCESS_KEY_ID: z.string().optional(),
+  ALIYUN_ACCESS_KEY_SECRET: z.string().optional(),
+  // DVH 数字人 / Azure / 种子脚本: 运行时直读 process.env, 此处注册供 fail-fast 校验 + 文档。
+  DVH_TENANT_ID: z.string().optional(),
+  DVH_APP_ID: z.string().optional(),
+  DVH_REAL_MODE: z.string().optional(),
+  DVH_DEFAULT_BG_URL: z.string().optional(),
+  AZURE_SPEECH_REGION: z.string().optional(),
+  HANXIAO_TENANT_ID: z.string().optional(),
 
   // 视频
   VIDEO_RESOLUTION: z.string().default("1080x1920"),
