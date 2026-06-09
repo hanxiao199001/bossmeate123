@@ -95,8 +95,18 @@ async function produceVideo(text: string, title: string, templateId: TemplateId,
   }
 }
 
+// P0-2 防双重扣费: 进程内"在途"锁。单 pm2 实例下, 双击/重试的并发请求会都先过 DB SELECT 去重(还没插入)
+// → 各自 produceVideo(扣费)→ 双重扣钱。此 Set 锁住"正在为某文章生成", 第二个并发请求直接跳过。
+const inFlightDvh = new Set<string>();
+
 export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<void> {
   const { db, tenantId, userId, articleContentId, templateId, conversationId, journalId } = opts;
+  const inflightKey = `${tenantId}:${articleContentId}`;
+  if (inFlightDvh.has(inflightKey)) {
+    logger.info({ articleContentId }, "dvh.bridge.in_flight_skip");
+    return;
+  }
+  inFlightDvh.add(inflightKey);
   try {
     const existing = await db.select({ id: contents.id }).from(contents).where(and(
       eq(contents.tenantId, tenantId),
@@ -186,5 +196,7 @@ export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<voi
       { err: err instanceof Error ? err.message : err, articleContentId, templateId: opts.templateId },
       "dvh.bridge.fatal",
     );
+  } finally {
+    inFlightDvh.delete(inflightKey);
   }
 }
