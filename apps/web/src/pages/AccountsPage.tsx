@@ -147,11 +147,14 @@ export default function AccountsPage() {
       return;
     }
 
+    const SEMI_AUTO = new Set(["douyin", "wechat_video", "xiaohongshu"]);
     const fields = CREDENTIAL_FIELDS[selectedPlatform] || [];
-    for (const field of fields) {
-      if (field.required && !formData[field.key]?.trim()) {
-        setAddMsg(`请填写 ${field.label}`);
-        return;
+    if (!SEMI_AUTO.has(selectedPlatform)) {
+      for (const field of fields) {
+        if (field.required && !formData[field.key]?.trim()) {
+          setAddMsg(`请填写 ${field.label}`);
+          return;
+        }
       }
     }
 
@@ -366,6 +369,11 @@ const handleScopeChange = async (accountId: string, scope: string) => {
             <div className="space-y-4 mb-6">
               <div className="border-t border-gray-200 pt-4">
                 <h4 className="text-sm font-medium text-gray-700 mb-3">凭证信息</h4>
+                {["douyin", "wechat_video", "xiaohongshu"].includes(selectedPlatform) && (
+                  <p className="text-xs text-amber-600 mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    半自动平台：内容由系统生成、人工发布，<b>凭证可不填</b>，账号仅作矩阵号标签使用。如有开放平台 API 凭证可选填，以备将来。
+                  </p>
+                )}
                 <div className="space-y-3">
                   {(CREDENTIAL_FIELDS[selectedPlatform] || []).map((field) => (
                     <div key={field.key}>

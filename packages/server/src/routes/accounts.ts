@@ -21,7 +21,7 @@ import { loadDecryptedAccount } from "../services/publisher/credentials-loader.j
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
   accountName: z.string().min(1),
-  credentials: z.record(z.any()),
+  credentials: z.record(z.any()).optional().default({}),
   groupName: z.string().optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
   journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
@@ -147,16 +147,23 @@ export async function accountRoutes(app: FastifyInstance) {
         })
         .returning();
 
-      // 2. 从 DB 重新读并解密，跑真实 verify
+      // 半自动平台(抖音/视频号/小红书): 第三方无稳定发布 API, 内容人工发布。账号只是矩阵"名字标签",
+      // 无凭证时跳过 API 验证、直接视为就绪(有凭证仍正常验证)。
+      const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
+      const hasCreds = body.credentials && Object.keys(body.credentials).length > 0;
       let verifyResult: { valid: boolean; error?: string } = { valid: false, error: "解密失败" };
-      try {
-        const loaded = await loadDecryptedAccount(account.id, request.tenantId);
-        if (loaded) {
-          verifyResult = await verifyAccountCredentials(loaded.platform, loaded.credentials);
+      if (SEMI_AUTO_PLATFORMS.has(body.platform) && !hasCreds) {
+        verifyResult = { valid: true }; // 半自动无凭证 → 就绪(人工发布)
+      } else {
+        try {
+          const loaded = await loadDecryptedAccount(account.id, request.tenantId);
+          if (loaded) {
+            verifyResult = await verifyAccountCredentials(loaded.platform, loaded.credentials);
+          }
+        } catch (err) {
+          verifyResult = { valid: false, error: err instanceof Error ? err.message : "凭证解密失败" };
+          logger.error({ err, accountId: account.id }, "入库后解密验证失败");
         }
-      } catch (err) {
-        verifyResult = { valid: false, error: err instanceof Error ? err.message : "凭证解密失败" };
-        logger.error({ err, accountId: account.id }, "入库后解密验证失败");
       }
 
       // 3. 回填 is_verified
