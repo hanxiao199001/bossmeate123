@@ -186,6 +186,8 @@ export default function ContentDetailPage() {
   const [variantCount, setVariantCount] = useState(3);
   const [douyinPosted, setDouyinPosted] = useState<boolean[]>([]);
   const [showDouyinQr, setShowDouyinQr] = useState(false); // PR #267: 扫码下载视频到手机
+  // PR-M2: 视频平台文案切换 (抖音/视频号同一助手通吃)
+  const [captionPlatform, setCaptionPlatform] = useState<"douyin" | "wechat_video">("douyin");
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
@@ -376,7 +378,7 @@ export default function ContentDetailPage() {
     setDouyinLoading(true);
     try {
       const res = await api.post<DyVariant[]>(
-        `/content/${content.id}/douyin-caption-variants?count=${variantCount}${force ? "&force=true" : ""}`,
+        `/content/${content.id}/douyin-caption-variants?count=${variantCount}&platform=${captionPlatform}${force ? "&force=true" : ""}`,
         {}
       );
       if (res.data) {
@@ -1149,14 +1151,25 @@ export default function ContentDetailPage() {
                         {/* PR #264/#266: 抖音半自动发布助手 — 多号差异化文案 + 复制 + 发布勾选 */}
                         <div className="mt-4 p-4 bg-white rounded-lg text-left">
                           <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-semibold text-gray-800">🎵 抖音发布助手</span>
-                            {douyinVariants && (
-                              <button
-                                onClick={() => handleGenerateDouyinCaption(true)}
-                                disabled={douyinLoading}
-                                className="text-xs text-blue-600 hover:underline disabled:opacity-50"
-                              >🔄 重新生成</button>
-                            )}
+                            <span className="text-sm font-semibold text-gray-800">
+                              {captionPlatform === "wechat_video" ? "📹 视频号发布助手" : "🎵 抖音发布助手"}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {/* PR-M2: 平台切换 — 切到哪个用哪个平台文案风格 */}
+                              {([["douyin", "🎵 抖音"], ["wechat_video", "📹 视频号"]] as const).map(([p, lbl]) => (
+                                <button key={p}
+                                  onClick={() => { if (captionPlatform !== p) { setCaptionPlatform(p); setDouyinVariants(null); setDouyinPosted([]); } }}
+                                  className={`text-xs px-2 py-0.5 rounded ${captionPlatform === p ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                                >{lbl}</button>
+                              ))}
+                              {douyinVariants && (
+                                <button
+                                  onClick={() => handleGenerateDouyinCaption(true)}
+                                  disabled={douyinLoading}
+                                  className="text-xs text-blue-600 hover:underline disabled:opacity-50 ml-1"
+                                >🔄 重新生成</button>
+                              )}
+                            </div>
                           </div>
                           {!douyinVariants ? (
                             <div className="flex items-center gap-2">
@@ -1231,7 +1244,7 @@ export default function ContentDetailPage() {
                               </div>
                               <ol className="mt-3 text-xs text-gray-500 list-decimal list-inside space-y-0.5">
                                 <li>下载视频到手机（上方「下载视频」或复制链接在手机打开）</li>
-                                <li>每个号：打开抖音 → ＋ → 选视频 → 复制对应「号N文案」粘贴 → 发布</li>
+                                <li>每个号：打开{captionPlatform === "wechat_video" ? "视频号" : "抖音"} → ＋ → 选视频 → 复制对应「号N文案」粘贴 → 发布</li>
                                 <li>发完一个勾一个，避免漏发 / 重发</li>
                               </ol>
                             </>
