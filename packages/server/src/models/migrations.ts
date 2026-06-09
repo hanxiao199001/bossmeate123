@@ -90,4 +90,18 @@ export const MIGRATIONS: Migration[] = [
       END $do$;
     `,
   },
+  {
+    version: "005_journal_usage",
+    description: "PR-N: 期刊使用记录表(15天不重复冷却)",
+    sql: `
+      CREATE TABLE IF NOT EXISTS journal_usage (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        journal_id UUID NOT NULL REFERENCES journals(id) ON DELETE CASCADE,
+        content_id UUID REFERENCES contents(id) ON DELETE SET NULL,
+        used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ju_lookup ON journal_usage (tenant_id, journal_id, used_at);
+    `,
+  },
 ];

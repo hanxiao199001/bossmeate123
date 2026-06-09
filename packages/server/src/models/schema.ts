@@ -1140,3 +1140,18 @@ export const contentPublishLog = pgTable(
     index("idx_cpl_created").on(table.createdAt),
   ]
 );
+
+// PR-N: 期刊使用记录 — 每次生成内容(盘点等)选到的刊记一笔, 用于"15天不重复"冷却。
+export const journalUsage = pgTable(
+  "journal_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    journalId: uuid("journal_id").references(() => journals.id).notNull(),
+    contentId: uuid("content_id").references(() => contents.id),
+    usedAt: timestamp("used_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ju_lookup").on(table.tenantId, table.journalId, table.usedAt),
+  ]
+);

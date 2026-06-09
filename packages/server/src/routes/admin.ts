@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, gte, or, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { journals, contents, platformAccounts, tenants } from "../models/schema.js";
+import { journals, contents, platformAccounts, tenants, journalUsage } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
@@ -688,7 +688,7 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const b = (request.body ?? {}) as { journalIds?: string[]; discipline?: string; catalog?: string; count?: number; audience?: string; scope?: string };
       const audience = (b.audience || "").trim() || "普通院校教师";
-      const { title, html, journalCovers } = await generateRoundupArticle({
+      const { title, html, journalCovers, journalIds } = await generateRoundupArticle({
         tenantId: request.tenantId, journalIds: b.journalIds, discipline: b.discipline,
         catalog: b.catalog, count: b.count, audience, scope: b.scope,
       });
@@ -701,6 +701,12 @@ export async function adminRoutes(app: FastifyInstance) {
         ...initialStatusFields("draft"),
         metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds: b.journalIds ?? null, discipline: b.discipline ?? null, journalCovers },
       }).returning({ id: contents.id });
+      // PR-N: 记录本次用到的刊 → "15天不重复"冷却
+      if (row?.id && journalIds.length > 0) {
+        await db.insert(journalUsage).values(
+          journalIds.map((jid) => ({ tenantId: request.tenantId, journalId: jid, contentId: row.id }))
+        );
+      }
       return { code: "OK", data: { contentId: row?.id, title } };
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, "admin.roundup_failed");

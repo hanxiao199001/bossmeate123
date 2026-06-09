@@ -11,6 +11,9 @@ import { getProviders } from "../ai/provider-factory.js";
 import { generateJournalRoundupHtml, type RoundupData } from "../publisher/adapters/journal-roundup-template.js";
 import { journalScopeCondition } from "../recommendation/journal-scope.js";
 
+// PR-N: 同一刊 N 天内不重复出现 (按租户)。可用 env 覆盖。
+const JOURNAL_REUSE_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
+
 interface JRow {
   id: string; name: string | null; discipline: string | null;
   acceptanceRate: number | null; reviewCycle: string | null; scopeDescription: string | null;
@@ -52,6 +55,12 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   if (opts.catalog) conds.push(sql`${journals.catalogs} @> ${JSON.stringify([opts.catalog])}::jsonb`);
   const scopeCond = journalScopeCondition(opts.scope);
   if (scopeCond) conds.push(scopeCond);
+  // PR-N: 排除该租户冷却期内已用过的刊 (强制 N 天不重复)
+  conds.push(sql`NOT EXISTS (
+    SELECT 1 FROM journal_usage ju
+    WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${opts.tenantId}
+      AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_REUSE_COOLDOWN_DAYS})
+  )`);
   return (await db.select(COLS).from(journals).where(and(...conds))
     .orderBy(sql`${journals.acceptanceRate} DESC NULLS LAST, random()`).limit(opts.count ?? 3)) as JRow[];
 }
@@ -124,9 +133,10 @@ function ruleFallback(js: JRow[], audience: string): RoundupData {
 }
 
 /** 生成盘点数据 (RoundupData)。 */
-export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData> {
+export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData & { journalIds: string[] }> {
   const js = await resolveJournals(opts);
-  if (js.length === 0) throw new Error("generateRoundup: 没选到期刊 (检查 journalIds / discipline)");
+  if (js.length === 0) throw new Error("没选到期刊: 可能该范围内 15 天内可用的新刊不足, 或筛选条件太窄");
+  const journalIds = js.map((j) => j.id);
 
   let parsed: Awaited<ReturnType<typeof callLlm>> | null = null;
   try {
@@ -134,7 +144,7 @@ export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, "roundup.llm_failed_fallback");
   }
-  if (!parsed?.items || parsed.items.length === 0) return ruleFallback(js, opts.audience);
+  if (!parsed?.items || parsed.items.length === 0) return { ...ruleFallback(js, opts.audience), journalIds };
 
   const items = js.map((j, i) => {
     const it = parsed!.items![i] ?? { intro: "", experienceParas: [] };
@@ -161,12 +171,13 @@ export async function generateRoundup(opts: RoundupOptions): Promise<RoundupData
     reminderTitle: reminderParas.length ? "最后一句最重要的提醒" : undefined,
     reminderParas,
     ctaLines: toArr(parsed.ctaLines),
+    journalIds,
   };
 }
 
 /** 一步到位: 生成盘点 → 渲染 HTML。 */
-export async function generateRoundupArticle(opts: RoundupOptions): Promise<{ title: string; html: string; journalCovers: string[] }> {
+export async function generateRoundupArticle(opts: RoundupOptions): Promise<{ title: string; html: string; journalCovers: string[]; journalIds: string[] }> {
   const data = await generateRoundup(opts);
   const journalCovers = data.items.map((it) => it.coverUrl).filter((u): u is string => !!u && /^https?:\/\//.test(u));
-  return { title: data.title, html: generateJournalRoundupHtml(data), journalCovers };
+  return { title: data.title, html: generateJournalRoundupHtml(data), journalCovers, journalIds: data.journalIds };
 }
