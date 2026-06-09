@@ -615,6 +615,39 @@ export async function adminRoutes(app: FastifyInstance) {
     return { code: "OK", data: { quota: clean, total } };
   });
 
+  /**
+   * PR-O: 每日内容配置(按类型) — domestic/international/roundup 各 {count, disciplines}。
+   *   数字人暂不自动生成。存 SYSTEM 租户 config.automationConfig.contentQuota, daily-cron 据此分类型生成。
+   */
+  app.get("/daily-content-config", { preHandler: adminOnlyMiddleware }, async () => {
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const cq = (t?.config as { automationConfig?: { contentQuota?: any } } | null)?.automationConfig?.contentQuota;
+    return { code: "OK", data: { contentQuota: cq || {}, disciplines: ALL_DISCIPLINES } };
+  });
+  app.patch("/daily-content-config", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body as { contentQuota?: Record<string, { count?: unknown; disciplines?: unknown }> } | null) || {};
+    const validTypes = new Set(["domestic", "international", "roundup"]);
+    const validDisc = new Set<string>(ALL_DISCIPLINES.map((d) => d.code));
+    const clean: Record<string, { count: number; disciplines: string[] }> = {};
+    let total = 0;
+    for (const [type, v] of Object.entries(body.contentQuota || {})) {
+      if (!validTypes.has(type)) continue;
+      const count = Math.min(Math.max(Math.floor(Number(v?.count)) || 0, 0), 50);
+      const disciplines = Array.isArray(v?.disciplines)
+        ? (v!.disciplines as unknown[]).map(String).filter((d) => validDisc.has(d))
+        : [];
+      if (count > 0) { clean[type] = { count, disciplines }; total += count; }
+    }
+    if (total > 100) return reply.code(400).send({ code: "QUOTA_TOO_LARGE", message: `每日总数 ${total} 超上限 100` });
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const cfg = (t?.config as Record<string, unknown>) || {};
+    const auto = (cfg.automationConfig as Record<string, unknown>) || {};
+    cfg.automationConfig = { ...auto, contentQuota: clean };
+    await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    logger.info({ contentQuota: clean, total }, "PR-O 每日内容配置(按类型)已更新");
+    return { code: "OK", data: { contentQuota: clean, total } };
+  });
+
   // 5-19 PR #171: SSE stream admin only (跟随 POST /bulk-distribute 同权限)
   app.get("/bulk-distribute/:batchId/stream", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const { batchId } = request.params as { batchId: string };
