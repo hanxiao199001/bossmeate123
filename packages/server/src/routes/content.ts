@@ -647,10 +647,12 @@ export async function contentRoutes(app: FastifyInstance) {
     try {
       const { id } = request.params as { id: string };
 
+      // 列表用 READABLE_TENANT_FILTER(含系统租户的每日自动生成内容), 删除也放开到同一范围,
+      // 否则"看得见删不掉"→404。(与本文件 line ~254 的操作 handler 一致)
       const [deleted] = await db
         .delete(contents)
         .where(
-          and(eq(contents.id, id), eq(contents.tenantId, request.tenantId))
+          and(eq(contents.id, id), READABLE_TENANT_FILTER(request.tenantId))
         )
         .returning();
 
