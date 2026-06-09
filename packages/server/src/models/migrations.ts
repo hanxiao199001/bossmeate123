@@ -32,4 +32,62 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS journal_scope varchar(20) NOT NULL DEFAULT 'both';
     `,
   },
+  {
+    version: "003_fk_ondelete_contents",
+    description: "P0-1: 引用 contents 的外键加 ON DELETE(强归属CASCADE/弱引用SET NULL), 删文章不再被外键挡500",
+    sql: `
+      -- 健壮辅助: 按列动态找现有外键名→替换为带 ON DELETE 的(不怕默认命名差异)
+      CREATE OR REPLACE FUNCTION _set_fk_ondelete(p_tbl text, p_col text, p_parent text, p_act text) RETURNS void AS $fn$
+      DECLARE c text;
+      BEGIN
+        FOR c IN
+          SELECT con.conname FROM pg_constraint con
+          WHERE con.conrelid = p_tbl::regclass AND con.contype = 'f'
+            AND p_col = ANY(SELECT a.attname FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey))
+        LOOP EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', p_tbl, c); END LOOP;
+        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %I(id) ON DELETE %s',
+                       p_tbl, p_tbl || '_' || p_col || '_fkey', p_col, p_parent, p_act);
+      END $fn$ LANGUAGE plpgsql;
+
+      SELECT _set_fk_ondelete('boss_edits',           'content_id',        'contents', 'CASCADE');
+      SELECT _set_fk_ondelete('content_metrics',      'content_id',        'contents', 'CASCADE');
+      SELECT _set_fk_ondelete('distribution_records', 'content_id',        'contents', 'SET NULL');
+      SELECT _set_fk_ondelete('production_records',   'content_id',        'contents', 'SET NULL');
+      SELECT _set_fk_ondelete('column_calendars',     'content_id',        'contents', 'SET NULL');
+      SELECT _set_fk_ondelete('leads',                'source_content_id', 'contents', 'SET NULL');
+      SELECT _set_fk_ondelete('batch_rows',           'article_id',        'contents', 'SET NULL');
+
+      DROP FUNCTION _set_fk_ondelete(text, text, text, text);
+    `,
+  },
+  {
+    version: "004_fk_ondelete_aggregates",
+    description: "P0-1: 聚合根(tenants/users/conversations/leads/journals/batches/content_templates/platform_accounts)的所有子表外键统一加 ON DELETE — NOT NULL→CASCADE, 可空→SET NULL。删租户/用户/账号等不再被外键挡500",
+    sql: `
+      DO $do$
+      DECLARE
+        parents text[] := ARRAY['tenants','users','conversations','leads','journals','batches','content_templates','platform_accounts'];
+        p text; r record;
+      BEGIN
+        FOREACH p IN ARRAY parents LOOP
+          FOR r IN
+            SELECT con.conname,
+                   con.conrelid::regclass::text AS tbl,
+                   att.attname AS col,
+                   att.attnotnull AS notnull
+            FROM pg_constraint con
+            JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = con.conkey[1]
+            WHERE con.contype = 'f'
+              AND con.confrelid = p::regclass
+              AND array_length(con.conkey, 1) = 1
+          LOOP
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.tbl, r.conname);
+            EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %s(id) ON DELETE %s',
+                           r.tbl, r.conname, r.col, p,
+                           CASE WHEN r.notnull THEN 'CASCADE' ELSE 'SET NULL' END);
+          END LOOP;
+        END LOOP;
+      END $do$;
+    `,
+  },
 ];
