@@ -67,6 +67,11 @@ export default function SettingsPage() {
   const [quotaSaving, setQuotaSaving] = useState(false);
   const [quotaResult, setQuotaResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // PR-O: 每日内容配置(按类型)
+  const [contentQuota, setContentQuota] = useState<Record<string, { count: number; disciplines: string[] }>>({});
+  const [cqSaving, setCqSaving] = useState(false);
+  const [cqResult, setCqResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   // T4-3-5: 模板偏好统计
   const [templatePrefs, setTemplatePrefs] = useState<TemplatePreferenceItem[]>([]);
   const [templateTotalSelections, setTemplateTotalSelections] = useState(0);
@@ -162,6 +167,30 @@ export default function SettingsPage() {
     } finally {
       setQuotaSaving(false);
     }
+  };
+
+  // PR-O: 加载/保存 每日内容配置(按类型)
+  useEffect(() => {
+    api.get<{ contentQuota: Record<string, { count: number; disciplines: string[] }> }>("/admin/daily-content-config")
+      .then((res) => setContentQuota(res.data?.contentQuota || {}))
+      .catch(() => { /* 非 admin 忽略 */ });
+  }, []);
+  const setCqCount = (t: string, n: number) =>
+    setContentQuota((p) => ({ ...p, [t]: { count: Math.max(0, Math.min(50, n)), disciplines: p[t]?.disciplines || [] } }));
+  const toggleCqDisc = (t: string, code: string) =>
+    setContentQuota((p) => {
+      const cur = p[t] || { count: 0, disciplines: [] };
+      const has = cur.disciplines.includes(code);
+      return { ...p, [t]: { count: cur.count, disciplines: has ? cur.disciplines.filter((x) => x !== code) : [...cur.disciplines, code] } };
+    });
+  const handleSaveContentQuota = async () => {
+    setCqSaving(true); setCqResult(null);
+    try {
+      const res = await api.patch<{ total: number }>("/admin/daily-content-config", { contentQuota });
+      setCqResult({ ok: true, msg: `已保存, 每日共 ${res.data?.total ?? 0} 篇, 次日生效` });
+    } catch (err: any) {
+      setCqResult({ ok: false, msg: err?.message || "保存失败" });
+    } finally { setCqSaving(false); }
   };
 
   const toggleDiscipline = (code: string) => {
@@ -374,6 +403,55 @@ export default function SettingsPage() {
           {quotaResult && (
             <div className={`mt-3 text-sm ${quotaResult.ok ? "text-green-600" : "text-red-600"}`}>{quotaResult.msg}</div>
           )}
+        </div>
+
+        {/* PR-O: 每日内容配置(按类型) */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-teal-100 flex items-center justify-center text-xl">{"\uD83D\uDDC2\uFE0F"}</div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">每日内容配置（按类型）</h2>
+              <p className="text-sm text-gray-500">设置每天各类型内容各生成几篇、各类各做哪些学科。数字人暂不自动生成；总数=各类之和。未选学科=全学科轮转。</p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {([["domestic", "国内核心"], ["international", "国外期刊"], ["roundup", "多刊盘点"]] as const).map(([t, label]) => {
+              const cur = contentQuota[t] || { count: 0, disciplines: [] };
+              return (
+                <div key={t} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-gray-800">{label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">每日</span>
+                      <input type="number" min={0} max={50} value={cur.count}
+                        onChange={(e) => setCqCount(t, Math.floor(Number(e.target.value)) || 0)}
+                        className="w-16 text-center border border-gray-300 rounded px-2 py-1 text-sm" />
+                      <span className="text-xs text-gray-500">篇</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ALL_DISCIPLINES.map((d) => {
+                      const on = cur.disciplines.includes(d.code);
+                      return (
+                        <button key={d.code} onClick={() => toggleCqDisc(t, d.code)}
+                          className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${on ? "border-teal-500 bg-teal-50 text-teal-700" : "border-gray-200 text-gray-500 hover:border-gray-300"}`}>
+                          {d.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1 text-[11px] text-gray-400">{cur.disciplines.length === 0 ? "未选学科 = 全学科轮转" : `${cur.disciplines.length} 个学科`}</p>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 pt-3">
+            <button onClick={handleSaveContentQuota} disabled={cqSaving}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-all ${cqSaving ? "bg-gray-400 cursor-not-allowed" : "bg-teal-600 hover:bg-teal-700 active:scale-95"}`}>
+              {cqSaving ? "保存中..." : "保存内容配置"}
+            </button>
+          </div>
+          {cqResult && <div className={`mt-3 text-sm ${cqResult.ok ? "text-green-600" : "text-red-600"}`}>{cqResult.msg}</div>}
         </div>
 
         {/* T4-3-5: 我的模板偏好（boss_edits 累计 → 加权选副版本模板） */}
