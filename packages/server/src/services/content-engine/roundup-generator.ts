@@ -48,7 +48,7 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   const scopeCond = journalScopeCondition(opts.scope);
   if (scopeCond) conds.push(scopeCond);
   return (await db.select(COLS).from(journals).where(and(...conds))
-    .orderBy(sql`${journals.acceptanceRate} DESC NULLS LAST`).limit(opts.count ?? 3)) as JRow[];
+    .orderBy(sql`${journals.acceptanceRate} DESC NULLS LAST, random()`).limit(opts.count ?? 3)) as JRow[];
 }
 
 function catalogLabels(j: JRow): string {
