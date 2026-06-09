@@ -82,11 +82,10 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
   const generating = phase === "generating";
 
   const selectedAccount = accounts.find((a) => a.id === accountId);
-  // 选了账号 → 定位跟随账号 (both → 不过滤); 否则用手动 scope
-  const effectiveScope = selectedAccount
-    ? (selectedAccount.journalScope && selectedAccount.journalScope !== "both" ? selectedAccount.journalScope : "")
-    : scope;
-  const scopeLocked = !!selectedAccount;
+  // 仅当账号定位是明确的国内/国外时才锁定跟随; "两者都做"或没选账号 → 不锁, 让用户手动选
+  const accountScope = selectedAccount?.journalScope;
+  const scopeLocked = accountScope === "domestic" || accountScope === "international";
+  const effectiveScope = scopeLocked ? (accountScope as string) : scope;
 
   const reset = () => {
     setPhase("idle"); setError(null); setDoneMsg(""); setLastContentId("");
@@ -172,7 +171,7 @@ export default function RoundupGenerateModal({ open, onClose, onComplete }: Roun
             </select>
             {selectedAccount && (
               <p className="mt-1 text-xs text-teal-600">
-                将按【{SCOPE_LABEL[selectedAccount.journalScope || "both"]}】选刊，生成后直接送入该账号草稿箱
+                {scopeLocked ? `将按【${SCOPE_LABEL[selectedAccount.journalScope || "both"]}】选刊，` : "可在下方手动选定位，"}生成后直接送入该账号草稿箱
               </p>
             )}
           </div>
