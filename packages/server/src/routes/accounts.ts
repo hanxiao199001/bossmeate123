@@ -355,7 +355,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * POST /publish - 批量发布内容到多个账号
    */
-  app.post("/publish", async (request) => {
+  app.post("/publish", async (request, reply) => {
     try {
       const body = publishSchema.parse(request.body);
 
@@ -386,7 +386,7 @@ export async function accountRoutes(app: FastifyInstance) {
       };
     } catch (err) {
       logger.error({ err }, "批量发布失败");
-      return { code: "ERROR", message: "发布失败，请稍后重试" };
+      return reply.code(500).send({ code: "ERROR", message: "发布失败，请稍后重试" });
     }
   });
 }

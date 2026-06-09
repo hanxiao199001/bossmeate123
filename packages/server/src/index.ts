@@ -57,6 +57,8 @@ process.on("unhandledRejection", (reason, promise) => {
 });
 process.on("uncaughtException", (err) => {
   console.error("[CRASH] uncaughtException:", err);
+  // Node 官方建议: uncaughtException 后进程状态不可信, 退出让 pm2 拉起, 避免带病僵尸运行。
+  process.exit(1);
 });
 
 async function bootstrap() {
@@ -289,4 +291,7 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+bootstrap().catch((e) => {
+  console.error("[CRASH] bootstrap failed:", e);
+  process.exit(1);
+});

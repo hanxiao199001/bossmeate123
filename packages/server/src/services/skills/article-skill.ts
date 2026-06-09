@@ -443,7 +443,9 @@ export class ArticleSkill implements ISkill {
         const raw = JSON.parse(jsonMatch[0]);
         parsed = {
           ...raw,
-          publishIntent: raw.publishIntent || { wantPublish: false, platforms: [], timing: "unspecified" },
+          publishIntent: raw.publishIntent
+            ? { ...raw.publishIntent, platforms: Array.isArray(raw.publishIntent.platforms) ? raw.publishIntent.platforms : [] }
+            : { wantPublish: false, platforms: [], timing: "unspecified" },
         };
       } else {
         throw new Error("未找到 JSON");
