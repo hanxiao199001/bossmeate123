@@ -15,12 +15,15 @@
  *
  * 调度: scheduler.ts 注册 cron '0 3 * * *' Asia/Shanghai (每日 03:00 BJ)。
  */
-import { desc, sql, inArray, eq } from "drizzle-orm";
+import { desc, sql, inArray, eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { keywords as keywordsTable, contents, tenants } from "../../models/schema.js";
+import { keywords as keywordsTable, contents, tenants, journals, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
+import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
+import { journalScopeCondition } from "./journal-scope.js";
+import { initialStatusFields } from "../articles/state-machine.js";
 import {
   SYSTEM_RECOMMENDATION_TENANT_ID,
   SYSTEM_RECOMMENDATION_USER_ID,
@@ -135,6 +138,13 @@ export async function getDailyQuota(): Promise<Record<string, number> | null> {
 export async function runDailyRecommendation(): Promise<DailyRecommendationResult> {
   const startedAt = new Date().toISOString();
   logger.info({ size: RECOMMENDATION_BATCH_SIZE }, "PR #130 daily-recommendation cron 开始");
+
+  // PR-O3: 配了"按类型"配额 → 走新引擎(多刊盘点+国内/国外单篇); 否则回退旧"按学科"路径。
+  const contentQuota = await getContentQuota();
+  if (contentQuota) {
+    logger.info({ types: Object.keys(contentQuota) }, "PR-O3 走按类型生成引擎");
+    return runDailyContentByType(contentQuota);
+  }
 
   const dayOfWeek = new Date().getDay();
   // PR #222: 优先用配置的每学科篇数 (dailyQuota); 没配则回退星期轮转。
@@ -288,4 +298,97 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   };
   logger.info(summary, `PR #172 daily-cron 完成 ${batchIds.length}/${candidates.length} (fallback=${fallbackLevel}, journals=${usedJournalIds.size})`);
   return summary;
+}
+
+// ============ PR-O3: 每日内容生成(按类型) ============
+const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics"];
+const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
+
+/** 读 SYSTEM 租户的 contentQuota(按类型配额)。空/未配 → null。 */
+export async function getContentQuota(): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
+  try {
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const raw = (t?.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)?.automationConfig?.contentQuota;
+    if (raw && typeof raw === "object") {
+      const clean: Record<string, { count: number; disciplines: string[] }> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const count = Math.floor(Number(v?.count)) || 0;
+        if (count > 0) clean[k] = { count, disciplines: Array.isArray(v?.disciplines) ? v!.disciplines.map(String) : [] };
+      }
+      if (Object.keys(clean).length > 0) return clean;
+    }
+  } catch (err) { logger.warn({ err: String(err) }, "PR-O3 读 contentQuota 失败"); }
+  return null;
+}
+
+/** 选一本 定位+学科 且 冷却期内未用过 的刊(随机)。无则 null。 */
+async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
+  const conds = [
+    eq(journals.status, "active"),
+    sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`,
+    sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`,
+  ];
+  const sc = journalScopeCondition(scope);
+  if (sc) conds.push(sc);
+  const [j] = await db.select({ id: journals.id }).from(journals).where(and(...conds)).orderBy(sql`random()`).limit(1);
+  return j?.id ?? null;
+}
+
+/** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
+export async function runDailyContentByType(cq: Record<string, { count: number; disciplines: string[] }>): Promise<DailyRecommendationResult> {
+  const startedAt = new Date().toISOString();
+  const SYS = SYSTEM_RECOMMENDATION_TENANT_ID;
+  const batchIds: string[] = [];
+  const failures: Array<{ keyword: string; error: string }> = [];
+  let roundupCount = 0;
+  const uniqueJournals = new Set<string>();
+  const usedDisc = new Set<string>();
+
+  for (const [type, cfg] of Object.entries(cq)) {
+    if (!cfg.count) continue;
+    const discs = cfg.disciplines.length ? cfg.disciplines : ALL_DISC_CODES;
+    for (let i = 0; i < cfg.count; i++) {
+      const discipline = discs[i % discs.length];
+      usedDisc.add(discipline);
+      try {
+        if (type === "roundup") {
+          const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: 3, audience: "普通院校教师" });
+          const [row] = await db.insert(contents).values({
+            tenantId: SYS, userId: SYSTEM_RECOMMENDATION_USER_ID, type: "article", title, body: html,
+            ...initialStatusFields("draft"),
+            metadata: { source: "roundup", templateId: "journal-roundup", discipline, journalCovers },
+          }).returning({ id: contents.id });
+          if (row?.id && journalIds.length) {
+            await db.insert(journalUsage).values(journalIds.map((jid) => ({ tenantId: SYS, journalId: jid, contentId: row.id })));
+            journalIds.forEach((jid) => uniqueJournals.add(jid));
+          }
+          roundupCount++;
+        } else if (type === "domestic" || type === "international") {
+          const journalId = await pickScopedFreshJournal(SYS, type, discipline);
+          if (!journalId) { logger.info({ type, discipline }, "PR-O3 该范围无可用新刊, 跳过"); continue; }
+          const cands = await selectCandidates({ disciplines: [discipline], cooldownDays: 0, poolSize: 5 });
+          const topic = cands[0]?.keyword ?? discipline;
+          const result = await createBatch({
+            tenantId: SYS, userId: SYSTEM_RECOMMENDATION_USER_ID,
+            filename: `daily-${type}-${discipline}-${new Date().toISOString().slice(0, 10)}`,
+            rows: [{ rowIndex: 1, topic, journalId, template: "A", priority: 3 }],
+          });
+          batchIds.push(result.batchId);
+          uniqueJournals.add(journalId);
+          await db.insert(journalUsage).values({ tenantId: SYS, journalId });
+          if (cands[0]) await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, cands[0].id));
+        }
+      } catch (err) {
+        const error = (err as Error).message || String(err);
+        failures.push({ keyword: `${type}/${discipline}`, error });
+        logger.warn({ type, discipline, err }, "PR-O3 单项生成失败(跳过)");
+      }
+    }
+  }
+  logger.info({ roundupCount, articles: batchIds.length, failures: failures.length }, "PR-O3 每日内容(按类型)生成完成");
+  return {
+    selectedKeywords: batchIds.length, articlesEnqueued: batchIds.length + roundupCount,
+    failures, batchIds, startedAt, finishedAt: new Date().toISOString(),
+    fallbackLevel: 0, diversityStats: { uniqueJournals: uniqueJournals.size, disciplines: [...usedDisc] },
+  };
 }
