@@ -1,0 +1,60 @@
+# BossMate CI 门禁（Phase 1c, 2026-06-10）
+# 每次 push/PR 到 main: 类型检查(必过) + 单元测试(必过)
+# 这是防"坏代码直接进生产"的第一道闸 — deploy:smart 拉的就是 main
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: 类型检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: tsc --noEmit (server)
+        run: npx tsc --noEmit -p packages/server/tsconfig.json
+
+  test:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
+    env:
+      DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci_unused
+      JWT_SECRET: ci-secret-12345678
+      REDIS_URL: redis://127.0.0.1:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: vitest run
+        run: npx vitest run --reporter=basic
