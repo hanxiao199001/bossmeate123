@@ -119,33 +119,53 @@ async function closeSession(s: QrSession, status: QrLoginStatus, error?: string)
   setTimeout(() => sessions.delete(s.sessionId), 600_000).unref?.();
 }
 
-/** 启发式截取页面上的二维码: 选最大的接近正方形且 ≥100px 的 img/canvas */
-async function captureQr(page: Page): Promise<string | null> {
+/**
+ * 启发式截取二维码: 在每个 frame 内找"接近正方形、边长 100-340px"的 img/canvas。
+ * - iframe 优先(抖音登录二维码在独立 passport iframe; 主文档常有大宣传卡误判)
+ * - 边长上限 340 过滤掉宣传卡/大图, 二维码一般 ~200px
+ * - 都没有 → 整页截图兜底
+ */
+async function findQrInFrame(frame: any): Promise<string | null> {
   try {
-    const handle = await page.evaluateHandle(() => {
-      // 浏览器上下文执行 — server tsconfig 无 DOM lib, 经 globalThis 取 document
+    const handle = await frame.evaluateHandle(() => {
       const doc = (globalThis as any).document;
       const cands = Array.from(doc.querySelectorAll("img, canvas")) as any[];
       let best: any = null;
       let bestArea = 0;
       for (const el of cands) {
         const r = el.getBoundingClientRect();
-        if (r.width < 100 || r.height < 100) continue;
-        const ratio = r.width / r.height;
+        const w = r.width, h = r.height;
+        if (w < 100 || h < 100 || w > 340 || h > 340) continue; // 二维码尺寸带
+        const ratio = w / h;
         if (ratio < 0.8 || ratio > 1.25) continue; // 接近正方形
-        const area = r.width * r.height;
+        const area = w * h;
         if (area > bestArea) { bestArea = area; best = el; }
       }
       return best;
     });
     const el = handle.asElement();
     if (el) {
-      const buf = await (el as any).screenshot({ encoding: "base64" });
+      const buf = await el.screenshot({ encoding: "base64" });
       await handle.dispose();
       return typeof buf === "string" ? buf : Buffer.from(buf).toString("base64");
     }
     await handle.dispose();
-    // 兜底: 整页截图 (用户也能从中扫码)
+    return null;
+  } catch {
+    return null; // frame 跨域/已 detach
+  }
+}
+
+async function captureQr(page: Page): Promise<string | null> {
+  try {
+    // iframe 优先 (登录二维码多在独立 iframe), 主文档最后
+    const frames = page.frames();
+    const ordered = [...frames.filter((f) => f !== page.mainFrame()), page.mainFrame()];
+    for (const frame of ordered) {
+      const qr = await findQrInFrame(frame);
+      if (qr) return qr;
+    }
+    // 兜底: 整页截图
     const full = await page.screenshot({ encoding: "base64" });
     return typeof full === "string" ? full : Buffer.from(full).toString("base64");
   } catch {
