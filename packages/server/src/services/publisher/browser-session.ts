@@ -360,6 +360,14 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
           } else {
             loggedIn = cfg.isLoggedInUrl(url) || hasSession;
           }
+          // 诊断全页截图: 每 8 轮 (~20s) 覆盖写一张, 扫码失败时直接看页面(滑块验证/二维码失效/环境异常)
+          if (pollTick % 8 === 0) {
+            try {
+              const dir = resolve(process.cwd(), "data/uploads");
+              await mkdir(dir, { recursive: true });
+              await page.screenshot({ path: resolve(dir, `qr-debug-${session.platform}.png`) as any, fullPage: true });
+            } catch { /* noop */ }
+          }
           // 诊断日志: 每 4 轮 (~10s) 打一次, 便于定位卡点
           if (pollTick++ % 4 === 0) {
             logger.info({
