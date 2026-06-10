@@ -86,18 +86,9 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption }: Upload
   await uploadVideoFile(page, videoPath);
   logger.info("抖音推草稿: 视频文件已提交, 等待进入编辑页");
 
-  // 2. 等编辑页就绪 (出现文案编辑器). 抖音编辑器是 contenteditable
-  const editorSelectors = [
-    'div[data-placeholder]',
-    '.zone-container [contenteditable="true"]',
-    '[contenteditable="true"]',
-  ];
-  let editor: any = null;
-  for (const sel of editorSelectors) {
-    editor = await page.waitForSelector(sel, { timeout: 90_000 }).catch(() => null);
-    if (editor) break;
-  }
-  if (!editor) throw new Error("等不到文案编辑器 (上传可能失败或页面改版)");
+  // 2. 等编辑页就绪 (穿透 shadow DOM 找文案编辑器)
+  const editor = await deepFindEditor(page, 90_000);
+  if (!editor) throw new Error("等不到文案编辑器 (上传可能失败或页面改版, 见失败截图)");
 
   // 3. 填文案
   await editor.click();
@@ -254,25 +245,68 @@ async function douyinEnsureUploadPage(page: Page): Promise<Page> {
 async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ok = await page.evaluate((labels: string[]) => {
-      const doc = (globalThis as any).document;
-      const btns = Array.from(doc.querySelectorAll("button, div[role='button'], span")) as any[];
-      for (const b of btns) {
-        const t = (b.textContent || "").trim();
-        if (!labels.some((l) => t === l)) continue;
-        const el = b.closest("button") || b;
-        const disabled = el.disabled || el.getAttribute("aria-disabled") === "true" ||
-          (el.className || "").toString().includes("disabled");
-        if (disabled) return false;
-        el.click();
-        return true;
-      }
-      return false;
-    }, texts);
-    if (ok) return true;
+    for (const frame of page.frames()) {
+      try {
+        const ok = await frame.evaluate((labels: string[]) => {
+          const doc = (globalThis as any).document;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          for (const b of deep(doc)) {
+            const tag = b.tagName;
+            if (tag !== "BUTTON" && tag !== "DIV" && tag !== "SPAN" && tag !== "A") continue;
+            const t = (b.textContent || "").trim();
+            if (!labels.some((l) => t === l)) continue;
+            const el = (b.closest && b.closest("button")) || b;
+            const disabled = el.disabled || el.getAttribute?.("aria-disabled") === "true" ||
+              (el.className || "").toString().includes("disabled");
+            if (disabled) return false; // 命中但禁用(转码中) → 等下一轮
+            el.click();
+            return true;
+          }
+          return false;
+        }, texts);
+        if (ok) return true;
+      } catch { /* frame detach */ }
+    }
     await new Promise((r) => setTimeout(r, 3_000));
   }
   return false;
+}
+
+/** 深度找编辑器 (穿透 shadow DOM + frame): contenteditable / textarea / 描述输入框, 轮询 timeoutMs */
+async function deepFindEditor(page: Page, timeoutMs: number): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      try {
+        const h = await frame.evaluateHandle(() => {
+          const doc = (globalThis as any).document;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          for (const el of deep(doc)) {
+            try {
+              const r = el.getBoundingClientRect();
+              if (r.width < 40 || r.height < 12) continue;
+            } catch { continue; }
+            if (el.getAttribute && el.getAttribute("contenteditable") === "true") return el;
+            if (el.tagName === "TEXTAREA") return el;
+            const ph = el.getAttribute && (el.getAttribute("placeholder") || "");
+            if (el.tagName === "INPUT" && /描述|标题|说点什么/.test(ph)) return el;
+          }
+          return null;
+        });
+        const el = h.asElement();
+        if (el) return el;
+        await h.dispose();
+      } catch { /* frame detach */ }
+    }
+    await new Promise((r) => setTimeout(r, 2_500));
+  }
+  return null;
 }
 
 /** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
@@ -288,19 +322,9 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   await uploadVideoFile(page, videoPath);
   logger.info("视频号推草稿: 视频文件已提交");
 
-  // 2. 等描述输入框 (视频号短描述是 contenteditable / textarea)
-  const editorSelectors = [
-    '.input-editor[contenteditable="true"]',
-    'div[contenteditable="true"]',
-    'textarea[placeholder*="描述"]',
-    'textarea',
-  ];
-  let editor: any = null;
-  for (const sel of editorSelectors) {
-    editor = await page.waitForSelector(sel, { timeout: 90_000 }).catch(() => null);
-    if (editor) break;
-  }
-  if (!editor) throw new Error("等不到描述编辑器 (上传失败或页面改版)");
+  // 2. 等描述输入框 (穿透 shadow DOM, channels 整页在 web component 内)
+  const editor = await deepFindEditor(page, 90_000);
+  if (!editor) throw new Error("等不到描述编辑器 (上传失败或页面改版, 见失败截图)");
 
   // 3. 填描述
   await editor.click();
