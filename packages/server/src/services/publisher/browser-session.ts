@@ -16,6 +16,8 @@ import puppeteerExtraImport from "puppeteer-extra";
 import StealthPluginImport from "puppeteer-extra-plugin-stealth";
 import type { Browser, BrowserContext, Page } from "puppeteer";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
@@ -58,6 +60,47 @@ async function getBrowser(): Promise<Browser> {
   }
 }
 
+// ===== 按账号持久化 profile (抖音风控: cookie 移植必被踢, 扫码与推送必须同一浏览器环境) =====
+const PROFILE_DIR = resolve(process.cwd(), "data/profiles");
+const profileEntries = new Map<string, { p: Promise<Browser>; refs: number }>();
+
+/** 打开(或复用)账号专属浏览器, userDataDir 落盘持久化。用完必须 releaseProfileBrowser。 */
+export async function acquireProfileBrowser(accountId: string): Promise<Browser> {
+  const existing = profileEntries.get(accountId);
+  if (existing) {
+    const b = await existing.p.catch(() => null);
+    if (b && b.connected) { existing.refs++; return b; }
+    profileEntries.delete(accountId);
+  }
+  const entry = {
+    refs: 1,
+    p: (async () => {
+      const dir = resolve(PROFILE_DIR, accountId);
+      await mkdir(dir, { recursive: true });
+      const b = (await puppeteerExtra.launch({ headless: true, args: LAUNCH_ARGS, userDataDir: dir })) as unknown as Browser;
+      logger.info({ accountId }, "profile 浏览器已启动");
+      return b;
+    })(),
+  };
+  profileEntries.set(accountId, entry);
+  try {
+    return await entry.p;
+  } catch (err) {
+    profileEntries.delete(accountId);
+    throw err;
+  }
+}
+
+/** 引用计数减一, 归零关浏览器 (profile 目录保留, 登录态在磁盘上) */
+export async function releaseProfileBrowser(accountId: string) {
+  const entry = profileEntries.get(accountId);
+  if (!entry) return;
+  entry.refs--;
+  if (entry.refs > 0) return;
+  profileEntries.delete(accountId);
+  try { (await entry.p).close(); } catch { /* noop */ }
+}
+
 // ===== 平台配置 =====
 interface PlatformLoginConfig {
   loginUrl: string;
@@ -67,6 +110,20 @@ interface PlatformLoginConfig {
   sessionCookies: string[];
   /** session cookie 必须挂在这些域后缀上 (防跨平台同名 cookie 串台) */
   cookieDomains: string[];
+  /** 扫码/推送共用按账号持久 profile (抖音: cookie 移植被风控踢, 必须同环境) */
+  persistentProfile?: boolean;
+  /** 自定义登录判定 (抖音登录框是同 URL 弹窗, URL/cookie 判定都会误报) */
+  checkLoggedIn?: (page: Page) => Promise<boolean>;
+}
+
+/** 抖音: 登录弹窗不改 URL — 有登录弹窗文案=未登录; 进 creator-micro 或出现创作者中心文案=已登录 */
+async function douyinPageLoggedIn(page: Page): Promise<boolean> {
+  try {
+    const txt: string = await page.evaluate(() => (globalThis as any).document?.body?.innerText ?? "");
+    if (/扫码登录|验证码登录|手机号登录|登录后即可|登录抖音/.test(txt)) return false;
+    if (/creator-micro/.test(page.url())) return true;
+    return /发布作品|内容管理|数据概览|创作者服务/.test(txt);
+  } catch { return false; }
 }
 
 export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
@@ -78,6 +135,8 @@ export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
       (/creator\.douyin\.com/.test(url) && !/login|passport/.test(url)),
     sessionCookies: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"],
     cookieDomains: ["douyin.com"],
+    persistentProfile: true,
+    checkLoggedIn: douyinPageLoggedIn,
   },
   wechat_video: {
     loginUrl: "https://channels.weixin.qq.com",
@@ -101,6 +160,7 @@ interface QrSession {
   error?: string;
   page?: Page;
   context?: BrowserContext;
+  profileAccountId?: string;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -126,6 +186,10 @@ async function closeSession(s: QrSession, status: QrLoginStatus, error?: string)
   if (s.context) {
     try { await s.context.close(); } catch { /* noop */ }
     s.context = undefined;
+  }
+  if (s.profileAccountId) {
+    await releaseProfileBrowser(s.profileAccountId);
+    s.profileAccountId = undefined;
   }
   // 终态会话 10 分钟后清理 (留给前端轮询读结果)
   setTimeout(() => sessions.delete(s.sessionId), 600_000).unref?.();
@@ -233,13 +297,21 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
   // 异步启动, 不阻塞接口返回
   (async () => {
     try {
-      const b = await getBrowser();
-      // 每个扫码会话独立隐身 context: cookie 从零开始。
-      // 否则共享浏览器里残留的旧 cookie(可能已被平台踢失效, 或抖音/视频号同名 sessionid 串台)
-      // 会让轮询第一拍就误判"已登录", 把失效旧 cookie 重新落库 → 前端秒显成功但推送照样失败。
-      const ctx = await b.createBrowserContext();
-      session.context = ctx;
-      const page = await ctx.newPage();
+      let page: Page;
+      if (cfg.persistentProfile) {
+        // 抖音: 账号专属持久 profile — 扫码与推送同一浏览器环境, 登录态不靠移植
+        const pb = await acquireProfileBrowser(params.accountId);
+        session.profileAccountId = params.accountId;
+        page = await pb.newPage();
+      } else {
+        const b = await getBrowser();
+        // 每个扫码会话独立隐身 context: cookie 从零开始。
+        // 否则共享浏览器里残留的旧 cookie(可能已被平台踢失效, 或同名 sessionid 串台)
+        // 会让轮询第一拍就误判"已登录", 把失效旧 cookie 重新落库 → 前端秒显成功但推送照样失败。
+        const ctx = await b.createBrowserContext();
+        session.context = ctx;
+        page = await ctx.newPage();
+      }
       session.page = page;
       await page.setViewport({ width: 1280, height: 900 });
       // 抖音/视频号创作页有长连接+轮询, networkidle2 永不触发 → 用 domcontentloaded
@@ -269,7 +341,9 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
           }
           const onPlatformDomain = (c: any) => cfg.cookieDomains.some((d) => String(c.domain ?? "").endsWith(d));
           const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value && onPlatformDomain(c));
-          const loggedIn = cfg.isLoggedInUrl(url) || hasSession;
+          const loggedIn = cfg.checkLoggedIn
+            ? await cfg.checkLoggedIn(page)
+            : (cfg.isLoggedInUrl(url) || hasSession);
           // 诊断日志: 每 4 轮 (~10s) 打一次, 便于定位卡点
           if (pollTick++ % 4 === 0) {
             logger.info({

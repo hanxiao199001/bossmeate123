@@ -26,7 +26,7 @@ import { contents, platformAccounts, contentPublishLog } from "../../models/sche
 import { access } from "node:fs/promises";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { loadLoginState, markLoginExpired, getSessionBrowser } from "./browser-session.js";
+import { loadLoginState, markLoginExpired, getSessionBrowser, acquireProfileBrowser, releaseProfileBrowser, BROWSER_LOGIN_PLATFORMS } from "./browser-session.js";
 import { generateDouyinCaptionVariants } from "./douyin-caption.js";
 
 // ===== 任务模型 =====
@@ -634,11 +634,15 @@ async function runJob(job: DraftPushJob) {
       if (!state) { acct.status = "login_expired"; acct.error = "未登录或登录态失效, 请先扫码登录"; continue; }
 
       acct.status = "running";
-      const b = await getSessionBrowser();
-      const page = await b.newPage();
+      // 抖音: 账号专属持久 profile (与扫码同环境, 登录态原生在 profile 里, 不注入);
+      // 视频号: 共享浏览器 + cookie/localStorage 注入 (已验证可行, 不动)。
+      const usesProfile = !!BROWSER_LOGIN_PLATFORMS[acct.platform]?.persistentProfile;
+      const page = usesProfile
+        ? await (await acquireProfileBrowser(acct.accountId)).newPage()
+        : await (await getSessionBrowser()).newPage();
       try {
         await page.setViewport({ width: 1366, height: 900 });
-        await setPageLoginState(page, state, acct.platform);
+        if (!usesProfile) await setPageLoginState(page, state, acct.platform);
         await pusher({ page, videoPath, caption: captions[i] ?? captions[0] ?? "", title: titles[i] ?? titles[0] ?? "" });
         acct.status = "success";
         // 落库: status=draft (人工在平台后台审核发布后, 前端勾"已发"会覆盖成 success)
@@ -674,6 +678,7 @@ async function runJob(job: DraftPushJob) {
         logger.error({ err: msg, accountId: acct.accountId, contentId: job.contentId }, "推草稿失败");
       } finally {
         try { await page.close(); } catch { /* noop */ }
+        if (usesProfile) await releaseProfileBrowser(acct.accountId);
       }
 
       // 账号间随机间隔, 模拟人工节奏 (最后一个不等)
