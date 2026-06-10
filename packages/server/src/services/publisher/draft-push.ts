@@ -291,12 +291,17 @@ async function waitChannelsUploadComplete(page: Page, timeoutMs: number): Promis
 }
 
 async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
+  // el.click() 只派发孤立 click 事件, channels(Vue) 的按钮监听 pointer/mouse 序列, 经常"点了没反应"。
+  // 主 frame: 拿按钮中心坐标 → page.mouse 真实点击 (trusted event, 等价人手)。
+  // 子 frame: 坐标系不通, 退而求其次派发完整 pointerdown→mousedown→pointerup→mouseup→click 序列。
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     for (const frame of page.frames()) {
+      const isMain = frame === page.mainFrame();
       try {
-        const ok = await frame.evaluate((labels: string[]) => {
+        const hit = await frame.evaluate((labels: string[], useCoords: boolean) => {
           const doc = (globalThis as any).document;
+          const win = (globalThis as any).window;
           function* deep(root: any): any {
             const els = root.querySelectorAll("*");
             for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
@@ -309,13 +314,27 @@ async function clickButtonByText(page: Page, texts: string[], timeoutMs: number)
             const el = (b.closest && b.closest("button")) || b;
             const disabled = el.disabled || el.getAttribute?.("aria-disabled") === "true" ||
               (el.className || "").toString().includes("disabled");
-            if (disabled) return false; // 命中但禁用(转码中) → 等下一轮
-            el.click();
-            return true;
+            if (disabled) return { found: false }; // 命中但禁用(转码中) → 等下一轮
+            el.scrollIntoView({ block: "center", inline: "center" });
+            const r = el.getBoundingClientRect();
+            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+            if (useCoords) return { found: true, x: cx, y: cy };
+            // 子 frame: 派发完整事件序列 (composed:true 穿 shadow boundary)
+            const opts = { bubbles: true, cancelable: true, composed: true, view: win, button: 0, clientX: cx, clientY: cy };
+            for (const [type, Ctor] of [
+              ["pointerdown", win.PointerEvent ?? win.MouseEvent], ["mousedown", win.MouseEvent],
+              ["pointerup", win.PointerEvent ?? win.MouseEvent], ["mouseup", win.MouseEvent], ["click", win.MouseEvent],
+            ] as any) { try { el.dispatchEvent(new Ctor(type, opts)); } catch { /* noop */ } }
+            return { found: true };
           }
-          return false;
-        }, texts);
-        if (ok) return true;
+          return { found: false };
+        }, texts, isMain);
+        if (hit?.found) {
+          if (isMain && typeof (hit as any).x === "number") {
+            await page.mouse.click((hit as any).x, (hit as any).y, { delay: 60 });
+          }
+          return true;
+        }
       } catch { /* frame detach */ }
     }
     await new Promise((r) => setTimeout(r, 3_000));
@@ -367,6 +386,8 @@ async function verifyChannelsDraftExists(page: Page, caption: string): Promise<b
     "https://channels.weixin.qq.com/platform/post/list?currentTab=draft",
     "https://channels.weixin.qq.com/platform/post/list",
   ];
+  for (let attempt = 0; attempt < 3; attempt++) {
+  if (attempt > 0) await new Promise((r) => setTimeout(r, 8_000)); // 草稿落列表可能延迟
   for (const url of candidates) {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -379,6 +400,8 @@ async function verifyChannelsDraftExists(page: Page, caption: string): Promise<b
       logger.info({ draftCount: m[1] }, "视频号: 草稿箱计数>0 (文案未匹配到, 可能被平台截断)");
       return true;
     }
+    logger.info({ attempt, url: page.url(), draftCount: m ? m[1] : "未见计数" }, "视频号: 草稿箱实查未命中");
+  }
   }
   return false;
 }
@@ -413,6 +436,14 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   const clicked = await clickButtonByText(page, ["保存草稿", "保存至草稿箱", "存草稿"], 60_000);
   if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (页面改版, 见失败截图)");
   logger.info("视频号推草稿: 已点击保存草稿, 验证落库中");
+  // 点击后现场截图 (无论成败都留, 失败路径的截图曾静默丢失过)
+  try {
+    await new Promise((r) => setTimeout(r, 2_500));
+    await mkdir(FAIL_SHOT_DIR, { recursive: true });
+    const shot = resolve(FAIL_SHOT_DIR, `draft-push-aftersave-${Date.now()}.png`);
+    await page.screenshot({ path: shot as any, fullPage: true });
+    logger.info({ shot }, "视频号: 点保存后现场截图");
+  } catch (e) { logger.warn({ err: e instanceof Error ? e.message : e }, "视频号: 点保存后截图失败"); }
 
   // 6a. 页内信号 (只看 toast/跳转; '草稿箱'是左侧导航静态文案, 不能算成功证据)
   await (async () => {
@@ -581,7 +612,9 @@ async function runJob(job: DraftPushJob) {
             const shot = resolve(FAIL_SHOT_DIR, `draft-push-fail-${acct.accountId.slice(0, 8)}-${Date.now()}.png`);
             await page.screenshot({ path: shot as any, fullPage: true });
             logger.warn({ shot, accountId: acct.accountId }, "推草稿失败, 已截图");
-          } catch { /* noop */ }
+          } catch (shotErr) {
+            logger.warn({ err: shotErr instanceof Error ? shotErr.message : shotErr }, "失败截图未能保存");
+          }
         }
         logger.error({ err: msg, accountId: acct.accountId, contentId: job.contentId }, "推草稿失败");
       } finally {
