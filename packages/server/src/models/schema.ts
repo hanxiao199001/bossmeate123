@@ -782,6 +782,10 @@ export const platformAccounts = pgTable(
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
     templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息
+    // PR-S1: 浏览器登录态 (半自动平台扫码登录 → 推草稿箱)。login_state = 加密的 cookies+localStorage JSON
+    loginState: text("login_state"),
+    loginStatus: varchar("login_status", { length: 20 }).notNull().default("none"), // none | logged_in | expired
+    loginAt: timestamp("login_at", { withTimezone: true }),
     lastPublishedAt: timestamp("last_published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

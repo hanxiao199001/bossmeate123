@@ -17,6 +17,7 @@ import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
+import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS } from "../services/publisher/browser-session.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -81,6 +82,7 @@ export async function accountRoutes(app: FastifyInstance) {
           const parsedCreds = JSON.parse(decryptedCreds);
           return {
             ...a,
+            loginState: undefined, // PR-S1: 加密登录态不出接口
             credentials: maskCredentials(parsedCreds),
           };
         } catch (err) {
@@ -88,6 +90,7 @@ export async function accountRoutes(app: FastifyInstance) {
           logger.warn({ accountId: a.id, error: err instanceof Error ? err.message : "未知错误" }, "凭证解密失败，使用原始凭证");
           return {
             ...a,
+            loginState: undefined,
             credentials: maskCredentials(a.credentials as Record<string, any>),
           };
         }
@@ -367,6 +370,43 @@ export async function accountRoutes(app: FastifyInstance) {
       logger.error({ err }, "验证账号失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
+  });
+
+  /**
+   * PR-S1: POST /accounts/:id/qr-login - 发起扫码登录 (抖音/视频号浏览器登录态)
+   */
+  app.post("/accounts/:id/qr-login", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const [account] = await db
+        .select()
+        .from(platformAccounts)
+        .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, request.tenantId)))
+        .limit(1);
+      if (!account) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+      }
+      if (!BROWSER_LOGIN_PLATFORMS[account.platform]) {
+        return reply.code(400).send({ code: "BAD_REQUEST", message: `平台 ${account.platform} 不支持扫码登录` });
+      }
+      const { sessionId } = await startQrLogin({ accountId: id, tenantId: request.tenantId, platform: account.platform });
+      return { code: "OK", data: { sessionId } };
+    } catch (err) {
+      logger.error({ err }, "发起扫码登录失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: err instanceof Error ? err.message : "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * PR-S1: GET /accounts/qr-login/:sessionId - 轮询扫码登录状态 (waiting 时带二维码 base64)
+   */
+  app.get("/accounts/qr-login/:sessionId", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const status = getQrLoginStatus(sessionId, request.tenantId);
+    if (!status) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "会话不存在或已过期" });
+    }
+    return { code: "OK", data: status };
   });
 
   /**

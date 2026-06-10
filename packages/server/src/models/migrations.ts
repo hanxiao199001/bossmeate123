@@ -104,4 +104,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_ju_lookup ON journal_usage (tenant_id, journal_id, used_at);
     `,
   },
+  {
+    version: "006_pa_browser_login",
+    description: "PR-S1: platform_accounts 加浏览器登录态字段 — login_state(加密cookie/storage) / login_status(none|logged_in|expired) / login_at, 半自动平台扫码登录→推草稿箱用",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_state TEXT;
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_status VARCHAR(20) NOT NULL DEFAULT 'none';
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_at TIMESTAMPTZ;
+    `,
+  },
 ];
