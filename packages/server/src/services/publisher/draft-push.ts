@@ -79,10 +79,8 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption }: Upload
   const loginPopup = await page.evaluate(() => {
     const doc = (globalThis as any).document;
     const txt = (doc.body?.innerText || "");
-    const hasLoginDialog = /扫码登录|验证码登录|手机号登录|登录抖音/.test(txt);
-    const hasUploadHint = /上传视频|发布视频|拖拽|作品/.test(txt);
-    // 有登录字样且无上传相关 = 登录弹窗挡住了
-    return hasLoginDialog && !hasUploadHint;
+    // 真上传页不含"扫码登录/验证码登录"对话框文案; 出现即登录态失效弹了登录框
+    return /扫码登录|验证码登录|手机号登录|登录后即可|登录抖音/.test(txt);
   }).catch(() => false);
   if (loginPopup) throw new Error("LOGIN_EXPIRED");
   await uploadVideoFile(page, videoPath);
@@ -129,8 +127,21 @@ const UPLOAD_TRIGGER_TEXTS = ["上传视频", "上传", "选择视频", "点击�
 async function tryDirectInput(page: Page, videoPath: string): Promise<boolean> {
   for (const frame of page.frames()) {
     try {
-      const h = await frame.$('input[type="file"]');
-      if (h) { await (h as any).uploadFile(videoPath); return true; }
+      // pierce: 既查普通 DOM 也查 shadow root (视频号微前端用 web component)
+      const h = await frame.evaluateHandle(() => {
+        const doc = (globalThis as any).document;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        for (const el of deep(doc)) {
+          if (el.tagName === "INPUT" && el.type === "file") return el;
+        }
+        return null;
+      });
+      const el = h.asElement();
+      if (el) { await (el as any).uploadFile(videoPath); await h.dispose(); return true; }
+      await h.dispose();
     } catch { /* frame detach */ }
   }
   return false;
@@ -145,35 +156,48 @@ async function uploadVideoFile(page: Page, videoPath: string): Promise<void> {
     return;
   }
 
+  // 深度点击: 穿透 shadow DOM + 遍历所有 frame 找上传区点击 (返回命中描述)
+  const deepClickUploadZone = async (): Promise<string | null> => {
+    for (const frame of page.frames()) {
+      try {
+        const hit = await frame.evaluate((labels: string[]) => {
+          const doc = (globalThis as any).document;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          const all = Array.from(deep(doc)) as any[];
+          const visible = (el: any) => { try { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 20; } catch { return false; } };
+          // a) class 含 upload/drag
+          const classRe = /(upload|uploader|dragger|drag|drop)/i;
+          for (const el of all) {
+            const cls = el.className && el.className.toString ? el.className.toString() : "";
+            if (classRe.test(cls) && visible(el)) { el.click(); return "cls:" + cls.slice(0, 24); }
+          }
+          // b) 文案含上传/拖拽/大小限制 (上传区提示文字)
+          for (const el of all) {
+            const t = (el.textContent || "").trim();
+            if (t.length < 60 && /上传视频|点击上传|拖拽|选择视频|添加视频|大小不超过|时长/.test(t) && visible(el)) {
+              el.click(); return "txt:" + t.slice(0, 18);
+            }
+          }
+          // c) 短按钮精确文本
+          for (const el of all) {
+            const t = (el.textContent || "").trim();
+            if (t.length <= 12 && labels.some((l) => t === l) && visible(el)) { el.click(); return "btn:" + t; }
+          }
+          return null;
+        }, UPLOAD_TRIGGER_TEXTS);
+        if (hit) return hit;
+      } catch { /* frame detach */ }
+    }
+    return null;
+  };
+
   for (let attempt = 0; attempt < 4; attempt++) {
     let chooser: any = null;
     const chooserP = page.waitForFileChooser({ timeout: 9_000 }).then((c) => (chooser = c)).catch(() => null);
-    // 点一个上传候选 — 顺序: 上传区class选择器 → 短按钮精确文本 → 含"上传/拖拽"的区域(不卡字数)
-    const clicked = await page.evaluate((labels: string[]) => {
-      const doc = (globalThis as any).document;
-      // a) 上传区常见 class (视频号 + 虚线框/拖拽区都在这类)
-      const zoneSelectors = [
-        ".ant-upload", ".upload-area", ".post-cover-uploader", ".uploader",
-        '[class*="uploader" i]', '[class*="upload-content" i]', '[class*="upload" i]',
-        '[class*="dragger" i]', '[class*="drag-area" i]', '[class*="drop" i]',
-      ];
-      for (const sel of zoneSelectors) {
-        const el = doc.querySelector(sel);
-        if (el && (el as any).offsetParent !== null) { (el as any).click(); return "zone:" + sel; }
-      }
-      // b) 短按钮精确文本
-      const els = Array.from(doc.querySelectorAll("button, div, span, a, label")) as any[];
-      for (const el of els) {
-        const t = (el.textContent || "").trim();
-        if (t.length <= 12 && labels.some((l) => t === l)) { el.click(); return "text:" + t; }
-      }
-      // c) 含上传/拖拽字样的区域 (不卡字数, 上传区文案常较长)
-      for (const el of els) {
-        const t = (el.textContent || "").trim();
-        if (t.length < 40 && /上传视频|点击上传|拖拽|选择视频|添加视频/.test(t)) { el.click(); return "fuzzy:" + t.slice(0, 16); }
-      }
-      return null;
-    }, UPLOAD_TRIGGER_TEXTS);
+    const clicked = await deepClickUploadZone();
     await chooserP;
     if (chooser) {
       await chooser.accept([videoPath]);
@@ -181,8 +205,8 @@ async function uploadVideoFile(page: Page, videoPath: string): Promise<void> {
       return;
     }
     logger.info({ attempt, clicked, url: page.url() }, "推草稿: 本轮未触发文件框, 重试");
-    // 点击可能触发了导航 (如抖音首页→上传页), 再查一次 input
-    if (await tryDirectInput(page, videoPath)) { logger.info("推草稿: 导航后 input 上传成功"); return; }
+    // 点击可能触发了导航或动态创建了 input, 再查一次
+    if (await tryDirectInput(page, videoPath)) { logger.info("推草稿: 点击后 input 上传成功"); return; }
     await new Promise((r) => setTimeout(r, 2_000));
   }
   throw new Error("找不到上传入口 (input 与 fileChooser 均失败, 见失败截图)");
