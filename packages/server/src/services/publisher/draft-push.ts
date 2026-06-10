@@ -277,7 +277,8 @@ async function waitChannelsUploadComplete(page: Page, timeoutMs: number): Promis
     const txt = await deepBodyText(page);
     const uploadingNow = /上传中|上传\s*\d+\s*%|处理中|转码中|视频上传中/.test(txt);
     if (uploadingNow) sawUploading = true;
-    const readyMarker = /上传完成|更换视频|删除视频|重新上传|预览|发表时间/.test(txt);
+    // 注意: '预览/发表时间'是发表页静态文案, 不能当完成标记(会秒判完成→存空草稿)
+    const readyMarker = /上传完成|更换视频|删除视频|重新上传/.test(txt);
     // 见过上传中且现在不在上传 → 完成; 或出现明确完成标记
     if ((sawUploading && !uploadingNow) || readyMarker) {
       logger.info({ sawUploading, readyMarker }, "视频号: 判定上传完成");
@@ -356,6 +357,32 @@ async function deepFindEditor(page: Page, timeoutMs: number): Promise<any> {
   return null;
 }
 
+/**
+ * 终审: 打开草稿箱列表页, 用文案前缀实查草稿是否真的存在。
+ * 页面 toast/跳转都可能骗人(导航栏常驻'草稿箱'文案), 列表里有这条才算数。
+ */
+async function verifyChannelsDraftExists(page: Page, caption: string): Promise<boolean> {
+  const sig = caption.replace(/\s+/g, "").slice(0, 12); // 文案前缀做指纹
+  const candidates = [
+    "https://channels.weixin.qq.com/platform/post/list?currentTab=draft",
+    "https://channels.weixin.qq.com/platform/post/list",
+  ];
+  for (const url of candidates) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    } catch { continue; }
+    await new Promise((r) => setTimeout(r, 5_000)); // 列表异步加载
+    const txt = (await deepBodyText(page)).replace(/\s+/g, "");
+    if (sig && txt.includes(sig)) return true; // 文案命中 = 草稿真的在
+    const m = txt.match(/草稿箱\((\d+)\)/);
+    if (m && Number(m[1]) > 0) {
+      logger.info({ draftCount: m[1] }, "视频号: 草稿箱计数>0 (文案未匹配到, 可能被平台截断)");
+      return true;
+    }
+  }
+  return false;
+}
+
 /** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
 async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams): Promise<void> {
   await page.goto("https://channels.weixin.qq.com/platform/post/create", {
@@ -387,21 +414,22 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (页面改版, 见失败截图)");
   logger.info("视频号推草稿: 已点击保存草稿, 验证落库中");
 
-  // 6. 验证真的存上了 — 等成功提示 或 跳转离开创建页, 否则不误报成功
-  const saved = await (async () => {
+  // 6a. 页内信号 (只看 toast/跳转; '草稿箱'是左侧导航静态文案, 不能算成功证据)
+  await (async () => {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
-      if (!/post\/create/.test(page.url())) return true; // 跳走 = 已保存
+      if (!/post\/create/.test(page.url())) return; // 跳走, 进入实查
       const txt = await deepBodyText(page);
-      if (/保存成功|已保存|草稿箱|保存到草稿/.test(txt)) return true;
-      if (/请等待|上传完成后|视频上传中|不能为空|请填写/.test(txt)) return false; // 明确被拦
+      if (/保存成功|已保存|保存到草稿/.test(txt)) return;
       await new Promise((r) => setTimeout(r, 2_000));
     }
-    return false;
   })();
-  if (!saved) throw new Error("保存草稿未生效 (可能上传未完成或被平台拦截, 见失败截图)");
-  logger.info({ url: page.url() }, "视频号推草稿: 保存草稿已确认");
+
+  // 6b. 终审: 打开草稿箱列表页, 按文案实查那条草稿在不在 — 唯一可信的成功证据
+  const saved = await verifyChannelsDraftExists(page, caption);
+  if (!saved) throw new Error("保存草稿未生效 (草稿箱里没有该视频 — 可能上传未完成就被拦, 见失败截图)");
+  logger.info({ url: page.url() }, "视频号推草稿: 保存草稿已确认 (草稿箱实查命中)");
 }
 
 const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
