@@ -242,6 +242,53 @@ async function douyinEnsureUploadPage(page: Page): Promise<Page> {
   return page;
 }
 
+/** 收集全页文本 (穿透 shadow DOM + frame), 用于检测上传进度/提示 */
+async function deepBodyText(page: Page): Promise<string> {
+  let text = "";
+  for (const frame of page.frames()) {
+    try {
+      const t = await frame.evaluate(() => {
+        const doc = (globalThis as any).document;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        let out = "";
+        for (const el of deep(doc)) {
+          // 只取叶子文本避免重复
+          if (el.children && el.children.length === 0 && el.textContent) out += el.textContent.trim() + "\n";
+        }
+        return out;
+      });
+      text += t + "\n";
+    } catch { /* frame detach */ }
+  }
+  return text;
+}
+
+/**
+ * 等视频号上传完成 — 12s 就点保存会存到空草稿。
+ * 等"上传中/上传 xx%/处理中"消失 且 出现完成信号(时长/更换/删除/上传完成)。
+ */
+async function waitChannelsUploadComplete(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let sawUploading = false;
+  while (Date.now() < deadline) {
+    const txt = await deepBodyText(page);
+    const uploadingNow = /上传中|上传\s*\d+\s*%|处理中|转码中|视频上传中/.test(txt);
+    if (uploadingNow) sawUploading = true;
+    const readyMarker = /上传完成|更换视频|删除视频|重新上传|预览|发表时间/.test(txt);
+    // 见过上传中且现在不在上传 → 完成; 或出现明确完成标记
+    if ((sawUploading && !uploadingNow) || readyMarker) {
+      logger.info({ sawUploading, readyMarker }, "视频号: 判定上传完成");
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  logger.warn("视频号: 等上传完成超时");
+  return false;
+}
+
 async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -331,13 +378,30 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   await page.keyboard.type(caption, { delay: 30 });
   await new Promise((r) => setTimeout(r, 1_500));
 
-  // 4. 等转码完成后存草稿 ("保存草稿"/"暂存"/"存草稿")
-  const clicked = await clickButtonByText(page, ["保存草稿", "暂存", "存草稿", "保存"], 180_000);
-  if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (转码超时或页面改版)");
+  // 4. 等视频真正上传完成 (否则点保存只存到空草稿)
+  const uploadDone = await waitChannelsUploadComplete(page, 240_000);
+  if (!uploadDone) throw new Error("视频上传未完成 (超时, 视频可能过大或网络慢)");
 
-  await new Promise((r) => setTimeout(r, 5_000));
-  if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
-  logger.info({ url: page.url() }, "视频号推草稿: 已点击保存草稿");
+  // 5. 点"保存草稿" (精确文本, 避免误点其它"保存")
+  const clicked = await clickButtonByText(page, ["保存草稿", "保存至草稿箱", "存草稿"], 60_000);
+  if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (页面改版, 见失败截图)");
+  logger.info("视频号推草稿: 已点击保存草稿, 验证落库中");
+
+  // 6. 验证真的存上了 — 等成功提示 或 跳转离开创建页, 否则不误报成功
+  const saved = await (async () => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+      if (!/post\/create/.test(page.url())) return true; // 跳走 = 已保存
+      const txt = await deepBodyText(page);
+      if (/保存成功|已保存|草稿箱|保存到草稿/.test(txt)) return true;
+      if (/请等待|上传完成后|视频上传中|不能为空|请填写/.test(txt)) return false; // 明确被拦
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+    return false;
+  })();
+  if (!saved) throw new Error("保存草稿未生效 (可能上传未完成或被平台拦截, 见失败截图)");
+  logger.info({ url: page.url() }, "视频号推草稿: 保存草稿已确认");
 }
 
 const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
