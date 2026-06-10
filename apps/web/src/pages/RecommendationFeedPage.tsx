@@ -13,7 +13,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
 import { useAuthStore } from "../hooks/useAuthStore";
 import RecommendationCard, { type RecommendationItem } from "../components/RecommendationCard";
-import { toast } from "../components/Toast";
+import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
 
 interface FeedResponse {
   items: RecommendationItem[];
@@ -28,6 +28,8 @@ export default function RecommendationFeedPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [skippingId, setSkippingId] = useState<string | null>(null);
+  // 6-11 施工包C1-b: 卡片"生成数字人视频"改弹统一 UnifiedVideoModal (卡片上已选模板透传为默认主播)
+  const [videoCtx, setVideoCtx] = useState<{ articleId: string; templateId: string } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -53,14 +55,9 @@ export default function RecommendationFeedPage() {
     }
   };
 
-  // 5-15 PR #141: 触发数字人视频生成（DVH_REAL_MODE=false 时走 mock fixture）
-  const handleGenerateDvh = async (id: string, templateId: string) => {
-    try {
-      await api.post(`/articles/${id}/generate-dvh-video`, { templateId });
-      toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
-    } catch (e) {
-      toast.error("生成失败：" + (e instanceof Error ? e.message : "未知错误"));
-    }
+  // 6-11 施工包C1-b (审计 1.2): 原直接 POST /articles/:id/generate-dvh-video, 改为弹统一弹窗(弹窗内走同一接口)
+  const handleGenerateDvh = (id: string, templateId: string) => {
+    setVideoCtx({ articleId: id, templateId });
   };
 
   return (
@@ -116,6 +113,15 @@ export default function RecommendationFeedPage() {
           </div>
         )}
       </main>
+
+      {/* 6-11 施工包C1-b: 统一生成视频弹窗 */}
+      <UnifiedVideoModal
+        open={!!videoCtx}
+        onClose={() => setVideoCtx(null)}
+        articleId={videoCtx?.articleId}
+        defaultAvatar={videoCtx?.templateId}
+        defaultTab="article"
+      />
     </div>
   );
 }

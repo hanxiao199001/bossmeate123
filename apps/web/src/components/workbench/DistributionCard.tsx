@@ -2,11 +2,13 @@
  * 5-18 P1 — Workbench 右列分发卡。
  * #2 多账号矩阵：账号级 checkbox，按 platform groupBy。
  * 复用 platform_accounts 现有字段 (accountName / groupName / isVerified / capability)，无 schema 改动。
- * 默认勾选 isVerified=true 账号 (运营默认想发到已验证号)。
- * + 数字人视频独立 dropdown + 按钮（复用 PR #140 route）。
+ * 默认勾选 isVerified=true 账号 (运营默认想发到已验证号) — 由父组件 ContentWorkbenchPage 拉数时处理。
+ *
+ * 6-11 施工包C1 (审计 2.1/1.2):
+ *  - 账号勾选区收口到统一 <AccountSelector> (平台全选 + 已验证标记);
+ *  - 数字人视频 inline 模板下拉下线, "🎬 生成数字人视频"按钮改为弹统一 UnifiedVideoModal (onOpenVideoModal)。
  */
-import { DVH_TEMPLATES } from "../RecommendationCard";
-import { platformShortLabel } from "../../utils/i18n";
+import AccountSelector from "../AccountSelector";
 
 export interface WorkbenchAccount {
   id: string;
@@ -20,61 +22,30 @@ export interface WorkbenchAccount {
 export interface DistributionCardProps {
   accounts: WorkbenchAccount[];
   selectedAccountIds: Set<string>;
-  onToggleAccount: (id: string) => void;
+  onChangeAccountIds: (ids: string[]) => void;
   onPublish: () => void;
   publishing: boolean;
-  dvhTemplate: string;
-  onTemplateChange: (id: string) => void;
-  onGenerateDvh: () => void;
-  generatingDvh: boolean;
+  /** C1-b: 弹统一生成视频 modal (锁定当前选中文章) */
+  onOpenVideoModal: () => void;
   disabled?: boolean; // 无选中内容时禁用
 }
 
 export default function DistributionCard({
-  accounts, selectedAccountIds, onToggleAccount, onPublish, publishing,
-  dvhTemplate, onTemplateChange, onGenerateDvh, generatingDvh, disabled,
+  accounts, selectedAccountIds, onChangeAccountIds, onPublish, publishing,
+  onOpenVideoModal, disabled,
 }: DistributionCardProps) {
-  // 按 platform groupBy
-  const grouped = accounts.reduce<Record<string, WorkbenchAccount[]>>((acc, a) => {
-    (acc[a.platform] ??= []).push(a);
-    return acc;
-  }, {});
-  const platforms = Object.keys(grouped).sort();
   const selectedCount = accounts.filter((a) => selectedAccountIds.has(a.id)).length;
 
   return (
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-3">选择发布账号</h3>
-        {accounts.length === 0 ? (
-          <p className="text-xs text-gray-400">无可用账号 (去 <a href="/accounts" className="text-blue-600 underline">账号管理</a> 添加)</p>
-        ) : (
-          <div className="space-y-3">
-            {platforms.map((p) => (
-              <div key={p}>
-                <p className="text-xs font-medium text-gray-500 mb-1.5">{platformShortLabel(p)}</p>
-                <div className="space-y-1.5">
-                  {grouped[p].map((a) => (
-                    <label key={a.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedAccountIds.has(a.id)}
-                        onChange={() => onToggleAccount(a.id)}
-                        className="w-4 h-4 rounded border-gray-300"
-                      />
-                      <span className="text-sm text-gray-800 flex-1 truncate">{a.accountName}</span>
-                      {a.isVerified ? (
-                        <span className="text-xs text-green-600">✓</span>
-                      ) : (
-                        <span className="text-xs text-gray-400" title="未验证">未验</span>
-                      )}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <AccountSelector
+          accounts={accounts}
+          value={[...selectedAccountIds]}
+          onChange={onChangeAccountIds}
+          showGroupSelectAll
+        />
       </div>
 
       <button
@@ -87,26 +58,12 @@ export default function DistributionCard({
 
       <div className="border-t border-gray-100 pt-4">
         <div className="text-xs text-gray-500 mb-2 text-center">— 或 —</div>
-        <p className="text-xs font-medium text-gray-500 mb-2">数字人视频主播</p>
-        <div className="flex gap-2">
-          <select
-            value={dvhTemplate}
-            onChange={(e) => onTemplateChange(e.target.value)}
-            className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded bg-white"
-            disabled={disabled || generatingDvh}
-            aria-label="数字人模板"
-          >
-            {DVH_TEMPLATES.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
-        </div>
         <button
-          onClick={onGenerateDvh}
-          disabled={disabled || generatingDvh}
-          className="w-full mt-2 px-4 py-2 rounded-lg bg-pink-600 text-white text-sm font-medium hover:bg-pink-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          onClick={onOpenVideoModal}
+          disabled={disabled}
+          className="w-full px-4 py-2 rounded-lg bg-pink-600 text-white text-sm font-medium hover:bg-pink-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
-          {generatingDvh ? "🎬 生成中…" : "🎬 生成数字人视频"}
+          🎬 生成数字人视频
         </button>
       </div>
     </div>

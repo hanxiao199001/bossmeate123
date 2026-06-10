@@ -1,17 +1,17 @@
 /**
  * 5-23 PR #161 — 多选模式下右侧批量发布卡 (替单文章 DistributionCard).
  *
- * 仅含: 平台账号 checkbox (同 DistributionCard 模式) + 主按钮 "发布 N × M = K 次".
- * 点击后调 onSubmit(accountIds), parent 触发 POST /admin/bulk-distribute + 弹 progress panel.
+ * 仅含: 平台账号勾选 (6-11 施工包C1: 收口到统一 AccountSelector) + 主按钮 "发布 N × M = K 次".
+ * 点击后调 onSubmit, parent 触发 POST /admin/bulk-distribute + 弹 progress panel.
  */
 import type { WorkbenchAccount } from "./DistributionCard";
-import { platformShortLabel } from "../../utils/i18n";
+import AccountSelector from "../AccountSelector";
 
 export interface BulkDistributeCardProps {
   selectedArticleIds: Set<string>;
   accounts: WorkbenchAccount[];
   selectedAccountIds: Set<string>;
-  onToggleAccount: (id: string) => void;
+  onChangeAccountIds: (ids: string[]) => void;
   onSubmit: () => void;
   submitting: boolean;
 }
@@ -20,7 +20,7 @@ export default function BulkDistributeCard({
   selectedArticleIds,
   accounts,
   selectedAccountIds,
-  onToggleAccount,
+  onChangeAccountIds,
   onSubmit,
   submitting,
 }: BulkDistributeCardProps) {
@@ -29,12 +29,6 @@ export default function BulkDistributeCard({
   const totalJobs = articleCount * accountCount;
   const estimatedSec = Math.ceil(totalJobs * 3); // throttle 3s 默认
 
-  // 按 platform 分组 (同 DistributionCard 模式)
-  const grouped = accounts.reduce<Record<string, WorkbenchAccount[]>>((acc, a) => {
-    (acc[a.platform] ||= []).push(a);
-    return acc;
-  }, {});
-
   return (
     <div>
       <div className="mb-4 px-2 py-3 bg-green-50 border border-green-200 rounded-lg">
@@ -42,27 +36,13 @@ export default function BulkDistributeCard({
         <div className="text-xs text-green-700 mt-0.5">已选 {articleCount} 篇 × {accountCount} 账号 = {totalJobs} 次发布</div>
       </div>
 
-      <div className="space-y-3">
-        {Object.entries(grouped).map(([platform, list]) => (
-          <div key={platform}>
-            <div className="text-xs font-medium text-gray-500 mb-1.5">{platformShortLabel(platform)}</div>
-            <div className="space-y-1">
-              {list.map((a) => (
-                <label key={a.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selectedAccountIds.has(a.id)}
-                    onChange={() => onToggleAccount(a.id)}
-                    disabled={submitting}
-                  />
-                  <span className="flex-1 truncate text-gray-700">{a.accountName}</span>
-                  {a.isVerified && <span className="text-xs text-green-600">✓</span>}
-                </label>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+      <AccountSelector
+        accounts={accounts}
+        value={[...selectedAccountIds]}
+        onChange={onChangeAccountIds}
+        showGroupSelectAll
+        disabled={submitting}
+      />
 
       <button
         onClick={onSubmit}

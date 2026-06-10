@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
-import { PLATFORM_META } from "../utils/i18n";
+import AccountSelector from "../components/AccountSelector";
 
 // ===== 工作流类型 =====
 type WorkflowType = "article" | "video";
@@ -358,22 +358,6 @@ export default function WorkflowPage() {
       setMultiPublishMsg(`发布出错：${err?.message || "未知错误"}`);
     } finally {
       setMultiPublishing(false);
-    }
-  };
-
-  const togglePlatformAccount = (id: string) => {
-    setSelectedPlatformIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  };
-
-  const togglePlatformGroup = (platform: string) => {
-    const ids = platformAccounts.filter((a) => a.platform === platform).map((a) => a.id);
-    const allSelected = ids.every((id) => selectedPlatformIds.includes(id));
-    if (allSelected) {
-      setSelectedPlatformIds((prev) => prev.filter((id) => !ids.includes(id)));
-    } else {
-      setSelectedPlatformIds((prev) => Array.from(new Set([...prev, ...ids])));
     }
   };
 
@@ -1787,47 +1771,17 @@ export default function WorkflowPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {(() => {
-                    const grouped = new Map<string, typeof platformAccounts>();
-                    for (const acc of platformAccounts) {
-                      if (acc.platform === "wechat") continue; // 微信已单独处理
-                      if (!grouped.has(acc.platform)) grouped.set(acc.platform, []);
-                      grouped.get(acc.platform)!.push(acc);
-                    }
-                    return Array.from(grouped.entries()).map(([platform, accs]) => {
-                      const cfg = PLATFORM_META[platform] || { label: platform, icon: "\uD83C\uDF10" };
-                      const allIds = accs.map((a) => a.id);
-                      const allSelected = allIds.every((id) => selectedPlatformIds.includes(id));
-                      return (
-                        <div key={platform} className={`p-4 rounded-xl border-2 transition-all ${
-                          allSelected ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50"
-                        }`}>
-                          <div className="flex items-center gap-3 mb-2">
-                            <input type="checkbox" checked={allSelected} onChange={() => togglePlatformGroup(platform)}
-                              className="w-4 h-4 rounded border-gray-300 cursor-pointer" />
-                            <span className="text-xl">{cfg.icon}</span>
-                            <span className="font-bold text-gray-900 text-sm">{cfg.label}</span>
-                            <span className="text-xs text-gray-400">({accs.length}个账号)</span>
-                          </div>
-                          <div className="ml-7 space-y-1.5">
-                            {accs.map((acc) => (
-                              <label key={acc.id} className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={selectedPlatformIds.includes(acc.id)}
-                                  onChange={() => togglePlatformAccount(acc.id)}
-                                  className="w-3.5 h-3.5 rounded border-gray-300 cursor-pointer" />
-                                <span className="text-sm text-gray-700">{acc.accountName}</span>
-                                <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                  acc.isVerified ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"
-                                }`}>
-                                  {acc.isVerified ? "\u2705 已验证" : "\u26A0\uFE0F 待验证"}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    });
-                  })()}
+                  {/* 6-11 施工包C1 (审计 2.1): 平台分组卡片收口统一 AccountSelector
+                      — 默认勾选已验证账号(行为变化, 老韩已确认) + 平台全选; 微信已在上方单独处理 */}
+                  <div className="p-4 rounded-xl border border-gray-200 bg-white">
+                    <AccountSelector
+                      accounts={platformAccounts.filter((a) => a.platform !== "wechat")}
+                      value={selectedPlatformIds}
+                      onChange={setSelectedPlatformIds}
+                      defaultVerifiedChecked
+                      showGroupSelectAll
+                    />
+                  </div>
 
                   {/* 一键发布按钮 */}
                   <div className="flex items-center gap-3 pt-2">

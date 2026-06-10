@@ -22,7 +22,7 @@ import RiskAuditModal, { type AuditResult } from "../components/workbench/RiskAu
 // 5-23 PR #161 — Workbench v2: 多选 + 手动生成 + 批量发布
 import WorkbenchTopBar from "../components/workbench/WorkbenchTopBar";
 import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
-import ManualGenerateVideoModal from "../components/workbench/ManualGenerateVideoModal";
+import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
 import RoundupGenerateModal from "../components/workbench/RoundupGenerateModal";
 import BatchPreviewSummary from "../components/workbench/BatchPreviewSummary";
 import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
@@ -43,8 +43,8 @@ export default function ContentWorkbenchPage() {
   const [accounts, setAccounts] = useState<WorkbenchAccount[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
   const [publishing, setPublishing] = useState(false);
-  const [dvhTemplate, setDvhTemplate] = useState("A_academic");
-  const [generatingDvh, setGeneratingDvh] = useState(false);
+  // 6-11 施工包C1-b: 生成视频统一弹 UnifiedVideoModal; 分发卡入口锁定当前文章, 顶栏入口不锁
+  const [videoArticleId, setVideoArticleId] = useState<string | undefined>(undefined);
 
   // 5-20 P2 风控: audit modal state
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
@@ -141,12 +141,9 @@ export default function ContentWorkbenchPage() {
       .finally(() => setPreviewLoading(false));
   }, [selectedId]);
 
-  const toggleAccount = useCallback((id: string) => {
-    setSelectedAccountIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  // 6-11 施工包C1: AccountSelector 受控 onChange (整组 id 数组) 替代逐个 toggle
+  const handleAccountIdsChange = useCallback((ids: string[]) => {
+    setSelectedAccountIds(new Set(ids));
   }, []);
 
   const accountIdsArr = useMemo(() => [...selectedAccountIds], [selectedAccountIds]);
@@ -230,19 +227,6 @@ export default function ContentWorkbenchPage() {
     await submitPublish(accountIdsArr, { forceOverride: true, overrideReason: reason });
   }, [accountIdsArr, submitPublish]);
 
-  const handleGenerateDvh = useCallback(async () => {
-    if (!selectedId) return;
-    setGeneratingDvh(true);
-    try {
-      await api.post(`/articles/${selectedId}/generate-dvh-video`, { templateId: dvhTemplate });
-      toast.success("数字人视频生成中, 稍后在内容管理→视频类型查看");
-    } catch (err) {
-      toast.error("生成失败: " + (err instanceof Error ? err.message : "未知"));
-    } finally {
-      setGeneratingDvh(false);
-    }
-  }, [selectedId, dvhTemplate]);
-
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
@@ -250,7 +234,7 @@ export default function ContentWorkbenchPage() {
       <WorkbenchTopBar
         selectedCount={selectedIds.size}
         onClickGenerateArticle={() => setGenerateModal("article")}
-        onClickGenerateVideo={() => setGenerateModal("video")}
+        onClickGenerateVideo={() => { setVideoArticleId(undefined); setGenerateModal("video"); }}
         onClickGenerateRoundup={() => setGenerateModal("roundup")}
         onClickClearSelection={() => setSelectedIds(new Set())}
       />
@@ -292,7 +276,7 @@ export default function ContentWorkbenchPage() {
               selectedArticleIds={selectedIds}
               accounts={accounts}
               selectedAccountIds={selectedAccountIds}
-              onToggleAccount={toggleAccount}
+              onChangeAccountIds={handleAccountIdsChange}
               onSubmit={handleBulkSubmit}
               submitting={bulkSubmitting}
             />
@@ -300,13 +284,14 @@ export default function ContentWorkbenchPage() {
             <DistributionCard
               accounts={accounts}
               selectedAccountIds={selectedAccountIds}
-              onToggleAccount={toggleAccount}
+              onChangeAccountIds={handleAccountIdsChange}
               onPublish={handlePublish}
               publishing={publishing}
-              dvhTemplate={dvhTemplate}
-              onTemplateChange={setDvhTemplate}
-              onGenerateDvh={handleGenerateDvh}
-              generatingDvh={generatingDvh}
+              onOpenVideoModal={() => {
+                if (!selectedId) return;
+                setVideoArticleId(selectedId);
+                setGenerateModal("video");
+              }}
               disabled={!selectedId}
             />
           )}
@@ -335,9 +320,11 @@ export default function ContentWorkbenchPage() {
         onClose={() => setGenerateModal(null)}
         onComplete={handleGenerateComplete}
       />
-      <ManualGenerateVideoModal
+      <UnifiedVideoModal
         open={generateModal === "video"}
         onClose={() => setGenerateModal(null)}
+        articleId={videoArticleId}
+        defaultTab="article"
         onTriggered={(info) => {
           setGenerateModal(null);
           if (info.mode === "direct" && info.articleId) {

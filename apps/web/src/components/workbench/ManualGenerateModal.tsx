@@ -12,6 +12,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../../utils/api";
 import JournalFilterTab from "./JournalFilterTab";
+import AccountSelector from "../AccountSelector";
 
 type Template = "A" | "B" | "C" | "E";
 type CountOption = 3 | 5 | 10 | "custom";
@@ -320,22 +321,17 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
                 仅生成不发布
               </label>
             </div>
-            {!skipPublish && accounts.length > 0 && (
-              <div className="space-y-1 max-h-28 overflow-y-auto">
-                {accounts.filter(a => a.status === "active" || a.isVerified).map((a) => (
-                  <label key={a.id} className={`flex items-center gap-2 px-2.5 py-1.5 border rounded-lg text-sm cursor-pointer ${
-                    selectedAccountIds.has(a.id) ? "border-blue-500 bg-blue-50" : "border-gray-200"
-                  } ${generating ? "opacity-50" : ""}`}>
-                    <input type="checkbox" checked={selectedAccountIds.has(a.id)} onChange={() => toggleAccount(a.id)} disabled={generating} className="rounded" />
-                    <span>{a.accountName}</span>
-                    <span className="text-[11px] text-gray-400">{a.platform}</span>
-                    {a.isVerified && <span className="text-[10px] text-green-600 bg-green-50 px-1 rounded">已验证</span>}
-                  </label>
-                ))}
+            {/* 6-11 施工包C1 (审计 2.1): 扁平列表 → 统一 AccountSelector (按平台分组 + 平台全选 + 已验证✓) */}
+            {!skipPublish && (
+              <div className="max-h-40 overflow-y-auto">
+                <AccountSelector
+                  accounts={accounts.filter((a) => a.status === "active" || a.isVerified)}
+                  value={[...selectedAccountIds]}
+                  onChange={(ids) => setSelectedAccountIds(new Set(ids))}
+                  showGroupSelectAll
+                  disabled={generating}
+                />
               </div>
-            )}
-            {!skipPublish && accounts.length === 0 && (
-              <div className="text-xs text-gray-400 py-2">暂无可用账号</div>
             )}
           </div>
 

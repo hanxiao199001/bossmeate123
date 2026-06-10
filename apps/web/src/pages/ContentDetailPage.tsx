@@ -7,6 +7,8 @@ import { PLATFORM_META, platformLabel } from "../utils/i18n";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 import RewriteSectionModal from "../components/RewriteSectionModal";
 import EditTimelineDrawer from "../components/EditTimelineDrawer";
+import AccountSelector from "../components/AccountSelector";
+import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
 
 // ===== 类型定义 =====
 interface VariantSibling {
@@ -197,8 +199,8 @@ export default function ContentDetailPage() {
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
 
-  // 5-15 PR #141: 数字人视频模板选择（替代 PR Q.0 的 video_script 老按钮）
-  const [dvhTemplate, setDvhTemplate] = useState<string>("A_academic");
+  // 6-11 施工包C1-b (审计 1.2): 数字人视频改弹统一 UnifiedVideoModal (原 inline 模板下拉 + dvhTemplate state 下线)
+  const [showVideoModal, setShowVideoModal] = useState(false);
 
   // T4-3-5: 模板元信息缓存（id → {name, icon, description}），首次挂载时拉一次
   const [templates, setTemplates] = useState<Map<string, TemplateInfo>>(new Map());
@@ -272,17 +274,6 @@ export default function ContentDetailPage() {
     const bodyChanged = editBody !== (content.body || "");
     setHasChanges(titleChanged || bodyChanged);
   }, [editTitle, editBody, content]);
-
-  // 5-15 PR #141: 触发数字人视频生成（DVH_REAL_MODE=false 时走 mock fixture）
-  const handleGenerateDvhVideo = useCallback(async () => {
-    if (!content || content.type !== "article") return;
-    try {
-      await api.post(`/articles/${content.id}/generate-dvh-video`, { templateId: dvhTemplate });
-      toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
-    } catch (err) {
-      toast.error("生成失败：" + (err instanceof Error ? err.message : "未知错误"));
-    }
-  }, [content, dvhTemplate]);
 
   // 保存
   const handleSave = async () => {
@@ -427,34 +418,6 @@ export default function ContentDetailPage() {
     } catch {
       setMatrixPosted((prev) => ({ ...prev, [accountId]: !posted }));
       toast.error("记录失败，请重试");
-    }
-  };
-
-  // 切换账号选择
-  const toggleAccountSelection = (accountId: string) => {
-    setSelectedAccountIds(prev =>
-      prev.includes(accountId)
-        ? prev.filter(id => id !== accountId)
-        : [...prev, accountId]
-    );
-  };
-
-  // 全选某个平台的账号
-  const togglePlatformAll = (platform: string) => {
-    const platformAccountIds = accounts
-      .filter(acc => acc.platform === platform)
-      .map(acc => acc.id);
-
-    const allSelected = platformAccountIds.every(id => selectedAccountIds.includes(id));
-
-    if (allSelected) {
-      setSelectedAccountIds(prev =>
-        prev.filter(id => !platformAccountIds.includes(id))
-      );
-    } else {
-      setSelectedAccountIds(prev =>
-        Array.from(new Set([...prev, ...platformAccountIds]))
-      );
     }
   };
 
@@ -835,20 +798,9 @@ export default function ContentDetailPage() {
             >
               ✏️ 编辑此文
             </button>
-            {/* 5-15 PR #141: 数字人视频 — inline select 选 4 套主播模板 */}
-            <select
-              value={dvhTemplate}
-              onChange={(e) => setDvhTemplate(e.target.value)}
-              className="px-2 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700"
-              aria-label="数字人模板"
-            >
-              <option value="A_academic">A 学术</option>
-              <option value="B_marketing">B 营销</option>
-              <option value="C_popular">C 科普</option>
-              <option value="E_industry">E 行业</option>
-            </select>
+            {/* 6-11 施工包C1-b: 弹统一生成视频弹窗 (锁定本文, 主播模板在弹窗里选) */}
             <button
-              onClick={handleGenerateDvhVideo}
+              onClick={() => setShowVideoModal(true)}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-pink-600 text-white hover:bg-pink-700"
             >
               🎬 生成数字人视频
@@ -885,83 +837,16 @@ export default function ContentDetailPage() {
               </div>
             ) : (
               <>
-                {/* 按平台分组显示账号 */}
-                <div className="space-y-3 mb-4">
-                  {Array.from(
-                    new Set(accounts.map(acc => acc.platform))
-                  ).map(platform => {
-                    const platformAccounts = accounts.filter(
-                      acc => acc.platform === platform
-                    );
-                    const allSelected = platformAccounts.every(acc =>
-                      selectedAccountIds.includes(acc.id)
-                    );
-
-                    return (
-                      <div
-                        key={platform}
-                        className="bg-white rounded-lg border border-green-200 p-3"
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <input
-                            type="checkbox"
-                            checked={allSelected}
-                            onChange={() => togglePlatformAll(platform)}
-                            className="w-4 h-4 rounded border-gray-300 cursor-pointer"
-                          />
-                          <span className="text-lg">
-                            {PLATFORM_META[platform]?.icon || "🌐"}
-                          </span>
-                          <span className="text-sm font-medium text-gray-700">
-                            {platformLabel(platform)}
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            ({platformAccounts.length})
-                          </span>
-                        </div>
-                        <div className="space-y-2 ml-6">
-                          {platformAccounts.map(account => (
-                            <label
-                              key={account.id}
-                              className="flex items-center gap-2 cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedAccountIds.includes(
-                                  account.id
-                                )}
-                                onChange={() =>
-                                  toggleAccountSelection(account.id)
-                                }
-                                className="w-4 h-4 rounded border-gray-300 cursor-pointer"
-                              />
-                              <span className="text-sm text-gray-700">
-                                {account.accountName}
-                              </span>
-                              {/* PR-S6: 抖音/视频号 看登录态(推草稿前置); 其余平台看 API 验证 */}
-                              {["douyin", "wechat_video"].includes(account.platform) ? (
-                                account.loginStatus === "logged_in" ? (
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ 已登录·可推草稿</span>
-                                ) : (
-                                  <Link to="/accounts" className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200">未登录·去扫码</Link>
-                                )
-                              ) : (
-                                <span
-                                  className={`text-xs px-1.5 py-0.5 rounded ${
-                                    account.isVerified
-                                      ? "bg-green-100 text-green-700"
-                                      : "bg-yellow-100 text-yellow-700"
-                                  }`}
-                                >
-                                  {account.isVerified ? "已验证" : "待验证"}
-                                </span>
-                              )}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
+                {/* 6-11 施工包C1 (审计 2.1): 平台分组勾选收口统一 AccountSelector
+                    — 默认勾选已验证账号(行为变化, 老韩已确认) + 平台全选 + 抖音/视频号登录态徽标 */}
+                <div className="bg-white rounded-lg border border-green-200 p-3 mb-4">
+                  <AccountSelector
+                    accounts={accounts}
+                    value={selectedAccountIds}
+                    onChange={setSelectedAccountIds}
+                    defaultVerifiedChecked
+                    showGroupSelectAll
+                  />
                 </div>
 
                 {/* 发布按钮和结果 */}
@@ -1488,6 +1373,14 @@ export default function ContentDetailPage() {
           </div>
         )}
       </div>
+
+      {/* 6-11 施工包C1-b: 统一生成视频弹窗 (文章锁定为当前内容) */}
+      <UnifiedVideoModal
+        open={showVideoModal}
+        onClose={() => setShowVideoModal(false)}
+        articleId={content.id}
+        defaultTab="article"
+      />
 
       {/* T4-2-2: AI 改段 Modal（task #20） */}
       {id && (
