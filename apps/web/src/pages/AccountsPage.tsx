@@ -461,6 +461,16 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                   </>
                 ) : (
                 <>
+                {/* 公众号 API 凭证录入引导 (路线决策: 保持官方 API, 不走扫码 — 登录态永不过期且合法稳定) */}
+                {selectedPlatform === "wechat" && (
+                  <div className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 mb-3 space-y-1.5">
+                    <p className="font-medium">📋 凭证获取与配置（一次配好，永不过期）：</p>
+                    <p>1. 用公众号管理员微信扫码登录 <a href="https://mp.weixin.qq.com" target="_blank" rel="noreferrer" className="underline font-medium">mp.weixin.qq.com</a></p>
+                    <p>2. 左侧菜单 <b>设置与开发 → 基本配置</b>：页面上方即 <b>AppID</b>；<b>AppSecret</b> 点"重置"生成（仅显示一次，立即复制；重置不影响已有功能）</p>
+                    <p>3. 同页 <b>IP白名单</b> 点"查看"→ 添加服务器 IP：<code className="px-1 py-0.5 bg-blue-100 rounded font-mono font-bold select-all">106.53.163.120</code>（不加白名单接口会报 40164 错误）</p>
+                    <p>4. 回到本页填入两项凭证，保存后自动验证</p>
+                  </div>
+                )}
                 <h4 className="text-sm font-medium text-gray-700 mb-3">凭证信息</h4>
                 <div className="space-y-3">
                   {(CREDENTIAL_FIELDS[selectedPlatform] || []).map((field) => (
