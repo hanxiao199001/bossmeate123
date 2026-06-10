@@ -341,8 +341,19 @@ async function deepClickByText(page: Page, pattern: RegExp): Promise<boolean> {
         target = el; // 越深越内层, 后命中覆盖
       }
       if (!target) return null;
-      target.scrollIntoView({ block: "center", inline: "center" });
-      const r = target.getBoundingClientRect();
+      // 命中的常是内层文字 → 向上找真正可点击的"行/按钮"(role/button/a/li/cursor:pointer/可点 class)
+      let clickable = target;
+      let node = target;
+      for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+        const tag = node.tagName;
+        const role = node.getAttribute?.("role");
+        const cls = (node.className || "").toString();
+        const cursor = (() => { try { return (globalThis as any).getComputedStyle(node).cursor; } catch { return ""; } })();
+        if (tag === "BUTTON" || tag === "A" || tag === "LI" || role === "button" ||
+            cursor === "pointer" || /item|cell|btn|option|row|list/i.test(cls)) { clickable = node; break; }
+      }
+      clickable.scrollIntoView({ block: "center", inline: "center" });
+      const r = clickable.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) return null;
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }, pattern.source);
@@ -518,22 +529,24 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
                 return false;
               }).catch(() => false);
 
-              if (!session.smsRequested) {
-                // ① 选"短信验证"方式 (列表项, 文案可能是"发送短信验证/手机短信验证/短信验证")
-                await deepClickByText(page, /短信验/);
-                await new Promise((r) => setTimeout(r, 1_000));
-                // ② 点"获取验证码/发送验证码"真正发短信
-                const sent = await deepClickByText(page, /获取验证码|发送验证码|发送短信|重新发送/);
+              // 判断当前处于哪一步: 短信页特征 = 有验证码输入框 或 出现手机号掩码(138****8888) 或 倒计时
+              const onSmsPage = hasCodeInput || /\d{3}\*{2,}\d{2,}|秒后重(新|发)|\d+s\s*后/.test(pageTxt);
+              if (!onSmsPage) {
+                // 仍在"方式选择"列表 → 点"发送短信验证"那一行进入短信页 (不点获取验证码!)
+                const picked = await deepClickByText(page, /短信/);
+                logger.info({ sessionId: session.sessionId, picked }, "qr-login: 方式选择页, 点'短信验证'进入短信页");
+              } else if (!session.smsRequested) {
+                // 已在短信页 → 点"获取验证码"真正发短信 (只点一次)
+                const sent = await deepClickByText(page, /获取验证码|发送验证码|获取短信|发送短信/);
                 if (sent) {
                   session.smsRequested = true;
-                  session.createdAt = Date.now(); // 重置超时, 留足收码输码时间
-                  logger.info({ sessionId: session.sessionId }, "qr-login: 已点'获取验证码', 短信应已发出, 等用户输码");
+                  session.createdAt = Date.now();
+                  logger.info({ sessionId: session.sessionId }, "qr-login: 已进短信页并点'获取验证码', 短信应已发出");
                 } else {
-                  logger.info({ sessionId: session.sessionId, hasCodeInput }, "qr-login: 身份验证页, 未找到'获取验证码'按钮(可能仍在方式选择), 下拍重试");
+                  logger.info({ sessionId: session.sessionId }, "qr-login: 在短信页但未找到'获取验证码'(可能倒计时中)");
                 }
               }
-              // 出现验证码输入框 → 进 waiting_sms (即便没点到按钮, 有输入框也让用户能输)
-              if ((session.smsRequested || hasCodeInput) && session.status !== "waiting_sms") session.status = "waiting_sms";
+              if (onSmsPage && session.status !== "waiting_sms") session.status = "waiting_sms";
               // 验证弹窗现场整页截图给前端看
               const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
               if (shot) session.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
