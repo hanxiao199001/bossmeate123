@@ -64,9 +64,10 @@ interface UploadParams {
 /** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
 async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Promise<void> {
   await page.goto("https://creator.douyin.com/creator-micro/content/upload", {
-    waitUntil: "networkidle2",
+    waitUntil: "domcontentloaded", // 创作页长连接, networkidle2 永不触发
     timeout: 60_000,
   });
+  await new Promise((r) => setTimeout(r, 3_000));
   if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
 
   // 1. 选文件 — 上传页有 input[type=file]
@@ -129,9 +130,52 @@ async function clickButtonByText(page: Page, texts: string[], timeoutMs: number)
   return false;
 }
 
+/** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
+async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams): Promise<void> {
+  await page.goto("https://channels.weixin.qq.com/platform/post/create", {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await new Promise((r) => setTimeout(r, 3_000));
+  if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+
+  // 1. 选文件
+  const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 20_000 });
+  if (!fileInput) throw new Error("找不到上传入口 input[type=file]");
+  await (fileInput as any).uploadFile(videoPath);
+  logger.info("视频号推草稿: 视频文件已提交");
+
+  // 2. 等描述输入框 (视频号短描述是 contenteditable / textarea)
+  const editorSelectors = [
+    '.input-editor[contenteditable="true"]',
+    'div[contenteditable="true"]',
+    'textarea[placeholder*="描述"]',
+    'textarea',
+  ];
+  let editor: any = null;
+  for (const sel of editorSelectors) {
+    editor = await page.waitForSelector(sel, { timeout: 90_000 }).catch(() => null);
+    if (editor) break;
+  }
+  if (!editor) throw new Error("等不到描述编辑器 (上传失败或页面改版)");
+
+  // 3. 填描述
+  await editor.click();
+  await page.keyboard.type(caption, { delay: 30 });
+  await new Promise((r) => setTimeout(r, 1_500));
+
+  // 4. 等转码完成后存草稿 ("保存草稿"/"暂存"/"存草稿")
+  const clicked = await clickButtonByText(page, ["保存草稿", "暂存", "存草稿", "保存"], 180_000);
+  if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (转码超时或页面改版)");
+
+  await new Promise((r) => setTimeout(r, 5_000));
+  if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+  logger.info({ url: page.url() }, "视频号推草稿: 已点击保存草稿");
+}
+
 const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
   douyin: douyinPushDraft,
-  // wechat_video: PR-S3
+  wechat_video: wechatVideoPushDraft,
 };
 
 // ===== 队列执行 =====

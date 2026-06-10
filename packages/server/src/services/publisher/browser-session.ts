@@ -205,7 +205,8 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
       const page = await b.newPage();
       session.page = page;
       await page.setViewport({ width: 1280, height: 900 });
-      await page.goto(cfg.loginUrl, { waitUntil: "networkidle2", timeout: 45_000 });
+      // 抖音/视频号创作页有长连接+轮询, networkidle2 永不触发 → 用 domcontentloaded
+      await page.goto(cfg.loginUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
       // 给登录页二维码渲染留时间
       await new Promise((r) => setTimeout(r, 3_000));
       session.qrPng = (await captureQr(page)) ?? undefined;
