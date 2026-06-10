@@ -507,30 +507,69 @@ export default function ContentDetailPage() {
     setPublishMsg("");
     setPublishResults([]);
     try {
-      const res = await api.post<{ results: PublishResult[]; summary: { total: number; success: number; failed: number } }>("/publish", {
-        contentId: id,
-        accountIds: selectedAccountIds,
-      });
+      // PR-S6: 统一入口 — 抖音/视频号走"推草稿箱"(浏览器登录态, 不要 API 凭证), 其余平台走 /publish
+      const SEMI = ["douyin", "wechat_video"];
+      const selected = accounts.filter((a) => selectedAccountIds.includes(a.id));
+      const draftAccts = selected.filter((a) => SEMI.includes(a.platform));
+      const apiAccts = selected.filter((a) => !SEMI.includes(a.platform));
+      const collected: PublishResult[] = [];
 
-      if (res.data) {
-        const results = res.data.results || [];
-        setPublishResults(results);
-        const s = res.data.summary;
-        // 精细文案：失败优先暴露，draft_only 用独立词避免"成功"歧义
-        const fullOk = results.filter((r) => r.success && r.mode === "full").length;
-        const draftOnly = results.filter((r) => r.success && r.mode === "draft_only").length;
-        const failed = s.failed;
-        const parts: string[] = [];
-        if (fullOk > 0) parts.push(`${fullOk} 个已群发`);
-        if (draftOnly > 0) parts.push(`${draftOnly} 个进草稿箱待人工发送`);
-        if (failed > 0) parts.push(`${failed} 个失败`);
-        setPublishMsg(parts.length > 0 ? parts.join("，") : "无发布结果");
-
-        // 仅当有账号"真正群发"(mode=full)才把内容标 published；draft_only 保留原状态
-        if (fullOk > 0) {
-          await api.patch(`/content/${id}`, { status: "published" });
-          fetchContent();
+      // 1) 抖音/视频号 → 推草稿箱
+      const loggedIn = draftAccts.filter((a) => a.loginStatus === "logged_in");
+      for (const a of draftAccts.filter((a) => a.loginStatus !== "logged_in")) {
+        collected.push({ accountId: a.id, accountName: a.accountName, platform: a.platform, success: false, error: "未扫码登录 — 请到账号管理扫码登录后再推送" });
+      }
+      if (loggedIn.length > 0) {
+        const r = await api.post<{ jobId: string }>(`/content/${id}/push-draft`, { accountIds: loggedIn.map((a) => a.id) });
+        const jobId = r.data?.jobId;
+        if (jobId) {
+          const terminal = new Set(["success", "failed", "login_expired"]);
+          for (let i = 0; i < 160; i++) {
+            await new Promise((res) => setTimeout(res, 3000));
+            const jr = await api.get<{ accounts: Array<{ accountId: string; accountName: string; platform?: string; status: string; error?: string }> }>(`/content/push-draft/${jobId}`);
+            const accs = jr.data?.accounts || [];
+            const doneCount = accs.filter((a) => terminal.has(a.status)).length;
+            setPublishMsg(`抖音/视频号 推送草稿箱中… ${doneCount}/${accs.length}（上传+转码需数分钟，请勿关闭）`);
+            // 实时把已完成的并入结果展示
+            const liveDone: PublishResult[] = accs.filter((a) => terminal.has(a.status)).map((x) => ({
+              accountId: x.accountId, accountName: x.accountName,
+              platform: loggedIn.find((l) => l.id === x.accountId)?.platform || "",
+              success: x.status === "success", mode: "draft_only" as const,
+              message: x.status === "success" ? "已进草稿箱 — 到平台后台审核后发布" : undefined,
+              error: x.status === "login_expired" ? "登录态失效，请重新扫码登录" : x.status === "failed" ? (x.error || "推送失败") : undefined,
+            }));
+            setPublishResults([...collected, ...liveDone]);
+            if (accs.length > 0 && accs.every((a) => terminal.has(a.status))) {
+              collected.push(...liveDone);
+              break;
+            }
+          }
+          setMatrixRefreshNonce((n) => n + 1);
         }
+      }
+
+      // 2) 其余平台 → /publish (API 发布)
+      if (apiAccts.length > 0) {
+        const res = await api.post<{ results: PublishResult[]; summary: { total: number; success: number; failed: number } }>("/publish", {
+          contentId: id,
+          accountIds: apiAccts.map((a) => a.id),
+        });
+        if (res.data?.results) collected.push(...res.data.results);
+      }
+
+      setPublishResults(collected);
+      const fullOk = collected.filter((r) => r.success && r.mode === "full").length;
+      const draftOk = collected.filter((r) => r.success && r.mode === "draft_only").length;
+      const failed = collected.filter((r) => !r.success).length;
+      const parts: string[] = [];
+      if (fullOk > 0) parts.push(`${fullOk} 个已群发`);
+      if (draftOk > 0) parts.push(`${draftOk} 个进草稿箱待审核发布`);
+      if (failed > 0) parts.push(`${failed} 个失败`);
+      setPublishMsg(parts.length > 0 ? parts.join("，") : "无发布结果");
+
+      if (fullOk > 0) {
+        await api.patch(`/content/${id}`, { status: "published" });
+        fetchContent();
       }
     } catch (err) {
       setPublishMsg(`发布出错：${err instanceof Error ? err.message : "未知错误"}`);
@@ -933,17 +972,24 @@ export default function ContentDetailPage() {
                               <span className="text-sm text-gray-700">
                                 {account.accountName}
                               </span>
-                              <span
-                                className={`text-xs px-1.5 py-0.5 rounded ${
-                                  account.isVerified
-                                    ? "bg-green-100 text-green-700"
-                                    : "bg-yellow-100 text-yellow-700"
-                                }`}
-                              >
-                                {account.isVerified
-                                  ? "已验证"
-                                  : "待验证"}
-                              </span>
+                              {/* PR-S6: 抖音/视频号 看登录态(推草稿前置); 其余平台看 API 验证 */}
+                              {["douyin", "wechat_video"].includes(account.platform) ? (
+                                account.loginStatus === "logged_in" ? (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ 已登录·可推草稿</span>
+                                ) : (
+                                  <Link to="/accounts" className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200">未登录·去扫码</Link>
+                                )
+                              ) : (
+                                <span
+                                  className={`text-xs px-1.5 py-0.5 rounded ${
+                                    account.isVerified
+                                      ? "bg-green-100 text-green-700"
+                                      : "bg-yellow-100 text-yellow-700"
+                                  }`}
+                                >
+                                  {account.isVerified ? "已验证" : "待验证"}
+                                </span>
+                              )}
                             </label>
                           ))}
                         </div>
