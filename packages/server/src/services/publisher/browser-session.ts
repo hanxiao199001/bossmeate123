@@ -70,8 +70,11 @@ interface PlatformLoginConfig {
 export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
   douyin: {
     loginUrl: "https://creator.douyin.com",
-    isLoggedInUrl: (url) => url.includes("creator-micro") && !url.includes("login"),
-    sessionCookies: ["sessionid", "sessionid_ss"],
+    // 登录后跳 creator-micro/home; 放宽为"在 creator.douyin.com 且不在 login 页"
+    isLoggedInUrl: (url) =>
+      /creator\.douyin\.com\/creator-micro/.test(url) ||
+      (/creator\.douyin\.com/.test(url) && !/login|passport/.test(url)),
+    sessionCookies: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"],
   },
   wechat_video: {
     loginUrl: "https://channels.weixin.qq.com",
@@ -232,6 +235,8 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
       session.qrPng = (await captureQr(page)) ?? undefined;
       session.status = "waiting";
 
+      const pollCdp = await page.target().createCDPSession();
+      let pollTick = 0;
       session.timer = setInterval(async () => {
         try {
           if (Date.now() - session.createdAt > SESSION_TIMEOUT_MS) {
@@ -239,10 +244,24 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
             return;
           }
           const url = page.url();
-          let loggedIn = cfg.isLoggedInUrl(url);
-          if (!loggedIn) {
-            const cookies = await page.cookies();
-            loggedIn = cookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value);
+          // 全域 cookie (抖音 session 挂 .douyin.com, page.cookies() 只看当前域会漏)
+          let allCookies: any[] = [];
+          try {
+            const r = (await pollCdp.send("Network.getAllCookies")) as { cookies: any[] };
+            allCookies = r.cookies ?? [];
+          } catch { /* fallback 下面用 page.cookies */ }
+          if (allCookies.length === 0) {
+            try { allCookies = await page.cookies(); } catch { /* noop */ }
+          }
+          const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value);
+          const loggedIn = cfg.isLoggedInUrl(url) || hasSession;
+          // 诊断日志: 每 4 轮 (~10s) 打一次, 便于定位卡点
+          if (pollTick++ % 4 === 0) {
+            logger.info({
+              sessionId: session.sessionId, platform: session.platform, url,
+              hasSession, cookieCount: allCookies.length,
+              sessionCookieNames: allCookies.filter((c) => cfg.sessionCookies.includes(c.name)).map((c) => c.name),
+            }, "qr-login 轮询状态");
           }
           if (loggedIn) {
             if (session.timer) { clearInterval(session.timer); session.timer = undefined; }
