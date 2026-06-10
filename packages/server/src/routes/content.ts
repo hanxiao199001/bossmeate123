@@ -16,6 +16,7 @@ import {
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { auditContent } from "../services/risk-control/audit-content.js";
 import { generateDouyinCaption, generateDouyinCaptionVariants } from "../services/publisher/douyin-caption.js";
+import { enqueueDraftPush, getDraftPushJob } from "../services/publisher/draft-push.js";
 
 /** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
 const READABLE_TENANT_FILTER = (tenantId: string) =>
@@ -1080,5 +1081,71 @@ export async function contentRoutes(app: FastifyInstance) {
       logger.error({ err, contentId: id }, "记录半自动发布失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
     }
+  });
+
+  /**
+   * PR-S2: POST /content/:id/push-draft { accountIds } — 推视频+文案到平台草稿箱 (浏览器自动化)
+   * 异步任务, 返回 jobId, 用 GET /content/push-draft/:jobId 轮询各账号进度。
+   */
+  app.post("/:id/push-draft", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { accountIds?: string[] };
+    if (!body.accountIds?.length) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "accountIds 必填" });
+    }
+    try {
+      const [content] = await db
+        .select({ id: contents.id, type: contents.type })
+        .from(contents)
+        .where(and(eq(contents.id, id), READABLE_TENANT_FILTER(request.tenantId)))
+        .limit(1);
+      if (!content) return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      if (content.type !== "video") {
+        return reply.code(400).send({ code: "BAD_REQUEST", message: "仅视频内容支持推草稿箱" });
+      }
+      const accts = await db
+        .select({
+          id: platformAccounts.id,
+          accountName: platformAccounts.accountName,
+          platform: platformAccounts.platform,
+        })
+        .from(platformAccounts)
+        .where(and(inArray(platformAccounts.id, body.accountIds), eq(platformAccounts.tenantId, request.tenantId)));
+      if (accts.length === 0) {
+        return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+      }
+      const { jobId } = await enqueueDraftPush({
+        tenantId: request.tenantId,
+        contentId: id,
+        accounts: accts.map((a) => ({ accountId: a.id, accountName: a.accountName, platform: a.platform })),
+      });
+      return { code: "OK", data: { jobId } };
+    } catch (err) {
+      logger.error({ err, contentId: id }, "发起推草稿失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * PR-S2: GET /content/push-draft/:jobId — 轮询推草稿任务进度
+   */
+  app.get("/push-draft/:jobId", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = getDraftPushJob(jobId, request.tenantId);
+    if (!job) return reply.code(404).send({ code: "NOT_FOUND", message: "任务不存在或已过期" });
+    return {
+      code: "OK",
+      data: {
+        jobId: job.jobId,
+        contentId: job.contentId,
+        accounts: job.accounts.map((a) => ({
+          accountId: a.accountId,
+          accountName: a.accountName,
+          platform: a.platform,
+          status: a.status,
+          error: a.error,
+        })),
+      },
+    };
   });
 }
