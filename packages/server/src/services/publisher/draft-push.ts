@@ -58,6 +58,8 @@ function rand(min: number, max: number) {
 
 // ===== 平台上传实现 =====
 interface UploadParams {
+  /** 钩子标题 (文案包 hookTitle), 视频号短标题从这派生; 缺省回退 caption */
+  title?: string;
   page: Page;
   videoPath: string;
   caption: string;
@@ -448,7 +450,7 @@ async function verifyChannelsDraftExists(page: Page, caption: string): Promise<b
 }
 
 /** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
-async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams): Promise<void> {
+async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadParams): Promise<void> {
   await page.goto("https://channels.weixin.qq.com/platform/post/create", {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
@@ -474,7 +476,8 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   if (!uploadDone) throw new Error("视频上传未完成 (超时, 视频可能过大或网络慢)");
 
   // 4b. 改写短标题为合规长度 (平台自动带出的常超16字 → 保存被拦)
-  const shortTitle = deriveShortTitle(caption);
+  // 短标题用钩子标题派生 (本来就是标题, 截16字也通顺), 不再用整段文案机械截断
+  const shortTitle = deriveShortTitle(title || caption);
   const titleSet = await setChannelsShortTitle(page, shortTitle);
   logger.info({ shortTitle, titleSet }, "视频号: 短标题已改写");
   await new Promise((r) => setTimeout(r, 1_000));
@@ -605,6 +608,7 @@ async function runJob(job: DraftPushJob) {
 
   // 文案: 复用差异化文案生成 (按账号序号对应, 与前端助手一致)
   let captions: string[] = [];
+  let titles: string[] = [];
   try {
     const variants = await generateDouyinCaptionVariants({
       contentId: job.contentId,
@@ -614,8 +618,10 @@ async function runJob(job: DraftPushJob) {
       platform: (job.accounts[0]?.platform === "wechat_video" ? "wechat_video" : "douyin") as any,
     });
     captions = variants.map((v: any) => v.fullText || v.hookTitle || content.title || "");
+    titles = variants.map((v: any) => v.hookTitle || content.title || "");
   } catch {
     captions = job.accounts.map(() => content.title || "");
+    titles = job.accounts.map(() => content.title || "");
   }
 
   try {
@@ -633,7 +639,7 @@ async function runJob(job: DraftPushJob) {
       try {
         await page.setViewport({ width: 1366, height: 900 });
         await setPageLoginState(page, state, acct.platform);
-        await pusher({ page, videoPath, caption: captions[i] ?? captions[0] ?? "" });
+        await pusher({ page, videoPath, caption: captions[i] ?? captions[0] ?? "", title: titles[i] ?? titles[0] ?? "" });
         acct.status = "success";
         // 落库: status=draft (人工在平台后台审核发布后, 前端勾"已发"会覆盖成 success)
         await db.insert(contentPublishLog).values({
