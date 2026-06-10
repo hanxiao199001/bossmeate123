@@ -14,7 +14,7 @@
 
 import puppeteerExtraImport from "puppeteer-extra";
 import StealthPluginImport from "puppeteer-extra-plugin-stealth";
-import type { Browser, Page } from "puppeteer";
+import type { Browser, BrowserContext, Page } from "puppeteer";
 import { randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
@@ -65,6 +65,8 @@ interface PlatformLoginConfig {
   isLoggedInUrl: (url: string) => boolean;
   /** 关键 cookie 名 (任一存在即认为有登录态) */
   sessionCookies: string[];
+  /** session cookie 必须挂在这些域后缀上 (防跨平台同名 cookie 串台) */
+  cookieDomains: string[];
 }
 
 export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
@@ -75,12 +77,14 @@ export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
       /creator\.douyin\.com\/creator-micro/.test(url) ||
       (/creator\.douyin\.com/.test(url) && !/login|passport/.test(url)),
     sessionCookies: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"],
+    cookieDomains: ["douyin.com"],
   },
   wechat_video: {
     loginUrl: "https://channels.weixin.qq.com",
     isLoggedInUrl: (url) =>
       /channels\.weixin\.qq\.com\/(platform|micro)/.test(url) && !url.includes("login"),
     sessionCookies: ["sessionid", "wxuin"],
+    cookieDomains: ["weixin.qq.com", "qq.com"],
   },
 };
 
@@ -96,6 +100,7 @@ interface QrSession {
   qrPng?: string; // base64
   error?: string;
   page?: Page;
+  context?: BrowserContext;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -117,6 +122,10 @@ async function closeSession(s: QrSession, status: QrLoginStatus, error?: string)
   if (s.page) {
     try { await s.page.close(); } catch { /* noop */ }
     s.page = undefined;
+  }
+  if (s.context) {
+    try { await s.context.close(); } catch { /* noop */ }
+    s.context = undefined;
   }
   // 终态会话 10 分钟后清理 (留给前端轮询读结果)
   setTimeout(() => sessions.delete(s.sessionId), 600_000).unref?.();
@@ -225,7 +234,12 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
   (async () => {
     try {
       const b = await getBrowser();
-      const page = await b.newPage();
+      // 每个扫码会话独立隐身 context: cookie 从零开始。
+      // 否则共享浏览器里残留的旧 cookie(可能已被平台踢失效, 或抖音/视频号同名 sessionid 串台)
+      // 会让轮询第一拍就误判"已登录", 把失效旧 cookie 重新落库 → 前端秒显成功但推送照样失败。
+      const ctx = await b.createBrowserContext();
+      session.context = ctx;
+      const page = await ctx.newPage();
       session.page = page;
       await page.setViewport({ width: 1280, height: 900 });
       // 抖音/视频号创作页有长连接+轮询, networkidle2 永不触发 → 用 domcontentloaded
@@ -253,7 +267,8 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
           if (allCookies.length === 0) {
             try { allCookies = await page.cookies(); } catch { /* noop */ }
           }
-          const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value);
+          const onPlatformDomain = (c: any) => cfg.cookieDomains.some((d) => String(c.domain ?? "").endsWith(d));
+          const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value && onPlatformDomain(c));
           const loggedIn = cfg.isLoggedInUrl(url) || hasSession;
           // 诊断日志: 每 4 轮 (~10s) 打一次, 便于定位卡点
           if (pollTick++ % 4 === 0) {
