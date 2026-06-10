@@ -376,6 +376,47 @@ async function deepFindEditor(page: Page, timeoutMs: number): Promise<any> {
   return null;
 }
 
+/** 视频号短标题: 6-16字硬限制, 超限保存被拦('标题超过16字限制'实测踩坑)。从文案派生合规短标题。 */
+function deriveShortTitle(caption: string): string {
+  const noTags = caption.replace(/#[^\s#]+/g, " "); // 去话题标签
+  const clean = Array.from(noTags.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "")).slice(0, 16).join("");
+  if (clean.length >= 6) return clean;
+  return (clean + "精选学术内容分享").slice(0, 16);
+}
+
+/**
+ * 改写视频号"短标题"输入框 (描述填入后平台会自动带出, 常超16字限制)。
+ * 深度遍历找 placeholder/maxlength 匹配的 input, 用原生 setter 赋值 + input/change 事件 (Vue 才感知)。
+ */
+async function setChannelsShortTitle(page: Page, title: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      const ok = await frame.evaluate((val: string) => {
+        const doc = (globalThis as any).document;
+        const win = (globalThis as any).window;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        for (const el of deep(doc)) {
+          if (el.tagName !== "INPUT") continue;
+          const ph = (el.getAttribute("placeholder") || "");
+          const ml = el.getAttribute("maxlength");
+          if (!/短标题|标题/.test(ph) && ml !== "16") continue;
+          const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")?.set;
+          setter ? setter.call(el, val) : (el.value = val);
+          el.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
+          el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
+          return true;
+        }
+        return false;
+      }, title);
+      if (ok) return true;
+    } catch { /* frame detach */ }
+  }
+  return false;
+}
+
 /**
  * 终审: 打开草稿箱列表页, 用文案前缀实查草稿是否真的存在。
  * 页面 toast/跳转都可能骗人(导航栏常驻'草稿箱'文案), 列表里有这条才算数。
@@ -432,6 +473,12 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   const uploadDone = await waitChannelsUploadComplete(page, 240_000);
   if (!uploadDone) throw new Error("视频上传未完成 (超时, 视频可能过大或网络慢)");
 
+  // 4b. 改写短标题为合规长度 (平台自动带出的常超16字 → 保存被拦)
+  const shortTitle = deriveShortTitle(caption);
+  const titleSet = await setChannelsShortTitle(page, shortTitle);
+  logger.info({ shortTitle, titleSet }, "视频号: 短标题已改写");
+  await new Promise((r) => setTimeout(r, 1_000));
+
   // 5. 点"保存草稿" (精确文本, 避免误点其它"保存")
   const clicked = await clickButtonByText(page, ["保存草稿", "保存至草稿箱", "存草稿"], 60_000);
   if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (页面改版, 见失败截图)");
@@ -453,6 +500,8 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
       if (!/post\/create/.test(page.url())) return; // 跳走, 进入实查
       const txt = await deepBodyText(page);
       if (/保存成功|已保存|保存到草稿/.test(txt)) return;
+      const blocked = txt.match(/[^\n]*(?:超过\s*\d+\s*字|字数超|不能为空|不符合要求|保存草稿失败|保存失败)[^\n]*/);
+      if (blocked) throw new Error(`保存被平台拦截: ${blocked[0].trim().slice(0, 60)}`);
       await new Promise((r) => setTimeout(r, 2_000));
     }
   })();
