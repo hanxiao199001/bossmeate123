@@ -235,11 +235,13 @@ async function findQrInFrame(frame: any): Promise<string | null> {
 }
 
 /**
- * 主文档二维码定位 (返回视口坐标矩形, 由 clip 截取)。
- * el.screenshot 在元素被兄弟节点遮挡/布局偏移时会截出"半个码"(抖音创作者中心内嵌面板实测踩坑),
- * 改打分定位 + page.screenshot clip: canvas 优先(抖音二维码是 canvas), 祖先带"扫码"文案加权。
+ * 主文档二维码提取 — 不依赖截屏。
+ * 坐标截图在动态布局/轮播 banner 下会截错位(实测两轮踩坑: 半个码 / 截成宣传图)。
+ * 直接从 DOM 抠像素: canvas.toDataURL 拿二维码原始像素(抖音是 canvas);
+ * img 画到离屏 canvas 再 toDataURL (cross-origin taint 抛错则退回矩形坐标给 clip 兜底)。
+ * 选择: 祖先 6 层内含"扫码/扫一扫/二维码/登录"文案强加权, canvas 加权, 正方形 80-400px。
  */
-async function findQrRectInMain(page: Page): Promise<{ x: number; y: number; width: number; height: number } | null> {
+async function extractQrFromMain(page: Page): Promise<{ dataUrl?: string; rect?: { x: number; y: number; width: number; height: number } } | null> {
   try {
     return await page.evaluate(() => {
       const doc = (globalThis as any).document;
@@ -249,19 +251,32 @@ async function findQrRectInMain(page: Page): Promise<{ x: number; y: number; wid
       for (const el of cands) {
         const r = el.getBoundingClientRect();
         const w = r.width, h = r.height;
-        if (w < 100 || h < 100 || w > 340 || h > 340) continue;
+        if (w < 80 || h < 80 || w > 400 || h > 400) continue;
         const ratio = w / h;
-        if (ratio < 0.8 || ratio > 1.25) continue;
-        let score = w * h;
-        if (el.tagName === "CANVAS") score *= 1.5;
+        if (ratio < 0.85 || ratio > 1.18) continue;
+        let score = 10_000 + w * h * 0.01;
+        if (el.tagName === "CANVAS") score += 5_000;
         let anc = el.parentElement;
-        for (let i = 0; i < 5 && anc; i++, anc = anc.parentElement) {
+        for (let i = 0; i < 6 && anc; i++, anc = anc.parentElement) {
           const t = (anc.textContent || "");
-          if (t.length < 400 && /扫码|扫一扫|二维码/.test(t)) { score *= 2; break; }
+          if (t.length < 500 && /扫码|扫一扫|二维码|登录/.test(t)) { score += 20_000; break; }
         }
-        if (score > bestScore) { bestScore = score; best = { x: r.left, y: r.top, width: r.width, height: r.height }; }
+        if (score > bestScore) { bestScore = score; best = el; }
       }
-      return best;
+      if (!best) return null;
+      const r = best.getBoundingClientRect();
+      const rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+      try {
+        if (best.tagName === "CANVAS") return { dataUrl: best.toDataURL("image/png"), rect };
+        const c = doc.createElement("canvas");
+        c.width = best.naturalWidth || Math.round(r.width);
+        c.height = best.naturalHeight || Math.round(r.height);
+        const ctx = c.getContext("2d");
+        ctx.drawImage(best, 0, 0, c.width, c.height);
+        return { dataUrl: c.toDataURL("image/png"), rect };
+      } catch {
+        return { rect }; // cross-origin taint → 退回坐标
+      }
     });
   } catch {
     return null;
@@ -270,8 +285,14 @@ async function findQrRectInMain(page: Page): Promise<{ x: number; y: number; wid
 
 async function captureQr(page: Page): Promise<string | null> {
   try {
-    // 1. 主文档打分定位 + clip 截取 (带 12px 边距, 钳制在视口内)
-    const rect = await findQrRectInMain(page);
+    // 1. 主文档 DOM 直抠像素 (canvas.toDataURL, 与布局/遮挡/动画无关)
+    const found = await extractQrFromMain(page);
+    if (found?.dataUrl) {
+      const b64 = found.dataUrl.replace(/^data:image\/\w+;base64,/, "");
+      if (b64.length > 1_000) return b64; // 过小=空白canvas, 走兜底
+    }
+    // 1b. 退化: 坐标 clip 截取 (带 12px 边距, 钳制在视口内)
+    const rect = found?.rect ?? null;
     if (rect) {
       const vp = page.viewport() ?? { width: 1280, height: 900 };
       const pad = 12;
