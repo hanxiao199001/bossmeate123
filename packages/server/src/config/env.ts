@@ -169,6 +169,15 @@ const envSchema = z.object({
   // B.1: 公众号入站 webhook 校验 token（公众号管理后台「开发-基本配置」 token）
   WECHAT_VERIFY_TOKEN: z.string().default("ai_butler_token_2026"),
 
+  // 抖音开放平台官方 OAuth 代发（6-10 双轨 A 轨, scope video.create.bind）
+  // 全局应用凭证（一个 BossMate 企业应用服务所有租户）; 账号级 credentials.clientKey/clientSecret 可覆盖
+  DOUYIN_CLIENT_KEY: z.string().optional(),
+  DOUYIN_CLIENT_SECRET: z.string().optional(),
+  // OAuth 回调地址, 须与开放平台控制台配置一致, 如 https://<domain>/api/v1/douyin/oauth/callback
+  DOUYIN_OAUTH_REDIRECT_URL: z.string().optional(),
+  // create_video 默认可见范围: 0=公开 1=自见(草稿模式, 人工App里改公开) 2=好友可见
+  DOUYIN_PRIVATE_STATUS: z.coerce.number().int().min(0).max(2).default(1),
+
   // 质量检查
   QUALITY_MIN_SCORE: z.coerce.number().default(70),
 

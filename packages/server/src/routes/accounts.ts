@@ -18,6 +18,8 @@ import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } fr
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
 import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode, resendSmsCode, remoteClick } from "../services/publisher/browser-session.js";
+import { buildAuthorizeUrl, resolveDouyinAppConfig, signOauthState } from "../services/publisher/douyin-open-api.js";
+import { env } from "../config/env.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -452,6 +454,35 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * POST /publish - 批量发布内容到多个账号
    */
+  // 6-10 双轨 A 轨: 生成抖音官方 OAuth 授权链接（scope video.create.bind, 服务端代发）。
+  // 前端打开该 URL → 客户用抖音 App 扫码/确认授权 → 抖音重定向到 /douyin/oauth/callback 落 token。
+  app.get("/accounts/:id/douyin-oauth-url", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await loadDecryptedAccount(id, request.tenantId!);
+    if (!account) {
+      return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+    }
+    if (account.platform !== "douyin") {
+      return reply.code(400).send({ code: "BAD_PLATFORM", message: "仅抖音账号支持 OAuth 授权" });
+    }
+    const appConfig = resolveDouyinAppConfig(account.credentials);
+    if (!appConfig) {
+      return reply.code(400).send({
+        code: "DOUYIN_APP_NOT_CONFIGURED",
+        message: "未配置抖音开放平台应用凭证: 请在服务器 .env 配置 DOUYIN_CLIENT_KEY/DOUYIN_CLIENT_SECRET（或在账号凭证里填 clientKey/clientSecret）",
+      });
+    }
+    const redirectUri = env.DOUYIN_OAUTH_REDIRECT_URL;
+    if (!redirectUri) {
+      return reply.code(400).send({
+        code: "DOUYIN_REDIRECT_NOT_CONFIGURED",
+        message: "未配置 DOUYIN_OAUTH_REDIRECT_URL（须与开放平台控制台回调域名一致, 如 https://<domain>/api/v1/douyin/oauth/callback）",
+      });
+    }
+    const state = signOauthState({ accountId: id, tenantId: request.tenantId! });
+    return { authorizeUrl: buildAuthorizeUrl(appConfig, redirectUri, state), expiresInMinutes: 30 };
+  });
+
   app.post("/publish", async (request, reply) => {
     try {
       const body = publishSchema.parse(request.body);

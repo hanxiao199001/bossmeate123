@@ -272,6 +272,9 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
             ...(account.metadata as Record<string, any>),
             ...(content.metadata as Record<string, any>),
             ...(videoUrl ? { videoUrl } : {}),
+            // douyin OAuth token 刷新落库需要的上下文（其他适配器忽略）
+            accountId: account.id,
+            tenantId,
           },
           capability: accountCapability,
         });
