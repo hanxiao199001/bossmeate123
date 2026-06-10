@@ -169,6 +169,8 @@ interface QrSession {
   autoTries?: number;
   /** 用户已开始远程点击接管, 自动点击停手 */
   userDriving?: boolean;
+  /** 鼠标互斥锁: page.mouse 不允许并发按下 ('left is already pressed'), 所有点击串行 */
+  mouseLock?: Promise<void>;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -400,7 +402,7 @@ export async function submitSmsCode(sessionId: string, tenantId: string, code: s
     }, code.trim());
     if (!typed) return { ok: false, message: "页面上找不到验证码输入框, 请重新发起扫码" };
     await new Promise((r) => setTimeout(r, 800));
-    await deepClickByText(page, /^(验证|确定|提交|确认)$/);
+    await withMouseLock(s, () => deepClickByText(page, /^(验证|确定|提交|确认)$/));
     s.status = "waiting"; // 交回轮询判定; 若验证失败弹窗仍在, 下一拍会切回 waiting_sms
     logger.info({ sessionId }, "qr-login: 短信验证码已提交");
     return { ok: true };
@@ -414,11 +416,18 @@ export async function resendSmsCode(sessionId: string, tenantId: string): Promis
   const s = sessions.get(sessionId);
   if (!s || s.tenantId !== tenantId) return { ok: false, message: "会话不存在或已过期" };
   if (!s.page) return { ok: false, message: "会话页面已关闭" };
-  const sent = await deepClickByText(s.page, /获取验证码|发送验证码|重新发送|重新获取|发送短信/);
+  const sent = await withMouseLock(s, () => deepClickByText(s.page!, /获取验证码|发送验证码|重新发送|重新获取|发送短信/));
   if (!sent) return { ok: false, message: "页面上找不到发送按钮(可能在倒计时中, 请等几秒)" };
   s.createdAt = Date.now();
   logger.info({ sessionId }, "qr-login: 用户手动重发短信验证码");
   return { ok: true };
+}
+
+/** 串行化同一会话上的鼠标操作 (并发 mouse.down 会炸 'left is already pressed') */
+function withMouseLock<T>(s: QrSession, fn: () => Promise<T>): Promise<T> {
+  const run = (s.mouseLock ?? Promise.resolve()).catch(() => undefined).then(fn);
+  s.mouseLock = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 /**
@@ -431,15 +440,17 @@ export async function remoteClick(sessionId: string, tenantId: string, xRatio: n
   if (!s.page) return { ok: false, message: "会话页面已关闭" };
   if (!(xRatio >= 0 && xRatio <= 1 && yRatio >= 0 && yRatio <= 1)) return { ok: false, message: "坐标越界" };
   const page = s.page;
+  s.userDriving = true; // 先置位: 后台自动点击立刻让位
   try {
-    const vp = page.viewport() ?? { width: 1280, height: 900 };
-    await page.mouse.click(Math.round(xRatio * vp.width), Math.round(yRatio * vp.height), { delay: 50 });
-    s.userDriving = true; // 用户接管, 自动点击让位
-    await new Promise((r) => setTimeout(r, 1_200));
-    const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
-    if (shot) s.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
-    logger.info({ sessionId, xRatio: xRatio.toFixed(3), yRatio: yRatio.toFixed(3) }, "qr-login: 远程点击");
-    return { ok: true };
+    return await withMouseLock(s, async () => {
+      const vp = page.viewport() ?? { width: 1280, height: 900 };
+      await page.mouse.click(Math.round(xRatio * vp.width), Math.round(yRatio * vp.height), { delay: 50 });
+      await new Promise((r) => setTimeout(r, 1_200));
+      const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
+      if (shot) s.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
+      logger.info({ sessionId, xRatio: xRatio.toFixed(3), yRatio: yRatio.toFixed(3) }, "qr-login: 远程点击");
+      return { ok: true };
+    });
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : "点击失败" };
   }
@@ -563,11 +574,11 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
               const autoAllowed = !session.userDriving && session.autoTries <= 3;
               if (!onSmsPage && autoAllowed) {
                 // 仍在"方式选择"列表 → 点"发送短信验证"那一行进入短信页 (不点获取验证码!)
-                const picked = await deepClickByText(page, /短信/);
+                const picked = await withMouseLock(session, () => deepClickByText(page, /短信/));
                 logger.info({ sessionId: session.sessionId, picked }, "qr-login: 方式选择页, 点'短信验证'进入短信页");
               } else if (onSmsPage && !session.smsRequested && !session.userDriving) {
                 // 已在短信页 → 点"获取验证码"真正发短信 (只点一次; 排除方式列表项'发送短信验证')
-                const sent = await deepClickByText(page, /获取验证码|发送验证码/);
+                const sent = await withMouseLock(session, () => deepClickByText(page, /获取验证码|发送验证码/));
                 if (sent) {
                   session.smsRequested = true;
                   session.createdAt = Date.now();
@@ -580,8 +591,8 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
               // 验证弹窗现场整页截图给前端看
               const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
               if (shot) session.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
-            } else if (/确定登录/.test(pageTxt)) {
-              await deepClickByText(page, /^确定登录$/);
+            } else if (!session.userDriving && /确定登录/.test(pageTxt)) {
+              await withMouseLock(session, () => deepClickByText(page, /^确定登录$/));
             }
           }
           let loggedIn: boolean;

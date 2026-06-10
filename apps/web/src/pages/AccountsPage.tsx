@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "../components/Toast";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
@@ -244,8 +244,10 @@ export default function AccountsPage() {
     }
   };
 
+  const clickBusyRef = useRef(false);
   const remoteClickShot = async (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!qrModal?.sessionId) return;
+    if (!qrModal?.sessionId || clickBusyRef.current) return;
+    clickBusyRef.current = true;
     const img = e.currentTarget;
     const rect = img.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
@@ -254,6 +256,8 @@ export default function AccountsPage() {
       await api.post(`/accounts/qr-login/${qrModal.sessionId}/click`, { x, y });
     } catch (err) {
       toast.error((err as any)?.response?.data?.message || "点击失败");
+    } finally {
+      clickBusyRef.current = false;
     }
   };
 
