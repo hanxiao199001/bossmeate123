@@ -148,7 +148,7 @@ export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
 };
 
 // ===== 会话表 =====
-export type QrLoginStatus = "starting" | "waiting" | "success" | "expired" | "failed";
+export type QrLoginStatus = "starting" | "waiting" | "waiting_sms" | "success" | "expired" | "failed";
 
 interface QrSession {
   sessionId: string;
@@ -163,6 +163,8 @@ interface QrSession {
   profileAccountId?: string;
   /** cookie 已现但页面未跳转时的主动刷新次数 (上限3) */
   reloads?: number;
+  /** 抖音身份验证: 是否已点"接收短信验证码" */
+  smsRequested?: boolean;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -173,7 +175,7 @@ const MAX_CONCURRENT = 2;
 
 function activeCount(): number {
   let n = 0;
-  for (const s of sessions.values()) if (s.status === "starting" || s.status === "waiting") n++;
+  for (const s of sessions.values()) if (s.status === "starting" || s.status === "waiting" || s.status === "waiting_sms") n++;
   return n;
 }
 
@@ -322,6 +324,76 @@ async function captureQr(page: Page): Promise<string | null> {
   }
 }
 
+/** 深度找文本命中元素并用真实鼠标点击 (trusted event, 抖音验证按钮 el.click 不响应) */
+async function deepClickByText(page: Page, pattern: RegExp): Promise<boolean> {
+  try {
+    const hit = await page.evaluate((src: string) => {
+      const re = new RegExp(src);
+      const doc = (globalThis as any).document;
+      function* deep(root: any): any {
+        const els = root.querySelectorAll("*");
+        for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+      }
+      let target: any = null;
+      for (const el of deep(doc)) {
+        const t = (el.textContent || "").trim();
+        if (t.length === 0 || t.length > 30 || !re.test(t)) continue;
+        target = el; // 越深越内层, 后命中覆盖
+      }
+      if (!target) return null;
+      target.scrollIntoView({ block: "center", inline: "center" });
+      const r = target.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return null;
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }, pattern.source);
+    if (!hit) return false;
+    await page.mouse.click(hit.x, hit.y, { delay: 50 });
+    return true;
+  } catch { return false; }
+}
+
+/** 抖音身份验证: 用户在前端输入短信验证码 → 填入页面并提交 */
+export async function submitSmsCode(sessionId: string, tenantId: string, code: string): Promise<{ ok: boolean; message?: string }> {
+  const s = sessions.get(sessionId);
+  if (!s || s.tenantId !== tenantId) return { ok: false, message: "会话不存在或已过期" };
+  if (!s.page || s.status !== "waiting_sms") return { ok: false, message: "当前不在短信验证步骤" };
+  const page = s.page;
+  try {
+    const typed = await page.evaluate((val: string) => {
+      const doc = (globalThis as any).document;
+      const win = (globalThis as any).window;
+      function* deep(root: any): any {
+        const els = root.querySelectorAll("*");
+        for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+      }
+      for (const el of deep(doc)) {
+        if (el.tagName !== "INPUT") continue;
+        const type = (el.getAttribute("type") || "text").toLowerCase();
+        if (!["text", "tel", "number"].includes(type)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 30 || r.height < 10) continue;
+        const ph = el.getAttribute("placeholder") || "";
+        const ml = el.getAttribute("maxlength") || "";
+        if (!/验证码/.test(ph) && ml !== "6" && ml !== "4") continue;
+        const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")?.set;
+        if (setter) setter.call(el, val); else el.value = val;
+        el.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
+        el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
+        return true;
+      }
+      return false;
+    }, code.trim());
+    if (!typed) return { ok: false, message: "页面上找不到验证码输入框, 请重新发起扫码" };
+    await new Promise((r) => setTimeout(r, 800));
+    await deepClickByText(page, /^(验证|确定|提交|确认)$/);
+    s.status = "waiting"; // 交回轮询判定; 若验证失败弹窗仍在, 下一拍会切回 waiting_sms
+    logger.info({ sessionId }, "qr-login: 短信验证码已提交");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "提交失败" };
+  }
+}
+
 /** 登录成功 → 抓全量 cookies(CDP) + localStorage, 加密落库 */
 async function persistLoginState(s: QrSession) {
   const page = s.page!;
@@ -352,7 +424,7 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
 
   // 同账号旧会话顶掉
   for (const s of sessions.values()) {
-    if (s.accountId === params.accountId && (s.status === "starting" || s.status === "waiting")) {
+    if (s.accountId === params.accountId && (s.status === "starting" || s.status === "waiting" || s.status === "waiting_sms")) {
       await closeSession(s, "expired", "被新会话替代");
     }
   }
@@ -414,6 +486,28 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
           }
           const onPlatformDomain = (c: any) => cfg.cookieDomains.some((d) => String(c.domain ?? "").endsWith(d));
           const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value && onPlatformDomain(c));
+          // 抖音补充交互: 扫码确认后网页侧可能弹"身份验证"(新设备风控) 或 "确定登录"按钮
+          if (cfg.checkLoggedIn) {
+            const pageTxt: string = await page
+              .evaluate(() => (globalThis as any).document?.body?.innerText ?? "")
+              .catch(() => "");
+            if (/身份验证/.test(pageTxt)) {
+              if (!session.smsRequested) {
+                const clicked = await deepClickByText(page, /接收短信验证码|短信验证/);
+                if (clicked) {
+                  session.smsRequested = true;
+                  session.createdAt = Date.now(); // 重置超时时钟, 给收码输码留足时间
+                  logger.info({ sessionId: session.sessionId }, "qr-login: 触发身份验证, 已点'接收短信验证码', 等用户输码");
+                }
+              }
+              if (session.smsRequested && session.status !== "waiting_sms") session.status = "waiting_sms";
+              // 验证弹窗现场整页截图给前端看
+              const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
+              if (shot) session.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
+            } else if (/确定登录/.test(pageTxt)) {
+              await deepClickByText(page, /^确定登录$/);
+            }
+          }
           let loggedIn: boolean;
           if (cfg.checkLoggedIn) {
             loggedIn = await cfg.checkLoggedIn(page);
@@ -455,9 +549,11 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
             await closeSession(session, "success");
             return;
           }
-          // 未登录: 刷新二维码截图 (平台二维码会轮换)
-          const qr = await captureQr(page);
-          if (qr) session.qrPng = qr;
+          // 未登录: 刷新二维码截图 (平台二维码会轮换); waiting_sms 态已放验证页截图, 不覆盖
+          if (session.status === "waiting") {
+            const qr = await captureQr(page);
+            if (qr) session.qrPng = qr;
+          }
         } catch (err) {
           logger.warn({ err: err instanceof Error ? err.message : err, sessionId: session.sessionId }, "qr-login 轮询异常");
         }
@@ -477,7 +573,7 @@ export function getQrLoginStatus(sessionId: string, tenantId: string): { status:
   if (!s || s.tenantId !== tenantId) return null;
   return {
     status: s.status,
-    qrPng: s.status === "waiting" ? s.qrPng : undefined,
+    qrPng: s.status === "waiting" || s.status === "waiting_sms" ? s.qrPng : undefined,
     error: s.error,
   };
 }

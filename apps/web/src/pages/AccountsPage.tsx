@@ -223,10 +223,26 @@ export default function AccountsPage() {
     accountId: string;
     accountName: string;
     sessionId?: string;
-    status: "starting" | "waiting" | "success" | "expired" | "failed";
+    status: "starting" | "waiting" | "waiting_sms" | "success" | "expired" | "failed";
     qrPng?: string;
     error?: string;
   } | null>(null);
+  const [smsCode, setSmsCode] = useState("");
+  const [smsSubmitting, setSmsSubmitting] = useState(false);
+
+  const submitSms = async () => {
+    if (!qrModal?.sessionId || !smsCode.trim() || smsSubmitting) return;
+    setSmsSubmitting(true);
+    try {
+      await api.post(`/accounts/qr-login/${qrModal.sessionId}/sms-code`, { code: smsCode.trim() });
+      toast.success("验证码已提交, 等待平台校验…");
+      setSmsCode("");
+    } catch (err) {
+      toast.error((err as any)?.response?.data?.message || "提交失败, 请重试");
+    } finally {
+      setSmsSubmitting(false);
+    }
+  };
 
   const startQrLogin = async (account: Account) => {
     setQrModal({ accountId: account.id, accountName: account.accountName, status: "starting" });
@@ -724,6 +740,30 @@ const handleScopeChange = async (accountId: string, scope: string) => {
               ) : (
                 <div className="py-12 text-sm text-gray-500">二维码加载中…</div>
               )
+            )}
+            {qrModal.status === "waiting_sms" && (
+              <div className="space-y-3">
+                {qrModal.qrPng && (
+                  <img src={`data:image/png;base64,${qrModal.qrPng}`} alt="身份验证页面" className="mx-auto w-full max-h-60 object-contain border border-gray-100 rounded-lg" />
+                )}
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-left">
+                  抖音要求短信验证（新设备登录）：验证码已发送至该账号绑定手机，请输入收到的验证码
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    value={smsCode}
+                    onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                    onKeyDown={(e) => { if (e.key === "Enter") submitSms(); }}
+                    placeholder="短信验证码"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={submitSms}
+                    disabled={smsSubmitting || !smsCode.trim()}
+                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >{smsSubmitting ? "提交中…" : "提交"}</button>
+                </div>
+              </div>
             )}
             {qrModal.status === "success" && (
               <div className="py-10 text-green-600 text-sm font-medium">✅ 登录成功,登录态已保存</div>

@@ -17,7 +17,7 @@ import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
-import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS } from "../services/publisher/browser-session.js";
+import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode } from "../services/publisher/browser-session.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -407,6 +407,22 @@ export async function accountRoutes(app: FastifyInstance) {
       return reply.code(404).send({ code: "NOT_FOUND", message: "会话不存在或已过期" });
     }
     return { code: "OK", data: status };
+  });
+
+  /**
+   * PR-S26: POST /accounts/qr-login/:sessionId/sms-code - 抖音身份验证, 提交短信验证码
+   */
+  app.post("/accounts/qr-login/:sessionId/sms-code", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const { code } = (request.body ?? {}) as { code?: string };
+    if (!code || !/^\d{4,8}$/.test(code.trim())) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "请输入4-8位数字验证码" });
+    }
+    const result = await submitSmsCode(sessionId, request.tenantId, code);
+    if (!result.ok) {
+      return reply.code(400).send({ code: "SMS_FAILED", message: result.message ?? "提交失败" });
+    }
+    return { code: "OK", data: { submitted: true } };
   });
 
   /**
