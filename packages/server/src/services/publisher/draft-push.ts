@@ -64,7 +64,8 @@ interface UploadParams {
 }
 
 /** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
-async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Promise<void> {
+async function douyinPushDraft({ page: initialPage, videoPath, caption }: UploadParams): Promise<void> {
+  let page = initialPage;
   await page.goto("https://creator.douyin.com/creator-micro/content/upload", {
     waitUntil: "domcontentloaded", // 创作页长连接, networkidle2 永不触发
     timeout: 60_000,
@@ -72,10 +73,9 @@ async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Prom
   await new Promise((r) => setTimeout(r, 3_000));
   if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
 
-  // 1. 选文件 — 跨frame找 input[type=file] (找不到先点上传按钮触发)
-  const fileInput = await findFileInput(page, 30_000);
-  if (!fileInput) throw new Error("找不到上传入口 input[type=file] (页面改版, 见失败截图)");
-  await fileInput.uploadFile(videoPath);
+  // 1. 确保在上传页 (直链可能被重定向回首页), 再上传
+  page = await douyinEnsureUploadPage(page);
+  await uploadVideoFile(page, videoPath);
   logger.info("抖音推草稿: 视频文件已提交, 等待进入编辑页");
 
   // 2. 等编辑页就绪 (出现文案编辑器). 抖音编辑器是 contenteditable
@@ -109,38 +109,98 @@ async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Prom
 
 /** 文本找按钮并点击 (等到可点为止), 浏览器上下文执行 */
 /**
- * 跨所有 frame 找 input[type=file] (上传组件可能在 iframe 内)。
- * 找不到时尝试点"上传视频/上传/选择视频"按钮触发隐藏 input 渲染, 再找。
+ * 上传视频文件 — 通吃标准 input 和自定义上传组件:
+ * 1. 先跨 frame 找现成 input[type=file] 直接 uploadFile
+ * 2. 找不到 → 点"上传/添加/选择视频"等区域, 用 waitForFileChooser 拦截原生文件框塞文件
+ *    (自定义组件点击后也会弹文件框, 这招绕过 DOM 选择器)
  */
-async function findFileInput(page: Page, timeoutMs: number): Promise<any> {
-  const deadline = Date.now() + timeoutMs;
-  let triggered = false;
-  while (Date.now() < deadline) {
-    for (const frame of page.frames()) {
-      try {
-        const h = await frame.$('input[type="file"]');
-        if (h) return h;
-      } catch { /* frame detach */ }
-    }
-    // 第二轮起: 尝试点上传按钮 reveal input
-    if (!triggered) {
-      triggered = true;
-      for (const frame of page.frames()) {
-        try {
-          await frame.evaluate(() => {
-            const doc = (globalThis as any).document;
-            const els = Array.from(doc.querySelectorAll("button, div, span, a")) as any[];
-            for (const el of els) {
-              const t = (el.textContent || "").trim();
-              if (/^(上传视频|上传|选择视频|发布视频|点击上传)$/.test(t)) { el.click(); return; }
-            }
-          });
-        } catch { /* noop */ }
+const UPLOAD_TRIGGER_TEXTS = ["上传视频", "上传", "选择视频", "点击上传", "添加视频", "添加", "发布视频"];
+
+async function tryDirectInput(page: Page, videoPath: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      const h = await frame.$('input[type="file"]');
+      if (h) { await (h as any).uploadFile(videoPath); return true; }
+    } catch { /* frame detach */ }
+  }
+  return false;
+}
+
+async function uploadVideoFile(page: Page, videoPath: string): Promise<void> {
+  // 诊断: 打印 frame URL 便于排查
+  logger.info({ frames: page.frames().map((f) => f.url()).slice(0, 8) }, "推草稿: 当前页 frames");
+
+  if (await tryDirectInput(page, videoPath)) {
+    logger.info("推草稿: 直接 input[type=file] 上传成功");
+    return;
+  }
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let chooser: any = null;
+    const chooserP = page.waitForFileChooser({ timeout: 9_000 }).then((c) => (chooser = c)).catch(() => null);
+    // 点一个上传候选 (按钮文字 或 含 upload class 的区域)
+    const clicked = await page.evaluate((labels: string[]) => {
+      const doc = (globalThis as any).document;
+      const els = Array.from(doc.querySelectorAll("button, div, span, a, label")) as any[];
+      for (const el of els) {
+        const t = (el.textContent || "").trim();
+        if (t.length <= 12 && labels.some((l) => t === l || t.includes(l))) { el.click(); return t; }
       }
+      const up = doc.querySelector('[class*="upload" i], [class*="dragger" i], [class*="add" i]');
+      if (up) { (up as any).click(); return "upload-zone"; }
+      return null;
+    }, UPLOAD_TRIGGER_TEXTS);
+    await chooserP;
+    if (chooser) {
+      await chooser.accept([videoPath]);
+      logger.info({ via: clicked }, "推草稿: 经 fileChooser 上传成功");
+      return;
     }
+    logger.info({ attempt, clicked, url: page.url() }, "推草稿: 本轮未触发文件框, 重试");
+    // 点击可能触发了导航 (如抖音首页→上传页), 再查一次 input
+    if (await tryDirectInput(page, videoPath)) { logger.info("推草稿: 导航后 input 上传成功"); return; }
     await new Promise((r) => setTimeout(r, 2_000));
   }
-  return null;
+  throw new Error("找不到上传入口 (input 与 fileChooser 均失败, 见失败截图)");
+}
+
+/** 抖音: 确保在上传页 (直链常被重定向回首页 → 从首页点'发布视频'进上传页, 处理可能的新标签页) */
+async function douyinEnsureUploadPage(page: Page): Promise<Page> {
+  if (/content\/(upload|publish)/.test(page.url())) return page;
+  logger.info({ url: page.url() }, "抖音: 不在上传页, 尝试点'发布视频'进入");
+  const browser = page.browser();
+  const newPagePromise = new Promise<Page | null>((resolve) => {
+    const onTarget = async (t: any) => {
+      try { const np = await t.page(); if (np) resolve(np); } catch { resolve(null); }
+    };
+    browser.once("targetcreated", onTarget);
+    setTimeout(() => resolve(null), 8_000);
+  });
+  const clicked = await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const els = Array.from(doc.querySelectorAll("a, button, div, span")) as any[];
+    for (const el of els) {
+      const t = (el.textContent || "").trim();
+      if (t === "发布视频" || t === "上传视频" || t === "发布作品") { el.click(); return t; }
+    }
+    return null;
+  });
+  if (!clicked) {
+    // 兜底再直链一次
+    await page.goto("https://creator.douyin.com/creator-micro/content/upload", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 3_000));
+    return page;
+  }
+  const newPage = await newPagePromise;
+  if (newPage) {
+    await newPage.bringToFront().catch(() => {});
+    await new Promise((r) => setTimeout(r, 3_000));
+    logger.info({ url: newPage.url() }, "抖音: 发布视频打开新标签页");
+    return newPage;
+  }
+  // 同标签内导航
+  await new Promise((r) => setTimeout(r, 3_000));
+  return page;
 }
 
 async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
@@ -176,10 +236,8 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   await new Promise((r) => setTimeout(r, 3_000));
   if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
 
-  // 1. 选文件 — 跨frame找 input[type=file]
-  const fileInput = await findFileInput(page, 30_000);
-  if (!fileInput) throw new Error("找不到上传入口 input[type=file] (页面改版, 见失败截图)");
-  await fileInput.uploadFile(videoPath);
+  // 1. 选文件 — fileChooser 通吃自定义上传组件
+  await uploadVideoFile(page, videoPath);
   logger.info("视频号推草稿: 视频文件已提交");
 
   // 2. 等描述输入框 (视频号短描述是 contenteditable / textarea)
