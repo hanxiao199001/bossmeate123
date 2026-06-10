@@ -72,10 +72,10 @@ async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Prom
   await new Promise((r) => setTimeout(r, 3_000));
   if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
 
-  // 1. 选文件 — 上传页有 input[type=file]
-  const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 20_000 });
-  if (!fileInput) throw new Error("找不到上传入口 input[type=file]");
-  await (fileInput as any).uploadFile(videoPath);
+  // 1. 选文件 — 跨frame找 input[type=file] (找不到先点上传按钮触发)
+  const fileInput = await findFileInput(page, 30_000);
+  if (!fileInput) throw new Error("找不到上传入口 input[type=file] (页面改版, 见失败截图)");
+  await fileInput.uploadFile(videoPath);
   logger.info("抖音推草稿: 视频文件已提交, 等待进入编辑页");
 
   // 2. 等编辑页就绪 (出现文案编辑器). 抖音编辑器是 contenteditable
@@ -108,6 +108,41 @@ async function douyinPushDraft({ page, videoPath, caption }: UploadParams): Prom
 }
 
 /** 文本找按钮并点击 (等到可点为止), 浏览器上下文执行 */
+/**
+ * 跨所有 frame 找 input[type=file] (上传组件可能在 iframe 内)。
+ * 找不到时尝试点"上传视频/上传/选择视频"按钮触发隐藏 input 渲染, 再找。
+ */
+async function findFileInput(page: Page, timeoutMs: number): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  let triggered = false;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      try {
+        const h = await frame.$('input[type="file"]');
+        if (h) return h;
+      } catch { /* frame detach */ }
+    }
+    // 第二轮起: 尝试点上传按钮 reveal input
+    if (!triggered) {
+      triggered = true;
+      for (const frame of page.frames()) {
+        try {
+          await frame.evaluate(() => {
+            const doc = (globalThis as any).document;
+            const els = Array.from(doc.querySelectorAll("button, div, span, a")) as any[];
+            for (const el of els) {
+              const t = (el.textContent || "").trim();
+              if (/^(上传视频|上传|选择视频|发布视频|点击上传)$/.test(t)) { el.click(); return; }
+            }
+          });
+        } catch { /* noop */ }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  return null;
+}
+
 async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -141,10 +176,10 @@ async function wechatVideoPushDraft({ page, videoPath, caption }: UploadParams):
   await new Promise((r) => setTimeout(r, 3_000));
   if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
 
-  // 1. 选文件
-  const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 20_000 });
-  if (!fileInput) throw new Error("找不到上传入口 input[type=file]");
-  await (fileInput as any).uploadFile(videoPath);
+  // 1. 选文件 — 跨frame找 input[type=file]
+  const fileInput = await findFileInput(page, 30_000);
+  if (!fileInput) throw new Error("找不到上传入口 input[type=file] (页面改版, 见失败截图)");
+  await fileInput.uploadFile(videoPath);
   logger.info("视频号推草稿: 视频文件已提交");
 
   // 2. 等描述输入框 (视频号短描述是 contenteditable / textarea)
