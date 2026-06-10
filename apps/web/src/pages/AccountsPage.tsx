@@ -250,10 +250,18 @@ export default function AccountsPage() {
     clickBusyRef.current = true;
     const img = e.currentTarget;
     const rect = img.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
+    // object-contain 有留白: 必须按"实际画面区域"换算坐标, 否则点击横/纵向偏移点不中
+    const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight);
+    const dispW = img.naturalWidth * scale;
+    const dispH = img.naturalHeight * scale;
+    const offX = rect.left + (rect.width - dispW) / 2;
+    const offY = rect.top + (rect.height - dispH) / 2;
+    const x = (e.clientX - offX) / dispW;
+    const y = (e.clientY - offY) / dispH;
+    if (x < 0 || x > 1 || y < 0 || y > 1) { clickBusyRef.current = false; return; } // 点在留白处, 忽略
     try {
       await api.post(`/accounts/qr-login/${qrModal.sessionId}/click`, { x, y });
+      toast.success("已点击, 画面刷新中…");
     } catch (err) {
       toast.error((err as any)?.response?.data?.message || "点击失败");
     } finally {
