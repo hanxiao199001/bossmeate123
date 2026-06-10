@@ -75,6 +75,16 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption }: Upload
 
   // 1. 确保在上传页 (直链可能被重定向回首页), 再上传
   page = await douyinEnsureUploadPage(page);
+  // 抖音是弹窗登录(不改URL): 出现扫码/登录弹窗 = 登录态失效
+  const loginPopup = await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const txt = (doc.body?.innerText || "");
+    const hasLoginDialog = /扫码登录|验证码登录|手机号登录|登录抖音/.test(txt);
+    const hasUploadHint = /上传视频|发布视频|拖拽|作品/.test(txt);
+    // 有登录字样且无上传相关 = 登录弹窗挡住了
+    return hasLoginDialog && !hasUploadHint;
+  }).catch(() => false);
+  if (loginPopup) throw new Error("LOGIN_EXPIRED");
   await uploadVideoFile(page, videoPath);
   logger.info("抖音推草稿: 视频文件已提交, 等待进入编辑页");
 
@@ -138,16 +148,30 @@ async function uploadVideoFile(page: Page, videoPath: string): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt++) {
     let chooser: any = null;
     const chooserP = page.waitForFileChooser({ timeout: 9_000 }).then((c) => (chooser = c)).catch(() => null);
-    // 点一个上传候选 (按钮文字 或 含 upload class 的区域)
+    // 点一个上传候选 — 顺序: 上传区class选择器 → 短按钮精确文本 → 含"上传/拖拽"的区域(不卡字数)
     const clicked = await page.evaluate((labels: string[]) => {
       const doc = (globalThis as any).document;
+      // a) 上传区常见 class (视频号 + 虚线框/拖拽区都在这类)
+      const zoneSelectors = [
+        ".ant-upload", ".upload-area", ".post-cover-uploader", ".uploader",
+        '[class*="uploader" i]', '[class*="upload-content" i]', '[class*="upload" i]',
+        '[class*="dragger" i]', '[class*="drag-area" i]', '[class*="drop" i]',
+      ];
+      for (const sel of zoneSelectors) {
+        const el = doc.querySelector(sel);
+        if (el && (el as any).offsetParent !== null) { (el as any).click(); return "zone:" + sel; }
+      }
+      // b) 短按钮精确文本
       const els = Array.from(doc.querySelectorAll("button, div, span, a, label")) as any[];
       for (const el of els) {
         const t = (el.textContent || "").trim();
-        if (t.length <= 12 && labels.some((l) => t === l || t.includes(l))) { el.click(); return t; }
+        if (t.length <= 12 && labels.some((l) => t === l)) { el.click(); return "text:" + t; }
       }
-      const up = doc.querySelector('[class*="upload" i], [class*="dragger" i], [class*="add" i]');
-      if (up) { (up as any).click(); return "upload-zone"; }
+      // c) 含上传/拖拽字样的区域 (不卡字数, 上传区文案常较长)
+      for (const el of els) {
+        const t = (el.textContent || "").trim();
+        if (t.length < 40 && /上传视频|点击上传|拖拽|选择视频|添加视频/.test(t)) { el.click(); return "fuzzy:" + t.slice(0, 16); }
+      }
       return null;
     }, UPLOAD_TRIGGER_TEXTS);
     await chooserP;
@@ -301,13 +325,38 @@ async function resolveVideoSource(source: string): Promise<{ path: string; isTem
   throw new Error(`无法识别的视频源: ${source.slice(0, 80)}`);
 }
 
-async function setPageLoginState(page: Page, state: { cookies: any[] }) {
+// 平台登录态所在 origin (注入 localStorage 需先停在该域页面)
+const PLATFORM_ORIGIN: Record<string, string> = {
+  douyin: "https://creator.douyin.com",
+  wechat_video: "https://channels.weixin.qq.com",
+};
+
+async function setPageLoginState(page: Page, state: { cookies: any[]; localStorage?: string }, platform: string) {
   const cdp = await page.target().createCDPSession();
   // CDP setCookies 支持跨域批量
   await cdp.send("Network.setCookies", { cookies: state.cookies.map((c) => ({
     name: c.name, value: c.value, domain: c.domain, path: c.path ?? "/",
     expires: c.expires, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite,
   })) });
+
+  // 关键: 恢复 localStorage — 抖音/视频号部分登录令牌存这里, 只给 cookie 会被判未登录弹登录框。
+  // localStorage 是 per-origin 的, 必须先停在该域的页面才能写。
+  const origin = PLATFORM_ORIGIN[platform];
+  if (state.localStorage && state.localStorage !== "{}" && origin) {
+    try {
+      await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await page.evaluate((lsJson: string) => {
+        try {
+          const data = JSON.parse(lsJson);
+          const ls = (globalThis as any).localStorage;
+          for (const k of Object.keys(data)) ls.setItem(k, data[k]);
+        } catch { /* noop */ }
+      }, state.localStorage);
+      logger.info({ platform }, "推草稿: localStorage 已恢复");
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, platform }, "推草稿: localStorage 恢复失败(继续)");
+    }
+  }
 }
 
 async function runJob(job: DraftPushJob) {
@@ -363,7 +412,7 @@ async function runJob(job: DraftPushJob) {
       const page = await b.newPage();
       try {
         await page.setViewport({ width: 1366, height: 900 });
-        await setPageLoginState(page, state);
+        await setPageLoginState(page, state, acct.platform);
         await pusher({ page, videoPath, caption: captions[i] ?? captions[0] ?? "" });
         acct.status = "success";
         // 落库: status=draft (人工在平台后台审核发布后, 前端勾"已发"会覆盖成 success)
