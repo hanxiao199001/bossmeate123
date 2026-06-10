@@ -114,21 +114,20 @@ export default function BatchProgressPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/content" className="text-blue-600 hover:text-blue-700 text-sm">← 返回内容列表</Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">批量生成进度</span>
-          <span className="text-xs text-gray-400 truncate max-w-xs">📄 {batch.filename || batch.id}</span>
-        </div>
-        {isDone && (
-          <button onClick={downloadReport} className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700">
-            📥 下载 CSV 报告
-          </button>
-        )}
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏; 返回链接+标题+下载按钮迁到内容区顶部 */}
       <div className="max-w-6xl mx-auto py-6 px-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-4 min-w-0">
+            <Link to="/content" className="text-blue-600 hover:text-blue-700 text-sm shrink-0">← 返回内容列表</Link>
+            <h1 className="text-2xl font-bold text-gray-900 shrink-0">批量生成进度</h1>
+            <span className="text-xs text-gray-400 truncate max-w-xs">📄 {batch.filename || batch.id}</span>
+          </div>
+          {isDone && (
+            <button onClick={downloadReport} className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700">
+              📥 下载 CSV 报告
+            </button>
+          )}
+        </div>
         {/* 4 Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <div className="bg-white rounded-xl border p-4">

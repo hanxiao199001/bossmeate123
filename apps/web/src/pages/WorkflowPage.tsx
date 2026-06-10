@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import AccountSelector from "../components/AccountSelector";
 
@@ -114,8 +113,6 @@ export default function WorkflowPage() {
   const steps = workflowType === "article" ? ARTICLE_STEPS : VIDEO_STEPS;
   const workflowTitle = workflowType === "article" ? "图文创作" : "视频制作";
 
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
 
   const [currentStep, setCurrentStep] = useState(0);
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
@@ -587,22 +584,9 @@ export default function WorkflowPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-lg font-bold text-blue-600">BossMate</span>
-            <span className="text-xs text-gray-400">AI超级员工</span>
-          </Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">{workflowTitle}</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">退出</button>
-        </div>
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏 (退出在 Sidebar 底部); 标题迁到内容区顶部 */}
       <div className="max-w-7xl mx-auto py-6 px-4">
+        <h1 className="text-2xl font-bold text-gray-900 mb-4">{workflowTitle}</h1>
         {/* 步骤条 */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6">
           <div className="flex items-center">

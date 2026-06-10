@@ -155,23 +155,18 @@ export default function AdminJournalsAuditPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="text-blue-600 hover:text-blue-700 text-sm">← 首页</Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">期刊数据审计</span>
-          <span className="text-xs text-gray-400">PR 2 (5-9 早) — 只读 v1</span>
-        </div>
-        <button
-          onClick={exportCsv}
-          className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-          title="导出当前筛选结果为 CSV"
-        >
-          📥 导出 CSV
-        </button>
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏; 标题+导出按钮迁到内容区顶部 */}
       <div className="max-w-7xl mx-auto py-6 px-6">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">期刊数据审计</h1>
+          <button
+            onClick={exportCsv}
+            className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            title="导出当前筛选结果为 CSV"
+          >
+            📥 导出 CSV
+          </button>
+        </div>
         {/* 6 个统计卡片 */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">

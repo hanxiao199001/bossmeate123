@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "../components/Toast";
-import { Link, useNavigate } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import { PLATFORM_META } from "../utils/i18n";
 
@@ -73,9 +71,6 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function AccountsPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
-  const navigate = useNavigate();
 
   // 账号列表状态
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -354,29 +349,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-gray-500 hover:text-blue-600 transition-colors">
-            <span className="text-lg">&larr;</span>
-            <span className="text-sm">返回</span>
-          </button>
-          <span className="text-gray-300">|</span>
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-lg font-bold text-blue-600">BossMate</span>
-            <span className="text-xs text-gray-400">AI超级员工</span>
-          </Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">多平台账号管理</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">
-            退出
-          </button>
-        </div>
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航统一走 MainLayout 侧边栏 (标题在下方 h1, 退出在 Sidebar 底部) */}
       <div className="max-w-7xl mx-auto py-6 px-6">
         {/* 页面标题与操作 */}
         <div className="flex items-center justify-between mb-6">

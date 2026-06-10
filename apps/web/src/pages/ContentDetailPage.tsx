@@ -665,8 +665,8 @@ export default function ContentDetailPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* 顶部导航 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shrink-0">
+      {/* 6-11 施工包C2-a (审计2.5): 双层导航删内层 — 原 <nav> 顶栏降级为内容区操作工具条 (返回链接+状态+操作按钮全保留), 全局导航走 MainLayout 侧边栏 */}
+      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           {/* 5-23 hotfix: navigate(-1) 自动回上一页 (/workbench 或 /content), Link 写死 /content 是 bug */}
           <button
@@ -771,7 +771,7 @@ export default function ContentDetailPage() {
 
           {/* 5-21 P0: user/logout 已搬 sidebar (MainLayout), 此处保留 action 行 (Save/改段/History/发布) */}
         </div>
-      </nav>
+      </div>
 
       {/* PR 1：AI 编造期刊警告横幅（data_source='ai_fabricated' 时） */}
       {journalDataSource === "ai_fabricated" && (

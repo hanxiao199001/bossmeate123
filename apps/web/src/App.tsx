@@ -39,7 +39,7 @@ import SalesRadarPage from "./pages/SalesRadarPage";
 import { useState } from "react";
 import ChatFab from "./components/chat-drawer/ChatFab";
 import ChatDrawer from "./components/chat-drawer/ChatDrawer";
-// 5-21 P0: 全局 sidebar layout (包 / /workbench /sales-radar /content/:id 这 4 个 demo 页)
+// 6-11 施工包C2-a (审计2.5): 全站统一侧边栏 — 所有可达登录后页面都包 MainLayout
 import MainLayout from "./components/layout/MainLayout";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -107,7 +107,9 @@ export default function App() {
         path="/recommend-feed"
         element={
           <ProtectedRoute>
-            <RecommendationFeedPage />
+            <MainLayout>
+              <RecommendationFeedPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -118,7 +120,9 @@ export default function App() {
         path="/workflow/:type"
         element={
           <ProtectedRoute>
-            <WorkflowPage />
+            <MainLayout>
+              <WorkflowPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -158,7 +162,9 @@ export default function App() {
         path="/content"
         element={
           <ProtectedRoute>
-            <ContentPage />
+            <MainLayout>
+              <ContentPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -203,7 +209,9 @@ export default function App() {
         path="/admin/journals/audit"
         element={
           <ProtectedAdminRoute>
-            <AdminJournalsAuditPage />
+            <MainLayout>
+              <AdminJournalsAuditPage />
+            </MainLayout>
           </ProtectedAdminRoute>
         }
       />
@@ -213,7 +221,9 @@ export default function App() {
         path="/batch/:id"
         element={
           <ProtectedRoute>
-            <BatchProgressPage />
+            <MainLayout>
+              <BatchProgressPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -234,7 +244,9 @@ export default function App() {
         path="/settings"
         element={
           <ProtectedRoute>
-            <SettingsPage />
+            <MainLayout>
+              <SettingsPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -269,7 +281,9 @@ export default function App() {
         path="/video/create"
         element={
           <ProtectedRoute>
-            <VideoCreationPage />
+            <MainLayout>
+              <VideoCreationPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -278,7 +292,9 @@ export default function App() {
         path="/accounts"
         element={
           <ProtectedRoute>
-            <AccountsPage />
+            <MainLayout>
+              <AccountsPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />
@@ -301,7 +317,9 @@ export default function App() {
         path="/journals/:id"
         element={
           <ProtectedRoute>
-            <JournalDetailPage />
+            <MainLayout>
+              <JournalDetailPage />
+            </MainLayout>
           </ProtectedRoute>
         }
       />

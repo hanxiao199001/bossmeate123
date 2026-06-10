@@ -11,7 +11,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
-import { useAuthStore } from "../hooks/useAuthStore";
 import RecommendationCard, { type RecommendationItem } from "../components/RecommendationCard";
 import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
 
@@ -22,8 +21,6 @@ interface FeedResponse {
 
 export default function RecommendationFeedPage() {
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
   const [items, setItems] = useState<RecommendationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -62,28 +59,16 @@ export default function RecommendationFeedPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold text-gray-900">📅 BossMate 今日推荐</h1>
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删(内容库/工作台/后台链接由 Sidebar 取代, 退出在 Sidebar 底部); 标题迁到内容区顶部 */}
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        <div className="flex items-center gap-4 mb-5">
+          <h1 className="text-2xl font-bold text-gray-900">📅 BossMate 今日推荐</h1>
           <span className="text-xs text-gray-500">每日 03:00 自动生成 10 篇</span>
         </div>
-        <div className="flex items-center gap-3 text-sm">
-          <Link to="/content" className="text-gray-600 hover:text-gray-900">📝 内容库</Link>
-          <Link to="/home" className="text-gray-600 hover:text-gray-900">🛠️ 工作台</Link>
-          {(user?.role === "owner" || user?.role === "admin") && (
-            <Link to="/admin/journals/audit" className="text-gray-600 hover:text-gray-900">📊 后台</Link>
-          )}
-          <span className="text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-gray-500 hover:text-red-500">退出</button>
-        </div>
-      </nav>
-
-      <main className="max-w-7xl mx-auto px-6 py-6">
         {/* Banner */}
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 mb-5 flex items-center gap-2">
           <span className="text-lg">📅</span>
-          <span><strong>BossMate 每天自动生成内容</strong>。挑喜欢的，一键发布到公众号。手动创作 → <Link to="/content" className="underline text-blue-700">内容库</Link>「⚙️ 高级模式」</span>
+          <span><strong>BossMate 每天自动生成内容</strong>。挑喜欢的，一键发布到公众号。手动创作 → <Link to="/workbench" className="underline text-blue-700">内容工坊</Link></span>
         </div>
 
         {/* Loading / Error */}

@@ -4,8 +4,6 @@
  * 三步向导：上传图片 → 配置参数 → 合成 & 预览
  */
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Link } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { api, ApiError } from "../utils/api";
 
 // ===== 类型 =====
@@ -29,8 +27,6 @@ type Step = "upload" | "config" | "compose";
 
 // ===== 主组件 =====
 export default function VideoCreationPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
 
   const [step, setStep] = useState<Step>("upload");
   const [images, setImages] = useState<UploadedImage[]>([]);
@@ -166,24 +162,9 @@ export default function VideoCreationPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 导航 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-lg font-bold text-blue-600">BossMate</span>
-            <span className="text-xs text-gray-400">AI超级员工</span>
-          </Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">图片转视频</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link to="/" className="text-sm text-gray-500 hover:text-blue-600">返回首页</Link>
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">退出</button>
-        </div>
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏 (退出在 Sidebar 底部); 标题迁到内容区顶部 */}
       <div className="max-w-4xl mx-auto py-8 px-4">
+        <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">🎬 图片转视频</h1>
         {/* 步骤指示器 */}
         <div className="flex items-center justify-center gap-4 mb-8">
           {[

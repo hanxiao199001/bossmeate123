@@ -1,10 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "../components/Toast";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../utils/api";
-import RecommendationModal from "../components/RecommendationModal";
-import BatchUploadModal from "../components/BatchUploadModal";
 import { STATUS_LABELS, STATUS_COLORS } from "../components/StatusBadge";
 
 // ===== 类型定义 =====
@@ -51,8 +48,6 @@ const TYPE_ICONS: Record<string, string> = {
 };
 
 export default function ContentPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
 
   // 列表状态
@@ -90,11 +85,6 @@ export default function ContentPage() {
 
   // 删除确认
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  // PR #116 P3: AI 推荐 modal 状态
-  const [recommendOpen, setRecommendOpen] = useState(false);
-  // PR #119 P4: 批量 csv 导入 modal 状态
-  const [batchUploadOpen, setBatchUploadOpen] = useState(false);
 
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
@@ -242,25 +232,9 @@ export default function ContentPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航 */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-lg font-bold text-blue-600">BossMate</span>
-            <span className="text-xs text-gray-400">AI超级员工</span>
-          </Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-sm font-medium text-gray-700">内容管理</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600">{user?.name}</span>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-red-500">
-            退出
-          </button>
-        </div>
-      </nav>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航统一走 MainLayout 侧边栏 (退出在 Sidebar 底部) */}
       <div className="max-w-7xl mx-auto py-6 px-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">内容管理</h1>
         {/* P0-B：6 tabs（全部 + 5 状态，archived 默认不显示）*/}
         {stats && (
           <div className="grid grid-cols-3 md:grid-cols-6 gap-4 mb-6">
@@ -325,18 +299,8 @@ export default function ContentPage() {
             </label>
           </div>
 
-          {/* PR #129 5-12 V2.5 提前: 4 生成入口折 details, 主视图突出"挑发布"流程 */}
-          <details className="group">
-            <summary className="text-xs text-gray-500 hover:text-gray-700 cursor-pointer select-none">
-              ⚙️ 高级模式（手动创作入口） <span className="group-open:hidden">▼</span><span className="hidden group-open:inline">▲</span>
-            </summary>
-            <div className="flex gap-2 mt-2">
-              <button onClick={() => setRecommendOpen(true)} className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700">🤖 AI 推荐</button>
-              <button onClick={() => setBatchUploadOpen(true)} className="px-3 py-1.5 bg-purple-700 text-white text-xs font-medium rounded hover:bg-purple-800">📤 批量 CSV</button>
-              <Link to="/workflow/article" className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700">+ 选题创作</Link>
-              <Link to="/chat?skill=article" className="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded hover:bg-gray-200">+ AI 对话</Link>
-            </div>
-          </details>
+          {/* 6-11 施工包C2-b (审计1.1): "⚙️高级模式"折叠区已收敛 — AI推荐/批量CSV/专家模式入口迁到内容工坊顶栏, AI对话走右下角悬浮球 */}
+          <span className="text-xs text-gray-400">批量生成与高级创作已合并到「内容工坊」</span>
         </div>
 
         {/* PR #130 V2.5 (5-13): View mode tab — "📅 今日推荐" 默认显前一天 cron 10 篇 vs "全部" 我的全部 */}
@@ -356,15 +320,9 @@ export default function ContentPage() {
         {viewMode === "all" && (
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 flex items-center gap-2">
           <span className="text-lg">📅</span>
-          <span><strong>BossMate 每天自动生成内容</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
+          <span><strong>BossMate 每天自动生成内容</strong>。您只需进来挑喜欢的，一键发布到公众号。批量生成与手动创作请去「内容工坊」。</span>
         </div>
         )}
-
-        {/* PR #116: AI 推荐 modal */}
-        <RecommendationModal open={recommendOpen} onClose={() => setRecommendOpen(false)} />
-
-        {/* PR #119: 批量 csv 导入 modal */}
-        <BatchUploadModal open={batchUploadOpen} onClose={() => setBatchUploadOpen(false)} />
 
         {/* 6-10 审计3.4 老韩同意: "今日推荐"收敛到内容工坊 — recommendation 视图不再渲染本页列表, 改为引导块跳 /workbench;
             原推荐列表渲染代码未删, 仍走下方 all 分支(数据请求逻辑也保留), 可随时恢复 */}

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import ContactMetaSection from "../components/ContactMetaSection";
 
@@ -42,8 +41,6 @@ const ALL_DISCIPLINES = [
 ];
 
 export default function SettingsPage() {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
 
   // 微信配置状态
   const [wechatConfig, setWechatConfig] = useState<WechatConfig | null>(null);
@@ -237,24 +234,9 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 顶栏 */}
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="text-xl font-bold text-green-600">BossMate</Link>
-          <span className="text-gray-300">|</span>
-          <span className="text-gray-600 font-medium">{"\u2699\uFE0F"} 系统设置</span>
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-gray-500">{user?.name || user?.email}</span>
-          <button onClick={logout} className="text-gray-400 hover:text-red-500">退出</button>
-        </div>
-      </header>
-
+      {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏 (退出在 Sidebar 底部); 标题迁到内容区顶部 */}
       <div className="max-w-4xl mx-auto p-6">
-        {/* 面包屑 */}
-        <div className="mb-6">
-          <Link to="/" className="text-sm text-blue-600 hover:underline">{"\u2190"} 返回首页</Link>
-        </div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">{"\u2699\uFE0F"} 系统设置</h1>
 
         {/* 快速导航卡片 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">

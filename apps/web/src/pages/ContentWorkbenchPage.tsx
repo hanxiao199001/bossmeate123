@@ -25,6 +25,9 @@ import ManualGenerateModal from "../components/workbench/ManualGenerateModal";
 import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
 import RoundupGenerateModal from "../components/workbench/RoundupGenerateModal";
 import BatchPreviewSummary from "../components/workbench/BatchPreviewSummary";
+// 6-11 施工包C2-b (审计1.1): AI推荐/批量CSV 从 ContentPage"高级模式"迁来 (modal 与提交链路原样复用)
+import RecommendationModal from "../components/RecommendationModal";
+import BatchUploadModal from "../components/BatchUploadModal";
 import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
 import BulkDistributeProgressPanel from "../components/workbench/BulkDistributeProgressPanel";
 import { useAuthStore } from "../hooks/useAuthStore";
@@ -57,6 +60,9 @@ export default function ContentWorkbenchPage() {
   void isAdmin; // 留 dormant 防 lint 警告 (未来 bulk UI 可启用)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [generateModal, setGenerateModal] = useState<"article" | "video" | "roundup" | null>(null);
+  // 6-11 施工包C2-b: AI推荐 / 批量CSV modal 状态 (原 ContentPage 高级模式)
+  const [recommendOpen, setRecommendOpen] = useState(false);
+  const [batchUploadOpen, setBatchUploadOpen] = useState(false);
   const toggleMultiSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -236,6 +242,8 @@ export default function ContentWorkbenchPage() {
         onClickGenerateArticle={() => setGenerateModal("article")}
         onClickGenerateVideo={() => { setVideoArticleId(undefined); setGenerateModal("video"); }}
         onClickGenerateRoundup={() => setGenerateModal("roundup")}
+        onClickRecommend={() => setRecommendOpen(true)}
+        onClickBatchCsv={() => setBatchUploadOpen(true)}
         onClickClearSelection={() => setSelectedIds(new Set())}
       />
       <ContentTabBar active={tab} counts={counts} onChange={setTab} />
@@ -320,6 +328,9 @@ export default function ContentWorkbenchPage() {
         onClose={() => setGenerateModal(null)}
         onComplete={handleGenerateComplete}
       />
+      {/* 6-11 施工包C2-b: AI推荐 / 批量CSV modal (原 ContentPage 高级模式, 提交链路不变) */}
+      <RecommendationModal open={recommendOpen} onClose={() => setRecommendOpen(false)} />
+      <BatchUploadModal open={batchUploadOpen} onClose={() => setBatchUploadOpen(false)} />
       <UnifiedVideoModal
         open={generateModal === "video"}
         onClose={() => setGenerateModal(null)}
