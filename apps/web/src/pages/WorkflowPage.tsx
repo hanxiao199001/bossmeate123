@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { PLATFORM_META } from "../utils/i18n";
 
 // ===== 工作流类型 =====
 type WorkflowType = "article" | "video";
@@ -1787,14 +1788,6 @@ export default function WorkflowPage() {
               ) : (
                 <div className="space-y-3">
                   {(() => {
-                    const platformCfg: Record<string, { name: string; icon: string }> = {
-                      baijiahao: { name: "百家号", icon: "\uD83D\uDCDD" },
-                      toutiao: { name: "头条号", icon: "\uD83D\uDCF0" },
-                      zhihu: { name: "知乎", icon: "\uD83D\uDCA1" },
-                      xiaohongshu: { name: "小红书", icon: "\uD83D\uDCD5" },
-                      douyin: { name: "抖音", icon: "\uD83C\uDFB5" },
-                      wechat_video: { name: "视频号", icon: "\uD83D\uDCF9" },
-                    };
                     const grouped = new Map<string, typeof platformAccounts>();
                     for (const acc of platformAccounts) {
                       if (acc.platform === "wechat") continue; // 微信已单独处理
@@ -1802,7 +1795,7 @@ export default function WorkflowPage() {
                       grouped.get(acc.platform)!.push(acc);
                     }
                     return Array.from(grouped.entries()).map(([platform, accs]) => {
-                      const cfg = platformCfg[platform] || { name: platform, icon: "\uD83C\uDF10" };
+                      const cfg = PLATFORM_META[platform] || { label: platform, icon: "\uD83C\uDF10" };
                       const allIds = accs.map((a) => a.id);
                       const allSelected = allIds.every((id) => selectedPlatformIds.includes(id));
                       return (
@@ -1813,7 +1806,7 @@ export default function WorkflowPage() {
                             <input type="checkbox" checked={allSelected} onChange={() => togglePlatformGroup(platform)}
                               className="w-4 h-4 rounded border-gray-300 cursor-pointer" />
                             <span className="text-xl">{cfg.icon}</span>
-                            <span className="font-bold text-gray-900 text-sm">{cfg.name}</span>
+                            <span className="font-bold text-gray-900 text-sm">{cfg.label}</span>
                             <span className="text-xs text-gray-400">({accs.length}个账号)</span>
                           </div>
                           <div className="ml-7 space-y-1.5">

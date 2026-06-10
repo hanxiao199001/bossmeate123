@@ -6,7 +6,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
-import { api } from "../utils/api";
+import { api, ApiError } from "../utils/api";
 
 // ===== 类型 =====
 interface UploadedImage {
@@ -73,18 +73,8 @@ export default function VideoCreationPage() {
         previews.push(URL.createObjectURL(f));
       }
 
-      const token = useAuthStore.getState().token;
-      const resp = await fetch("/api/v1/video/upload-images", {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      });
-      const data = await resp.json();
-
-      if (!resp.ok) {
-        setError(data.message || "上传失败");
-        return;
-      }
+      // 6-11 施工包A(审计 5.1): 收编进 api.upload(自动带 token,multipart 由 browser 设)
+      const data = await api.upload<{ images: any[] }>("/video/upload-images", formData);
 
       const newImages: UploadedImage[] = (data.data?.images || []).map((img: any, i: number) => ({
         ...img,
@@ -95,8 +85,8 @@ export default function VideoCreationPage() {
 
       setImages(prev => [...prev, ...newImages]);
       setError(null);
-    } catch {
-      setError("上传失败，请检查网络");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "上传失败，请检查网络");
     } finally {
       setUploading(false);
     }

@@ -3,6 +3,7 @@ import { toast } from "../components/Toast";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { PLATFORM_META } from "../utils/i18n";
 
 // ===== 类型定义 =====
 interface Account {
@@ -22,16 +23,7 @@ interface Account {
   updatedAt: string;
 }
 
-// ===== 平台配置 =====
-const PLATFORM_INFO: Record<string, { name: string; icon: string; color: string }> = {
-  wechat: { name: "微信公众号", icon: "💬", color: "bg-green-100 text-green-700" },
-  baijiahao: { name: "百家号", icon: "📰", color: "bg-blue-100 text-blue-700" },
-  toutiao: { name: "头条号", icon: "📱", color: "bg-red-100 text-red-700" },
-  zhihu: { name: "知乎", icon: "🔍", color: "bg-blue-100 text-blue-600" },
-  xiaohongshu: { name: "小红书", icon: "📕", color: "bg-pink-100 text-pink-700" },
-  douyin: { name: "抖音", icon: "🎵", color: "bg-gray-100 text-gray-800" },
-  wechat_video: { name: "视频号", icon: "📹", color: "bg-green-100 text-green-600" },
-};
+// ===== 平台配置 ===== (6-11 施工包A: 收口到 utils/i18n.ts 的 PLATFORM_META,8 份重复表合一)
 
 // PR-P2: 半自动平台 — 第三方无稳定发布 API, 内容人工发布, 凭证选填(账号=矩阵号标签)
 const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
@@ -341,7 +333,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
   };
 
   // 获取可用平台列表
-  const availablePlatforms = ["全部", ...Object.keys(PLATFORM_INFO)];
+  const availablePlatforms = ["全部", ...Object.keys(PLATFORM_META)];
   const availableGroups = ["全部", ...groups];
 
   // 过滤账号列表
@@ -423,8 +415,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                   onChange={(e) => setSelectedPlatform(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
                 >
-                  {Object.entries(PLATFORM_INFO).map(([key, info]) => (
-                    <option key={key} value={key}>{info.name}</option>
+                  {Object.entries(PLATFORM_META).map(([key, info]) => (
+                    <option key={key} value={key}>{info.label}</option>
                   ))}
                 </select>
               </div>
@@ -648,12 +640,12 @@ const handleScopeChange = async (accountId: string, scope: string) => {
         ) : (
           <div className="space-y-6">
             {Object.entries(accountsByPlatform).map(([platformKey, platformAccounts]) => {
-              const platformInfo = PLATFORM_INFO[platformKey];
+              const platformInfo = PLATFORM_META[platformKey];
               return (
                 <div key={platformKey}>
                   <div className="flex items-center gap-2 mb-3">
                     <span className="text-2xl">{platformInfo.icon}</span>
-                    <h3 className="text-lg font-bold text-gray-900">{platformInfo.name}</h3>
+                    <h3 className="text-lg font-bold text-gray-900">{platformInfo.label}</h3>
                     <span className="text-xs text-gray-400">({platformAccounts.length})</span>
                   </div>
 

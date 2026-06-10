@@ -63,7 +63,8 @@ async function request<T>(
   const headers: Record<string, string> = {
     ...((options.headers as Record<string, string>) || {}),
   };
-  if (options.body != null) {
+  // FormData 不手动设 Content-Type，让浏览器自动带 multipart boundary
+  if (options.body != null && !(options.body instanceof FormData)) {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";
   }
 
@@ -116,6 +117,49 @@ async function request<T>(
   return data;
 }
 
+/**
+ * 6-11 施工包A(审计 5.1): 二进制下载(CSV 报表等)。
+ * 与 request 同一套错误处理(401 统一登出、失败弹 toast),但返回 Blob 而非 JSON。
+ */
+async function downloadBlob(path: string, init: Omit<RequestInit, "body" | "method"> = {}): Promise<Blob> {
+  const token = useAuthStore.getState().token;
+  const headers: Record<string, string> = {
+    ...((init.headers as Record<string, string>) || {}),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...init, method: "GET", headers });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiAbortError();
+    }
+    toast.error("网络连接失败，请检查网络");
+    throw error;
+  }
+
+  if (!response.ok) {
+    let message = `下载失败 (${response.status})`;
+    let code = "HTTP_ERROR";
+    try {
+      const data = JSON.parse(await response.text()) as ApiResponse;
+      if (data.message) message = data.message;
+      if (data.code) code = data.code;
+    } catch { /* 非 JSON 错误体，用默认文案 */ }
+    if (response.status === 401) {
+      notifyUnauthorized();
+    } else {
+      toast.error(message);
+    }
+    throw new ApiError(message, code, response.status);
+  }
+
+  return response.blob();
+}
+
 type ReqInit = Omit<RequestInit, "body" | "method">;
 
 export const api = {
@@ -145,4 +189,11 @@ export const api = {
 
   delete: <T>(path: string, init: ReqInit = {}) =>
     request<T>(path, { ...init, method: "DELETE" }),
+
+  /** multipart 上传：自动带 Authorization，不设 Content-Type(浏览器带 boundary)，错误处理同 request */
+  upload: <T>(path: string, formData: FormData, init: ReqInit = {}) =>
+    request<T>(path, { ...init, method: "POST", body: formData }),
+
+  /** 二进制下载(返回 Blob)，错误处理同 request */
+  download: (path: string, init: ReqInit = {}) => downloadBlob(path, init),
 };

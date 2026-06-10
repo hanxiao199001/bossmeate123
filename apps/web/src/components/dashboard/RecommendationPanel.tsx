@@ -2,6 +2,7 @@
  * 5-21 P0 — 推荐内容预览面板 (top 3)。
  */
 import { Link } from "react-router-dom";
+import { platformShortLabel } from "../../utils/i18n";
 
 export interface RecommendationPreview {
   id: string;
@@ -15,11 +16,6 @@ export interface RecommendationPanelProps {
   totalCount: number;
   loading?: boolean;
 }
-
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", wechat_video: "视频号", baijiahao: "百家号",
-  toutiao: "头条号", zhihu: "知乎", xiaohongshu: "小红书", douyin: "抖音",
-};
 
 export default function RecommendationPanel({ items, totalCount, loading }: RecommendationPanelProps) {
   return (
@@ -63,7 +59,7 @@ export default function RecommendationPanel({ items, totalCount, loading }: Reco
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-900 line-clamp-2 leading-snug">{it.title}</p>
                     {it.platform && (
-                      <p className="text-[11px] text-gray-400 mt-0.5">{PLATFORM_LABEL[it.platform] || it.platform}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{platformShortLabel(it.platform)}</p>
                     )}
                   </div>
                 </Link>

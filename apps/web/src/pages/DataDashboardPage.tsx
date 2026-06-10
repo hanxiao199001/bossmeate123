@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { statusLabel } from "../components/StatusBadge";
 
 // ============ 类型 ============
 
@@ -227,7 +228,7 @@ export default function DataDashboardPage() {
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-gray-700 truncate">{c.title}</div>
                         <div className="text-[11px] text-gray-400 flex items-center gap-2">
-                          <span>{STATUS_LABELS[c.status] || c.status}</span>
+                          <span>{statusLabel(c.status)}</span>
                           <span>·</span>
                           <span>{new Date(c.createdAt).toLocaleDateString("zh-CN")}</span>
                         </div>
@@ -247,10 +248,6 @@ export default function DataDashboardPage() {
 }
 
 // ============ 子组件 ============
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: "草稿", reviewing: "审核中", approved: "已通过", published: "已发布",
-};
 
 function MetricCard({ label, value, sub, icon, color }: {
   label: string; value: number; sub: string; icon: string;

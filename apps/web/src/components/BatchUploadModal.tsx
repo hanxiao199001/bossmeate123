@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { api } from "../utils/api";
 
 interface Props {
   open: boolean;
@@ -80,16 +81,9 @@ export default function BatchUploadModal({ open, onClose }: Props) {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      // 直接 fetch（绕 api.ts 的 JSON content-type，multipart 由 browser 设）
-      const token = localStorage.getItem("auth-token") || ""; // useAuthStore 同源
-      const resp = await fetch("/api/v1/batch/upload", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-      const json = await resp.json();
-      const batchId = json?.data?.batchId;
+      // 6-11 施工包A(审计 5.1): 收编进 api.upload(自动带 token,multipart 由 browser 设)
+      const json = await api.upload<{ batchId: string }>("/batch/upload", fd);
+      const batchId = json.data?.batchId;
       if (!batchId) throw new Error("响应缺 batchId");
       onClose();
       navigate(`/batch/${batchId}`);

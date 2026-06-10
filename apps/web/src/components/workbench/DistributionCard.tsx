@@ -6,6 +6,7 @@
  * + 数字人视频独立 dropdown + 按钮（复用 PR #140 route）。
  */
 import { DVH_TEMPLATES } from "../RecommendationCard";
+import { platformShortLabel } from "../../utils/i18n";
 
 export interface WorkbenchAccount {
   id: string;
@@ -29,11 +30,6 @@ export interface DistributionCardProps {
   disabled?: boolean; // 无选中内容时禁用
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", wechat_video: "视频号", baijiahao: "百家号",
-  toutiao: "头条号", zhihu: "知乎", xiaohongshu: "小红书", douyin: "抖音",
-};
-
 export default function DistributionCard({
   accounts, selectedAccountIds, onToggleAccount, onPublish, publishing,
   dvhTemplate, onTemplateChange, onGenerateDvh, generatingDvh, disabled,
@@ -56,7 +52,7 @@ export default function DistributionCard({
           <div className="space-y-3">
             {platforms.map((p) => (
               <div key={p}>
-                <p className="text-xs font-medium text-gray-500 mb-1.5">{PLATFORM_LABEL[p] || p}</p>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">{platformShortLabel(p)}</p>
                 <div className="space-y-1.5">
                   {grouped[p].map((a) => (
                     <label key={a.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">

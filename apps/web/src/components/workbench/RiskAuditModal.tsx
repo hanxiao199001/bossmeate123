@@ -7,6 +7,7 @@
  *  - [⚠️ 强制放行]  → 二次确认 + 填理由 → POST /publish { forceOverride:true, overrideReason }
  */
 import { useState } from "react";
+import { platformShortLabel } from "../../utils/i18n";
 
 export interface AuditHit {
   platform: string;
@@ -29,11 +30,6 @@ export interface RiskAuditModalProps {
   onSkipRiskyPlatforms: () => void; // [跳过] deselect 命中 platform + publish 干净的
   onForceOverride: (reason: string) => void; // [强制放行] 已二次确认
 }
-
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", wechat_video: "视频号", douyin: "抖音",
-  baijiahao: "百家号", toutiao: "头条号", zhihu: "知乎", xiaohongshu: "小红书",
-};
 
 function hitNoteFor(platform: string, word: string): string {
   if ((platform === "douyin" || platform === "wechat_video") && (word === "微信" || word === "WeChat" || word === "公众号")) {
@@ -80,7 +76,7 @@ export default function RiskAuditModal({ open, audit, contentId, onClose, onEdit
           {platforms.map((p) => (
             <div key={p}>
               <p className="text-sm font-semibold text-gray-700 mb-2">
-                {PLATFORM_LABEL[p] || p}: <span className="text-red-600">{byPlatform[p].length} 处</span>
+                {platformShortLabel(p)}: <span className="text-red-600">{byPlatform[p].length} 处</span>
               </p>
               <div className="space-y-1.5">
                 {byPlatform[p].map((h) => (

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
+import { toast } from "../components/Toast";
 
 interface KeywordItem {
   id: string;
@@ -195,11 +196,10 @@ export default function KeywordsPage() {
     if (generatingId) return;
     setGeneratingId(keywordId);
     try {
-      const r = await api.post<{ batchId: string; recommendedJournalId: string | null; message: string }>(`/keywords/${keywordId}/generate-article`, {});
-      const data = (r as any).data ?? r;
-      alert(`✅ 已为「${keywordText}」加入生成队列\n${data.message}\n推荐期刊: ${data.recommendedJournalId ? "已挑选 top1 multi_source" : "无候选, 走 fallback"}\nbatchId: ${data.batchId.slice(0, 8)}...`);
+      await api.post<{ batchId: string; recommendedJournalId: string | null; message: string }>(`/keywords/${keywordId}/generate-article`, {});
+      toast.success(`「${keywordText}」已提交生成，稍后到内容工坊查看`);
     } catch (e) {
-      alert(`❌ 一键生成失败: ${(e as Error).message}`);
+      toast.error(`一键生成失败：${(e as Error).message}`);
     } finally {
       setGeneratingId(null);
     }

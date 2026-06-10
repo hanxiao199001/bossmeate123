@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../utils/api";
 import { toast } from "../components/Toast";
+import StatusBadge, { statusLabel } from "../components/StatusBadge";
+import { PLATFORM_META, platformLabel } from "../utils/i18n";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 import RewriteSectionModal from "../components/RewriteSectionModal";
 import EditTimelineDrawer from "../components/EditTimelineDrawer";
@@ -94,19 +96,8 @@ interface PublishResult {
 }
 
 // ===== 常量 =====
-const STATUS_LABELS: Record<string, string> = {
-  draft: "草稿",
-  reviewing: "审核中",
-  approved: "已通过",
-  published: "已发布",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-600",
-  reviewing: "bg-yellow-100 text-yellow-700",
-  approved: "bg-green-100 text-green-700",
-  published: "bg-blue-100 text-blue-700",
-};
+// 6-11 施工包A(审计 2.3): 旧 4 状态表删除——它缺 generated/generating/failed,
+// 导致详情页直接显示英文原码;词表/配色统一走 components/StatusBadge。
 
 const STATUS_FLOW: Record<string, { next: string; label: string; color: string }[]> = {
   draft: [
@@ -325,7 +316,7 @@ export default function ContentDetailPage() {
       const res = await api.patch<ContentItem>(`/content/${id}`, { status: newStatus });
       if (res.data) {
         setContent(res.data);
-        setSaveMsg(`状态已更新为「${STATUS_LABELS[newStatus]}」`);
+        setSaveMsg(`状态已更新为「${statusLabel(newStatus)}」`);
         setTimeout(() => setSaveMsg(""), 3000);
       }
     } catch (err) {
@@ -725,13 +716,7 @@ export default function ContentDetailPage() {
           <span className="text-sm text-gray-500">
             {TYPE_LABELS[content.type] || content.type}
           </span>
-          <span
-            className={`inline-block text-xs px-2.5 py-1 rounded-full font-medium ${
-              STATUS_COLORS[content.status] || "bg-gray-100 text-gray-600"
-            }`}
-          >
-            {STATUS_LABELS[content.status] || content.status}
-          </span>
+          <StatusBadge status={content.status} />
           {/* T4-3-5: 当前内容所用模板 badge（无 templateId 时优雅隐藏） */}
           <TemplateBadge
             templateId={content.metadata?.templateId as string | undefined}
@@ -908,25 +893,6 @@ export default function ContentDetailPage() {
                     const platformAccounts = accounts.filter(
                       acc => acc.platform === platform
                     );
-                    const platformIcons: Record<string, string> = {
-                      wechat: "💬",
-                      baijiahao: "📰",
-                      toutiao: "📱",
-                      zhihu: "🔍",
-                      xiaohongshu: "📕",
-                      douyin: "🎵",
-                      wechat_video: "📹",
-                    };
-                    const platformNames: Record<string, string> = {
-                      wechat: "微信公众号",
-                      baijiahao: "百家号",
-                      toutiao: "头条号",
-                      zhihu: "知乎",
-                      xiaohongshu: "小红书",
-                      douyin: "抖音",
-                      wechat_video: "视频号",
-                    };
-
                     const allSelected = platformAccounts.every(acc =>
                       selectedAccountIds.includes(acc.id)
                     );
@@ -944,10 +910,10 @@ export default function ContentDetailPage() {
                             className="w-4 h-4 rounded border-gray-300 cursor-pointer"
                           />
                           <span className="text-lg">
-                            {platformIcons[platform] || "🌐"}
+                            {PLATFORM_META[platform]?.icon || "🌐"}
                           </span>
                           <span className="text-sm font-medium text-gray-700">
-                            {platformNames[platform] || platform}
+                            {platformLabel(platform)}
                           </span>
                           <span className="text-xs text-gray-500">
                             ({platformAccounts.length})
@@ -1197,13 +1163,7 @@ export default function ContentDetailPage() {
                         templates={templates}
                       />
                     </div>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full ${
-                        STATUS_COLORS[v.status] || "bg-gray-100 text-gray-600"
-                      }`}
-                    >
-                      {STATUS_LABELS[v.status] || v.status}
-                    </span>
+                    <StatusBadge status={v.status} className="text-xs px-2 py-0.5 rounded-full" />
                   </div>
                   <h3 className="text-base font-bold text-gray-900 mb-2 line-clamp-2">
                     {v.title || "无标题"}
@@ -1505,10 +1465,10 @@ export default function ContentDetailPage() {
               {content.platforms.map((p, i) => (
                 <div key={i} className="flex items-center gap-3 text-sm">
                   <span className="text-gray-400">
-                    {{ wechat: "💬", douyin: "🎵", xiaohongshu: "📕", wechat_video: "📹" }[p.platform] || "🌐"}
+                    {PLATFORM_META[p.platform]?.icon || "🌐"}
                   </span>
                   <span className="font-medium text-gray-700">
-                    {{ wechat: "微信公众号", douyin: "抖音", xiaohongshu: "小红书", wechat_video: "视频号" }[p.platform] || p.platform}
+                    {platformLabel(p.platform)}
                   </span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     p.status === "published" ? "bg-green-100 text-green-700" :

@@ -1,8 +1,8 @@
 /**
  * 5-21 P0 全重设计 — Sidebar (全局 MainLayout 包) + Greeting + KpiStrip + PrimaryActionBar + 2 列 (Recommendation/Leads)。
  *
- * 5-21 前的老 hero (HeroSection / Pipeline24hStrip / PreviewCardRow) 已搬出主 render。
- * 老组件文件保留 (apps/web/src/components/dashboard/HeroSection.tsx 等), 5-23+ 单独 PR 清理。
+ * 5-21 前的老 hero (HeroSection / Pipeline24hStrip / PreviewCardRow) 已搬出主 render,
+ * 老组件文件已于 6-11 施工包A删除 (连同 SmartInput.tsx,审计 2.4 确认零引用)。
  * 本文件下方 WorkflowSection / ToolGrid / FactoryHero / PendingReviewQueue / TopicStrip 函数定义保留作 dead code,
  * 方便 revert 或重新接入；主 render 不再调用。
  */

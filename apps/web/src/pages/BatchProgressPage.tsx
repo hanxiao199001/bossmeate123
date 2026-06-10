@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../utils/api";
+import { toast } from "../components/Toast";
 
 interface BatchRow {
   id: string;
@@ -81,7 +82,7 @@ export default function BatchProgressPage() {
       await api.post(`/batch/${id}/retry/${rowId}`, {});
       fetchData();
     } catch (e) {
-      alert((e as Error).message || "重试失败");
+      toast.error((e as Error).message || "重试失败");
     } finally {
       setRetryingId(null);
     }
@@ -89,9 +90,8 @@ export default function BatchProgressPage() {
 
   const downloadReport = () => {
     if (!id) return;
-    const token = localStorage.getItem("auth-token") || "";
-    fetch(`/api/v1/batch/${id}/report`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.blob())
+    // 6-11 施工包A(审计 5.1): 收编进 api.download(自动带 token,401/失败提示走 api 层统一 toast)
+    api.download(`/batch/${id}/report`)
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -100,7 +100,7 @@ export default function BatchProgressPage() {
         a.click();
         URL.revokeObjectURL(url);
       })
-      .catch((e) => alert((e as Error).message));
+      .catch(() => { /* api.download 已统一弹 toast */ });
   };
 
   if (err) return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-red-600">❌ {err}</div>;

@@ -5,7 +5,7 @@ import { useAuthStore } from "../hooks/useAuthStore";
 import { api } from "../utils/api";
 import RecommendationModal from "../components/RecommendationModal";
 import BatchUploadModal from "../components/BatchUploadModal";
-import { articleStatusLabel } from "../utils/i18n";
+import { STATUS_LABELS, STATUS_COLORS } from "../components/StatusBadge";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -35,24 +35,6 @@ interface ContentStats {
 // ===== P0-B 6 状态全集（spec 删 reviewing/approved 中间态）=====
 const STATUS_TABS = ["draft", "generating", "failed", "generated", "published"] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
-
-const STATUS_LABELS: Record<string, string> = {
-  ...articleStatusLabel,
-  // P0 迁移期兼容：旧 enum 显示标签
-  reviewing: "审核中（旧）",
-  approved: "已通过（旧）",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-600",
-  generating: "bg-blue-100 text-blue-700",
-  failed: "bg-red-100 text-red-700",
-  generated: "bg-green-100 text-green-700",
-  published: "bg-sky-100 text-sky-700",
-  archived: "bg-gray-100 text-gray-500",
-  reviewing: "bg-yellow-100 text-yellow-700",
-  approved: "bg-green-100 text-green-700",
-};
 
 const TYPE_LABELS: Record<string, string> = {
   article: "图文",
@@ -524,7 +506,7 @@ export default function ContentPage() {
                           const skipped = JSON.parse(sessionStorage.getItem("v25_skip") || "[]");
                           sessionStorage.setItem("v25_skip", JSON.stringify([...skipped, item.id]));
                           setItems((prev) => prev.filter((x) => x.id !== item.id));
-                          alert("已跳过本会话隐藏。V2.5（5-23 起）后将记入推荐学习信号。");
+                          toast.info("已跳过，本会话内不再显示");
                         }}
                         className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-50"
                         title="本会话隐藏 (V2.5 后接推荐算法)"

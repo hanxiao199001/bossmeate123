@@ -33,7 +33,7 @@ export const DEFAULTS: CostInputs = {
   operatorOutputDaily: 2,
 };
 
-// localStorage 持久化 (CostComparisonPage + HeroSection 共用)
+// localStorage 持久化 (CostComparisonPage 使用; 原共用方 HeroSection 已删)
 export const STORAGE_KEY = "bossmate.costInputs.v1";
 
 export function loadInputs(): CostInputs {

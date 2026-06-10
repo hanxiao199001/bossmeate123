@@ -5,11 +5,7 @@
  * 点击后调 onSubmit(accountIds), parent 触发 POST /admin/bulk-distribute + 弹 progress panel.
  */
 import type { WorkbenchAccount } from "./DistributionCard";
-
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", wechat_video: "视频号", baijiahao: "百家号",
-  toutiao: "头条号", zhihu: "知乎", xiaohongshu: "小红书", douyin: "抖音",
-};
+import { platformShortLabel } from "../../utils/i18n";
 
 export interface BulkDistributeCardProps {
   selectedArticleIds: Set<string>;
@@ -49,7 +45,7 @@ export default function BulkDistributeCard({
       <div className="space-y-3">
         {Object.entries(grouped).map(([platform, list]) => (
           <div key={platform}>
-            <div className="text-xs font-medium text-gray-500 mb-1.5">{PLATFORM_LABEL[platform] || platform}</div>
+            <div className="text-xs font-medium text-gray-500 mb-1.5">{platformShortLabel(platform)}</div>
             <div className="space-y-1">
               {list.map((a) => (
                 <label key={a.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
