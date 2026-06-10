@@ -17,7 +17,7 @@ import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
-import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode, resendSmsCode } from "../services/publisher/browser-session.js";
+import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode, resendSmsCode, remoteClick } from "../services/publisher/browser-session.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -433,6 +433,20 @@ export async function accountRoutes(app: FastifyInstance) {
     const result = await resendSmsCode(sessionId, request.tenantId);
     if (!result.ok) return reply.code(400).send({ code: "RESEND_FAILED", message: result.message ?? "重发失败" });
     return { code: "OK", data: { sent: true } };
+  });
+
+  /**
+   * PR-S29: POST /accounts/qr-login/:sessionId/click - 远程点击 (在实时截图上按比例坐标操作页面)
+   */
+  app.post("/accounts/qr-login/:sessionId/click", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const { x, y } = (request.body ?? {}) as { x?: number; y?: number };
+    if (typeof x !== "number" || typeof y !== "number") {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "缺少坐标" });
+    }
+    const result = await remoteClick(sessionId, request.tenantId, x, y);
+    if (!result.ok) return reply.code(400).send({ code: "CLICK_FAILED", message: result.message ?? "点击失败" });
+    return { code: "OK", data: { clicked: true } };
   });
 
   /**

@@ -244,6 +244,19 @@ export default function AccountsPage() {
     }
   };
 
+  const remoteClickShot = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!qrModal?.sessionId) return;
+    const img = e.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    try {
+      await api.post(`/accounts/qr-login/${qrModal.sessionId}/click`, { x, y });
+    } catch (err) {
+      toast.error((err as any)?.response?.data?.message || "点击失败");
+    }
+  };
+
   const resendSms = async () => {
     if (!qrModal?.sessionId) return;
     try {
@@ -754,10 +767,16 @@ const handleScopeChange = async (accountId: string, scope: string) => {
             {qrModal.status === "waiting_sms" && (
               <div className="space-y-3">
                 {qrModal.qrPng && (
-                  <img src={`data:image/png;base64,${qrModal.qrPng}`} alt="身份验证页面" className="mx-auto w-full max-h-60 object-contain border border-gray-100 rounded-lg" />
+                  <img
+                    src={`data:image/png;base64,${qrModal.qrPng}`}
+                    alt="身份验证页面 (可点击操作)"
+                    onClick={remoteClickShot}
+                    className="mx-auto w-full max-h-72 object-contain border border-gray-100 rounded-lg cursor-crosshair"
+                    title="直接点击画面操作页面"
+                  />
                 )}
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-left">
-                  抖音要求短信验证（新设备登录）：验证码已发送至该账号绑定手机，请输入收到的验证码
+                  抖音要求身份验证。<b>上方画面可直接点击操作</b>：先点「发送短信验证」那一行 → 画面刷新后点「获取验证码」→ 手机收到短信后在下方输入验证码提交
                 </p>
                 <div className="flex gap-2">
                   <input

@@ -165,6 +165,10 @@ interface QrSession {
   reloads?: number;
   /** 抖音身份验证: 是否已点"接收短信验证码" */
   smsRequested?: boolean;
+  /** 自动推进尝试次数 (上限后让位给用户远程点击) */
+  autoTries?: number;
+  /** 用户已开始远程点击接管, 自动点击停手 */
+  userDriving?: boolean;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -417,6 +421,30 @@ export async function resendSmsCode(sessionId: string, tenantId: string): Promis
   return { ok: true };
 }
 
+/**
+ * 远程点击: 前端在实时截图上点, 坐标按比例转发到真实页面 (page.mouse 真实输入,
+ * 不分 iframe/shadow DOM, 任何验证弹窗都能操作 — 元素查找式自动点击的最终兜底)。
+ */
+export async function remoteClick(sessionId: string, tenantId: string, xRatio: number, yRatio: number): Promise<{ ok: boolean; message?: string }> {
+  const s = sessions.get(sessionId);
+  if (!s || s.tenantId !== tenantId) return { ok: false, message: "会话不存在或已过期" };
+  if (!s.page) return { ok: false, message: "会话页面已关闭" };
+  if (!(xRatio >= 0 && xRatio <= 1 && yRatio >= 0 && yRatio <= 1)) return { ok: false, message: "坐标越界" };
+  const page = s.page;
+  try {
+    const vp = page.viewport() ?? { width: 1280, height: 900 };
+    await page.mouse.click(Math.round(xRatio * vp.width), Math.round(yRatio * vp.height), { delay: 50 });
+    s.userDriving = true; // 用户接管, 自动点击让位
+    await new Promise((r) => setTimeout(r, 1_200));
+    const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
+    if (shot) s.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
+    logger.info({ sessionId, xRatio: xRatio.toFixed(3), yRatio: yRatio.toFixed(3) }, "qr-login: 远程点击");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "点击失败" };
+  }
+}
+
 /** 登录成功 → 抓全量 cookies(CDP) + localStorage, 加密落库 */
 async function persistLoginState(s: QrSession) {
   const page = s.page!;
@@ -529,15 +557,17 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
                 return false;
               }).catch(() => false);
 
-              // 判断当前处于哪一步: 短信页特征 = 有验证码输入框 或 出现手机号掩码(138****8888) 或 倒计时
-              const onSmsPage = hasCodeInput || /\d{3}\*{2,}\d{2,}|秒后重(新|发)|\d+s\s*后/.test(pageTxt);
-              if (!onSmsPage) {
+              // 短信页特征收紧: 只认验证码输入框/倒计时 (手机号掩码在方式选择列表也有, 会误判)
+              const onSmsPage = hasCodeInput || /秒后重(新|发)|\d+s\s*后/.test(pageTxt);
+              session.autoTries = (session.autoTries ?? 0) + 1;
+              const autoAllowed = !session.userDriving && session.autoTries <= 3;
+              if (!onSmsPage && autoAllowed) {
                 // 仍在"方式选择"列表 → 点"发送短信验证"那一行进入短信页 (不点获取验证码!)
                 const picked = await deepClickByText(page, /短信/);
                 logger.info({ sessionId: session.sessionId, picked }, "qr-login: 方式选择页, 点'短信验证'进入短信页");
-              } else if (!session.smsRequested) {
-                // 已在短信页 → 点"获取验证码"真正发短信 (只点一次)
-                const sent = await deepClickByText(page, /获取验证码|发送验证码|获取短信|发送短信/);
+              } else if (onSmsPage && !session.smsRequested && !session.userDriving) {
+                // 已在短信页 → 点"获取验证码"真正发短信 (只点一次; 排除方式列表项'发送短信验证')
+                const sent = await deepClickByText(page, /获取验证码|发送验证码/);
                 if (sent) {
                   session.smsRequested = true;
                   session.createdAt = Date.now();
@@ -546,7 +576,7 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
                   logger.info({ sessionId: session.sessionId }, "qr-login: 在短信页但未找到'获取验证码'(可能倒计时中)");
                 }
               }
-              if (onSmsPage && session.status !== "waiting_sms") session.status = "waiting_sms";
+              if ((onSmsPage || session.autoTries > 3 || session.userDriving) && session.status !== "waiting_sms") session.status = "waiting_sms";
               // 验证弹窗现场整页截图给前端看
               const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
               if (shot) session.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
