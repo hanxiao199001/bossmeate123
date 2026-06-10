@@ -234,16 +234,66 @@ async function findQrInFrame(frame: any): Promise<string | null> {
   }
 }
 
+/**
+ * 主文档二维码定位 (返回视口坐标矩形, 由 clip 截取)。
+ * el.screenshot 在元素被兄弟节点遮挡/布局偏移时会截出"半个码"(抖音创作者中心内嵌面板实测踩坑),
+ * 改打分定位 + page.screenshot clip: canvas 优先(抖音二维码是 canvas), 祖先带"扫码"文案加权。
+ */
+async function findQrRectInMain(page: Page): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  try {
+    return await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const cands = Array.from(doc.querySelectorAll("img, canvas")) as any[];
+      let best: any = null;
+      let bestScore = 0;
+      for (const el of cands) {
+        const r = el.getBoundingClientRect();
+        const w = r.width, h = r.height;
+        if (w < 100 || h < 100 || w > 340 || h > 340) continue;
+        const ratio = w / h;
+        if (ratio < 0.8 || ratio > 1.25) continue;
+        let score = w * h;
+        if (el.tagName === "CANVAS") score *= 1.5;
+        let anc = el.parentElement;
+        for (let i = 0; i < 5 && anc; i++, anc = anc.parentElement) {
+          const t = (anc.textContent || "");
+          if (t.length < 400 && /扫码|扫一扫|二维码/.test(t)) { score *= 2; break; }
+        }
+        if (score > bestScore) { bestScore = score; best = { x: r.left, y: r.top, width: r.width, height: r.height }; }
+      }
+      return best;
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function captureQr(page: Page): Promise<string | null> {
   try {
-    // iframe 优先 (登录二维码多在独立 iframe), 主文档最后
+    // 1. 主文档打分定位 + clip 截取 (带 12px 边距, 钳制在视口内)
+    const rect = await findQrRectInMain(page);
+    if (rect) {
+      const vp = page.viewport() ?? { width: 1280, height: 900 };
+      const pad = 12;
+      const x = Math.max(0, rect.x - pad);
+      const y = Math.max(0, rect.y - pad);
+      const clip = {
+        x, y,
+        width: Math.min(vp.width - x, rect.width + pad * 2),
+        height: Math.min(vp.height - y, rect.height + pad * 2),
+      };
+      if (clip.width > 50 && clip.height > 50) {
+        const buf = await page.screenshot({ encoding: "base64", clip });
+        return typeof buf === "string" ? buf : Buffer.from(buf).toString("base64");
+      }
+    }
+    // 2. iframe 内二维码 (独立 passport 登录页形态)
     const frames = page.frames();
-    const ordered = [...frames.filter((f) => f !== page.mainFrame()), page.mainFrame()];
-    for (const frame of ordered) {
+    for (const frame of frames.filter((f) => f !== page.mainFrame())) {
       const qr = await findQrInFrame(frame);
       if (qr) return qr;
     }
-    // 兜底: 整页截图
+    // 3. 兜底: 整页截图 (二维码在页面上就能扫)
     const full = await page.screenshot({ encoding: "base64" });
     return typeof full === "string" ? full : Buffer.from(full).toString("base64");
   } catch {
