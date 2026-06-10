@@ -23,6 +23,8 @@ import type { Page } from "puppeteer";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, platformAccounts, contentPublishLog } from "../../models/schema.js";
+import { access } from "node:fs/promises";
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { loadLoginState, markLoginExpired, getSessionBrowser } from "./browser-session.js";
 import { generateDouyinCaptionVariants } from "./douyin-caption.js";
@@ -179,12 +181,31 @@ const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
 };
 
 // ===== 队列执行 =====
-async function downloadVideo(url: string): Promise<string> {
-  const path = resolve(tmpdir(), `draft-push-${randomUUID()}.mp4`);
-  const resp = await fetch(url);
-  if (!resp.ok || !resp.body) throw new Error(`视频下载失败: ${resp.status}`);
-  await pipeline(Readable.fromWeb(resp.body as any), createWriteStream(path));
-  return path;
+/**
+ * 视频源 → 本地文件路径。
+ * - /storage/xxx (LocalStorage 相对URL, DVH视频就是这种) → 直接映射磁盘路径 (UPLOAD_DIR/storage/xxx), 零拷贝
+ * - http(s) → 下载到临时文件 (isTemp=true, 用完删)
+ * 复用 video/composer.ts materialize 同一 idiom (红线#11)
+ */
+async function resolveVideoSource(source: string): Promise<{ path: string; isTemp: boolean }> {
+  if (source.startsWith("/storage/")) {
+    const relativePath = source.replace("/storage/", "");
+    const diskPath = resolve(env.UPLOAD_DIR, "storage", relativePath);
+    try {
+      await access(diskPath);
+      return { path: diskPath, isTemp: false };
+    } catch {
+      throw new Error(`本地存储文件不存在: ${diskPath} (原始: ${source})`);
+    }
+  }
+  if (/^https?:\/\//i.test(source)) {
+    const path = resolve(tmpdir(), `draft-push-${randomUUID()}.mp4`);
+    const resp = await fetch(source);
+    if (!resp.ok || !resp.body) throw new Error(`视频下载失败: ${resp.status}`);
+    await pipeline(Readable.fromWeb(resp.body as any), createWriteStream(path));
+    return { path, isTemp: true };
+  }
+  throw new Error(`无法识别的视频源: ${source.slice(0, 80)}`);
 }
 
 async function setPageLoginState(page: Page, state: { cookies: any[] }) {
@@ -210,10 +231,13 @@ async function runJob(job: DraftPushJob) {
   }
 
   let videoPath: string | null = null;
+  let videoIsTemp = false;
   try {
-    videoPath = await downloadVideo(videoUrl);
+    const resolved = await resolveVideoSource(videoUrl);
+    videoPath = resolved.path;
+    videoIsTemp = resolved.isTemp;
   } catch (err) {
-    for (const a of job.accounts) { a.status = "failed"; a.error = err instanceof Error ? err.message : "视频下载失败"; }
+    for (const a of job.accounts) { a.status = "failed"; a.error = err instanceof Error ? err.message : "视频获取失败"; }
     return;
   }
 
@@ -288,7 +312,7 @@ async function runJob(job: DraftPushJob) {
       }
     }
   } finally {
-    if (videoPath) { try { await unlink(videoPath); } catch { /* noop */ } }
+    if (videoPath && videoIsTemp) { try { await unlink(videoPath); } catch { /* noop */ } }
   }
 }
 
