@@ -351,11 +351,14 @@ export default function ContentPage() {
           >📝 我的全部</button>
         </div>
 
-        {/* PR #129 V2.5 提前: 友好 banner — 主流程"挑发布"叙事 */}
+        {/* PR #129 V2.5 提前: 友好 banner — 主流程"挑发布"叙事
+            6-10 审计3.4: recommendation 视图已收敛到工坊(下方引导块), banner 只在 all 视图显示 */}
+        {viewMode === "all" && (
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 flex items-center gap-2">
           <span className="text-lg">📅</span>
-          <span><strong>{viewMode === "recommendation" ? "BossMate 每日 03:00 自动生成 10 篇推荐" : "BossMate 每天自动生成内容"}</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
+          <span><strong>BossMate 每天自动生成内容</strong>。您只需进来挑喜欢的，一键发布到公众号。手动创作入口在「⚙️ 高级模式」。</span>
         </div>
+        )}
 
         {/* PR #116: AI 推荐 modal */}
         <RecommendationModal open={recommendOpen} onClose={() => setRecommendOpen(false)} />
@@ -363,7 +366,21 @@ export default function ContentPage() {
         {/* PR #119: 批量 csv 导入 modal */}
         <BatchUploadModal open={batchUploadOpen} onClose={() => setBatchUploadOpen(false)} />
 
-        {/* 内容列表 */}
+        {/* 6-10 审计3.4 老韩同意: "今日推荐"收敛到内容工坊 — recommendation 视图不再渲染本页列表, 改为引导块跳 /workbench;
+            原推荐列表渲染代码未删, 仍走下方 all 分支(数据请求逻辑也保留), 可随时恢复 */}
+        {viewMode === "recommendation" ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <p className="text-4xl mb-3">📅</p>
+            <p className="text-gray-800 font-medium mb-1">今日推荐已合并到「内容工坊」</p>
+            <p className="text-sm text-gray-400 mb-5">挑选、预览、一键分发，都在工坊一站完成</p>
+            <button
+              onClick={() => navigate("/workbench")}
+              className="px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              去工坊查看推荐 →
+            </button>
+          </div>
+        ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {loading ? (
             <div className="text-center py-16 text-gray-400">
@@ -599,6 +616,7 @@ export default function ContentPage() {
             </>
           )}
         </div>
+        )}
       </div>
     </div>
   );
