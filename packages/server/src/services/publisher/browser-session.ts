@@ -161,6 +161,8 @@ interface QrSession {
   page?: Page;
   context?: BrowserContext;
   profileAccountId?: string;
+  /** cookie 已现但页面未跳转时的主动刷新次数 (上限3) */
+  reloads?: number;
   timer?: ReturnType<typeof setInterval>;
   createdAt: number;
 }
@@ -341,9 +343,23 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
           }
           const onPlatformDomain = (c: any) => cfg.cookieDomains.some((d) => String(c.domain ?? "").endsWith(d));
           const hasSession = allCookies.some((c) => cfg.sessionCookies.includes(c.name) && c.value && onPlatformDomain(c));
-          const loggedIn = cfg.checkLoggedIn
-            ? await cfg.checkLoggedIn(page)
-            : (cfg.isLoggedInUrl(url) || hasSession);
+          let loggedIn: boolean;
+          if (cfg.checkLoggedIn) {
+            loggedIn = await cfg.checkLoggedIn(page);
+            // 抖音: 扫码后 cookie 先落, 但 headless 下登录 iframe 完成后主页面常不自动跳转,
+            // 内容判定会永远停在"等待扫码" → 见到 session cookie 就主动刷新让登录态生效
+            if (!loggedIn && hasSession) {
+              session.reloads = (session.reloads ?? 0) + 1;
+              if (session.reloads <= 3) {
+                logger.info({ sessionId: session.sessionId, reloads: session.reloads }, "qr-login: 已见 session cookie 但页面未跳转, 主动刷新");
+                try { await page.goto(cfg.loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }); } catch { /* noop */ }
+                await new Promise((r) => setTimeout(r, 2_500));
+                loggedIn = await cfg.checkLoggedIn(page);
+              }
+            }
+          } else {
+            loggedIn = cfg.isLoggedInUrl(url) || hasSession;
+          }
           // 诊断日志: 每 4 轮 (~10s) 打一次, 便于定位卡点
           if (pollTick++ % 4 === 0) {
             logger.info({
