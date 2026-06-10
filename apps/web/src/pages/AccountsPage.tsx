@@ -244,6 +244,16 @@ export default function AccountsPage() {
     }
   };
 
+  const resendSms = async () => {
+    if (!qrModal?.sessionId) return;
+    try {
+      await api.post(`/accounts/qr-login/${qrModal.sessionId}/resend-sms`, {});
+      toast.success("已请求重新发送验证码");
+    } catch (err) {
+      toast.error((err as any)?.response?.data?.message || "重发失败");
+    }
+  };
+
   const startQrLogin = async (account: Account) => {
     setQrModal({ accountId: account.id, accountName: account.accountName, status: "starting" });
     try {
@@ -763,6 +773,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                     className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                   >{smsSubmitting ? "提交中…" : "提交"}</button>
                 </div>
+                <button onClick={resendSms} className="text-xs text-blue-600 hover:text-blue-800">没收到？重新发送验证码</button>
               </div>
             )}
             {qrModal.status === "success" && (

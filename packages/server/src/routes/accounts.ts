@@ -17,7 +17,7 @@ import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
-import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode } from "../services/publisher/browser-session.js";
+import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode, resendSmsCode } from "../services/publisher/browser-session.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -423,6 +423,16 @@ export async function accountRoutes(app: FastifyInstance) {
       return reply.code(400).send({ code: "SMS_FAILED", message: result.message ?? "提交失败" });
     }
     return { code: "OK", data: { submitted: true } };
+  });
+
+  /**
+   * PR-S27: POST /accounts/qr-login/:sessionId/resend-sms - 抖音身份验证, 重发短信验证码
+   */
+  app.post("/accounts/qr-login/:sessionId/resend-sms", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const result = await resendSmsCode(sessionId, request.tenantId);
+    if (!result.ok) return reply.code(400).send({ code: "RESEND_FAILED", message: result.message ?? "重发失败" });
+    return { code: "OK", data: { sent: true } };
   });
 
   /**

@@ -394,6 +394,18 @@ export async function submitSmsCode(sessionId: string, tenantId: string, code: s
   }
 }
 
+/** 抖音身份验证: 重新发送短信验证码 (机房 IP 发送失败时用户手动重发) */
+export async function resendSmsCode(sessionId: string, tenantId: string): Promise<{ ok: boolean; message?: string }> {
+  const s = sessions.get(sessionId);
+  if (!s || s.tenantId !== tenantId) return { ok: false, message: "会话不存在或已过期" };
+  if (!s.page) return { ok: false, message: "会话页面已关闭" };
+  const sent = await deepClickByText(s.page, /获取验证码|发送验证码|重新发送|重新获取|发送短信/);
+  if (!sent) return { ok: false, message: "页面上找不到发送按钮(可能在倒计时中, 请等几秒)" };
+  s.createdAt = Date.now();
+  logger.info({ sessionId }, "qr-login: 用户手动重发短信验证码");
+  return { ok: true };
+}
+
 /** 登录成功 → 抓全量 cookies(CDP) + localStorage, 加密落库 */
 async function persistLoginState(s: QrSession) {
   const page = s.page!;
@@ -491,16 +503,37 @@ export async function startQrLogin(params: { accountId: string; tenantId: string
             const pageTxt: string = await page
               .evaluate(() => (globalThis as any).document?.body?.innerText ?? "")
               .catch(() => "");
-            if (/身份验证/.test(pageTxt)) {
+            if (/身份验证|安全验证|验证身份/.test(pageTxt)) {
+              // 抖音身份验证是多步: ①方式选择列表(短信/密码/...) ②进入短信页点"获取验证码"真正发短信 ③输码
+              // 每拍都尝试推进, 直到页面出现验证码输入框才算短信已发
+              const hasCodeInput = await page.evaluate(() => {
+                const doc = (globalThis as any).document;
+                function* deep(root: any): any { const els = root.querySelectorAll("*"); for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); } }
+                for (const el of deep(doc)) {
+                  if (el.tagName !== "INPUT") continue;
+                  const ph = el.getAttribute("placeholder") || ""; const ml = el.getAttribute("maxlength") || "";
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 30 && r.height > 10 && (/验证码/.test(ph) || ml === "6" || ml === "4")) return true;
+                }
+                return false;
+              }).catch(() => false);
+
               if (!session.smsRequested) {
-                const clicked = await deepClickByText(page, /接收短信验证码|短信验证/);
-                if (clicked) {
+                // ① 选"短信验证"方式 (列表项, 文案可能是"发送短信验证/手机短信验证/短信验证")
+                await deepClickByText(page, /短信验/);
+                await new Promise((r) => setTimeout(r, 1_000));
+                // ② 点"获取验证码/发送验证码"真正发短信
+                const sent = await deepClickByText(page, /获取验证码|发送验证码|发送短信|重新发送/);
+                if (sent) {
                   session.smsRequested = true;
-                  session.createdAt = Date.now(); // 重置超时时钟, 给收码输码留足时间
-                  logger.info({ sessionId: session.sessionId }, "qr-login: 触发身份验证, 已点'接收短信验证码', 等用户输码");
+                  session.createdAt = Date.now(); // 重置超时, 留足收码输码时间
+                  logger.info({ sessionId: session.sessionId }, "qr-login: 已点'获取验证码', 短信应已发出, 等用户输码");
+                } else {
+                  logger.info({ sessionId: session.sessionId, hasCodeInput }, "qr-login: 身份验证页, 未找到'获取验证码'按钮(可能仍在方式选择), 下拍重试");
                 }
               }
-              if (session.smsRequested && session.status !== "waiting_sms") session.status = "waiting_sms";
+              // 出现验证码输入框 → 进 waiting_sms (即便没点到按钮, 有输入框也让用户能输)
+              if ((session.smsRequested || hasCodeInput) && session.status !== "waiting_sms") session.status = "waiting_sms";
               // 验证弹窗现场整页截图给前端看
               const shot = await page.screenshot({ encoding: "base64" }).catch(() => null);
               if (shot) session.qrPng = typeof shot === "string" ? shot : Buffer.from(shot).toString("base64");
