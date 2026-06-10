@@ -15,6 +15,9 @@ interface Account {
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
+  // PR-S4: 浏览器登录态 (抖音/视频号扫码登录 → 推草稿箱)
+  loginStatus?: "none" | "logged_in" | "expired";
+  loginAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -214,6 +217,52 @@ export default function AccountsPage() {
       setVerifying(prev => ({ ...prev, [accountId]: false }));
     }
   };
+
+  // PR-S4: 扫码登录 (抖音/视频号 → 浏览器登录态 → 推草稿箱)
+  const [qrModal, setQrModal] = useState<{
+    accountId: string;
+    accountName: string;
+    sessionId?: string;
+    status: "starting" | "waiting" | "success" | "expired" | "failed";
+    qrPng?: string;
+    error?: string;
+  } | null>(null);
+
+  const startQrLogin = async (account: Account) => {
+    setQrModal({ accountId: account.id, accountName: account.accountName, status: "starting" });
+    try {
+      const res = await api.post<{ sessionId: string }>(`/accounts/${account.id}/qr-login`, {});
+      if (res.data?.sessionId) {
+        setQrModal((m) => m && { ...m, sessionId: res.data!.sessionId });
+      } else {
+        setQrModal((m) => m && { ...m, status: "failed", error: "发起登录失败" });
+      }
+    } catch (err) {
+      setQrModal((m) => m && { ...m, status: "failed", error: (err as any)?.response?.data?.message || "发起登录失败" });
+    }
+  };
+
+  // 轮询扫码状态
+  useEffect(() => {
+    if (!qrModal?.sessionId) return;
+    if (qrModal.status === "success" || qrModal.status === "expired" || qrModal.status === "failed") return;
+    const t = setInterval(async () => {
+      try {
+        const res = await api.get<{ status: string; qrPng?: string; error?: string }>(
+          `/accounts/qr-login/${qrModal.sessionId}`
+        );
+        if (res.data) {
+          const d = res.data;
+          setQrModal((m) => m && { ...m, status: d.status as any, qrPng: d.qrPng ?? m.qrPng, error: d.error });
+          if (d.status === "success") {
+            toast.success("扫码登录成功");
+            fetchAccounts();
+          }
+        }
+      } catch { /* 会话过期等, 下轮再说 */ }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [qrModal?.sessionId, qrModal?.status, fetchAccounts]);
 
   // 删除账号
 const handleScopeChange = async (accountId: string, scope: string) => {
@@ -592,6 +641,26 @@ const handleScopeChange = async (accountId: string, scope: string) => {
 
                           {/* 操作按钮 */}
                           <div className="flex items-center gap-2 ml-4">
+                            {/* PR-S4: 抖音/视频号 — 登录状态 + 扫码登录 (推草稿箱前置条件) */}
+                            {["douyin", "wechat_video"].includes(account.platform) && (
+                              <>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  account.loginStatus === "logged_in"
+                                    ? "bg-green-100 text-green-700"
+                                    : account.loginStatus === "expired"
+                                      ? "bg-red-100 text-red-600"
+                                      : "bg-gray-100 text-gray-500"
+                                }`}>
+                                  {account.loginStatus === "logged_in" ? "✓ 已登录" : account.loginStatus === "expired" ? "登录失效" : "未登录"}
+                                </span>
+                                <button
+                                  onClick={() => startQrLogin(account)}
+                                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 active:scale-95 transition-all"
+                                >
+                                  {account.loginStatus === "logged_in" ? "重新扫码" : "📱 扫码登录"}
+                                </button>
+                              </>
+                            )}
                             {!account.isVerified && (
                               <button
                                 onClick={() => handleVerify(account.id)}
@@ -627,6 +696,41 @@ const handleScopeChange = async (accountId: string, scope: string) => {
           </div>
         )}
       </div>
+      {/* PR-S4: 扫码登录 Modal */}
+      {qrModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setQrModal(null)}>
+          <div className="bg-white rounded-2xl p-6 w-[360px] text-center" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-gray-900 mb-1">扫码登录</h3>
+            <p className="text-xs text-gray-500 mb-4">{qrModal.accountName} — 用该账号绑定的手机扫码</p>
+            {qrModal.status === "starting" && (
+              <div className="py-12 flex flex-col items-center gap-3">
+                <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-gray-500">正在打开平台登录页…</span>
+              </div>
+            )}
+            {qrModal.status === "waiting" && (
+              qrModal.qrPng ? (
+                <img src={`data:image/png;base64,${qrModal.qrPng}`} alt="登录二维码" className="mx-auto w-56 h-56 object-contain border border-gray-100 rounded-lg" />
+              ) : (
+                <div className="py-12 text-sm text-gray-500">二维码加载中…</div>
+              )
+            )}
+            {qrModal.status === "success" && (
+              <div className="py-10 text-green-600 text-sm font-medium">✅ 登录成功,登录态已保存</div>
+            )}
+            {(qrModal.status === "expired" || qrModal.status === "failed") && (
+              <div className="py-8 space-y-3">
+                <p className="text-sm text-red-500">{qrModal.error || "二维码已过期"}</p>
+                <button
+                  onClick={() => { const acc = accounts.find(a => a.id === qrModal.accountId); if (acc) startQrLogin(acc); }}
+                  className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >重新获取二维码</button>
+              </div>
+            )}
+            <button onClick={() => setQrModal(null)} className="mt-4 text-xs text-gray-400 hover:text-gray-600">关闭</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

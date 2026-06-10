@@ -76,6 +76,8 @@ interface Account {
   isVerified: boolean;
   lastPublishAt?: string;
   createdAt?: string;
+  // PR-S4: 浏览器登录态 (扫码登录后可自动推草稿箱)
+  loginStatus?: "none" | "logged_in" | "expired";
 }
 
 interface PublishResult {
@@ -192,6 +194,11 @@ export default function ContentDetailPage() {
   // PR-P1: 矩阵账号联动 — 助手读真实抖音/视频号账号, 每套文案绑定账号, "已发"写 content_publish_log
   const [matrixAccounts, setMatrixAccounts] = useState<Account[]>([]);
   const [matrixPosted, setMatrixPosted] = useState<Record<string, boolean>>({});
+  // PR-S4: 推草稿箱 — 已推草稿映射 + 异步任务进度
+  const [matrixDrafted, setMatrixDrafted] = useState<Record<string, boolean>>({});
+  const [matrixRefreshNonce, setMatrixRefreshNonce] = useState(0);
+  const [pushJob, setPushJob] = useState<{ jobId: string; accounts: Array<{ accountId: string; accountName: string; status: string; error?: string }> } | null>(null);
+  const [pushing, setPushing] = useState(false);
 
   // T4-2-2: AI 改段 Modal 开关（task #20）
   const [showRewriteModal, setShowRewriteModal] = useState(false);
@@ -365,15 +372,61 @@ export default function ContentDetailPage() {
           );
         setMatrixAccounts(accs);
         const map: Record<string, boolean> = {};
+        const drafts: Record<string, boolean> = {};
         for (const row of logRes.data || []) {
           if (row.status === "success") map[row.accountId] = true;
+          if (row.status === "draft") drafts[row.accountId] = true;
         }
         setMatrixPosted(map);
+        setMatrixDrafted(drafts);
       } catch (err) {
         console.error("获取矩阵账号失败", err);
       }
     })();
-  }, [id, content?.type, captionPlatform]);
+  }, [id, content?.type, captionPlatform, matrixRefreshNonce]);
+
+  // PR-S4: 一键推送草稿箱 (已登录账号)
+  const handlePushDraft = async () => {
+    const targets = matrixAccounts.filter((a) => a.loginStatus === "logged_in");
+    if (!id || targets.length === 0) return;
+    setPushing(true);
+    try {
+      const res = await api.post<{ jobId: string }>(`/content/${id}/push-draft`, {
+        accountIds: targets.map((a) => a.id),
+      });
+      if (res.data?.jobId) {
+        setPushJob({
+          jobId: res.data.jobId,
+          accounts: targets.map((a) => ({ accountId: a.id, accountName: a.accountName, status: "queued" })),
+        });
+      }
+    } catch (err) {
+      toast.error((err as any)?.response?.data?.message || "发起推送失败");
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  // PR-S4: 轮询推送任务进度
+  useEffect(() => {
+    if (!pushJob?.jobId) return;
+    const terminal = new Set(["success", "failed", "login_expired"]);
+    if (pushJob.accounts.every((a) => terminal.has(a.status))) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await api.get<{ accounts: Array<{ accountId: string; accountName: string; status: string; error?: string }> }>(
+          `/content/push-draft/${pushJob.jobId}`
+        );
+        if (res.data?.accounts) {
+          setPushJob((j) => j && { ...j, accounts: res.data!.accounts });
+          if (res.data.accounts.every((a) => terminal.has(a.status))) {
+            setMatrixRefreshNonce((n) => n + 1); // 刷已推草稿标记/登录态
+          }
+        }
+      } catch { /* 任务过期等, 停轮询 */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [pushJob?.jobId, pushJob?.accounts]);
 
   // PR-P1: 勾/取消"已发" — 落库, 失败回滚
   const toggleMatrixPosted = async (accountId: string, posted: boolean) => {
@@ -1219,6 +1272,43 @@ export default function ContentDetailPage() {
                               )}
                             </div>
                           </div>
+                          {/* PR-S4: 一键推送草稿箱 (浏览器自动化, 需账号已扫码登录) */}
+                          {matrixAccounts.length > 0 && (() => {
+                            const loggedIn = matrixAccounts.filter((a) => a.loginStatus === "logged_in");
+                            const PUSH_LABEL: Record<string, string> = {
+                              queued: "⏳ 排队中", running: "🔄 推送中…", success: "✅ 已进草稿箱",
+                              failed: "❌ 失败", login_expired: "🔑 登录失效",
+                            };
+                            return (
+                              <div className="mb-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs text-gray-600">
+                                    {loggedIn.length > 0
+                                      ? `${loggedIn.length}/${matrixAccounts.length} 个账号已登录,可自动推送视频+文案到平台草稿箱`
+                                      : <>账号未扫码登录 — 先到 <Link to="/accounts" className="text-blue-600 underline">账号管理</Link> 扫码,即可一键推草稿箱</>}
+                                  </span>
+                                  <button
+                                    onClick={handlePushDraft}
+                                    disabled={pushing || loggedIn.length === 0 || (pushJob?.accounts.some((a) => a.status === "queued" || a.status === "running") ?? false)}
+                                    className="shrink-0 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
+                                  >🚀 推送草稿箱</button>
+                                </div>
+                                {pushJob && (
+                                  <div className="mt-2 space-y-1">
+                                    {pushJob.accounts.map((a) => (
+                                      <div key={a.accountId} className="flex items-center justify-between text-xs">
+                                        <span className="text-gray-700">{a.accountName}</span>
+                                        <span className={a.status === "success" ? "text-green-600" : a.status === "failed" || a.status === "login_expired" ? "text-red-500" : "text-gray-500"}>
+                                          {PUSH_LABEL[a.status] || a.status}{a.error ? ` · ${a.error}` : ""}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    <p className="text-[11px] text-gray-400 mt-1">进草稿箱后,到对应平台 App/后台审核确认即可发布</p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                           {!douyinVariants ? (
                             matrixAccounts.length > 0 ? (
                               /* PR-P1: 已加账号 → 按账号数生成, 每号一套 */
@@ -1310,7 +1400,7 @@ export default function ContentDetailPage() {
                                               : setDouyinPosted((prev) => prev.map((f, k) => (k === i ? e.target.checked : f)))
                                           }
                                         />
-                                        {label}{posted ? " · 已发" : ""}
+                                        {label}{posted ? " · 已发" : matrixDrafted[acct?.id ?? ""] ? " · 📥 已推草稿" : ""}
                                       </label>
                                       <button
                                         onClick={() => copyToClipboard(v.fullText, `「${label}」文案`)}
