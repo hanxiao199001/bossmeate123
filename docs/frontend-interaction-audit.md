@@ -242,3 +242,25 @@
 ---
 
 *审计方法: 路由表(App.tsx)、菜单(Sidebar.tsx)与全量跳转(Link/navigate)交叉比对;重复实现以 grep 全文检索核实;每条结论均附可点开复查的 文件:行号。初审 6 条结论: 2 条属实但低估(入口数/重复份数)、2 条属实(孤儿页/提示不一致,细节有出入已纠正)、1 条表述有误(无 StatusBadge 组件,实为散写的状态映射表)、1 条担心不成立(API 层已统一)。*
+
+---
+
+# 执行记录(2026-06-10 深夜, 老韩全部圈选"同意"后一次性实施)
+
+| 决策点 | 内容 | 状态 | 提交 |
+|---|---|---|---|
+| 2.2 | 平台名 8 份→i18n.ts PLATFORM_META 一份(RiskAuditModal 缺平台真bug已修) | ✅ | e2e3d7d |
+| 2.3 | StatusBadge 统一, 详情页英文原码真bug已修, 已发布颜色统一 | ✅ | e2e3d7d |
+| 2.4 | 4 死组件已删(含 SmartInput 坏链接) | ✅ | e2e3d7d |
+| 四 | 5 处 alert→toast(KeywordsPage 技术文案改人话); confirm 9 处按计划保留 | ✅ | e2e3d7d |
+| 5 | api.upload/download 收编 3 处手写 fetch | ✅ | e2e3d7d |
+| 3 | 6 孤儿页全部下线(路由注释代码保留): /keywords /dashboard /templates /knowledge /sales /admin/journals; 可达页活链接 0 处需清理 | ✅ | e7ef730 |
+| 3.4 | 今日推荐收敛工坊, ContentPage 推荐 tab→引导块跳工坊 | ✅ | e7ef730 |
+| 2.1 | AccountSelector 统一 5 处(~280行重复删除); 详情页/工作流默认勾选→勾已验证 | ✅ | db210da |
+| 1.2 | UnifiedVideoModal 三选项卡, 4 入口共用; ManualGenerateVideoModal 删除 | ✅ | db210da |
+| 2.5 | 全站统一侧边栏: 9 条路由纳入 MainLayout(含顺手 /settings、/journals/:id), 8 页手写顶栏删除, 退出由 Sidebar 承接 | ✅ | 4ea54aa |
+| 1.1 | 链路收敛"工坊+对话": ContentPage 高级模式折叠区删除, AI推荐/批量CSV 搬进工坊顶栏, 专家模式链接→/workflow/article; 悬浮球+/chat 维持 | ✅ | 4ea54aa |
+
+未做(本来就排除或低优先级): RoundupGenerateModal 单选下拉(2.1 变体)、原生 confirm 统一弹窗(六.8)、WorkflowPage 1928 行本体拆分(属 Phase 4 代码债)。
+全部验证: apps/web 与 packages/server tsc --noEmit 零错误。**后端接口与提交数据结构零改动。**
+人工验收建议(部署后过一遍): ①工坊顶栏 6 个入口各点一遍 ②详情页发布(默认勾选已验证+平台全选) ③任一页面确认侧边栏常驻+退出按钮在侧边栏底部 ④内容列表/详情状态标签中文一致。
