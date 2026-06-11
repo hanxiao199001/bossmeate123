@@ -43,7 +43,8 @@ export type SchedulerJobType =
   | "daily-recommendation"     // PR #130 V2.5 5-13：每日 03:00 BJ 10 篇推荐 article 入 system tenant
   | "monthly-journal-refresh"  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
   | "content-retention-cleanup" // PR #178：每日 03:30 BJ 60 天保留清理
-  | "stale-review-cleanup";    // 清理超时未审核内容（3天）
+  | "stale-review-cleanup"     // 清理超时未审核内容（3天）
+  | "login-keepalive";         // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -395,6 +396,14 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenantsForCover.length, totalSuccess, totalFailed };
     }
 
+    case "login-keepalive": {
+      // 串行慢巡检(账号间8-20s), 不要与推草稿/扫码并发跑浏览器 — keepalive 内部有 running 互斥
+      const { runLoginKeepalive } = await import("./publisher/login-keepalive.js");
+      const summary = await runLoginKeepalive();
+      if (!summary) logger.warn("login-keepalive: 已有巡检在跑, 本次跳过");
+      break;
+    }
+
     case "stale-review-cleanup": {
       // 清理超过 3 天仍处于 reviewing / draft 状态的内容
       const STALE_DAYS = 3;
@@ -473,6 +482,16 @@ async function registerCronJobs() {
     {
       name: "daily-crawl",
       data: { type: "daily-crawl" as SchedulerJobType },
+    }
+  );
+
+  // 6-11: 每日 05:00 登录态保活巡检(避开 03:30 备份/清理与 07:00 爬虫)
+  await crawlerQueue.upsertJobScheduler(
+    "login-keepalive-schedule",
+    { pattern: "0 5 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "login-keepalive",
+      data: { type: "login-keepalive" as SchedulerJobType },
     }
   );
 

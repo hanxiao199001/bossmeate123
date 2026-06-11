@@ -84,6 +84,7 @@ export default function AccountsPage() {
 
   // 添加账号表单状态
   const [showAddForm, setShowAddForm] = useState(false);
+  const [keepaliveBusy, setKeepaliveBusy] = useState(false); // 6-11 登录态保活手动巡检
   const [selectedPlatform, setSelectedPlatform] = useState("wechat");
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [accountName, setAccountName] = useState("");
@@ -348,6 +349,19 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     accountsByPlatform[acc.platform].push(acc);
   });
 
+  // 6-11: 手动触发登录态保活巡检(串行慢任务, 后台跑)
+  const runKeepalive = async () => {
+    setKeepaliveBusy(true);
+    try {
+      const r = await api.post<{ message?: string }>("/accounts/keepalive", {});
+      toast.info((r as any).message || "巡检已启动, 稍后刷新查看登录状态");
+    } catch {
+      /* api 层已统一弹错 */
+    } finally {
+      setKeepaliveBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航统一走 MainLayout 侧边栏 (标题在下方 h1, 退出在 Sidebar 底部) */}
@@ -357,14 +371,40 @@ const handleScopeChange = async (accountId: string, scope: string) => {
           title="多平台账号管理"
           subtitle="管理和验证您在各个平台的内容发布账号"
           actions={
-            <button
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="px-4 h-9 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg shadow-sm transition-all active:scale-95"
-            >
-              + 添加账号
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={runKeepalive}
+                disabled={keepaliveBusy}
+                title="巡检所有已扫码账号的登录态: 在线的顺手续期, 掉线的标红提醒(每日 05:00 也会自动跑)"
+                className="px-3 h-9 bg-white border border-slate-200 text-slate-700 hover:border-slate-300 text-sm font-medium rounded-lg transition-all disabled:opacity-50"
+              >
+                {keepaliveBusy ? "启动中…" : "登录态巡检"}
+              </button>
+              <button
+                onClick={() => setShowAddForm(!showAddForm)}
+                className="px-4 h-9 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg shadow-sm transition-all active:scale-95"
+              >
+                + 添加账号
+              </button>
+            </div>
           }
         />
+
+        {/* 6-11: 登录失效醒目提醒(保活巡检发现掉线 → 这里催扫码) */}
+        {(() => {
+          const expiredAccounts = accounts.filter((a) => a.loginStatus === "expired");
+          if (expiredAccounts.length === 0) return null;
+          return (
+            <div className="mb-6 p-3 rounded-lg text-sm bg-amber-50 text-amber-800 border border-amber-200 flex items-center justify-between">
+              <span>
+                ⚠️ {expiredAccounts.length} 个账号登录已失效(
+                {expiredAccounts.slice(0, 3).map((a) => a.accountName).join("、")}
+                {expiredAccounts.length > 3 ? " 等" : ""}
+                ),推送会跳过它们 — 请在下方列表点「重新扫码」恢复
+              </span>
+            </div>
+          );
+        })()}
 
         {/* 成功提示 */}
         {addMsg && (

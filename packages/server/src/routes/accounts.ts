@@ -19,6 +19,7 @@ import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
 import { loadDecryptedAccount } from "../services/publisher/credentials-loader.js";
 import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode, resendSmsCode, remoteClick } from "../services/publisher/browser-session.js";
 import { buildAuthorizeUrl, resolveDouyinAppConfig, signOauthState } from "../services/publisher/douyin-open-api.js";
+import { runLoginKeepalive, getLastKeepaliveSummary, isKeepaliveRunning } from "../services/publisher/login-keepalive.js";
 import { env } from "../config/env.js";
 
 const createAccountSchema = z.object({
@@ -481,6 +482,21 @@ export async function accountRoutes(app: FastifyInstance) {
     }
     const state = signOauthState({ accountId: id, tenantId: request.tenantId! });
     return { authorizeUrl: buildAuthorizeUrl(appConfig, redirectUri, state), expiresInMinutes: 30 };
+  });
+
+  // 6-11: 登录态保活 — 手动触发巡检(fire-and-forget, 串行慢任务)+查最近结果
+  app.post("/accounts/keepalive", async (request, reply) => {
+    if (isKeepaliveRunning()) {
+      return reply.code(409).send({ code: "KEEPALIVE_RUNNING", message: "巡检正在进行中, 请稍后查看结果" });
+    }
+    void runLoginKeepalive(request.tenantId!).catch((err) =>
+      logger.error({ err }, "手动保活巡检异常")
+    );
+    return { started: true, message: "巡检已启动(账号间8-20s串行, 视账号数需几分钟), 稍后刷新查看登录状态" };
+  });
+
+  app.get("/accounts/keepalive", async () => {
+    return { running: isKeepaliveRunning(), lastSummary: getLastKeepaliveSummary() };
   });
 
   app.post("/publish", async (request, reply) => {

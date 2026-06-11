@@ -554,7 +554,7 @@ const PLATFORM_ORIGIN: Record<string, string> = {
   wechat_video: "https://channels.weixin.qq.com",
 };
 
-async function setPageLoginState(page: Page, state: { cookies: any[]; localStorage?: string }, platform: string) {
+export async function setPageLoginState(page: Page, state: { cookies: any[]; localStorage?: string }, platform: string) {
   const cdp = await page.target().createCDPSession();
   // CDP setCookies 支持跨域批量
   await cdp.send("Network.setCookies", { cookies: state.cookies.map((c) => ({
