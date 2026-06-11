@@ -424,6 +424,21 @@ async function verifyChannelsDraftExists(page: Page, caption: string, shortTitle
     "https://channels.weixin.qq.com/platform/post/list?currentTab=draft",
     "https://channels.weixin.qq.com/platform/post/list",
   ];
+  // 6-11 二轮: 先点侧边栏「草稿箱」菜单进真实草稿页(URL 是猜的会落到发表列表), 失败再回退 URL 候选
+  const viaMenu = await (async () => {
+    try {
+      await page.goto("https://channels.weixin.qq.com/platform", { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await new Promise((r) => setTimeout(r, 4_000));
+      const clicked = await clickButtonByText(page, ["草稿箱"], 10_000);
+      if (!clicked) return false;
+      await new Promise((r) => setTimeout(r, 6_000));
+      const txt = (await deepBodyText(page)).replace(/\s+/g, "");
+      logger.info({ url: page.url(), excerpt: txt.slice(0, 120) }, "视频号: 经侧边栏进入草稿箱");
+      return sigs.some((g) => txt.includes(g));
+    } catch { return false; }
+  })();
+  if (viaMenu) return true;
+
   for (let attempt = 0; attempt < 3; attempt++) {
   if (attempt > 0) await new Promise((r) => setTimeout(r, 8_000)); // 草稿落列表可能延迟
   for (const url of candidates) {
@@ -473,8 +488,33 @@ export async function wechatVideoPushDraft({ page, videoPath, caption, title }: 
       await page.keyboard.press("Backspace");
       await page.keyboard.type(caption, { delay: 30 });
       await new Promise((r) => setTimeout(r, 1_200));
-      const got: string = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
+      let got: string = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
       descFilled = got.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
+      // 6-11 二轮: 键盘输入进不去(读回为空) → JS 原生赋值兜底(S18 短标题同款思路, 已被验证可行)
+      if (!descFilled) {
+        const jsSet = await (editor as any).evaluate((el: any, val: string) => {
+          const win = (globalThis as any).window;
+          try {
+            if (el.getAttribute && el.getAttribute("contenteditable") === "true") {
+              el.focus?.();
+              el.textContent = val;
+              el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, data: val, inputType: "insertText" }));
+              el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
+              return ((el.innerText ?? el.textContent ?? "") as string).trim().length > 0;
+            }
+            const proto = el.tagName === "TEXTAREA" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+            setter ? setter.call(el, val) : (el.value = val);
+            el.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
+            el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
+            return true;
+          } catch { return false; }
+        }, caption);
+        await new Promise((r) => setTimeout(r, 800));
+        got = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
+        descFilled = jsSet && got.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
+        logger.info({ jsSet, gotLen: got.length }, "视频号: JS 直写描述兜底");
+      }
       if (!descFilled) logger.warn({ attempt: i + 1, got: got.slice(0, 40) }, "视频号: 描述读回不匹配, 重试");
     } catch (e) {
       logger.warn({ attempt: i + 1, err: e instanceof Error ? e.message : e }, "视频号: 填描述异常, 重试");
