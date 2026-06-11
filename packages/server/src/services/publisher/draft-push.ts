@@ -130,6 +130,57 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption, title }:
   }
   await new Promise((r) => setTimeout(r, 1_500));
 
+  // 4. 6-11 六轮定版(真机实锤): 网页「暂存离开」的"草稿"只存浏览器本地(Agent profile 里),
+  //    客户自己的浏览器/抖音App 都看不到 → 对客户无意义。主路改为「仅自己可见」+ 真实发布
+  //    (= A轨 private_status=1 自见草稿语义, 老韩 5-28 拍板: 真实落抖音服务器, 作品管理可见,
+  //    仅作者可见, 检查满意后在 App/网页改公开)。找不到该选项时回退暂存离开。
+  const visSet = await clickButtonByText(page, ["仅自己可见"], 120_000);
+  if (visSet) {
+    logger.info("抖音: 已选「仅自己可见」(自见=草稿语义), 等「发布」可点");
+    await new Promise((r) => setTimeout(r, 1_000));
+    const pub = await clickButtonByText(page, ["发布"], 180_000);
+    if (!pub) throw new Error("找不到或点不动「发布」按钮 (转码超时或页面改版)");
+    try {
+      await new Promise((r) => setTimeout(r, 2_500));
+      await mkdir(FAIL_SHOT_DIR, { recursive: true });
+      const shot = resolve(FAIL_SHOT_DIR, `douyin-aftersave-${Date.now()}.png`);
+      await page.screenshot({ path: shot as any, fullPage: true });
+      logger.info({ shot }, "抖音: 点发布后现场截图");
+    } catch { /* noop */ }
+    const published = await (async (): Promise<boolean> => {
+      const deadline = Date.now() + 40_000;
+      while (Date.now() < deadline) {
+        const u = page.url();
+        if (u.includes("login")) throw new Error("LOGIN_EXPIRED");
+        if (/content\/manage/.test(u) && !/upload/.test(u)) return true;
+        const txt = await deepBodyText(page).catch(() => "");
+        if (/发布成功|已发布|发布完成/.test(txt)) return true;
+        const blocked = txt.match(/[^\n]*(?:发布失败|审核不通过|含有违规|标题不能为空|上传失败)[^\n]*/);
+        if (blocked) throw new Error(`抖音发布被拦: ${blocked[0].trim().slice(0, 60)}`);
+        await new Promise((r) => setTimeout(r, 2_000));
+      }
+      return false;
+    })();
+    if (!published) {
+      // 实查兜底: 作品管理按标题前缀找(自见作品也在列表里)
+      try {
+        await page.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 30_000 });
+        await new Promise((r) => setTimeout(r, 6_000));
+        const sig = douyinTitle.replace(/\s+/g, "").slice(0, 10);
+        const txt2 = (await deepBodyText(page).catch(() => "")).replace(/\s+/g, "");
+        if (sig.length >= 4 && txt2.includes(sig)) {
+          logger.info("抖音: 作品管理实查命中, 「仅自己可见」发布已确认");
+          return;
+        }
+      } catch { /* noop */ }
+      throw new Error("抖音「仅自己可见」发布未确认生效 (无成功提示且作品管理未见 — 见 douyin-aftersave 截图)");
+    }
+    logger.info({ url: page.url() }, "抖音推草稿: 已发布为「仅自己可见」(作品管理可见, 检查后改公开即可)");
+    return;
+  }
+
+  // —— 回退路径: 暂存离开(注意: 此"草稿"只存 Agent 浏览器本地, 客户其他设备看不到) ——
+  logger.warn("抖音: 未找到「仅自己可见」选项, 回退「暂存离开」模式");
   // 4. 等视频转码完成. 6-11 真机实锤: 当前版本按钮叫「暂存离开」(不再是"存草稿")
   const clicked = await clickButtonByText(page, ["暂存离开", "存草稿", "保存草稿", "暂存"], 180_000);
   if (!clicked) throw new Error("找不到或点不动「暂存离开/存草稿」按钮 (转码超时或页面改版)");
