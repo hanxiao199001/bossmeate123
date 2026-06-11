@@ -157,6 +157,25 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       return { ok: true, serverTime: new Date().toISOString(), deviceId: request.agentDevice!.id };
     });
 
+    /** GET /agent/accounts — 本租户可本地发布的账号列表 (douyin/wechat_video, Agent login 命令列账号用) */
+    authed.get("/agent/accounts", async (request) => {
+      const device = request.agentDevice!;
+      const rows = await db
+        .select({
+          id: platformAccounts.id,
+          platform: platformAccounts.platform,
+          accountName: platformAccounts.accountName,
+          status: platformAccounts.status,
+        })
+        .from(platformAccounts)
+        .where(and(
+          eq(platformAccounts.tenantId, device.tenantId),
+          inArray(platformAccounts.platform, ["douyin", "wechat_video"]),
+        ))
+        .orderBy(desc(platformAccounts.createdAt));
+      return { code: "OK", data: { accounts: rows } };
+    });
+
     /**
      * POST /agent/tasks/claim {platforms?, limit?=1} — 原子领单。
      * 并发安全: 子查询 FOR UPDATE SKIP LOCKED — 多设备同时 claim 时, 已被其他事务

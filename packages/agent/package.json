@@ -1,0 +1,24 @@
+{
+  "name": "@bossmate/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BossMate 本地发布 Agent — 跑在客户电脑, 本地有头浏览器把视频推到视频号/抖音草稿箱",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "bossmate-agent": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js run"
+  },
+  "dependencies": {
+    "puppeteer": "^23.11.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

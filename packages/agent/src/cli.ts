@@ -1,0 +1,378 @@
+#!/usr/bin/env node
+/**
+ * BossMate 本地发布 Agent CLI — 跑在客户电脑 (macOS/Windows), 流程:
+ *   pair   配对服务器拿 token (一次性配对码在网页设置页生成)
+ *   login  本地有头浏览器扫码登录 (每账号持久 profile, 登录态落在本机磁盘)
+ *   status 服务器连通 + 各账号登录态体检
+ *   run    主循环: 轮询领任务 → 下载视频 → 浏览器推草稿 → 回报
+ */
+import { hostname } from "node:os";
+import { join } from "node:path";
+import { mkdir, stat, unlink } from "node:fs/promises";
+import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
+import type { Browser, Page } from "puppeteer";
+import {
+  CONFIG_PATH,
+  SCREENSHOTS_DIR,
+  TMP_DIR,
+  ensureDirs,
+  loadConfig,
+  profileDir,
+  saveConfig,
+  type AgentConfig,
+} from "./config.js";
+import { AgentApi, ApiError, type AgentAccount, type AgentTask } from "./api.js";
+import { logger } from "./log.js";
+import { isLoggedIn, launchAccountBrowser, openPlatformHome } from "./browser.js";
+import { PLATFORM_PUSHERS } from "./pushers.js";
+
+const AGENT_VERSION = "0.1.0";
+const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号" };
+const CLAIM_INTERVAL_MS = 15_000;
+const LOGIN_WAIT_MS = 5 * 60_000; // 扫码最长等 5 分钟
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function rand(min: number, max: number): number {
+  return Math.floor(min + Math.random() * (max - min));
+}
+
+function platformLabel(platform: string): string {
+  return PLATFORM_LABEL[platform] ?? platform;
+}
+
+/** 读配置, 没配对过直接退出并给指引 */
+async function requireConfig(): Promise<AgentConfig> {
+  const cfg = await loadConfig();
+  if (!cfg) {
+    logger.error(`尚未配对 (${CONFIG_PATH} 不存在或不完整)。`);
+    logger.error("请先在 BossMate 网页「设置 → 本地发布 Agent」生成配对码, 然后执行:");
+    logger.error("  bossmate-agent pair <服务器地址> <配对码>");
+    process.exit(1);
+  }
+  return cfg;
+}
+
+// ===== pair =====
+async function cmdPair(args: string[]): Promise<void> {
+  const [serverUrl, code, nameArg] = args;
+  if (!serverUrl || !code) {
+    logger.error("用法: bossmate-agent pair <服务器地址> <配对码> [设备名]");
+    logger.error("示例: bossmate-agent pair https://bossmate.example.com 123456 老板的MacBook");
+    process.exit(1);
+  }
+  const name = (nameArg ?? hostname()).slice(0, 100);
+  logger.info(`正在向 ${serverUrl} 配对 (设备名: ${name})...`);
+  const data = await AgentApi.pair(serverUrl, code, name, AGENT_VERSION);
+  await saveConfig({
+    serverUrl: serverUrl.replace(/\/+$/, ""),
+    token: data.token,
+    deviceId: data.deviceId,
+    tenantId: data.tenantId,
+    name,
+    pairedAt: new Date().toISOString(),
+  });
+  logger.info(`配对成功! 设备ID ${data.deviceId}, 配置已写入 ${CONFIG_PATH}`);
+  logger.info("下一步: bossmate-agent login (本地浏览器扫码登录平台账号)");
+}
+
+// ===== login =====
+/** 单账号扫码: 开有头浏览器到平台主页, 用户手机扫码, 3s 一拍轮询登录判定 */
+async function loginAccount(account: AgentAccount): Promise<boolean> {
+  const label = platformLabel(account.platform);
+  logger.info(`[${label}] ${account.accountName}: 正在打开浏览器, 请用该账号绑定的手机 App 扫码登录...`);
+  let browser: Browser | null = null;
+  try {
+    browser = await launchAccountBrowser(account.id);
+    const page = await openPlatformHome(browser, account.platform);
+    if (await isLoggedIn(page, account.platform)) {
+      logger.info(`[${label}] ${account.accountName}: 本地已是登录态, 无需重新扫码`);
+      return true;
+    }
+    logger.info(`[${label}] ${account.accountName}: 等待扫码 (最长 ${LOGIN_WAIT_MS / 60_000} 分钟, 中途关浏览器即放弃)...`);
+    const deadline = Date.now() + LOGIN_WAIT_MS;
+    while (Date.now() < deadline) {
+      await sleep(3_000);
+      if (!browser.connected) {
+        logger.warn(`[${label}] ${account.accountName}: 浏览器被关闭, 放弃本账号`);
+        return false;
+      }
+      if (await isLoggedIn(page, account.platform)) {
+        await sleep(2_000); // 等登录后跳转/cookie 落稳
+        logger.info(`[${label}] ${account.accountName}: 登录成功, 登录态已落在本机 profile`);
+        return true;
+      }
+    }
+    logger.warn(`[${label}] ${account.accountName}: 等待扫码超时`);
+    return false;
+  } finally {
+    // 关浏览器 → profile 落盘
+    try { await browser?.close(); } catch { /* noop */ }
+  }
+}
+
+async function cmdLogin(args: string[]): Promise<void> {
+  const cfg = await requireConfig();
+  await ensureDirs();
+  const api = new AgentApi(cfg.serverUrl, cfg.token);
+  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  if (accounts.length === 0) {
+    logger.warn("服务器上没有可本地发布的账号 (抖音/视频号), 请先在网页端添加平台账号。");
+    return;
+  }
+  logger.info(`共 ${accounts.length} 个账号:`);
+  for (let i = 0; i < accounts.length; i++) {
+    const a = accounts[i];
+    let hasProfile = false;
+    try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
+    console.log(`  ${i + 1}. [${platformLabel(a.platform)}] ${a.accountName}  (${a.id.slice(0, 8)}…)${hasProfile ? "  [本机已有登录档案]" : ""}`);
+  }
+
+  let selected: AgentAccount[];
+  if (args.includes("--all")) {
+    selected = accounts;
+  } else {
+    const rl = createInterface({ input: stdin, output: stdout });
+    const answer = (await rl.question("请输入要登录的账号序号 (多个用逗号分隔, 如 1,3): ")).trim();
+    rl.close();
+    const idxs = answer.split(/[,，\s]+/).filter(Boolean).map((s) => Number(s));
+    if (idxs.some((n) => !Number.isInteger(n) || n < 1 || n > accounts.length)) {
+      logger.error(`序号无效: ${answer} (应为 1~${accounts.length})`);
+      process.exit(1);
+    }
+    selected = [...new Set(idxs)].map((n) => accounts[n - 1]);
+  }
+
+  let ok = 0;
+  for (const account of selected) {
+    if (await loginAccount(account)) ok++;
+  }
+  logger.info(`登录完成: 成功 ${ok}/${selected.length}。下一步: bossmate-agent run (开始领任务)`);
+}
+
+// ===== status =====
+async function cmdStatus(args: string[]): Promise<void> {
+  const cfg = await requireConfig();
+  const fast = args.includes("--fast");
+  const api = new AgentApi(cfg.serverUrl, cfg.token);
+
+  try {
+    const pong = await api.ping();
+    logger.info(`服务器连通正常: ${cfg.serverUrl} (服务器时间 ${pong.serverTime}, 设备 ${pong.deviceId.slice(0, 8)}…)`);
+  } catch (err) {
+    logger.error("服务器连不通:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+
+  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  if (accounts.length === 0) { logger.warn("没有可本地发布的账号"); return; }
+  logger.info(`账号登录状态 (${fast ? "--fast 只看本地档案" : "逐账号开浏览器实测"}):`);
+  for (const a of accounts) {
+    const label = `[${platformLabel(a.platform)}] ${a.accountName}`;
+    if (fast) {
+      let hasProfile = false;
+      try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
+      console.log(`  ${hasProfile ? "●" : "○"} ${label} — ${hasProfile ? "本机有登录档案 (未实测)" : "未登录 (无本地档案)"}`);
+      continue;
+    }
+    let browser: Browser | null = null;
+    try {
+      browser = await launchAccountBrowser(a.id);
+      const page = await openPlatformHome(browser, a.platform);
+      const logged = await isLoggedIn(page, a.platform);
+      console.log(`  ${logged ? "●" : "✗"} ${label} — ${logged ? "登录有效" : "登录态失效, 请重新 login"}`);
+    } catch (err) {
+      console.log(`  ? ${label} — 检测失败: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      try { await browser?.close(); } catch { /* noop */ }
+    }
+  }
+}
+
+// ===== run =====
+function warnLoginExpired(task: AgentTask): void {
+  const label = platformLabel(task.platform);
+  console.error("");
+  console.error("  ⚠️ ════════════════════════════════════════════════════════");
+  console.error(`  ⚠️  账号 [${label}] ${task.accountName} 本机登录态已失效!`);
+  console.error("  ⚠️  任务已回报 login_expired, 该账号后续任务都会卡住。");
+  console.error("  ⚠️  请尽快执行: bossmate-agent login  重新扫码。");
+  console.error("  ⚠️ ════════════════════════════════════════════════════════");
+  console.error("");
+}
+
+/** 失败现场截图到 ~/.bossmate-agent/screenshots/ */
+async function captureFailShot(page: Page | null, task: AgentTask): Promise<void> {
+  if (!page) return;
+  try {
+    await mkdir(SCREENSHOTS_DIR, { recursive: true });
+    const shot = join(SCREENSHOTS_DIR, `task-fail-${task.id.slice(0, 8)}-${Date.now()}.png`);
+    await page.screenshot({ path: shot as any, fullPage: true });
+    logger.warn({ shot }, "任务失败, 现场已截图");
+  } catch (err) {
+    logger.warn("失败截图未能保存:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** 执行单个任务: 开账号浏览器 → 验登录 → 下视频 → 推草稿 → 回报; finally 关浏览器删临时文件 */
+async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
+  const label = platformLabel(task.platform);
+  logger.info(`领到任务 ${task.id.slice(0, 8)}…: [${label}] ${task.accountName} (第 ${task.attempts} 次尝试)`);
+  let browser: Browser | null = null;
+  let page: Page | null = null;
+  let videoPath: string | null = null;
+  try {
+    browser = await launchAccountBrowser(task.accountId);
+    page = await openPlatformHome(browser, task.platform);
+
+    if (!(await isLoggedIn(page, task.platform))) {
+      await api.reportResult(task.id, "login_expired", "Agent 本机浏览器登录态失效");
+      warnLoginExpired(task);
+      return;
+    }
+
+    await mkdir(TMP_DIR, { recursive: true });
+    videoPath = join(TMP_DIR, `task-${task.id}.mp4`);
+    logger.info("正在下载任务视频...");
+    await api.downloadVideo(task.id, videoPath);
+    logger.info({ videoPath }, "视频下载完成");
+
+    const pusher = PLATFORM_PUSHERS[task.platform];
+    if (!pusher) throw new Error(`平台 ${task.platform} 暂不支持本地推草稿`);
+    await pusher({ page, videoPath, caption: task.caption ?? "", title: task.title ?? "" });
+
+    await api.reportResult(task.id, "success");
+    logger.info(`任务 ${task.id.slice(0, 8)}… 完成: 草稿已推到 [${label}] ${task.accountName}, 请在平台后台确认发布`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "LOGIN_EXPIRED") {
+      await api.reportResult(task.id, "login_expired", "推送过程中检测到登录态失效")
+        .catch((e) => logger.error("回报 login_expired 失败:", e instanceof Error ? e.message : e));
+      warnLoginExpired(task);
+    } else {
+      logger.error({ taskId: task.id, err: msg }, "任务执行失败");
+      await captureFailShot(page, task);
+      await api.reportResult(task.id, "failed", msg.slice(0, 500))
+        .catch((e) => logger.error("回报 failed 失败:", e instanceof Error ? e.message : e));
+    }
+  } finally {
+    try { await browser?.close(); } catch { /* noop */ }
+    if (videoPath) { try { await unlink(videoPath); } catch { /* noop */ } }
+  }
+}
+
+async function cmdRun(): Promise<void> {
+  const cfg = await requireConfig();
+  await ensureDirs();
+  const api = new AgentApi(cfg.serverUrl, cfg.token);
+  const platforms = Object.keys(PLATFORM_PUSHERS);
+
+  // SIGINT 优雅退出: 完成当前任务再退; 再按一次立即退
+  let stopping = false;
+  let busy = false;
+  process.on("SIGINT", () => {
+    if (stopping) {
+      console.error("\n再次收到 Ctrl+C, 立即退出");
+      process.exit(130);
+    }
+    stopping = true;
+    console.error(busy
+      ? "\n收到退出信号: 当前任务完成后退出 (再按一次 Ctrl+C 立即退出)"
+      : "\n收到退出信号, 正在退出...");
+  });
+
+  try {
+    const pong = await api.ping();
+    logger.info(`Agent v${AGENT_VERSION} 已启动: 服务器 ${cfg.serverUrl} 连通正常 (设备 ${pong.deviceId.slice(0, 8)}…)`);
+  } catch (err) {
+    logger.error("服务器连不通, 请检查网络/服务器地址/token:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+  logger.info(`开始轮询领任务 (每 ${CLAIM_INTERVAL_MS / 1000}s, 平台: ${platforms.map(platformLabel).join("/")})。Ctrl+C 退出。`);
+
+  while (!stopping) {
+    let tasks: AgentTask[] = [];
+    try {
+      tasks = await api.claimTasks(platforms, 1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof ApiError && err.status === 401) {
+        logger.error("token 失效或设备被吊销, 请重新配对:", msg);
+        process.exit(1);
+      }
+      logger.warn("领任务失败 (稍后重试):", msg);
+    }
+
+    if (tasks.length === 0) {
+      await sleep(CLAIM_INTERVAL_MS);
+      continue;
+    }
+
+    for (let i = 0; i < tasks.length; i++) {
+      busy = true;
+      try {
+        await runTask(api, tasks[i]);
+      } finally {
+        busy = false;
+      }
+      if (stopping) break;
+      // 任务间随机间隔, 模拟人工节奏 (与 server draft-push 同节奏 8~20s)
+      await sleep(rand(8_000, 20_000));
+    }
+  }
+  logger.info("Agent 已退出");
+}
+
+// ===== help =====
+function printHelp(): void {
+  console.log(`BossMate 本地发布 Agent v${AGENT_VERSION}
+
+用法: bossmate-agent <命令> [参数]
+
+命令:
+  pair <服务器地址> <配对码> [设备名]   与服务器配对 (配对码在网页「设置 → 本地发布 Agent」生成; 设备名缺省取本机名)
+  login [--all]                         本地浏览器扫码登录平台账号 (--all 全部账号依次扫码)
+  status [--fast]                       服务器连通 + 各账号登录态体检 (--fast 只看本地档案, 不开浏览器)
+  run                                   主循环: 每 15s 领任务 → 本地浏览器推草稿到视频号/抖音 → 回报
+  help                                  显示本帮助
+
+示例:
+  bossmate-agent pair https://bossmate.example.com 123456
+  bossmate-agent login
+  bossmate-agent run
+
+数据目录: ~/.bossmate-agent/ (config.json 配置 / profiles 登录档案 / tmp 临时视频 / screenshots 失败截图)`);
+}
+
+// ===== 入口 =====
+async function main(): Promise<void> {
+  const [, , cmd, ...rest] = process.argv;
+  switch (cmd) {
+    case "pair": return cmdPair(rest);
+    case "login": return cmdLogin(rest);
+    case "status": return cmdStatus(rest);
+    case "run": return cmdRun();
+    case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+      printHelp();
+      return;
+    default:
+      logger.error(`未知命令: ${cmd}`);
+      printHelp();
+      process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  if (err instanceof ApiError) {
+    logger.error(`服务器返回错误 (${err.status}): ${err.message}`);
+  } else {
+    logger.error("执行失败:", err instanceof Error ? (err.stack ?? err.message) : err);
+  }
+  process.exit(1);
+});

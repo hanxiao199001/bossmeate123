@@ -1,0 +1,481 @@
+/**
+ * 移植自 server draft-push.ts, 服务器侧改了要同步这里。
+ * 源: packages/server/src/services/publisher/draft-push.ts (S12~S19 线上调试结晶)
+ *
+ * 改造仅限:
+ *   1. logger → src/log.ts (console 实现, 兼容 pino 风格调用签名, 调用点零改动)
+ *   2. 截图目录 FAIL_SHOT_DIR → ~/.bossmate-agent/screenshots/
+ *   3. 去掉服务端队列/DB/登录态注入, 只保留两个 pusher 及其全部 helper
+ * 选择器与流程逻辑一字不改。
+ */
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import type { Page } from "puppeteer";
+import { logger } from "./log.js";
+import { SCREENSHOTS_DIR } from "./config.js";
+
+const FAIL_SHOT_DIR = SCREENSHOTS_DIR;
+
+// ===== 平台上传实现 =====
+export interface UploadParams {
+  /** 钩子标题 (文案包 hookTitle), 视频号短标题从这派生; 缺省回退 caption */
+  title?: string;
+  page: Page;
+  videoPath: string;
+  caption: string;
+}
+
+/** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
+export async function douyinPushDraft({ page: initialPage, videoPath, caption }: UploadParams): Promise<void> {
+  let page = initialPage;
+  await page.goto("https://creator.douyin.com/creator-micro/content/upload", {
+    waitUntil: "domcontentloaded", // 创作页长连接, networkidle2 永不触发
+    timeout: 60_000,
+  });
+  await new Promise((r) => setTimeout(r, 3_000));
+  if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+
+  // 1. 确保在上传页 (直链可能被重定向回首页), 再上传
+  page = await douyinEnsureUploadPage(page);
+  // 抖音是弹窗登录(不改URL): 出现扫码/登录弹窗 = 登录态失效
+  const loginPopup = await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const txt = (doc.body?.innerText || "");
+    // 真上传页不含"扫码登录/验证码登录"对话框文案; 出现即登录态失效弹了登录框
+    return /扫码登录|验证码登录|手机号登录|登录后即可|登录抖音/.test(txt);
+  }).catch(() => false);
+  if (loginPopup) throw new Error("LOGIN_EXPIRED");
+  await uploadVideoFile(page, videoPath);
+  logger.info("抖音推草稿: 视频文件已提交, 等待进入编辑页");
+
+  // 2. 等编辑页就绪 (穿透 shadow DOM 找文案编辑器)
+  const editor = await deepFindEditor(page, 90_000);
+  if (!editor) throw new Error("等不到文案编辑器 (上传可能失败或页面改版, 见失败截图)");
+
+  // 3. 填文案
+  await editor.click();
+  await page.keyboard.type(caption, { delay: 30 });
+  await new Promise((r) => setTimeout(r, 1_500));
+
+  // 4. 等视频转码完成 (存草稿按钮可点). 轮询找"存草稿"按钮并等它非 disabled
+  const clicked = await clickButtonByText(page, ["存草稿", "保存草稿"], 180_000);
+  if (!clicked) throw new Error("找不到或点不动「存草稿」按钮 (转码超时或页面改版)");
+
+  // 5. 确认结果: 跳转到内容管理 或 出现成功提示
+  await new Promise((r) => setTimeout(r, 5_000));
+  const url = page.url();
+  if (url.includes("login")) throw new Error("LOGIN_EXPIRED");
+  logger.info({ url }, "抖音推草稿: 已点击存草稿");
+}
+
+/** 文本找按钮并点击 (等到可点为止), 浏览器上下文执行 */
+/**
+ * 上传视频文件 — 通吃标准 input 和自定义上传组件:
+ * 1. 先跨 frame 找现成 input[type=file] 直接 uploadFile
+ * 2. 找不到 → 点"上传/添加/选择视频"等区域, 用 waitForFileChooser 拦截原生文件框塞文件
+ *    (自定义组件点击后也会弹文件框, 这招绕过 DOM 选择器)
+ */
+const UPLOAD_TRIGGER_TEXTS = ["上传视频", "上传", "选择视频", "点击上传", "添加视频", "添加", "发布视频"];
+
+async function tryDirectInput(page: Page, videoPath: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      // pierce: 既查普通 DOM 也查 shadow root (视频号微前端用 web component)
+      const h = await frame.evaluateHandle(() => {
+        const doc = (globalThis as any).document;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        for (const el of deep(doc)) {
+          if (el.tagName === "INPUT" && el.type === "file") return el;
+        }
+        return null;
+      });
+      const el = h.asElement();
+      if (el) { await (el as any).uploadFile(videoPath); await h.dispose(); return true; }
+      await h.dispose();
+    } catch { /* frame detach */ }
+  }
+  return false;
+}
+
+async function uploadVideoFile(page: Page, videoPath: string): Promise<void> {
+  // 诊断: 打印 frame URL 便于排查
+  logger.info({ frames: page.frames().map((f) => f.url()).slice(0, 8) }, "推草稿: 当前页 frames");
+
+  if (await tryDirectInput(page, videoPath)) {
+    logger.info("推草稿: 直接 input[type=file] 上传成功");
+    return;
+  }
+
+  // 深度点击: 穿透 shadow DOM + 遍历所有 frame 找上传区点击 (返回命中描述)
+  const deepClickUploadZone = async (): Promise<string | null> => {
+    for (const frame of page.frames()) {
+      try {
+        const hit = await frame.evaluate((labels: string[]) => {
+          const doc = (globalThis as any).document;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          const all = Array.from(deep(doc)) as any[];
+          const visible = (el: any) => { try { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 20; } catch { return false; } };
+          // a) class 含 upload/drag
+          const classRe = /(upload|uploader|dragger|drag|drop)/i;
+          for (const el of all) {
+            const cls = el.className && el.className.toString ? el.className.toString() : "";
+            if (classRe.test(cls) && visible(el)) { el.click(); return "cls:" + cls.slice(0, 24); }
+          }
+          // b) 文案含上传/拖拽/大小限制 (上传区提示文字)
+          for (const el of all) {
+            const t = (el.textContent || "").trim();
+            if (t.length < 60 && /上传视频|点击上传|拖拽|选择视频|添加视频|大小不超过|时长/.test(t) && visible(el)) {
+              el.click(); return "txt:" + t.slice(0, 18);
+            }
+          }
+          // c) 短按钮精确文本
+          for (const el of all) {
+            const t = (el.textContent || "").trim();
+            if (t.length <= 12 && labels.some((l) => t === l) && visible(el)) { el.click(); return "btn:" + t; }
+          }
+          return null;
+        }, UPLOAD_TRIGGER_TEXTS);
+        if (hit) return hit;
+      } catch { /* frame detach */ }
+    }
+    return null;
+  };
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let chooser: any = null;
+    const chooserP = page.waitForFileChooser({ timeout: 9_000 }).then((c) => (chooser = c)).catch(() => null);
+    const clicked = await deepClickUploadZone();
+    await chooserP;
+    if (chooser) {
+      await chooser.accept([videoPath]);
+      logger.info({ via: clicked }, "推草稿: 经 fileChooser 上传成功");
+      return;
+    }
+    logger.info({ attempt, clicked, url: page.url() }, "推草稿: 本轮未触发文件框, 重试");
+    // 点击可能触发了导航或动态创建了 input, 再查一次
+    if (await tryDirectInput(page, videoPath)) { logger.info("推草稿: 点击后 input 上传成功"); return; }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error("找不到上传入口 (input 与 fileChooser 均失败, 见失败截图)");
+}
+
+/** 抖音: 确保在上传页 (直链常被重定向回首页 → 从首页点'发布视频'进上传页, 处理可能的新标签页) */
+async function douyinEnsureUploadPage(page: Page): Promise<Page> {
+  if (/content\/(upload|publish)/.test(page.url())) return page;
+  logger.info({ url: page.url() }, "抖音: 不在上传页, 尝试点'发布视频'进入");
+  const browser = page.browser();
+  const newPagePromise = new Promise<Page | null>((resolve) => {
+    const onTarget = async (t: any) => {
+      try { const np = await t.page(); if (np) resolve(np); } catch { resolve(null); }
+    };
+    browser.once("targetcreated", onTarget);
+    setTimeout(() => resolve(null), 8_000);
+  });
+  const clicked = await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const els = Array.from(doc.querySelectorAll("a, button, div, span")) as any[];
+    for (const el of els) {
+      const t = (el.textContent || "").trim();
+      if (t === "发布视频" || t === "上传视频" || t === "发布作品") { el.click(); return t; }
+    }
+    return null;
+  });
+  if (!clicked) {
+    // 兜底再直链一次
+    await page.goto("https://creator.douyin.com/creator-micro/content/upload", { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 3_000));
+    return page;
+  }
+  const newPage = await newPagePromise;
+  if (newPage) {
+    await newPage.bringToFront().catch(() => {});
+    await new Promise((r) => setTimeout(r, 3_000));
+    logger.info({ url: newPage.url() }, "抖音: 发布视频打开新标签页");
+    return newPage;
+  }
+  // 同标签内导航
+  await new Promise((r) => setTimeout(r, 3_000));
+  return page;
+}
+
+/** 收集全页文本 (穿透 shadow DOM + frame), 用于检测上传进度/提示 */
+async function deepBodyText(page: Page): Promise<string> {
+  let text = "";
+  for (const frame of page.frames()) {
+    try {
+      const t = await frame.evaluate(() => {
+        const doc = (globalThis as any).document;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        let out = "";
+        for (const el of deep(doc)) {
+          // 只取叶子文本避免重复
+          if (el.children && el.children.length === 0 && el.textContent) out += el.textContent.trim() + "\n";
+        }
+        return out;
+      });
+      text += t + "\n";
+    } catch { /* frame detach */ }
+  }
+  return text;
+}
+
+/**
+ * 等视频号上传完成 — 12s 就点保存会存到空草稿。
+ * 等"上传中/上传 xx%/处理中"消失 且 出现完成信号(时长/更换/删除/上传完成)。
+ */
+async function waitChannelsUploadComplete(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let sawUploading = false;
+  while (Date.now() < deadline) {
+    const txt = await deepBodyText(page);
+    const uploadingNow = /上传中|上传\s*\d+\s*%|处理中|转码中|视频上传中/.test(txt);
+    if (uploadingNow) sawUploading = true;
+    // 注意: '预览/发表时间'是发表页静态文案, 不能当完成标记(会秒判完成→存空草稿)
+    const readyMarker = /上传完成|更换视频|删除视频|重新上传/.test(txt);
+    // 见过上传中且现在不在上传 → 完成; 或出现明确完成标记
+    if ((sawUploading && !uploadingNow) || readyMarker) {
+      logger.info({ sawUploading, readyMarker }, "视频号: 判定上传完成");
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  logger.warn("视频号: 等上传完成超时");
+  return false;
+}
+
+async function clickButtonByText(page: Page, texts: string[], timeoutMs: number): Promise<boolean> {
+  // el.click() 只派发孤立 click 事件, channels(Vue) 的按钮监听 pointer/mouse 序列, 经常"点了没反应"。
+  // 主 frame: 拿按钮中心坐标 → page.mouse 真实点击 (trusted event, 等价人手)。
+  // 子 frame: 坐标系不通, 退而求其次派发完整 pointerdown→mousedown→pointerup→mouseup→click 序列。
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      const isMain = frame === page.mainFrame();
+      try {
+        const hit = await frame.evaluate((labels: string[], useCoords: boolean) => {
+          const doc = (globalThis as any).document;
+          const win = (globalThis as any).window;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          for (const b of deep(doc)) {
+            const tag = b.tagName;
+            if (tag !== "BUTTON" && tag !== "DIV" && tag !== "SPAN" && tag !== "A") continue;
+            const t = (b.textContent || "").trim();
+            if (!labels.some((l) => t === l)) continue;
+            const el = (b.closest && b.closest("button")) || b;
+            const disabled = el.disabled || el.getAttribute?.("aria-disabled") === "true" ||
+              (el.className || "").toString().includes("disabled");
+            if (disabled) return { found: false }; // 命中但禁用(转码中) → 等下一轮
+            el.scrollIntoView({ block: "center", inline: "center" });
+            const r = el.getBoundingClientRect();
+            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+            if (useCoords) return { found: true, x: cx, y: cy };
+            // 子 frame: 派发完整事件序列 (composed:true 穿 shadow boundary)
+            const opts = { bubbles: true, cancelable: true, composed: true, view: win, button: 0, clientX: cx, clientY: cy };
+            for (const [type, Ctor] of [
+              ["pointerdown", win.PointerEvent ?? win.MouseEvent], ["mousedown", win.MouseEvent],
+              ["pointerup", win.PointerEvent ?? win.MouseEvent], ["mouseup", win.MouseEvent], ["click", win.MouseEvent],
+            ] as any) { try { el.dispatchEvent(new Ctor(type, opts)); } catch { /* noop */ } }
+            return { found: true };
+          }
+          return { found: false };
+        }, texts, isMain);
+        if (hit?.found) {
+          if (isMain && typeof (hit as any).x === "number") {
+            await page.mouse.click((hit as any).x, (hit as any).y, { delay: 60 });
+          }
+          return true;
+        }
+      } catch { /* frame detach */ }
+    }
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  return false;
+}
+
+/** 深度找编辑器 (穿透 shadow DOM + frame): contenteditable / textarea / 描述输入框, 轮询 timeoutMs */
+async function deepFindEditor(page: Page, timeoutMs: number): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      try {
+        const h = await frame.evaluateHandle(() => {
+          const doc = (globalThis as any).document;
+          function* deep(root: any): any {
+            const els = root.querySelectorAll("*");
+            for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+          }
+          for (const el of deep(doc)) {
+            try {
+              const r = el.getBoundingClientRect();
+              if (r.width < 40 || r.height < 12) continue;
+            } catch { continue; }
+            if (el.getAttribute && el.getAttribute("contenteditable") === "true") return el;
+            if (el.tagName === "TEXTAREA") return el;
+            const ph = el.getAttribute && (el.getAttribute("placeholder") || "");
+            if (el.tagName === "INPUT" && /描述|标题|说点什么/.test(ph)) return el;
+          }
+          return null;
+        });
+        const el = h.asElement();
+        if (el) return el;
+        await h.dispose();
+      } catch { /* frame detach */ }
+    }
+    await new Promise((r) => setTimeout(r, 2_500));
+  }
+  return null;
+}
+
+/** 视频号短标题: 6-16字硬限制, 超限保存被拦('标题超过16字限制'实测踩坑)。从文案派生合规短标题。 */
+function deriveShortTitle(caption: string): string {
+  const noTags = caption.replace(/#[^\s#]+/g, " "); // 去话题标签
+  const clean = Array.from(noTags.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "")).slice(0, 16).join("");
+  if (clean.length >= 6) return clean;
+  return (clean + "精选学术内容分享").slice(0, 16);
+}
+
+/**
+ * 改写视频号"短标题"输入框 (描述填入后平台会自动带出, 常超16字限制)。
+ * 深度遍历找 placeholder/maxlength 匹配的 input, 用原生 setter 赋值 + input/change 事件 (Vue 才感知)。
+ */
+async function setChannelsShortTitle(page: Page, title: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      const ok = await frame.evaluate((val: string) => {
+        const doc = (globalThis as any).document;
+        const win = (globalThis as any).window;
+        function* deep(root: any): any {
+          const els = root.querySelectorAll("*");
+          for (const el of els) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+        }
+        for (const el of deep(doc)) {
+          if (el.tagName !== "INPUT") continue;
+          const ph = (el.getAttribute("placeholder") || "");
+          const ml = el.getAttribute("maxlength");
+          if (!/短标题|标题/.test(ph) && ml !== "16") continue;
+          const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")?.set;
+          setter ? setter.call(el, val) : (el.value = val);
+          el.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
+          el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
+          return true;
+        }
+        return false;
+      }, title);
+      if (ok) return true;
+    } catch { /* frame detach */ }
+  }
+  return false;
+}
+
+/**
+ * 终审: 打开草稿箱列表页, 用文案前缀实查草稿是否真的存在。
+ * 页面 toast/跳转都可能骗人(导航栏常驻'草稿箱'文案), 列表里有这条才算数。
+ */
+async function verifyChannelsDraftExists(page: Page, caption: string): Promise<boolean> {
+  const sig = caption.replace(/\s+/g, "").slice(0, 12); // 文案前缀做指纹
+  const candidates = [
+    "https://channels.weixin.qq.com/platform/post/list?currentTab=draft",
+    "https://channels.weixin.qq.com/platform/post/list",
+  ];
+  for (let attempt = 0; attempt < 3; attempt++) {
+  if (attempt > 0) await new Promise((r) => setTimeout(r, 8_000)); // 草稿落列表可能延迟
+  for (const url of candidates) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    } catch { continue; }
+    await new Promise((r) => setTimeout(r, 5_000)); // 列表异步加载
+    const txt = (await deepBodyText(page)).replace(/\s+/g, "");
+    if (sig && txt.includes(sig)) return true; // 文案命中 = 草稿真的在
+    const m = txt.match(/草稿箱\((\d+)\)/);
+    if (m && Number(m[1]) > 0) {
+      logger.info({ draftCount: m[1] }, "视频号: 草稿箱计数>0 (文案未匹配到, 可能被平台截断)");
+      return true;
+    }
+    logger.info({ attempt, url: page.url(), draftCount: m ? m[1] : "未见计数" }, "视频号: 草稿箱实查未命中");
+  }
+  }
+  return false;
+}
+
+/** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
+export async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadParams): Promise<void> {
+  await page.goto("https://channels.weixin.qq.com/platform/post/create", {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await new Promise((r) => setTimeout(r, 3_000));
+  if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+
+  // 1. 选文件 — fileChooser 通吃自定义上传组件
+  await uploadVideoFile(page, videoPath);
+  logger.info("视频号推草稿: 视频文件已提交");
+
+  // 2. 等描述输入框 (穿透 shadow DOM, channels 整页在 web component 内)
+  const editor = await deepFindEditor(page, 90_000);
+  if (!editor) throw new Error("等不到描述编辑器 (上传失败或页面改版, 见失败截图)");
+
+  // 3. 填描述
+  await editor.click();
+  await page.keyboard.type(caption, { delay: 30 });
+  await new Promise((r) => setTimeout(r, 1_500));
+
+  // 4. 等视频真正上传完成 (否则点保存只存到空草稿)
+  const uploadDone = await waitChannelsUploadComplete(page, 240_000);
+  if (!uploadDone) throw new Error("视频上传未完成 (超时, 视频可能过大或网络慢)");
+
+  // 4b. 改写短标题为合规长度 (平台自动带出的常超16字 → 保存被拦)
+  // 短标题用钩子标题派生 (本来就是标题, 截16字也通顺), 不再用整段文案机械截断
+  const shortTitle = deriveShortTitle(title || caption);
+  const titleSet = await setChannelsShortTitle(page, shortTitle);
+  logger.info({ shortTitle, titleSet }, "视频号: 短标题已改写");
+  await new Promise((r) => setTimeout(r, 1_000));
+
+  // 5. 点"保存草稿" (精确文本, 避免误点其它"保存")
+  const clicked = await clickButtonByText(page, ["保存草稿", "保存至草稿箱", "存草稿"], 60_000);
+  if (!clicked) throw new Error("找不到或点不动「保存草稿」按钮 (页面改版, 见失败截图)");
+  logger.info("视频号推草稿: 已点击保存草稿, 验证落库中");
+  // 点击后现场截图 (无论成败都留, 失败路径的截图曾静默丢失过)
+  try {
+    await new Promise((r) => setTimeout(r, 2_500));
+    await mkdir(FAIL_SHOT_DIR, { recursive: true });
+    const shot = resolve(FAIL_SHOT_DIR, `draft-push-aftersave-${Date.now()}.png`);
+    await page.screenshot({ path: shot as any, fullPage: true });
+    logger.info({ shot }, "视频号: 点保存后现场截图");
+  } catch (e) { logger.warn({ err: e instanceof Error ? e.message : e }, "视频号: 点保存后截图失败"); }
+
+  // 6a. 页内信号 (只看 toast/跳转; '草稿箱'是左侧导航静态文案, 不能算成功证据)
+  await (async () => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (page.url().includes("login")) throw new Error("LOGIN_EXPIRED");
+      if (!/post\/create/.test(page.url())) return; // 跳走, 进入实查
+      const txt = await deepBodyText(page);
+      if (/保存成功|已保存|保存到草稿/.test(txt)) return;
+      const blocked = txt.match(/[^\n]*(?:超过\s*\d+\s*字|字数超|不能为空|不符合要求|保存草稿失败|保存失败)[^\n]*/);
+      if (blocked) throw new Error(`保存被平台拦截: ${blocked[0].trim().slice(0, 60)}`);
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+  })();
+
+  // 6b. 终审: 打开草稿箱列表页, 按文案实查那条草稿在不在 — 唯一可信的成功证据
+  const saved = await verifyChannelsDraftExists(page, caption);
+  if (!saved) throw new Error("保存草稿未生效 (草稿箱里没有该视频 — 可能上传未完成就被拦, 见失败截图)");
+  logger.info({ url: page.url() }, "视频号推草稿: 保存草稿已确认 (草稿箱实查命中)");
+}
+
+export const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
+  douyin: douyinPushDraft,
+  wechat_video: wechatVideoPushDraft,
+};

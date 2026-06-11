@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    // typeRoots/types: 未跑 pnpm install 时本包没有自己的 node_modules,
+    // @types/node 从 server 借 (同版本 ^22); install 后优先用本包的。
+    "typeRoots": ["./node_modules/@types", "../server/node_modules/@types", "../../node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*"]
+}
