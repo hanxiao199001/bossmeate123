@@ -15,6 +15,7 @@ import KpiStrip, { type KpiItem } from "../components/dashboard/KpiStrip";
 import PrimaryActionBar from "../components/dashboard/PrimaryActionBar";
 import RecommendationPanel, { type RecommendationPreview } from "../components/dashboard/RecommendationPanel";
 import LeadsPanel, { type LeadPreview } from "../components/dashboard/LeadsPanel";
+import { SALES_RADAR_ENABLED } from "../utils/featureFlags";
 
 // ============ 类型定义 ============
 
@@ -57,9 +58,11 @@ export default function DashboardPage() {
       .then((r) => { const h = (r.data as any)?.todayHero; if (h) setHero(h); })
       .catch(() => {});
 
-    api.get<SalesStats>("/sales/stats")
-      .then((r) => { if (r.data) setSalesStats(r.data as SalesStats); })
-      .catch(() => {});
+    if (SALES_RADAR_ENABLED) {
+      api.get<SalesStats>("/sales/stats")
+        .then((r) => { if (r.data) setSalesStats(r.data as SalesStats); })
+        .catch(() => {});
+    }
 
     api.get<{ data?: { items?: any[] } } | { items?: any[] }>("/content/recommendations?limit=20")
       .then((r) => {
@@ -75,6 +78,7 @@ export default function DashboardPage() {
       .catch(() => {})
       .finally(() => setRecLoading(false));
 
+    if (!SALES_RADAR_ENABLED) { setLeadLoading(false); return; }
     api.get<{ data?: { items?: SalesLead[]; total?: number } } | { items?: SalesLead[]; total?: number }>("/sales/leads?pageSize=20")
       .then((r) => {
         const items: SalesLead[] = (r as any).data?.items ?? (r as any).items ?? [];
@@ -103,6 +107,22 @@ export default function DashboardPage() {
   const monthConverted = salesStats?.monthConverted ?? 0;
   const isEmpty = todayGenerated === 0 && todayPublished === 0 && recItems.length === 0 && leadItems.length === 0;
 
+  const salesKpis: KpiItem[] = SALES_RADAR_ENABLED ? [
+    {
+      key: "warm",
+      value: weekWarm,
+      label: "活跃热线索",
+      hint: "管线里的热客户",
+      to: "/sales-radar",
+    },
+    {
+      key: "converted",
+      value: monthConverted,
+      label: "本月已转化",
+      hint: "已成交客户数",
+    },
+  ] : [];
+
   const kpis: KpiItem[] = [
     {
       key: "today",
@@ -118,19 +138,7 @@ export default function DashboardPage() {
       hint: "推荐 → 内容工坊",
       to: "/workbench",
     },
-    {
-      key: "warm",
-      value: weekWarm,
-      label: "活跃热线索",
-      hint: "管线里的热客户",
-      to: "/sales-radar",
-    },
-    {
-      key: "converted",
-      value: monthConverted,
-      label: "本月已转化",
-      hint: "已成交客户数",
-    },
+    ...salesKpis,
   ];
 
   return (
@@ -141,9 +149,9 @@ export default function DashboardPage() {
 
       <PrimaryActionBar mode={isEmpty ? "empty" : "normal"} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className={`grid grid-cols-1 gap-4 ${SALES_RADAR_ENABLED ? "lg:grid-cols-2" : ""}`}>
         <RecommendationPanel items={recItems} totalCount={recTotal} loading={recLoading} />
-        <LeadsPanel items={leadItems} totalCount={leadTotal} loading={leadLoading} />
+        {SALES_RADAR_ENABLED && <LeadsPanel items={leadItems} totalCount={leadTotal} loading={leadLoading} />}
       </div>
 
       {/* PR Q.7 B 方案（5-7 user 拍板）：AI 内容工厂 widget 隐藏。FactoryHero 函数定义保留, 不渲染。 */}

@@ -4,6 +4,7 @@
  */
 import { Link, useLocation } from "react-router-dom";
 import { useAuthStore } from "../../hooks/useAuthStore";
+import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
 
 interface NavItem {
   to: string;
@@ -42,6 +43,8 @@ export default function Sidebar() {
   const role = user?.role;
   const isAdmin = role === "owner" || role === "admin";
   const secondaryNav = isAdmin ? [...SECONDARY_NAV, ...ADMIN_NAV] : SECONDARY_NAV;
+  // 6-11 销售板块藏而不删(见 utils/featureFlags.ts)
+  const primaryNav = SALES_RADAR_ENABLED ? PRIMARY_NAV : PRIMARY_NAV.filter((i) => i.to !== "/sales-radar");
 
   return (
     <aside className="fixed top-0 left-0 z-30 h-screen w-40 bg-white border-r border-gray-200 flex flex-col">
@@ -56,7 +59,7 @@ export default function Sidebar() {
       {/* nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2">
         <ul className="space-y-0.5">
-          {PRIMARY_NAV.map((item) => {
+          {primaryNav.map((item) => {
             const active = isActive(pathname, item);
             return (
               <li key={item.to}>

@@ -5,6 +5,7 @@
  *  empty:  "今天还没开始, 一键启动" 单大按钮
  */
 import { Link } from "react-router-dom";
+import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
 
 export interface PrimaryActionBarProps {
   mode: "normal" | "empty";
@@ -41,7 +42,7 @@ export default function PrimaryActionBar({ mode }: PrimaryActionBarProps) {
         </span>
         <span className="text-xs opacity-80">采用推荐 · 一键发布</span>
       </Link>
-      <Link
+      {SALES_RADAR_ENABLED && <Link
         to="/sales-radar"
         className="flex-1 px-5 py-3 bg-rose-600 text-white text-sm font-medium rounded-xl hover:bg-rose-700 active:scale-95 transition-all flex items-center justify-between"
       >
@@ -50,7 +51,7 @@ export default function PrimaryActionBar({ mode }: PrimaryActionBarProps) {
           <span>跟进销售线索</span>
         </span>
         <span className="text-xs opacity-80">热线索优先</span>
-      </Link>
+      </Link>}
       {/* 6-11 老韩拍板撤掉首页视频快捷按钮 — 图转视频入口收敛到工坊「生成视频」弹窗的图转视频选项卡 */}
     </section>
   );

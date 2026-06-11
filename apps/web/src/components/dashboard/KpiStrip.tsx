@@ -22,8 +22,9 @@ export interface KpiStripProps {
 }
 
 export default function KpiStrip({ items }: KpiStripProps) {
+  const mdCols = items.length >= 4 ? "md:grid-cols-4" : items.length === 3 ? "md:grid-cols-3" : "md:grid-cols-2";
   return (
-    <section className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <section className={`grid grid-cols-2 ${mdCols} gap-3 mb-6`}>
       {items.map((it) => {
         const inner = (
           <div className={`bg-white rounded-2xl border p-4 transition-all ${
