@@ -66,7 +66,7 @@ interface UploadParams {
 }
 
 /** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
-async function douyinPushDraft({ page: initialPage, videoPath, caption }: UploadParams): Promise<void> {
+async function douyinPushDraft({ page: initialPage, videoPath, caption, title }: UploadParams): Promise<void> {
   let page = initialPage;
   await page.goto("https://creator.douyin.com/creator-micro/content/upload", {
     waitUntil: "domcontentloaded", // 创作页长连接, networkidle2 永不触发
@@ -92,14 +92,44 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption }: Upload
   const editor = await deepFindEditor(page, 90_000);
   if (!editor) throw new Error("等不到文案编辑器 (上传可能失败或页面改版, 见失败截图)");
 
-  // 3. 填文案
+  // 3. 填文案 — 6-11 Agent真机修复回灌: 抖音编辑页 = 标题框(30字硬限) + 简介框(1000字)。
+  // 旧逻辑把整段 caption 打进第一个编辑器(标题框)被截 30 字。改: 标题框填短标题, 简介框尽力填全文案。
+  const douyinTitle = (title && title.trim() ? title.trim() : caption).slice(0, 30);
   await editor.click();
-  await page.keyboard.type(caption, { delay: 30 });
+  await page.keyboard.type(douyinTitle, { delay: 30 });
+  await new Promise((r) => setTimeout(r, 800));
+  try {
+    const briefHandle = await page.evaluateHandle(() => {
+      const doc = (globalThis as any).document;
+      const out: any[] = [];
+      const walk = (root: any) => {
+        if (!root) return;
+        for (const el of root.querySelectorAll?.("*") ?? []) {
+          const ph = (el.getAttribute?.("placeholder") ?? "") + (el.getAttribute?.("data-placeholder") ?? "");
+          const cls = el.className?.toString?.() ?? "";
+          if (/作品简介|添加作品简介/.test(ph) || (/editor/.test(cls) && /简介/.test(el.parentElement?.innerText?.slice(0, 80) ?? ""))) out.push(el);
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+      };
+      walk(doc);
+      return out[0] ?? null;
+    });
+    const briefEl = briefHandle.asElement();
+    if (briefEl) {
+      await (briefEl as any).click();
+      await page.keyboard.type(caption.slice(0, 990), { delay: 20 });
+      logger.info("抖音推草稿: 简介已填入");
+    } else {
+      logger.warn("抖音推草稿: 未找到简介框, 跳过(标题已填, 草稿可人工补简介)");
+    }
+  } catch (e) {
+    logger.warn({ err: e instanceof Error ? e.message : e }, "抖音推草稿: 填简介异常, 跳过");
+  }
   await new Promise((r) => setTimeout(r, 1_500));
 
-  // 4. 等视频转码完成 (存草稿按钮可点). 轮询找"存草稿"按钮并等它非 disabled
-  const clicked = await clickButtonByText(page, ["存草稿", "保存草稿"], 180_000);
-  if (!clicked) throw new Error("找不到或点不动「存草稿」按钮 (转码超时或页面改版)");
+  // 4. 等视频转码完成. 6-11 真机实锤: 当前版本按钮叫「暂存离开」(不再是"存草稿")
+  const clicked = await clickButtonByText(page, ["暂存离开", "存草稿", "保存草稿", "暂存"], 180_000);
+  if (!clicked) throw new Error("找不到或点不动「暂存离开/存草稿」按钮 (转码超时或页面改版)");
 
   // 5. 确认结果: 跳转到内容管理 或 出现成功提示
   await new Promise((r) => setTimeout(r, 5_000));
@@ -423,8 +453,12 @@ async function setChannelsShortTitle(page: Page, title: string): Promise<boolean
  * 终审: 打开草稿箱列表页, 用文案前缀实查草稿是否真的存在。
  * 页面 toast/跳转都可能骗人(导航栏常驻'草稿箱'文案), 列表里有这条才算数。
  */
-async function verifyChannelsDraftExists(page: Page, caption: string): Promise<boolean> {
-  const sig = caption.replace(/\s+/g, "").slice(0, 12); // 文案前缀做指纹
+async function verifyChannelsDraftExists(page: Page, caption: string, shortTitle?: string): Promise<boolean> {
+  // 6-11: 描述可能为空, 文案前缀 或 短标题前缀 命中皆算
+  const sigs = [caption, shortTitle ?? ""]
+    .map((t) => t.replace(/\s+/g, "").slice(0, 12))
+    .filter((t) => t.length >= 4);
+  const sig = sigs[0] ?? "";
   const candidates = [
     "https://channels.weixin.qq.com/platform/post/list?currentTab=draft",
     "https://channels.weixin.qq.com/platform/post/list",
@@ -437,7 +471,7 @@ async function verifyChannelsDraftExists(page: Page, caption: string): Promise<b
     } catch { continue; }
     await new Promise((r) => setTimeout(r, 5_000)); // 列表异步加载
     const txt = (await deepBodyText(page)).replace(/\s+/g, "");
-    if (sig && txt.includes(sig)) return true; // 文案命中 = 草稿真的在
+    if (sigs.some((g) => txt.includes(g))) return true; // 文案或短标题命中 = 草稿真的在
     const m = txt.match(/草稿箱\((\d+)\)/);
     if (m && Number(m[1]) > 0) {
       logger.info({ draftCount: m[1] }, "视频号: 草稿箱计数>0 (文案未匹配到, 可能被平台截断)");
@@ -466,9 +500,25 @@ async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadP
   const editor = await deepFindEditor(page, 90_000);
   if (!editor) throw new Error("等不到描述编辑器 (上传失败或页面改版, 见失败截图)");
 
-  // 3. 填描述
-  await editor.click();
-  await page.keyboard.type(caption, { delay: 30 });
+  // 3. 填描述 — 6-11 Agent真机修复回灌: 首次 click 偶发未聚焦文案打空; 填完读回验证, 不符重试 3 次。
+  const selectAllKey = process.platform === "darwin" ? "Meta" : "Control";
+  let descFilled = false;
+  for (let i = 0; i < 3 && !descFilled; i++) {
+    try {
+      await editor.click();
+      await new Promise((r) => setTimeout(r, 600));
+      await page.keyboard.down(selectAllKey); await page.keyboard.press("KeyA"); await page.keyboard.up(selectAllKey);
+      await page.keyboard.press("Backspace");
+      await page.keyboard.type(caption, { delay: 30 });
+      await new Promise((r) => setTimeout(r, 1_200));
+      const got: string = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
+      descFilled = got.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
+      if (!descFilled) logger.warn({ attempt: i + 1, got: got.slice(0, 40) }, "视频号: 描述读回不匹配, 重试");
+    } catch (e) {
+      logger.warn({ attempt: i + 1, err: e instanceof Error ? e.message : e }, "视频号: 填描述异常, 重试");
+    }
+  }
+  if (!descFilled) logger.warn("视频号: 描述 3 次未填上, 继续保存(草稿可人工补描述)");
   await new Promise((r) => setTimeout(r, 1_500));
 
   // 4. 等视频真正上传完成 (否则点保存只存到空草稿)
@@ -510,7 +560,7 @@ async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadP
   })();
 
   // 6b. 终审: 打开草稿箱列表页, 按文案实查那条草稿在不在 — 唯一可信的成功证据
-  const saved = await verifyChannelsDraftExists(page, caption);
+  const saved = await verifyChannelsDraftExists(page, caption, shortTitle);
   if (!saved) throw new Error("保存草稿未生效 (草稿箱里没有该视频 — 可能上传未完成就被拦, 见失败截图)");
   logger.info({ url: page.url() }, "视频号推草稿: 保存草稿已确认 (草稿箱实查命中)");
 }
