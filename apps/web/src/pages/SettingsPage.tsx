@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import ContactMetaSection from "../components/ContactMetaSection";
 import PageHeader from "../components/ui/PageHeader";
+import { toast } from "../components/Toast";
+import { IconMonitor } from "../components/ui/Icons";
 
 interface WechatConfig {
   appId: string;
@@ -12,6 +14,26 @@ interface WechatConfig {
   hasToken: boolean;
   tokenExpiresAt: string | null;
   updatedAt: string;
+}
+
+// Agent-3: 本地发布 Agent 设备（GET /agent-admin/devices）
+interface AgentDevice {
+  id: string;
+  name: string;
+  status: string; // active | disabled(已吊销)
+  lastSeenAt: string | null;
+  version: string | null;
+  online: boolean;
+}
+
+function formatLastSeen(lastSeenAt: string | null): string {
+  if (!lastSeenAt) return "从未上线";
+  const min = Math.floor((Date.now() - new Date(lastSeenAt).getTime()) / 60000);
+  if (min < 1) return "最后心跳刚刚";
+  if (min < 60) return `最后心跳 ${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `最后心跳 ${hr} 小时前`;
+  return `最后心跳 ${Math.floor(hr / 24)} 天前`;
 }
 
 // T4-3-5: 模板偏好统计（来自 /content-engine/template-preferences）
@@ -74,6 +96,65 @@ export default function SettingsPage() {
   const [templatePrefs, setTemplatePrefs] = useState<TemplatePreferenceItem[]>([]);
   const [templateTotalSelections, setTemplateTotalSelections] = useState(0);
   const [loadingTemplatePrefs, setLoadingTemplatePrefs] = useState(true);
+
+  // Agent-3: 本地发布 Agent — 配对码 + 设备列表
+  const [agentDevices, setAgentDevices] = useState<AgentDevice[]>([]);
+  const [agentLoading, setAgentLoading] = useState(true);
+  const [pairing, setPairing] = useState<{ code: string; expiresInSec: number } | null>(null);
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  const loadAgentDevices = async () => {
+    try {
+      const res = await api.get<{ devices: AgentDevice[] }>("/agent-admin/devices");
+      setAgentDevices(res.data?.devices || []);
+    } catch {
+      /* 错误已由 api 统一 toast */
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  // 在线判定窗口 90s, 30s 轮询一次保持状态新鲜
+  useEffect(() => {
+    loadAgentDevices();
+    const timer = setInterval(loadAgentDevices, 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleGeneratePairingCode = async () => {
+    setPairingLoading(true);
+    try {
+      const res = await api.post<{ code: string; expiresInSec: number }>("/agent-admin/pairing-code", {});
+      if (res.data) setPairing(res.data);
+    } catch {
+      /* 错误已由 api 统一 toast */
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  // 吊销: 二次点击确认 (toast 提醒 + 按钮变「确认吊销」, 4s 内未确认自动复原)
+  const handleRevokeDevice = async (deviceId: string) => {
+    if (revokeConfirmId !== deviceId) {
+      setRevokeConfirmId(deviceId);
+      toast.warning("再点一次「确认吊销」— 吊销后该设备 Token 立即失效");
+      setTimeout(() => setRevokeConfirmId((cur) => (cur === deviceId ? null : cur)), 4000);
+      return;
+    }
+    setRevokeConfirmId(null);
+    setRevokingId(deviceId);
+    try {
+      await api.delete(`/agent-admin/devices/${deviceId}`);
+      toast.success("设备已吊销");
+      await loadAgentDevices();
+    } catch {
+      /* 错误已由 api 统一 toast */
+    } finally {
+      setRevokingId(null);
+    }
+  };
 
   // 加载现有配置
   useEffect(() => {
@@ -255,6 +336,98 @@ export default function SettingsPage() {
               </div>
             </div>
           </Link>
+        </div>
+
+        {/* Agent-3: 本地发布 Agent — 配对码 + 设备管理 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
+              <IconMonitor size={20} />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">本地发布 Agent</h2>
+              <p className="text-sm text-gray-500">
+                在你或客户的电脑上运行 BossMate Agent, 用本机浏览器自动发布到视频号/抖音(登录态保存在本机, 更稳更合规)
+              </p>
+            </div>
+          </div>
+
+          {/* 配对码 */}
+          <div className="mb-5">
+            <button
+              onClick={handleGeneratePairingCode}
+              disabled={pairingLoading}
+              className={`px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
+                pairingLoading ? "bg-gray-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700 active:scale-95"
+              }`}
+            >
+              {pairingLoading ? "生成中…" : pairing ? "重新生成配对码" : "生成配对码"}
+            </button>
+            {pairing && (
+              <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 p-4">
+                <div className="font-mono text-3xl font-bold tracking-[0.35em] text-indigo-600 select-all">
+                  {pairing.code}
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  {Math.round(pairing.expiresInSec / 60)} 分钟内有效, 在客户电脑运行:
+                </p>
+                <code className="mt-1 inline-block rounded bg-slate-900 text-slate-100 text-xs font-mono px-2.5 py-1.5 select-all">
+                  bossmate-agent pair {window.location.origin} {pairing.code}
+                </code>
+              </div>
+            )}
+          </div>
+
+          {/* 设备列表 */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-gray-800">已配对设备</h3>
+              <button onClick={loadAgentDevices} className="text-xs text-indigo-600 hover:underline">
+                刷新
+              </button>
+            </div>
+            {agentLoading ? (
+              <div className="text-sm text-gray-500">加载中…</div>
+            ) : agentDevices.length === 0 ? (
+              <div className="text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded-lg p-4">
+                还没有设备, 生成配对码开始接入
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+                {agentDevices.map((d) => {
+                  const revoked = d.status === "disabled";
+                  const dot = revoked ? "bg-rose-500" : d.online ? "bg-emerald-500" : "bg-slate-300";
+                  const statusText = revoked ? "已吊销" : d.online ? "在线" : `离线 · ${formatLastSeen(d.lastSeenAt)}`;
+                  const statusColor = revoked ? "text-rose-600" : d.online ? "text-emerald-600" : "text-slate-500";
+                  return (
+                    <div key={d.id} className="flex items-center gap-3 px-3 py-2.5">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">{d.name || "未命名设备"}</div>
+                        <div className="text-xs text-gray-400">
+                          {d.version ? `v${d.version.replace(/^v/, "")}` : "版本未知"} ·{" "}
+                          <span className={statusColor}>{statusText}</span>
+                        </div>
+                      </div>
+                      {!revoked && (
+                        <button
+                          onClick={() => handleRevokeDevice(d.id)}
+                          disabled={revokingId === d.id}
+                          className={`shrink-0 px-3 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                            revokeConfirmId === d.id
+                              ? "border-rose-500 bg-rose-500 text-white hover:bg-rose-600"
+                              : "border-rose-200 text-rose-600 hover:bg-rose-50"
+                          } ${revokingId === d.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                        >
+                          {revokingId === d.id ? "吊销中…" : revokeConfirmId === d.id ? "确认吊销" : "吊销"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* PR-O: 每日内容配置(按类型) */}

@@ -76,7 +76,7 @@
 - **Agent 形态**：Electron 托盘应用（或 Node 单文件 + pkg）。内嵌 Playwright 驱动有头 Chrome，每账号一个持久 user-data-dir。
 - **登录**：首次客户本机扫码（可信环境秒过）；登录态留客户本机不上传（规避凭证托管责任）。
 - **服务器侧改造**：`publish_tasks` 表（pending/claimed/done/failed）+ 领任务/回报两个路由。预估 1-2 周 MVP。
-- **何时启动**：见第 0 节触发条件。未触发前不开工。
+- **启动状态(6-11 更新)**: 老韩拍板**提前开建**(服务企业客户)。MVP 已落地: 服务端任务框架(PR-A1 4520fc7: agent_devices/agent_publish_tasks/配对/原子领单/视频下载/回报) + packages/agent CLI(PR-A2 0f13bc2: pair/login/status/run, 双平台推送脚本整段移植) + 前端(设置页设备管理+详情页"发布通道: 服务器直发/本地 Agent"切换)。**第一台 Agent 装老韩 Mac**: 家用IP+有头浏览器, 抖音机房风控问题当场消失, A 轨审批期间即有全自动。安装说明见 packages/agent/README.md。Electron 托盘壳=二期。
 
 ## 5. 排除项与决策记录
 

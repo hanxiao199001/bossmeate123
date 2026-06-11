@@ -95,6 +95,18 @@ interface PublishResult {
   draftUrl?: string;
   mediaId?: string;
   error?: string;
+  /** Agent-3: 本地 Agent 任务尚未到终态 (pending/claimed), 渲染为进行中而非失败 */
+  pending?: boolean;
+}
+
+// Agent-3: GET /agent-admin/tasks 返回的任务 (status: pending|claimed|success|failed|login_expired|canceled)
+interface AgentTask {
+  id: string;
+  accountId: string;
+  accountName: string;
+  platform: string;
+  status: string;
+  error?: string | null;
 }
 
 // ===== 常量 =====
@@ -175,6 +187,8 @@ export default function ContentDetailPage() {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   // 6-11 抖音合规「是否同步」: 选中抖音账号时显示明确告知+可取消勾选(使用规范硬要求)
   const [syncToDouyin, setSyncToDouyin] = useState(true);
+  // Agent-3: 发布通道 — server=服务器直发(浏览器推草稿箱) / agent=派发给本地 Agent(客户电脑本机浏览器)
+  const [publishChannel, setPublishChannel] = useState<"server" | "agent">("server");
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
 
   // PR #264/#266: 抖音半自动发布助手 (多号差异化文案 + 复制 + 发布勾选)
@@ -474,9 +488,54 @@ export default function ContentDetailPage() {
       const apiAccts = selected.filter((a) => !SEMI.includes(a.platform));
       const collected: PublishResult[] = [];
 
+      // Agent-3: 「本地 Agent」通道 — SEMI 账号改派发给本地 Agent (POST /agent-admin/dispatch),
+      // 其余平台(公众号等)不受影响照旧走 /publish; syncToDouyin 剔除在 effectiveIds 已生效。
+      let agentPendingCount = 0;
+      let agentTimedOut = false;
+      if (publishChannel === "agent" && draftAccts.length > 0) {
+        const toResult = (t: AgentTask): PublishResult => {
+          const base = { accountId: t.accountId, accountName: t.accountName, platform: t.platform };
+          if (t.status === "success")
+            return { ...base, success: true, mode: "draft_only" as const, message: "已进草稿箱（经本地 Agent）— 到平台后台确认发布" };
+          if (t.status === "failed") return { ...base, success: false, error: t.error || "Agent 发布失败" };
+          if (t.status === "login_expired")
+            return { ...base, success: false, error: "Agent 上该账号未登录 — 在 Agent 电脑运行 bossmate-agent login" };
+          if (t.status === "canceled") return { ...base, success: false, error: "任务已取消" };
+          return { ...base, success: false, pending: true, message: t.status === "claimed" ? "Agent 执行中…" : "等待 Agent 领取…" };
+        };
+        const dr = await api.post<{ tasks: AgentTask[] }>("/agent-admin/dispatch", {
+          contentId: id,
+          accountIds: draftAccts.map((a) => a.id),
+        });
+        const dispatched = dr.data?.tasks || [];
+        const taskIds = new Set(dispatched.map((t) => t.id));
+        const terminal = new Set(["success", "failed", "login_expired", "canceled"]);
+        let snapshot = dispatched;
+        setPublishMsg(`已派发 ${dispatched.length} 个任务给本地 Agent, 等待领取…（Agent 需已配对并在线）`);
+        setPublishResults([...collected, ...snapshot.map(toResult)]);
+        // 轮询 GET /agent-admin/tasks?contentId= : 5s 间隔 × 36 次 = 最多 3 分钟, 全部终态即提前停
+        let allDone = snapshot.length > 0 && snapshot.every((t) => terminal.has(t.status));
+        for (let i = 0; i < 36 && !allDone; i++) {
+          await new Promise((res) => setTimeout(res, 5000));
+          const tr = await api.get<{ tasks: AgentTask[] }>(`/agent-admin/tasks?contentId=${id}`);
+          const mine = (tr.data?.tasks || []).filter((t) => taskIds.has(t.id));
+          if (mine.length > 0) snapshot = mine;
+          const doneCount = snapshot.filter((t) => terminal.has(t.status)).length;
+          setPublishMsg(`本地 Agent 发布中… ${doneCount}/${snapshot.length}（视频下载+上传需数分钟，请勿关闭）`);
+          setPublishResults([...collected, ...snapshot.map(toResult)]);
+          allDone = snapshot.length > 0 && snapshot.every((t) => terminal.has(t.status));
+        }
+        collected.push(...snapshot.map(toResult));
+        agentPendingCount = snapshot.filter((t) => !terminal.has(t.status)).length;
+        agentTimedOut = !allDone && agentPendingCount > 0;
+        if (collected.some((r) => r.success)) setMatrixRefreshNonce((n) => n + 1);
+      }
+      // Agent 通道下 SEMI 账号已派发, 不再走服务器推草稿
+      const serverDraftAccts = publishChannel === "agent" ? [] : draftAccts;
+
       // 1) 抖音/视频号 → 推草稿箱
-      const loggedIn = draftAccts.filter((a) => a.loginStatus === "logged_in");
-      for (const a of draftAccts.filter((a) => a.loginStatus !== "logged_in")) {
+      const loggedIn = serverDraftAccts.filter((a) => a.loginStatus === "logged_in");
+      for (const a of serverDraftAccts.filter((a) => a.loginStatus !== "logged_in")) {
         collected.push({ accountId: a.id, accountName: a.accountName, platform: a.platform, success: false, error: "未扫码登录 — 请到账号管理扫码登录后再推送" });
       }
       if (loggedIn.length > 0) {
@@ -520,11 +579,17 @@ export default function ContentDetailPage() {
       setPublishResults(collected);
       const fullOk = collected.filter((r) => r.success && r.mode === "full").length;
       const draftOk = collected.filter((r) => r.success && r.mode === "draft_only").length;
-      const failed = collected.filter((r) => !r.success).length;
+      const failed = collected.filter((r) => !r.success && !r.pending).length;
       const parts: string[] = [];
       if (fullOk > 0) parts.push(`${fullOk} 个已群发`);
       if (draftOk > 0) parts.push(`${draftOk} 个进草稿箱待审核发布`);
       if (failed > 0) parts.push(`${failed} 个失败`);
+      if (agentPendingCount > 0)
+        parts.push(
+          agentTimedOut
+            ? `${agentPendingCount} 个仍在 Agent 处理中(已超 3 分钟停止刷新, 稍后重开本页查看)`
+            : `${agentPendingCount} 个进行中`
+        );
       setPublishMsg(parts.length > 0 ? parts.join("，") : "无发布结果");
 
       if (fullOk > 0) {
@@ -855,6 +920,39 @@ export default function ContentDetailPage() {
                   />
                 </div>
 
+                {/* Agent-3: 发布通道切换 — 仅选中抖音/视频号账号时显示 */}
+                {(() => {
+                  const SEMI = ["douyin", "wechat_video"];
+                  const semiSelected = accounts.filter(
+                    (a) => SEMI.includes(a.platform) && selectedAccountIds.includes(a.id)
+                  );
+                  if (semiSelected.length === 0) return null;
+                  return (
+                    <div className="mb-3 p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+                        <span className="font-medium text-slate-700">发布通道:</span>
+                        {([["server", "服务器直发"], ["agent", "本地 Agent"]] as const).map(([v, lbl]) => (
+                          <label key={v} className="flex items-center gap-1.5 cursor-pointer text-slate-600">
+                            <input
+                              type="radio"
+                              name="publish-channel"
+                              className="accent-indigo-600"
+                              checked={publishChannel === v}
+                              onChange={() => setPublishChannel(v)}
+                            />
+                            {lbl}
+                          </label>
+                        ))}
+                        <span className="text-[11px] text-slate-400">
+                          Agent = 在你电脑上用本机浏览器发布, 需先在
+                          <Link to="/settings" className="text-indigo-600 hover:underline">设置页</Link>
+                          配对并运行
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* 6-11 抖音合规告知: 明确同步到哪个抖音号 + 可勾选「是否同步」(使用规范硬要求) */}
                 {(() => {
                   const douyinSelected = accounts.filter(
@@ -905,10 +1003,11 @@ export default function ContentDetailPage() {
                       发布结果：
                     </p>
                     {publishResults.map(result => {
+                      const isPending = !result.success && !!result.pending; // Agent-3: 等待领取/执行中
                       const isFull = result.success && result.mode === "full";
                       const isDraftOnly = result.success && result.mode === "draft_only";
-                      const isFailedWithDraft = !result.success && !!result.mediaId;
-                      const isFailedHard = !result.success && !result.mediaId;
+                      const isFailedWithDraft = !result.success && !isPending && !!result.mediaId;
+                      const isFailedHard = !result.success && !isPending && !result.mediaId;
 
                       let toneClass: string;
                       let icon: string;
@@ -916,7 +1015,13 @@ export default function ContentDetailPage() {
                       let btnClass: string;
                       let btnLabel: string;
 
-                      if (isFull) {
+                      if (isPending) {
+                        toneClass = "bg-indigo-50 text-indigo-700 border border-indigo-200";
+                        icon = "⏳";
+                        fallbackText = "等待本地 Agent…";
+                        btnClass = "";
+                        btnLabel = "";
+                      } else if (isFull) {
                         toneClass = "bg-green-100 text-green-700";
                         icon = "✓";
                         fallbackText = "已群发";
