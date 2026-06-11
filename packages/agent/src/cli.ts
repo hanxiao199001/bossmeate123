@@ -28,6 +28,10 @@ import { isLoggedIn, launchAccountBrowser, openPlatformHome } from "./browser.js
 import { PLATFORM_PUSHERS } from "./pushers.js";
 
 const AGENT_VERSION = "0.1.0";
+
+/** 半自动任务留下的"还开着等人工点发布"的浏览器, 按账号记录 —
+ *  同账号再来任务时复用它新开标签页, 避免同 profile 二次启动撞 SingletonLock。 */
+const keptBrowsers = new Map<string, Browser>();
 const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号" };
 const CLAIM_INTERVAL_MS = 15_000;
 const LOGIN_WAIT_MS = 5 * 60_000; // 扫码最长等 5 分钟
@@ -225,9 +229,19 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
   let page: Page | null = null;
   let videoPath: string | null = null;
   let keepBrowserOpen = false; // 半自动任务: 保持浏览器开着等用户点发布
+  let reusedKept = false; // 复用了半自动留下的浏览器: finally 不关整个浏览器
   try {
-    browser = await launchAccountBrowser(task.accountId);
-    page = await openPlatformHome(browser, task.platform);
+    const kept = keptBrowsers.get(task.accountId);
+    if (kept?.connected) {
+      browser = kept;
+      reusedKept = true;
+      logger.info({ accountId: task.accountId.slice(0, 8) }, "复用上一条半自动任务的浏览器窗口 (新开标签页, 原发布页不动)");
+      page = await openPlatformHome(browser, task.platform, true);
+    } else {
+      keptBrowsers.delete(task.accountId); // 已断开的记录清掉
+      browser = await launchAccountBrowser(task.accountId);
+      page = await openPlatformHome(browser, task.platform);
+    }
 
     if (!(await isLoggedIn(page, task.platform))) {
       await api.reportResult(task.id, "login_expired", "Agent 本机浏览器登录态失效");
@@ -248,6 +262,7 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
     if (result && result.manual) {
       // 半自动(抖音): 已填好停在发布页, 浏览器保持打开让用户点发布。不关浏览器。
       keepBrowserOpen = true;
+      keptBrowsers.set(task.accountId, browser);
       await api.reportResult(task.id, "manual_pending", result.message ?? "已填好, 请人工点发布");
       logger.warn(`🟡 任务 ${task.id.slice(0, 8)}… [${label}] ${task.accountName}: 已填好停在发布页 — 请在浏览器点【发布】, 完成后关闭该窗口`);
     } else {
@@ -268,7 +283,12 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
     }
   } finally {
     if (!keepBrowserOpen) {
-      try { await browser?.close(); } catch { /* noop */ }
+      if (reusedKept) {
+        // 浏览器是借来的(里面还有用户待点发布的标签页), 只关本任务开的标签
+        try { await page?.close(); } catch { /* noop */ }
+      } else {
+        try { await browser?.close(); } catch { /* noop */ }
+      }
     }
     if (videoPath) { try { await unlink(videoPath); } catch { /* noop */ } }
   }

@@ -6,7 +6,8 @@
 import puppeteerExtraImport from "puppeteer-extra";
 import StealthPluginImport from "puppeteer-extra-plugin-stealth";
 import type { Browser, Page } from "puppeteer";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readlink, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { profileDir } from "./config.js";
 import { logger } from "./log.js";
 
@@ -31,24 +32,62 @@ export const PLATFORM_HOME: Record<string, string> = {
   wechat_video: "https://channels.weixin.qq.com",
 };
 
+/** SingletonLock 处理: Chrome 持久 profile 同时只能被一个实例用。
+ *  锁是个 symlink 指向 "hostname-pid": pid 还活着=真有实例在跑(如上一条半自动窗口);
+ *  pid 死了=上次崩溃/被 kill 留下的残锁, 清掉即可。 */
+async function inspectSingletonLock(dir: string): Promise<"live" | "cleaned" | "none"> {
+  let target: string;
+  try { target = await readlink(join(dir, "SingletonLock")); } catch { return "none"; }
+  const pid = Number(target.split("-").pop());
+  if (Number.isFinite(pid) && pid > 0) {
+    try { process.kill(pid, 0); return "live"; } catch { /* 进程已死 → 残锁 */ }
+  }
+  for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    try { await rm(join(dir, f), { force: true }); } catch { /* noop */ }
+  }
+  logger.warn({ profile: dir }, "清理了残留的浏览器 profile 锁 (上次未正常退出)");
+  return "cleaned";
+}
+
+function isSingletonError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /Singleton|ProcessSingleton|Failed to launch the browser process/.test(msg);
+}
+
 /** 打开账号专属有头浏览器 (持久 profile)。用完调用方负责 browser.close()。 */
 export async function launchAccountBrowser(accountId: string): Promise<Browser> {
   const dir = profileDir(accountId);
   await mkdir(dir, { recursive: true });
-  const browser = (await puppeteerExtra.launch({
-    headless: false,
-    userDataDir: dir,
-    args: LAUNCH_ARGS,
-    defaultViewport: { width: 1366, height: 900 },
-  })) as unknown as Browser;
+  const doLaunch = async (): Promise<Browser> =>
+    (await puppeteerExtra.launch({
+      headless: false,
+      userDataDir: dir,
+      args: LAUNCH_ARGS,
+      defaultViewport: { width: 1366, height: 900 },
+    })) as unknown as Browser;
+
+  let browser: Browser;
+  try {
+    browser = await doLaunch();
+  } catch (err) {
+    if (!isSingletonError(err)) throw err;
+    const lock = await inspectSingletonLock(dir);
+    if (lock === "live") {
+      throw new Error(
+        "该账号的浏览器窗口已在运行 (大概率是上一条半自动任务停在发布页等人工点发布) — 请先到那个窗口点【发布】并关闭窗口, 再重派本任务"
+      );
+    }
+    browser = await doLaunch(); // 残锁已清, 重试一次
+  }
   logger.info({ accountId: accountId.slice(0, 8), profile: dir }, "账号浏览器已启动 (有头/持久profile)");
   return browser;
 }
 
-/** 复用浏览器自带首个标签页打开平台主页, 留 3s 渲染 */
-export async function openPlatformHome(browser: Browser, platform: string): Promise<Page> {
+/** 打开平台主页, 留 3s 渲染。默认复用首个标签页; newTab=true 时新开标签页
+ *  (复用半自动任务留下的浏览器时必须新开, 不能动用户待点发布的那个标签)。 */
+export async function openPlatformHome(browser: Browser, platform: string, newTab = false): Promise<Page> {
   const pages = await browser.pages();
-  const page = pages[0] ?? (await browser.newPage());
+  const page = newTab ? await browser.newPage() : (pages[0] ?? (await browser.newPage()));
   const home = PLATFORM_HOME[platform];
   if (!home) throw new Error(`平台 ${platform} 不支持本地浏览器登录`);
   await page.goto(home, { waitUntil: "domcontentloaded", timeout: 60_000 });
