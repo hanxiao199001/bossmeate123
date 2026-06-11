@@ -31,7 +31,7 @@ export interface AgentTask {
   attempts: number;
 }
 
-export type ResultStatus = "success" | "failed" | "login_expired";
+export type ResultStatus = "success" | "failed" | "login_expired" | "manual_pending";
 
 /** 带 HTTP 状态码与服务器 message 的错误 */
 export class ApiError extends Error {

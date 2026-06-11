@@ -224,6 +224,7 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
   let browser: Browser | null = null;
   let page: Page | null = null;
   let videoPath: string | null = null;
+  let keepBrowserOpen = false; // 半自动任务: 保持浏览器开着等用户点发布
   try {
     browser = await launchAccountBrowser(task.accountId);
     page = await openPlatformHome(browser, task.platform);
@@ -242,10 +243,17 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
 
     const pusher = PLATFORM_PUSHERS[task.platform];
     if (!pusher) throw new Error(`平台 ${task.platform} 暂不支持本地推草稿`);
-    await pusher({ page, videoPath, caption: task.caption ?? "", title: task.title ?? "" });
+    const result = await pusher({ page, videoPath, caption: task.caption ?? "", title: task.title ?? "" });
 
-    await api.reportResult(task.id, "success");
-    logger.info(`任务 ${task.id.slice(0, 8)}… 完成: 草稿已推到 [${label}] ${task.accountName}, 请在平台后台确认发布`);
+    if (result && result.manual) {
+      // 半自动(抖音): 已填好停在发布页, 浏览器保持打开让用户点发布。不关浏览器。
+      keepBrowserOpen = true;
+      await api.reportResult(task.id, "manual_pending", result.message ?? "已填好, 请人工点发布");
+      logger.warn(`🟡 任务 ${task.id.slice(0, 8)}… [${label}] ${task.accountName}: 已填好停在发布页 — 请在浏览器点【发布】, 完成后关闭该窗口`);
+    } else {
+      await api.reportResult(task.id, "success");
+      logger.info(`任务 ${task.id.slice(0, 8)}… 完成: 草稿已推到 [${label}] ${task.accountName}, 请在平台后台确认发布`);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === "LOGIN_EXPIRED") {
@@ -259,7 +267,9 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
         .catch((e) => logger.error("回报 failed 失败:", e instanceof Error ? e.message : e));
     }
   } finally {
-    try { await browser?.close(); } catch { /* noop */ }
+    if (!keepBrowserOpen) {
+      try { await browser?.close(); } catch { /* noop */ }
+    }
     if (videoPath) { try { await unlink(videoPath); } catch { /* noop */ } }
   }
 }

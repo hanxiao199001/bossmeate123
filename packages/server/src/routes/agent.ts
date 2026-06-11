@@ -52,7 +52,7 @@ declare module "fastify" {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const RESULT_STATUSES = new Set(["success", "failed", "login_expired"]);
+const RESULT_STATUSES = new Set(["success", "failed", "login_expired", "manual_pending"]);
 
 // ===== 配对码内存表 (一次性, 10 分钟过期; 重启即失效 — 配对是低频人工操作, 可接受) =====
 const PAIRING_CODES = new Map<string, { tenantId: string; expiresAt: number }>();
@@ -284,7 +284,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = (request.body ?? {}) as { status?: string; error?: string };
       if (!body.status || !RESULT_STATUSES.has(body.status)) {
-        return reply.code(400).send({ code: "BAD_REQUEST", message: "status 须为 success | failed | login_expired" });
+        return reply.code(400).send({ code: "BAD_REQUEST", message: "status 须为 success | failed | login_expired | manual_pending" });
       }
       const task = await loadTenantTask(id, device.tenantId);
       if (!task) return reply.code(404).send({ code: "NOT_FOUND", message: "任务不存在" });
@@ -296,7 +296,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         .update(agentPublishTasks)
         .set({
           status: body.status,
-          error: body.status === "success" ? null : String(body.error ?? "").slice(0, 2000) || null,
+          error: (body.status === "success") ? null : String(body.error ?? "").slice(0, 2000) || null,
           finishedAt: new Date(),
           updatedAt: new Date(),
         })

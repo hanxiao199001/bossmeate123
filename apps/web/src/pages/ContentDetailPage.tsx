@@ -99,7 +99,7 @@ interface PublishResult {
   pending?: boolean;
 }
 
-// Agent-3: GET /agent-admin/tasks 返回的任务 (status: pending|claimed|success|failed|login_expired|canceled)
+// Agent-3: GET /agent-admin/tasks 返回的任务 (status: pending|claimed|success|failed|login_expired|canceled|manual_pending)
 interface AgentTask {
   id: string;
   accountId: string;
@@ -501,6 +501,8 @@ export default function ContentDetailPage() {
           if (t.status === "login_expired")
             return { ...base, success: false, error: "Agent 上该账号未登录 — 在 Agent 电脑运行 bossmate-agent login" };
           if (t.status === "canceled") return { ...base, success: false, error: "任务已取消" };
+          if (t.status === "manual_pending")
+            return { ...base, success: true, mode: "draft_only" as const, message: "已在 Agent 电脑填好并停在发布页 — 请到该浏览器点「发布」(抖音网页发布需人工过一次验证)" };
           return { ...base, success: false, pending: true, message: t.status === "claimed" ? "Agent 执行中…" : "等待 Agent 领取…" };
         };
         const dr = await api.post<{ tasks: AgentTask[] }>("/agent-admin/dispatch", {
@@ -509,7 +511,7 @@ export default function ContentDetailPage() {
         });
         const dispatched = dr.data?.tasks || [];
         const taskIds = new Set(dispatched.map((t) => t.id));
-        const terminal = new Set(["success", "failed", "login_expired", "canceled"]);
+        const terminal = new Set(["success", "failed", "login_expired", "canceled", "manual_pending"]);
         let snapshot = dispatched;
         setPublishMsg(`已派发 ${dispatched.length} 个任务给本地 Agent, 等待领取…（Agent 需已配对并在线）`);
         setPublishResults([...collected, ...snapshot.map(toResult)]);

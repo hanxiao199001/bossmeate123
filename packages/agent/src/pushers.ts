@@ -25,8 +25,14 @@ export interface UploadParams {
   caption: string;
 }
 
+/** 推送结果: void/undefined = 已完成(进草稿箱/已发布); {manual:true} = 已填好停在发布页, 需人工点发布 */
+export interface PushResult {
+  manual?: boolean;
+  message?: string;
+}
+
 /** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
-export async function douyinPushDraft({ page: initialPage, videoPath, caption, title }: UploadParams): Promise<void> {
+export async function douyinPushDraft({ page: initialPage, videoPath, caption, title }: UploadParams): Promise<PushResult> {
   let page = initialPage;
   // 6-11 四轮: 平台编辑页有 beforeunload"离开此网站?"原生弹窗(验证步骤导航离开时触发),
   // 有头模式下会真弹给用户且阻塞导航 → 自动接受
@@ -91,122 +97,36 @@ export async function douyinPushDraft({ page: initialPage, videoPath, caption, t
   }
   await new Promise((r) => setTimeout(r, 1_500));
 
-  // 4. 6-11 六轮定版(真机实锤): 网页「暂存离开」的"草稿"只存浏览器本地(Agent profile 里),
-  //    客户自己的浏览器/抖音App 都看不到 → 对客户无意义。主路改为「仅自己可见」+ 真实发布
-  //    (= A轨 private_status=1 自见草稿语义, 老韩 5-28 拍板: 真实落抖音服务器, 作品管理可见,
-  //    仅作者可见, 检查满意后在 App/网页改公开)。找不到该选项时回退暂存离开。
-  const visSet = await clickButtonByText(page, ["仅自己可见"], 120_000);
-  if (visSet) {
-    logger.info("抖音: 已选「仅自己可见」(自见=草稿语义), 等「发布」可点");
-    await new Promise((r) => setTimeout(r, 1_000));
-    const pub = await clickButtonByText(page, ["发布"], 180_000);
-    if (!pub) throw new Error("找不到或点不动「发布」按钮 (转码超时或页面改版)");
-    try {
-      await new Promise((r) => setTimeout(r, 2_500));
-      await mkdir(FAIL_SHOT_DIR, { recursive: true });
-      const shot = resolve(FAIL_SHOT_DIR, `douyin-aftersave-${Date.now()}.png`);
-      await page.screenshot({ path: shot as any, fullPage: true });
-      logger.info({ shot }, "抖音: 点发布后现场截图");
-    } catch { /* noop */ }
-    const published = await (async (): Promise<boolean> => {
-      let deadline = Date.now() + 40_000;
-      const hardDeadline = Date.now() + 6 * 60_000; // 短信验证人工介入最多等 6 分钟
-      let smsNotified = 0;
-      while (Date.now() < Math.min(deadline, hardDeadline)) {
-        const u = page.url();
-        if (u.includes("login")) throw new Error("LOGIN_EXPIRED");
-        if (/content\/manage/.test(u) && !/upload/.test(u)) return true;
-        const txt = await deepBodyText(page).catch(() => "");
-        if (/发布成功|已发布|发布完成/.test(txt)) return true;
-        // 6-11 七轮: 发布触发"本人操作"短信验证(通常每设备一次) — 本地 Agent 的人工介入优势:
-        // 浏览器就在用户电脑上, 暂停等用户完成验证(获取验证码→输码→验证), 完成后自动继续
-        if (/接收短信验证码|短信验证码|确保是本人操作/.test(txt)) {
-          deadline = Date.now() + 60_000; // 见到弹窗就续命, 直到 hardDeadline
-          if (Date.now() - smsNotified > 20_000) {
-            smsNotified = Date.now();
-            logger.warn("⚠️  抖音要求短信验证(通常每设备仅一次) — 请到弹出的浏览器窗口操作: 点「获取验证码」→ 输入手机收到的码 → 点「验证」。Agent 等你最多 6 分钟, 完成后自动继续...");
-          }
-          await new Promise((r) => setTimeout(r, 3_000));
-          continue;
-        }
-        const blocked = txt.match(/[^\n]*(?:发布失败|审核不通过|含有违规|标题不能为空|上传失败)[^\n]*/);
-        if (blocked) throw new Error(`抖音发布被拦: ${blocked[0].trim().slice(0, 60)}`);
-        await new Promise((r) => setTimeout(r, 2_000));
-      }
-      return false;
-    })();
-    if (!published) {
-      // 实查兜底: 作品管理按标题前缀找(自见作品也在列表里)
-      try {
-        await page.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await new Promise((r) => setTimeout(r, 6_000));
-        const sig = douyinTitle.replace(/\s+/g, "").slice(0, 10);
-        const txt2 = (await deepBodyText(page).catch(() => "")).replace(/\s+/g, "");
-        if (sig.length >= 4 && txt2.includes(sig)) {
-          logger.info("抖音: 作品管理实查命中, 「仅自己可见」发布已确认");
-          return;
-        }
-      } catch { /* noop */ }
-      throw new Error("抖音「仅自己可见」发布未确认生效 (无成功提示且作品管理未见 — 见 douyin-aftersave 截图)");
-    }
-    logger.info({ url: page.url() }, "抖音推草稿: 已发布为「仅自己可见」(作品管理可见, 检查后改公开即可)");
-    return;
-  }
-
-  // —— 回退路径: 暂存离开(注意: 此"草稿"只存 Agent 浏览器本地, 客户其他设备看不到) ——
-  logger.warn("抖音: 未找到「仅自己可见」选项, 回退「暂存离开」模式");
-  // 4. 等视频转码完成. 6-11 真机实锤: 当前版本按钮叫「暂存离开」(不再是"存草稿")
-  const clicked = await clickButtonByText(page, ["暂存离开", "存草稿", "保存草稿", "暂存"], 180_000);
-  if (!clicked) throw new Error("找不到或点不动「暂存离开/存草稿」按钮 (转码超时或页面改版)");
-  logger.info("抖音推草稿: 已点「暂存离开」, 处理二次确认与结果验证");
-
-  // 4b. 6-11 五轮: 「暂存离开」常弹二次确认(页面内"确定/确认离开/暂存"按钮) — 点掉它推进保存
-  await new Promise((r) => setTimeout(r, 1_500));
-  await clickButtonByText(page, ["确定", "确认离开", "确认暂存", "离开"], 4_000).catch(() => false);
-
-  // 4c. 点击后现场截图(无论成败留证, 排查抖音保存流程靠它)
+  // 4. 8-轮定版(老韩拍板抖音改半自动): 抖音对网页端"发布"有短信验证墙(程序化点发布被风控判定可疑,
+  //    每次/高频要验证), 全自动不可持续。改为: Agent 填好一切 + 选「仅自己可见」(安全默认, 防误公开未审内容)
+  //    + 把发布按钮滚进视野后停手, 不点发布; 由人在浏览器点「发布」+过一次验证。省掉下载/上传/打字/填话题
+  //    等费时活, 只把"点发布+验证"留给人。抖音全自动等官方 API(A轨)。
+  await clickButtonByText(page, ["仅自己可见"], 60_000).catch(() => false);
+  // 把「发布」按钮滚进视野(只滚动定位, 不点击)
   try {
-    await new Promise((r) => setTimeout(r, 2_500));
+    await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      function* deep(root: any): any {
+        for (const el of root.querySelectorAll("*")) { yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); }
+      }
+      for (const el of deep(doc)) {
+        if ((el.tagName === "BUTTON" || el.tagName === "DIV" || el.tagName === "SPAN") && (el.textContent || "").trim() === "发布") {
+          el.scrollIntoView({ block: "center" });
+          break;
+        }
+      }
+    });
+  } catch { /* noop */ }
+  try {
+    await new Promise((r) => setTimeout(r, 1_500));
     await mkdir(FAIL_SHOT_DIR, { recursive: true });
-    const shot = resolve(FAIL_SHOT_DIR, `douyin-aftersave-${Date.now()}.png`);
+    const shot = resolve(FAIL_SHOT_DIR, `douyin-ready-${Date.now()}.png`);
     await page.screenshot({ path: shot as any, fullPage: true });
-    logger.info({ shot }, "抖音: 点暂存后现场截图");
+    logger.info({ shot }, "抖音: 已填好停在发布页(待人工点发布)");
   } catch { /* noop */ }
 
-  // 5. 成功证据(唯一可信). 6-11 五轮真机实锤草稿存放方式: 抖音网页版「暂存离开」后**留在上传页**,
-  //    再次进上传页顶部出现横幅"你还有上次未发布的视频, 是否继续编辑?[继续编辑][放弃]" = 草稿真在。
-  //    (抖音没有独立"草稿箱"菜单, 作品管理里也查不到, 这条横幅就是草稿的唯一入口)
-  const ok = await (async (): Promise<boolean> => {
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      const u = page.url();
-      if (u.includes("login")) throw new Error("LOGIN_EXPIRED");
-      const txt = await deepBodyText(page).catch(() => "");
-      // 强信号: "上次未发布的视频/继续编辑" 横幅 = 暂存成功
-      if (/上次未发布的视频|是否继续编辑|继续编辑/.test(txt)) return true;
-      // 跳到内容/作品管理 或 显式成功提示
-      if (/content\/manage|creator-micro\/content\/(manage|post)/.test(u) && !/upload/.test(u)) return true;
-      if (/暂存成功|保存成功|已保存草稿|草稿保存成功/.test(txt)) return true;
-      const blocked = txt.match(/[^\n]*(?:发布失败|保存失败|审核不通过|含有违规|标题不能为空|上传失败)[^\n]*/);
-      if (blocked) throw new Error(`抖音暂存被拦: ${blocked[0].trim().slice(0, 60)}`);
-      await new Promise((r) => setTimeout(r, 2_000));
-    }
-    return false;
-  })();
-  if (!ok) {
-    // 兜底实查: 主动回上传页看横幅(暂存离开可能已把当前页导走, 当前页文本取不到横幅)
-    try {
-      await page.goto("https://creator.douyin.com/creator-micro/content/upload", { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await new Promise((r) => setTimeout(r, 5_000));
-      const txt2 = await deepBodyText(page).catch(() => "");
-      if (/上次未发布的视频|是否继续编辑|继续编辑/.test(txt2)) {
-        logger.info("抖音推草稿: 回上传页见'继续编辑'横幅, 草稿已确认");
-        return;
-      }
-    } catch { /* noop */ }
-    throw new Error("抖音「暂存离开」未确认生效 (上传页无'继续编辑'横幅 — 草稿可能没真存上, 见 douyin-aftersave 截图)");
-  }
-  logger.info({ url: page.url() }, "抖音推草稿: 暂存离开已确认生效(草稿已存)");
+  logger.warn("📌 抖音内容已填好(标题/简介/话题/仅自己可见), 浏览器停在发布页 — 请在弹出的浏览器窗口点【发布】, 如弹短信验证按提示完成。发完可关闭该窗口。");
+  return { manual: true, message: "已填好内容, 请在 Agent 电脑的浏览器点「发布」(抖音网页发布需人工过一次验证)" };
 }
 
 /** 文本找按钮并点击 (等到可点为止), 浏览器上下文执行 */
@@ -689,7 +609,7 @@ export async function wechatVideoPushDraft({ page, videoPath, caption, title }: 
   }
 }
 
-export const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
+export const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<PushResult | void>> = {
   douyin: douyinPushDraft,
   wechat_video: wechatVideoPushDraft,
 };
