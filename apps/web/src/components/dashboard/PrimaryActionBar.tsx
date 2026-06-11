@@ -6,6 +6,7 @@
  */
 import { Link } from "react-router-dom";
 import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
+import { IconPenSquare, IconRadar, IconSparkles } from "../ui/Icons";
 
 export interface PrimaryActionBarProps {
   mode: "normal" | "empty";
@@ -14,15 +15,17 @@ export interface PrimaryActionBarProps {
 export default function PrimaryActionBar({ mode }: PrimaryActionBarProps) {
   if (mode === "empty") {
     return (
-      <section className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-5 flex items-center gap-4">
-        <span className="text-3xl">🚀</span>
+      <section className="mb-6 bg-white rounded-2xl border border-indigo-200 ring-1 ring-indigo-200/60 shadow-[0_1px_2px_rgba(16,24,40,0.04)] p-5 flex items-center gap-4">
+        <span className="w-11 h-11 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+          <IconSparkles size={20} />
+        </span>
         <div className="flex-1">
-          <div className="text-base font-bold text-gray-900">今天还没开始</div>
-          <div className="text-xs text-gray-500 mt-0.5">点一下，BossMate 帮你抓选题、写图文、找客户</div>
+          <div className="text-base font-semibold text-slate-900">今天还没开始</div>
+          <div className="text-xs text-slate-500 mt-0.5">点一下，BossMate 帮你抓选题、写图文、找客户</div>
         </div>
         <Link
           to="/workbench"
-          className="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 active:scale-95 transition-all"
+          className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg shadow-sm hover:bg-indigo-500 active:scale-95 transition-all"
         >
           一键启动今日产出 →
         </Link>
@@ -34,20 +37,20 @@ export default function PrimaryActionBar({ mode }: PrimaryActionBarProps) {
     <section className="mb-6 flex items-center gap-3">
       <Link
         to="/workbench"
-        className="flex-1 px-5 py-3 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-between"
+        className="flex-1 px-5 py-3 bg-indigo-600 text-white text-sm font-medium rounded-xl shadow-sm hover:bg-indigo-500 active:scale-95 transition-all flex items-center justify-between"
       >
         <span className="flex items-center gap-2">
-          <span className="text-base">📝</span>
+          <IconPenSquare size={16} />
           <span>打开内容工坊</span>
         </span>
         <span className="text-xs opacity-80">采用推荐 · 一键发布</span>
       </Link>
       {SALES_RADAR_ENABLED && <Link
         to="/sales-radar"
-        className="flex-1 px-5 py-3 bg-rose-600 text-white text-sm font-medium rounded-xl hover:bg-rose-700 active:scale-95 transition-all flex items-center justify-between"
+        className="flex-1 px-5 py-3 bg-rose-600 text-white text-sm font-medium rounded-xl shadow-sm hover:bg-rose-500 active:scale-95 transition-all flex items-center justify-between"
       >
         <span className="flex items-center gap-2">
-          <span className="text-base">📡</span>
+          <IconRadar size={16} />
           <span>跟进销售线索</span>
         </span>
         <span className="text-xs opacity-80">热线索优先</span>

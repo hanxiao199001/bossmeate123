@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../utils/api";
 import { toast } from "../components/Toast";
+import PageHeader from "../components/ui/PageHeader";
 
 interface BatchRow {
   id: string;
@@ -103,8 +104,8 @@ export default function BatchProgressPage() {
       .catch(() => { /* api.download 已统一弹 toast */ });
   };
 
-  if (err) return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-red-600">❌ {err}</div>;
-  if (!data) return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400">⏳ 加载中...</div>;
+  if (err) return <div className="min-h-screen bg-[#F6F7F9] flex items-center justify-center text-red-600">❌ {err}</div>;
+  if (!data) return <div className="min-h-screen bg-[#F6F7F9] flex items-center justify-center text-gray-400">⏳ 加载中...</div>;
 
   const { batch, rows } = data;
   const pending = batch.total - batch.completed - batch.failed;
@@ -113,20 +114,21 @@ export default function BatchProgressPage() {
   const isDone = batch.status === "completed" || batch.status === "failed";
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏; 返回链接+标题+下载按钮迁到内容区顶部 */}
       <div className="max-w-6xl mx-auto py-6 px-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4 min-w-0">
-            <Link to="/content" className="text-blue-600 hover:text-blue-700 text-sm shrink-0">← 返回内容列表</Link>
-            <h1 className="text-2xl font-bold text-gray-900 shrink-0">批量生成进度</h1>
-            <span className="text-xs text-gray-400 truncate max-w-xs">📄 {batch.filename || batch.id}</span>
-          </div>
-          {isDone && (
-            <button onClick={downloadReport} className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700">
-              📥 下载 CSV 报告
-            </button>
-          )}
+        <div className="mb-6">
+          <Link to="/content" className="text-indigo-600 hover:text-indigo-500 text-sm font-medium">← 返回内容列表</Link>
+          <PageHeader
+            className="mt-2"
+            title="批量生成进度"
+            subtitle={<span className="truncate max-w-xs inline-block align-bottom">{batch.filename || batch.id}</span>}
+            actions={isDone ? (
+              <button onClick={downloadReport} className="px-4 h-9 text-sm font-medium bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-500 transition-all">
+                下载 CSV 报告
+              </button>
+            ) : undefined}
+          />
         </div>
         {/* 4 Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

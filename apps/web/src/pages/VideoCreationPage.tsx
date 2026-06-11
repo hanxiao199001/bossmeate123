@@ -5,6 +5,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { api, ApiError } from "../utils/api";
+import PageHeader from "../components/ui/PageHeader";
 
 // ===== 类型 =====
 interface UploadedImage {
@@ -161,10 +162,10 @@ export default function VideoCreationPage() {
   const estimatedDuration = images.reduce((s, img) => s + img.durationMs / 1000, 0);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏 (退出在 Sidebar 底部); 标题迁到内容区顶部 */}
       <div className="max-w-4xl mx-auto py-8 px-4">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">🎬 图片转视频</h1>
+        <PageHeader title="图片转视频" />
         {/* 步骤指示器 */}
         <div className="flex items-center justify-center gap-4 mb-8">
           {[

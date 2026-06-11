@@ -2,17 +2,17 @@ import React, { useState, useEffect } from "react";
 import { useToastStore, ToastType } from "../stores/toastStore";
 
 const toastColors: Record<ToastType, { bg: string; border: string; icon: string }> = {
-  success: { bg: "#ecfdf5", border: "#10b981", icon: "✓" },
-  error: { bg: "#fef2f2", border: "#ef4444", icon: "✕" },
-  warning: { bg: "#fffbeb", border: "#f59e0b", icon: "!" },
-  info: { bg: "#eff6ff", border: "#3b82f6", icon: "ℹ" },
+  success: { bg: "#ffffff", border: "#10b981", icon: "✓" },
+  error: { bg: "#ffffff", border: "#f43f5e", icon: "✕" },
+  warning: { bg: "#ffffff", border: "#f59e0b", icon: "!" },
+  info: { bg: "#ffffff", border: "#4f46e5", icon: "ℹ" },
 };
 
 const textColors: Record<ToastType, string> = {
-  success: "#047857",
-  error: "#991b1b",
-  warning: "#92400e",
-  info: "#1e40af",
+  success: "#0f172a",
+  error: "#0f172a",
+  warning: "#0f172a",
+  info: "#0f172a",
 };
 
 interface ToastItemProps {
@@ -49,9 +49,10 @@ const ToastItem: React.FC<ToastItemProps> = ({ id, type, message, onRemove }) =>
         gap: "12px",
         padding: "12px 16px",
         backgroundColor: colors.bg,
-        border: `1px solid ${colors.border}`,
-        borderRadius: "6px",
-        boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
+        border: "1px solid rgba(226, 232, 240, 0.9)",
+        borderLeft: `3px solid ${colors.border}`,
+        borderRadius: "12px",
+        boxShadow: "0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.08)",
         animation: "slideIn 0.3s ease-out",
         position: "relative",
         overflow: "hidden",
@@ -98,7 +99,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ id, type, message, onRemove }) =>
         style={{
           background: "none",
           border: "none",
-          color: textColor,
+          color: "#94a3b8",
           fontSize: "18px",
           cursor: "pointer",
           padding: "0",

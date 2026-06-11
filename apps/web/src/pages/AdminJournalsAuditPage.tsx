@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import { dataSourceLabel, journalAuditFieldLabel } from "../utils/i18n";
+import PageHeader from "../components/ui/PageHeader";
 
 interface AuditStats {
   total: number;
@@ -154,19 +155,21 @@ export default function AdminJournalsAuditPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏; 标题+导出按钮迁到内容区顶部 */}
       <div className="max-w-7xl mx-auto py-6 px-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">期刊数据审计</h1>
-          <button
-            onClick={exportCsv}
-            className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-            title="导出当前筛选结果为 CSV"
-          >
-            📥 导出 CSV
-          </button>
-        </div>
+        <PageHeader
+          title="期刊数据审计"
+          actions={
+            <button
+              onClick={exportCsv}
+              className="px-3 py-1.5 text-sm font-medium bg-white border border-slate-200 text-slate-700 hover:border-slate-300 rounded-lg transition-colors"
+              title="导出当前筛选结果为 CSV"
+            >
+              导出 CSV
+            </button>
+          }
+        />
         {/* 6 个统计卡片 */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">

@@ -22,14 +22,14 @@ export default function Greeting({ userName }: GreetingProps) {
 
   return (
     <header className="mb-5">
-      <h1 className="text-2xl font-bold text-gray-900">
-        {hello}{userName ? <>，<span className="text-blue-600">{userName}</span></> : ""}
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        {hello}{userName ? <>，<span className="text-indigo-600">{userName}</span></> : ""}
       </h1>
-      <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+      <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
         <span>{dateLabel}</span>
-        <span className="text-gray-300">·</span>
+        <span className="text-slate-300">·</span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
           <span>系统正常</span>
         </span>
       </p>

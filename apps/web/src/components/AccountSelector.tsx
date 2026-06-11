@@ -98,8 +98,8 @@ export default function AccountSelector({
 
   if (accounts.length === 0) {
     return (
-      <p className="text-xs text-gray-400">
-        无可用账号 (去 <Link to="/accounts" className="text-blue-600 underline">账号管理</Link> 添加)
+      <p className="text-xs text-slate-400">
+        无可用账号 (去 <Link to="/accounts" className="text-indigo-600 hover:text-indigo-500 underline">账号管理</Link> 添加)
       </p>
     );
   }
@@ -118,21 +118,21 @@ export default function AccountSelector({
                   checked={allSelected}
                   onChange={() => toggleGroup(p)}
                   disabled={disabled}
-                  className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                  className="w-4 h-4 rounded border-slate-300 accent-indigo-600 cursor-pointer"
                   aria-label={`全选 ${platformShortLabel(p)}`}
                 />
               )}
               {PLATFORM_META[p]?.icon && (
                 <span className="text-sm leading-none">{PLATFORM_META[p].icon}</span>
               )}
-              <span className="text-xs font-medium text-gray-500">{platformShortLabel(p)}</span>
-              <span className="text-xs text-gray-400">({list.length})</span>
+              <span className="text-xs font-medium text-slate-500">{platformShortLabel(p)}</span>
+              <span className="text-xs text-slate-400">({list.length})</span>
             </div>
             <div className="space-y-1.5">
               {list.map((a) => (
                 <label
                   key={a.id}
-                  className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 ${
+                  className={`flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-slate-50 ${
                     disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
                   }`}
                 >
@@ -141,26 +141,26 @@ export default function AccountSelector({
                     checked={selected.has(a.id)}
                     onChange={() => toggleOne(a.id)}
                     disabled={disabled}
-                    className="w-4 h-4 rounded border-gray-300"
+                    className="w-4 h-4 rounded border-slate-300 accent-indigo-600"
                   />
-                  <span className="text-sm text-gray-800 flex-1 truncate">{a.accountName}</span>
+                  <span className="text-sm text-slate-700 flex-1 truncate">{a.accountName}</span>
                   {/* PR-S6: 抖音/视频号看登录态(推草稿前置); 其余平台看 API 验证 */}
                   {SEMI_LOGIN_PLATFORMS.has(a.platform) && a.loginStatus !== undefined ? (
                     a.loginStatus === "logged_in" ? (
-                      <span className="text-xs text-green-600" title="已登录·可推草稿">✓ 已登录</span>
+                      <span className="text-xs text-emerald-600" title="已登录·可推草稿">✓ 已登录</span>
                     ) : (
                       <Link
                         to="/accounts"
-                        className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
+                        className="text-xs px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100"
                         onClick={(e) => e.stopPropagation()}
                       >
                         未登录·去扫码
                       </Link>
                     )
                   ) : a.isVerified ? (
-                    <span className="text-xs text-green-600" title="已验证">✓</span>
+                    <span className="text-xs text-emerald-600" title="已验证">✓</span>
                   ) : (
-                    <span className="text-xs text-gray-400" title="未验证">未验</span>
+                    <span className="text-xs text-slate-400" title="未验证">未验</span>
                   )}
                 </label>
               ))}

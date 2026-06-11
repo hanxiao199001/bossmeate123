@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../utils/api";
 import AccountSelector from "../components/AccountSelector";
+import PageHeader from "../components/ui/PageHeader";
 
 // ===== 工作流类型 =====
 type WorkflowType = "article" | "video";
@@ -583,10 +584,10 @@ export default function WorkflowPage() {
   ) : null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏 (退出在 Sidebar 底部); 标题迁到内容区顶部 */}
       <div className="max-w-7xl mx-auto py-6 px-4">
-        <h1 className="text-2xl font-bold text-gray-900 mb-4">{workflowTitle}</h1>
+        <PageHeader className="mb-4" title={workflowTitle} />
         {/* 步骤条 */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6">
           <div className="flex items-center">

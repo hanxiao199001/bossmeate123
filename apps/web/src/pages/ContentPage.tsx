@@ -3,6 +3,7 @@ import { toast } from "../components/Toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../utils/api";
 import { STATUS_LABELS, STATUS_COLORS } from "../components/StatusBadge";
+import PageHeader from "../components/ui/PageHeader";
 
 // ===== 类型定义 =====
 interface ContentItem {
@@ -231,10 +232,10 @@ export default function ContentPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航统一走 MainLayout 侧边栏 (退出在 Sidebar 底部) */}
       <div className="max-w-7xl mx-auto py-6 px-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">内容管理</h1>
+        <PageHeader title="内容管理" />
         {/* P0-B：6 tabs（全部 + 5 状态，archived 默认不显示）*/}
         {stats && (
           <div className="grid grid-cols-3 md:grid-cols-6 gap-4 mb-6">

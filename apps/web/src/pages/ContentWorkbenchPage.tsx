@@ -234,7 +234,7 @@ export default function ContentWorkbenchPage() {
   }, [accountIdsArr, submitPublish]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="min-h-screen flex flex-col bg-[#F6F7F9]">
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
       {/* 5-19 PR #171: 砍 isAdmin gate — 生成按钮全 user 开放 (PR #161 admin only 过严, 韩宵也看不到) */}
       <WorkbenchTopBar
