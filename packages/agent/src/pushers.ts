@@ -109,13 +109,26 @@ export async function douyinPushDraft({ page: initialPage, videoPath, caption, t
       logger.info({ shot }, "抖音: 点发布后现场截图");
     } catch { /* noop */ }
     const published = await (async (): Promise<boolean> => {
-      const deadline = Date.now() + 40_000;
-      while (Date.now() < deadline) {
+      let deadline = Date.now() + 40_000;
+      const hardDeadline = Date.now() + 6 * 60_000; // 短信验证人工介入最多等 6 分钟
+      let smsNotified = 0;
+      while (Date.now() < Math.min(deadline, hardDeadline)) {
         const u = page.url();
         if (u.includes("login")) throw new Error("LOGIN_EXPIRED");
         if (/content\/manage/.test(u) && !/upload/.test(u)) return true;
         const txt = await deepBodyText(page).catch(() => "");
         if (/发布成功|已发布|发布完成/.test(txt)) return true;
+        // 6-11 七轮: 发布触发"本人操作"短信验证(通常每设备一次) — 本地 Agent 的人工介入优势:
+        // 浏览器就在用户电脑上, 暂停等用户完成验证(获取验证码→输码→验证), 完成后自动继续
+        if (/接收短信验证码|短信验证码|确保是本人操作/.test(txt)) {
+          deadline = Date.now() + 60_000; // 见到弹窗就续命, 直到 hardDeadline
+          if (Date.now() - smsNotified > 20_000) {
+            smsNotified = Date.now();
+            logger.warn("⚠️  抖音要求短信验证(通常每设备仅一次) — 请到弹出的浏览器窗口操作: 点「获取验证码」→ 输入手机收到的码 → 点「验证」。Agent 等你最多 6 分钟, 完成后自动继续...");
+          }
+          await new Promise((r) => setTimeout(r, 3_000));
+          continue;
+        }
         const blocked = txt.match(/[^\n]*(?:发布失败|审核不通过|含有违规|标题不能为空|上传失败)[^\n]*/);
         if (blocked) throw new Error(`抖音发布被拦: ${blocked[0].trim().slice(0, 60)}`);
         await new Promise((r) => setTimeout(r, 2_000));
