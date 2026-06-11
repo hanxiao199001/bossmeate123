@@ -133,12 +133,42 @@ async function douyinPushDraft({ page: initialPage, videoPath, caption, title }:
   // 4. 等视频转码完成. 6-11 真机实锤: 当前版本按钮叫「暂存离开」(不再是"存草稿")
   const clicked = await clickButtonByText(page, ["暂存离开", "存草稿", "保存草稿", "暂存"], 180_000);
   if (!clicked) throw new Error("找不到或点不动「暂存离开/存草稿」按钮 (转码超时或页面改版)");
+  logger.info("抖音推草稿: 已点「暂存离开」, 处理二次确认与结果验证");
 
-  // 5. 确认结果: 跳转到内容管理 或 出现成功提示
-  await new Promise((r) => setTimeout(r, 5_000));
-  const url = page.url();
-  if (url.includes("login")) throw new Error("LOGIN_EXPIRED");
-  logger.info({ url }, "抖音推草稿: 已点击存草稿");
+  // 4b. 6-11 五轮: 「暂存离开」常弹二次确认(页面内"确定/确认离开/暂存"按钮) — 点掉它推进保存
+  await new Promise((r) => setTimeout(r, 1_500));
+  await clickButtonByText(page, ["确定", "确认离开", "确认暂存", "离开"], 4_000).catch(() => false);
+
+  // 4c. 点击后现场截图(无论成败留证, 排查抖音保存流程靠它)
+  try {
+    await new Promise((r) => setTimeout(r, 2_500));
+    await mkdir(FAIL_SHOT_DIR, { recursive: true });
+    const shot = resolve(FAIL_SHOT_DIR, `douyin-aftersave-${Date.now()}.png`);
+    await page.screenshot({ path: shot as any, fullPage: true });
+    logger.info({ shot }, "抖音: 点暂存后现场截图");
+  } catch { /* noop */ }
+
+  // 5. 成功证据(唯一可信): 跳离 upload 页(进内容管理/作品管理) 或 出现"暂存成功/保存成功"提示。
+  //    6-11 实锤: 旧逻辑点完只等 5s 看 URL 就报成功 → 假阳性(草稿其实没存上)。收紧为实证。
+  const ok = await (async (): Promise<boolean> => {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const u = page.url();
+      if (u.includes("login")) throw new Error("LOGIN_EXPIRED");
+      // 跳到内容/作品管理 = 暂存离开真的生效了
+      if (/content\/manage|creator-micro\/content\/(manage|post)/.test(u) && !/upload/.test(u)) return true;
+      const txt = await deepBodyText(page).catch(() => "");
+      if (/暂存成功|保存成功|已保存草稿|草稿保存成功/.test(txt)) return true;
+      const blocked = txt.match(/[^\n]*(?:发布失败|保存失败|审核不通过|含有违规|标题不能为空|上传失败)[^\n]*/);
+      if (blocked) throw new Error(`抖音暂存被拦: ${blocked[0].trim().slice(0, 60)}`);
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+    return false;
+  })();
+  if (!ok) {
+    throw new Error("抖音「暂存离开」未确认生效 (未跳转内容管理且无成功提示 — 草稿可能没真存上, 见 douyin-aftersave 截图)");
+  }
+  logger.info({ url: page.url() }, "抖音推草稿: 暂存离开已确认生效");
 }
 
 /** 文本找按钮并点击 (等到可点为止), 浏览器上下文执行 */
