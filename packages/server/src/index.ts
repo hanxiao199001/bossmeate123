@@ -23,6 +23,7 @@ import { workflowRoutes } from "./routes/workflow.js";
 import { wechatRoutes } from "./routes/wechat.js";
 import { wechatCallbackRoutes } from "./routes/wechat-callback.js";
 import { douyinCallbackRoutes } from "./routes/douyin-callback.js";
+import { agentPublishRoutes, agentAdminRoutes } from "./routes/agent.js";
 import { workWechatCallbackRoutes } from "./routes/work-wechat-callback.js";
 import { accountRoutes } from "./routes/accounts.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
@@ -131,6 +132,8 @@ async function bootstrap() {
   await app.register(wechatCallbackRoutes, { prefix: env.API_PREFIX });
   // 抖音 OAuth 回调（公开, state HMAC 签名防伪造）
   await app.register(douyinCallbackRoutes, { prefix: env.API_PREFIX });
+  // Agent-1 (B轨): 本地发布 Agent（公开注册, 自带 x-agent-token 鉴权, 不走用户 JWT）
+  await app.register(agentPublishRoutes, { prefix: env.API_PREFIX });
   // B.2: 企业微信 inbound webhook（公开路径，AES + msg_signature 在路由内做）
   await app.register(workWechatCallbackRoutes, { prefix: env.API_PREFIX });
   await app.register(async (authApp) => {
@@ -190,6 +193,8 @@ async function bootstrap() {
     await protectedApp.register(agentRoutes, { prefix: `${env.API_PREFIX}/agents` });
     await protectedApp.register(salesRoutes, { prefix: `${env.API_PREFIX}/sales` });
     await protectedApp.register(videoRoutes, { prefix: `${env.API_PREFIX}/video` });
+    // Agent-1 (B轨): Agent 设备管理 + 派单（用户 JWT）
+    await protectedApp.register(agentAdminRoutes, { prefix: env.API_PREFIX });
   });
 
   // 初始化 AI 提供商

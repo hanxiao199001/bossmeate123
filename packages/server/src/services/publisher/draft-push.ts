@@ -582,6 +582,44 @@ export async function setPageLoginState(page: Page, state: { cookies: any[]; loc
   }
 }
 
+/**
+ * 取每账号差异化文案/标题 (douyin-caption variants 产物, 按账号序号对应)。
+ * draft-push runJob 与 agent-admin 派单 (routes/agent.ts dispatch) 共用, 避免复制粘贴。
+ * 任一环节失败回退 content.title, 永不 throw。
+ */
+export async function buildPushCaptions(
+  contentId: string,
+  tenantId: string,
+  accounts: Array<{ platform: string }>,
+): Promise<{ captions: string[]; titles: string[] }> {
+  let fallbackTitle = "";
+  try {
+    const [content] = await db
+      .select({ title: contents.title })
+      .from(contents)
+      .where(eq(contents.id, contentId))
+      .limit(1);
+    fallbackTitle = content?.title || "";
+    const variants = await generateDouyinCaptionVariants({
+      contentId,
+      tenantId,
+      count: Math.min(accounts.length, 10),
+      force: false,
+      platform: (accounts[0]?.platform === "wechat_video" ? "wechat_video" : "douyin") as any,
+    });
+    if (variants.length > 0) {
+      return {
+        captions: variants.map((v: any) => v.fullText || v.hookTitle || fallbackTitle),
+        titles: variants.map((v: any) => v.hookTitle || fallbackTitle),
+      };
+    }
+  } catch { /* 走兜底 */ }
+  return {
+    captions: accounts.map(() => fallbackTitle),
+    titles: accounts.map(() => fallbackTitle),
+  };
+}
+
 async function runJob(job: DraftPushJob) {
   // 取内容 + 视频 URL
   const [content] = await db
@@ -606,23 +644,8 @@ async function runJob(job: DraftPushJob) {
     return;
   }
 
-  // 文案: 复用差异化文案生成 (按账号序号对应, 与前端助手一致)
-  let captions: string[] = [];
-  let titles: string[] = [];
-  try {
-    const variants = await generateDouyinCaptionVariants({
-      contentId: job.contentId,
-      tenantId: job.tenantId,
-      count: Math.min(job.accounts.length, 10),
-      force: false,
-      platform: (job.accounts[0]?.platform === "wechat_video" ? "wechat_video" : "douyin") as any,
-    });
-    captions = variants.map((v: any) => v.fullText || v.hookTitle || content.title || "");
-    titles = variants.map((v: any) => v.hookTitle || content.title || "");
-  } catch {
-    captions = job.accounts.map(() => content.title || "");
-    titles = job.accounts.map(() => content.title || "");
-  }
+  // 文案: 复用差异化文案生成 (按账号序号对应, 与前端助手一致; 与 routes/agent.ts 派单共用)
+  const { captions, titles } = await buildPushCaptions(job.contentId, job.tenantId, job.accounts);
 
   try {
     for (let i = 0; i < job.accounts.length; i++) {

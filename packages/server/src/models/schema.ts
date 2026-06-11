@@ -1159,3 +1159,54 @@ export const journalUsage = pgTable(
     index("idx_ju_lookup").on(table.tenantId, table.journalId, table.usedAt),
   ]
 );
+
+// ============ Agent-1 (B轨): 本地发布 Agent — 设备表 ============
+// 本地 Agent 跑在客户电脑(家用IP+有头浏览器), 轮询服务器领发布任务。
+// token 明文只在配对响应出现一次, 服务端只存 sha256 hex (token_hash)。
+export const agentDevices = pgTable(
+  "agent_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    name: varchar("name", { length: 100 }).notNull(), // "老韩的MacBook"
+    tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(), // sha256(token) hex
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active | disabled
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    version: varchar("version", { length: 20 }), // agent 客户端版本
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_agent_devices_tenant").on(table.tenantId),
+  ]
+);
+
+// ============ Agent-1 (B轨): 本地发布 Agent — 发布任务队列 ============
+// 派单(agent-admin dispatch)建行 → Agent claim(FOR UPDATE SKIP LOCKED 原子领单) → 回报 result。
+export const agentPublishTasks = pgTable(
+  "agent_publish_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    contentId: uuid("content_id").references(() => contents.id).notNull(),
+    accountId: uuid("account_id").references(() => platformAccounts.id).notNull(),
+    platform: varchar("platform", { length: 20 }).notNull(), // douyin | wechat_video
+    accountName: varchar("account_name", { length: 200 }),
+    videoSource: text("video_source").notNull(), // /storage/相对路径 或 http(s) url
+    caption: text("caption"),
+    title: varchar("title", { length: 200 }),
+    // pending | claimed | success | failed | login_expired | canceled
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_apt_tenant_status").on(table.tenantId, table.status),
+    index("idx_apt_content").on(table.contentId),
+  ]
+);

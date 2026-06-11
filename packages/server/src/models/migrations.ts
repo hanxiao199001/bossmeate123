@@ -113,4 +113,44 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_at TIMESTAMPTZ;
     `,
   },
+  {
+    version: "007_agent_publish",
+    description: "Agent-1 (B轨): 本地发布 Agent — agent_devices 设备表 + agent_publish_tasks 任务队列",
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_devices (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        token_hash VARCHAR(64) NOT NULL UNIQUE,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        last_seen_at TIMESTAMPTZ,
+        version VARCHAR(20),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_devices_tenant ON agent_devices (tenant_id);
+
+      CREATE TABLE IF NOT EXISTS agent_publish_tasks (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        content_id UUID NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+        account_id UUID NOT NULL REFERENCES platform_accounts(id) ON DELETE CASCADE,
+        platform VARCHAR(20) NOT NULL,
+        account_name VARCHAR(200),
+        video_source TEXT NOT NULL,
+        caption TEXT,
+        title VARCHAR(200),
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        agent_device_id UUID REFERENCES agent_devices(id) ON DELETE SET NULL,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        claimed_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_apt_tenant_status ON agent_publish_tasks (tenant_id, status);
+      CREATE INDEX IF NOT EXISTS idx_apt_content ON agent_publish_tasks (content_id);
+    `,
+  },
 ];
