@@ -68,6 +68,9 @@ interface UploadParams {
 /** 抖音创作者中心: 上传 → 等转码 → 填文案 → 存草稿 (选择器多套兜底) */
 async function douyinPushDraft({ page: initialPage, videoPath, caption, title }: UploadParams): Promise<void> {
   let page = initialPage;
+  // 6-11 四轮: 平台编辑页有 beforeunload"离开此网站?"原生弹窗(验证步骤导航离开时触发),
+  // 有头模式下会真弹给用户且阻塞导航 → 自动接受
+  page.on("dialog", (d) => { d.accept().catch(() => {}); });
   await page.goto("https://creator.douyin.com/creator-micro/content/upload", {
     waitUntil: "domcontentloaded", // 创作页长连接, networkidle2 永不触发
     timeout: 60_000,
@@ -500,6 +503,8 @@ async function verifyChannelsDraftExists(page: Page, caption: string, shortTitle
 
 /** 视频号助手 (channels.weixin.qq.com): 发表页 → 上传 → 填描述 → 存草稿 */
 async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadParams): Promise<void> {
+  // 6-11 四轮: 自动接受 beforeunload"离开此网站?"弹窗(实查导航离开编辑页时触发, 有头模式会真弹给用户)
+  page.on("dialog", (d) => { d.accept().catch(() => {}); });
   await page.goto("https://channels.weixin.qq.com/platform/post/create", {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
