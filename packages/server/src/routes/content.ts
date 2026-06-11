@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, and, desc, sql, count, or, isNull, inArray, gte, lt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../models/db.js";
-import { contents, productionRecords, bossEdits, journals, platformAccounts, contentPublishLog } from "../models/schema.js";
+import { distributionRecords, contents, productionRecords, bossEdits, journals, platformAccounts, contentPublishLog } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import {
   ARTICLE_STATUSES,
@@ -641,12 +641,78 @@ export async function contentRoutes(app: FastifyInstance) {
     }
   });
 
+
+// ===== 6-11 抖音「同步删除」(使用规范合规项) =====
+/** 查该内容已通过官方 API 同步到抖音的记录(有 publishId=item_id 的) */
+async function findDouyinSyncRecords(contentId: string) {
+  const recs = await db
+    .select()
+    .from(distributionRecords)
+    .where(and(eq(distributionRecords.contentId, contentId), eq(distributionRecords.platform, "douyin")));
+  return recs
+    .map((r) => ({
+      accountName: r.accountName ?? "未知账号",
+      accountId: (r.metadata as any)?.accountId as string | undefined,
+      publishId: (r.metadata as any)?.publishId as string | undefined,
+      tenantId: r.tenantId,
+    }))
+    .filter((r) => r.publishId && r.accountId);
+}
+
+/** 尽力而为地删除抖音侧视频: 失败只记日志, 绝不阻断本地删除 */
+async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ accountName: string; ok: boolean; error?: string }>> {
+  const out: Array<{ accountName: string; ok: boolean; error?: string }> = [];
+  let recs: Awaited<ReturnType<typeof findDouyinSyncRecords>> = [];
+  try { recs = await findDouyinSyncRecords(contentId); } catch { return out; }
+  for (const r of recs) {
+    try {
+      const { loadDecryptedAccount, ensureFreshAccessToken } = await import("../services/publisher/credentials-loader.js");
+      const { refreshDouyinCredentials, deleteVideo } = await import("../services/publisher/douyin-open-api.js");
+      const acct = await loadDecryptedAccount(r.accountId!, r.tenantId);
+      if (!acct?.credentials?.refreshToken || !acct?.credentials?.openId) {
+        out.push({ accountName: r.accountName, ok: false, error: "账号未 OAuth 授权, 无法远程删除" });
+        continue;
+      }
+      const token = await ensureFreshAccessToken({
+        accountId: r.accountId!,
+        tenantId: r.tenantId,
+        credentials: acct.credentials,
+        refresh: () => refreshDouyinCredentials(acct.credentials),
+      });
+      await deleteVideo(token, acct.credentials.openId, r.publishId!);
+      out.push({ accountName: r.accountName, ok: true });
+      logger.info({ contentId, accountName: r.accountName, itemId: r.publishId }, "抖音同步删除成功");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "删除失败";
+      out.push({ accountName: r.accountName, ok: false, error: msg });
+      logger.warn({ contentId, accountName: r.accountName, err: msg }, "抖音同步删除失败(本地删除不受影响)");
+    }
+  }
+  return out;
+}
+
+  /**
+   * 6-11: GET /content/:id/douyin-sync-state — 该内容是否有已同步到抖音的视频(删除确认时显示「同步删除」勾选)
+   */
+  app.get("/:id/douyin-sync-state", async (request) => {
+    const { id } = request.params as { id: string };
+    const recs = await findDouyinSyncRecords(id).catch(() => []);
+    return { code: "OK", data: { count: recs.length, accountNames: recs.map((r) => r.accountName) } };
+  });
+
   /**
    * DELETE /content/:id - 删除内容
    */
   app.delete("/:id", async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
+      const { syncDouyin } = request.query as { syncDouyin?: string };
+
+      // 6-11 合规: 用户勾选「同步删除抖音侧视频」→ 先尽力远程删, 再删本地(远程失败不阻断)
+      let douyinDelete: Array<{ accountName: string; ok: boolean; error?: string }> | undefined;
+      if (syncDouyin === "1" || syncDouyin === "true") {
+        douyinDelete = await tryDeleteDouyinVideos(id);
+      }
 
       // 列表用 READABLE_TENANT_FILTER(含系统租户的每日自动生成内容), 删除也放开到同一范围,
       // 否则"看得见删不掉"→404。(与本文件 line ~254 的操作 handler 一致)
@@ -666,7 +732,7 @@ export async function contentRoutes(app: FastifyInstance) {
 
       logger.info({ contentId: id }, "内容删除成功");
 
-      return { code: "OK", data: { id } };
+      return { code: "OK", data: { id, douyinDelete } };
     } catch (err) {
       logger.error({ err }, "删除内容失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });

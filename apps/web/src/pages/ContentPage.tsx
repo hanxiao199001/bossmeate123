@@ -86,6 +86,20 @@ export default function ContentPage() {
 
   // 删除确认
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 6-11 抖音合规「是否同步删除」: 点删除时查该内容是否同步过抖音, 有则显示勾选(默认勾上)
+  const [douyinSync, setDouyinSync] = useState<{ count: number; accountNames: string[] }>({ count: 0, accountNames: [] });
+  const [syncDeleteDouyin, setSyncDeleteDouyin] = useState(true);
+
+  const startDelete = async (id: string) => {
+    setDeletingId(id);
+    setSyncDeleteDouyin(true);
+    setDouyinSync({ count: 0, accountNames: [] });
+    try {
+      const r = await api.get<{ data?: { count: number; accountNames: string[] } }>(`/content/${id}/douyin-sync-state`);
+      const d = (r as any).data ?? r;
+      if (d?.count > 0) setDouyinSync(d);
+    } catch { /* 查询失败不影响删除 */ }
+  };
 
   const pageSize = 20;
   const totalPages = Math.ceil(total / pageSize);
@@ -186,7 +200,8 @@ export default function ContentPage() {
   // 删除内容
   const handleDelete = async (id: string) => {
     try {
-      await api.delete(`/content/${id}`);
+      const sync = douyinSync.count > 0 && syncDeleteDouyin ? "?syncDouyin=1" : "";
+      await api.delete(`/content/${id}${sync}`);
       setDeletingId(null);
       fetchContents();
       fetchStats();
@@ -522,6 +537,17 @@ export default function ContentPage() {
                     {/* 删除 */}
                     {deletingId === item.id ? (
                       <span className="flex items-center gap-1">
+                        {douyinSync.count > 0 && (
+                          <label className="flex items-center gap-1 text-[11px] text-slate-500 mr-1 cursor-pointer" title={`已同步到: ${douyinSync.accountNames.join("、")}`}>
+                            <input
+                              type="checkbox"
+                              checked={syncDeleteDouyin}
+                              onChange={(e) => setSyncDeleteDouyin(e.target.checked)}
+                              className="accent-indigo-600 h-3 w-3"
+                            />
+                            同步删除抖音侧视频({douyinSync.count})
+                          </label>
+                        )}
                         <button
                           onClick={() => handleDelete(item.id)}
                           className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 font-medium"
@@ -537,7 +563,7 @@ export default function ContentPage() {
                       </span>
                     ) : (
                       <button
-                        onClick={() => setDeletingId(item.id)}
+                        onClick={() => startDelete(item.id)}
                         className="text-xs text-gray-400 hover:text-red-500 px-2 py-1 rounded hover:bg-red-50"
                       >
                         删除

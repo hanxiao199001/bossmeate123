@@ -292,6 +292,20 @@ export async function uploadVideo(accessToken: string, openId: string, buf: Buff
   return videoId;
 }
 
+/**
+ * 删除抖音侧视频(「是否同步删除」合规要求 — 使用规范: 需支持用户勾选是否同步删除)。
+ * ⚠️ 端点为旧版 OAuth API 文档的 /video/delete/(scope video.delete.bind), 现行 v1 文档未单列删除接口;
+ *    能力实验室申请时把删除能力一并勾选, 本接口待能力开通后实测。失败由调用方降级(只记日志不阻断)。
+ */
+export async function deleteVideo(accessToken: string, openId: string, itemId: string): Promise<void> {
+  const resp = await fetch(`${OPEN_API}/video/delete/?open_id=${encodeURIComponent(openId)}`, {
+    method: "POST",
+    headers: { "access-token": accessToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: itemId }),
+  });
+  assertOk((await resp.json()) as DouyinApiResp, "删除视频");
+}
+
 export interface CreateVideoParams {
   videoId: string;
   /** 标题+话题+@，≤1000 字。话题命名避免强导流（官方审核红线） */

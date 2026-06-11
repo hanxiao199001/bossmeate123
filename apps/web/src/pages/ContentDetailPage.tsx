@@ -173,6 +173,8 @@ export default function ContentDetailPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  // 6-11 抖音合规「是否同步」: 选中抖音账号时显示明确告知+可取消勾选(使用规范硬要求)
+  const [syncToDouyin, setSyncToDouyin] = useState(true);
   const [publishResults, setPublishResults] = useState<PublishResult[]>([]);
 
   // PR #264/#266: 抖音半自动发布助手 (多号差异化文案 + 复制 + 发布勾选)
@@ -463,7 +465,11 @@ export default function ContentDetailPage() {
     try {
       // PR-S6: 统一入口 — 抖音/视频号走"推草稿箱"(浏览器登录态, 不要 API 凭证), 其余平台走 /publish
       const SEMI = ["douyin", "wechat_video"];
-      const selected = accounts.filter((a) => selectedAccountIds.includes(a.id));
+      // 6-11 合规: 取消「同步到抖音」勾选 → 本次发布剔除抖音账号
+      const effectiveIds = syncToDouyin
+        ? selectedAccountIds
+        : selectedAccountIds.filter((aid) => accounts.find((a) => a.id === aid)?.platform !== "douyin");
+      const selected = accounts.filter((a) => effectiveIds.includes(a.id));
       const draftAccts = selected.filter((a) => SEMI.includes(a.platform));
       const apiAccts = selected.filter((a) => !SEMI.includes(a.platform));
       const collected: PublishResult[] = [];
@@ -848,6 +854,29 @@ export default function ContentDetailPage() {
                     showGroupSelectAll
                   />
                 </div>
+
+                {/* 6-11 抖音合规告知: 明确同步到哪个抖音号 + 可勾选「是否同步」(使用规范硬要求) */}
+                {(() => {
+                  const douyinSelected = accounts.filter(
+                    (a) => a.platform === "douyin" && selectedAccountIds.includes(a.id)
+                  );
+                  if (douyinSelected.length === 0) return null;
+                  return (
+                    <label className="flex items-start gap-2 mb-3 p-2.5 rounded-lg bg-slate-50 border border-slate-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={syncToDouyin}
+                        onChange={(e) => setSyncToDouyin(e.target.checked)}
+                        className="accent-indigo-600 mt-0.5"
+                      />
+                      <span className="text-xs text-slate-600 leading-relaxed">
+                        本内容(含视频、标题、话题)将同步发布到抖音账号:
+                        <span className="font-medium text-slate-800"> {douyinSelected.map((a) => `@${a.accountName}`).join("、")}</span>
+                        。取消勾选则本次不同步到抖音。在内容列表删除该内容时,可选择同步删除抖音侧视频。
+                      </span>
+                    </label>
+                  );
+                })()}
 
                 {/* 发布按钮和结果 */}
                 <div className="flex items-center gap-3">
