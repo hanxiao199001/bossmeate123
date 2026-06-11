@@ -181,15 +181,18 @@ export async function agentPublishRoutes(app: FastifyInstance) {
      * 并发安全: 子查询 FOR UPDATE SKIP LOCKED — 多设备同时 claim 时, 已被其他事务
      * 锁住的行直接跳过(不阻塞不重复), UPDATE 整句单事务原子完成, 一行任务只会被领走一次。
      */
-    authed.post("/agent/tasks/claim", async (request) => {
+    authed.post("/agent/tasks/claim", async (request, reply) => {
       const device = request.agentDevice!;
+      try {
       const body = (request.body ?? {}) as { platforms?: string[]; limit?: number };
       const limit = Math.min(Math.max(Math.floor(Number(body.limit) || 1), 1), 10);
       const platforms = Array.isArray(body.platforms)
         ? body.platforms.filter((p) => typeof p === "string" && p.length <= 20).slice(0, 10)
         : [];
+      // 6-11 真机首跑修复: drizzle 对 sql 模板里的 JS 数组参数会展开成多值而非 pg 数组,
+      // ANY(${arr}::text[]) 生成非法 SQL → 500。改为逐参数 IN 列表(各值独立占位符, 同样防注入)。
       const platformFilter = platforms.length > 0
-        ? sql` AND platform = ANY(${platforms}::text[])`
+        ? sql` AND platform IN (${sql.join(platforms.map((p) => sql`${p}`), sql`, `)})`
         : sql``;
 
       const result = await db.execute(sql`
@@ -228,6 +231,10 @@ export async function agentPublishRoutes(app: FastifyInstance) {
           })),
         },
       };
+      } catch (err) {
+        logger.error({ err, deviceId: device.id }, "agent claim 失败");
+        return reply.code(500).send({ code: "CLAIM_FAILED", message: err instanceof Error ? err.message : "领单失败" });
+      }
     });
 
     /**
