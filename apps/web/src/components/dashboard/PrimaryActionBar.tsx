@@ -1,7 +1,7 @@
 /**
  * 5-21 P0 — 主 CTA 条。
  * 双模:
- *  normal: 2 主 CTA (内容工坊 / 销售雷达) + 1 次 CTA (视频)
+ *  normal: 2 主 CTA (内容工坊 / 销售雷达); 视频快捷按钮 6-11 已撤(入口收敛工坊)
  *  empty:  "今天还没开始, 一键启动" 单大按钮
  */
 import { Link } from "react-router-dom";
@@ -51,13 +51,7 @@ export default function PrimaryActionBar({ mode }: PrimaryActionBarProps) {
         </span>
         <span className="text-xs opacity-80">热线索优先</span>
       </Link>
-      <Link
-        to="/video/create"
-        className="px-4 py-3 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-xl hover:border-purple-300 hover:text-purple-600 transition-all"
-        title="一键生成视频"
-      >
-        🎬 视频
-      </Link>
+      {/* 6-11 老韩拍板撤掉首页视频快捷按钮 — 图转视频入口收敛到工坊「生成视频」弹窗的图转视频选项卡 */}
     </section>
   );
 }
