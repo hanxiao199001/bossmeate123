@@ -24,7 +24,10 @@ interface AgentDevice {
   lastSeenAt: string | null;
   version: string | null;
   online: boolean;
+  accounts?: Array<{ accountName: string; platform: string }>; // PR-A16: 该设备持有登录态的账号
 }
+
+const AGENT_PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号" };
 
 function formatLastSeen(lastSeenAt: string | null): string {
   if (!lastSeenAt) return "从未上线";
@@ -408,6 +411,14 @@ export default function SettingsPage() {
                           {d.version ? `v${d.version.replace(/^v/, "")}` : "版本未知"} ·{" "}
                           <span className={statusColor}>{statusText}</span>
                         </div>
+                        {(d.accounts?.length ?? 0) > 0 && (
+                          <div className="text-xs text-gray-500 mt-0.5 truncate">
+                            持有登录:{" "}
+                            {d.accounts!
+                              .map((a) => `${AGENT_PLATFORM_LABEL[a.platform] ?? a.platform}·${a.accountName}`)
+                              .join("、")}
+                          </div>
+                        )}
                       </div>
                       {!revoked && (
                         <button

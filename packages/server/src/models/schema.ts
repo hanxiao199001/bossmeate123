@@ -777,6 +777,9 @@ export const platformAccounts = pgTable(
     // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
     capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
+    // PR-A16: 账号↔设备绑定 — 该账号浏览器登录态在哪台客户机 (NULL=未绑定, 任意设备可领;
+    // 设备首次成功完成该账号任务时自动绑定; 设备 ON DELETE SET NULL 自动解绑)
+    agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id, { onDelete: "set null" }),
     // PR-K: 账号期刊定位 — domestic=只做国内核心 / international=只做国外期刊 / both=两者都做(默认)
     journalScope: varchar("journal_scope", { length: 20 }).notNull().default("both"),
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）

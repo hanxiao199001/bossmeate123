@@ -153,4 +153,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_apt_content ON agent_publish_tasks (content_id);
     `,
   },
+  {
+    version: "008_pa_agent_device_binding",
+    description:
+      "PR-A16: 账号↔设备绑定 — platform_accounts.agent_device_id (该账号浏览器登录态在哪台客户机)。claim 按绑定路由: 未绑定任意设备可领, 已绑定只派持有登录态的那台; 设备首次成功完成该账号任务时自动绑定。多客户机不再互抢任务导致 login_expired",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS agent_device_id UUID REFERENCES agent_devices(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_pa_agent_device ON platform_accounts (agent_device_id);
+    `,
+  },
 ];

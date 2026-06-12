@@ -192,7 +192,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       // 6-11 真机首跑修复: drizzle 对 sql 模板里的 JS 数组参数会展开成多值而非 pg 数组,
       // ANY(${arr}::text[]) 生成非法 SQL → 500。改为逐参数 IN 列表(各值独立占位符, 同样防注入)。
       const platformFilter = platforms.length > 0
-        ? sql` AND platform IN (${sql.join(platforms.map((p) => sql`${p}`), sql`, `)})`
+        ? sql` AND apt.platform IN (${sql.join(platforms.map((p) => sql`${p}`), sql`, `)})`
         : sql``;
 
       const result = await db.execute(sql`
@@ -203,11 +203,13 @@ export async function agentPublishRoutes(app: FastifyInstance) {
             attempts = attempts + 1,
             updated_at = NOW()
         WHERE id IN (
-          SELECT id FROM agent_publish_tasks
-          WHERE tenant_id = ${device.tenantId} AND status = 'pending'${platformFilter}
-          ORDER BY created_at
+          SELECT apt.id FROM agent_publish_tasks apt
+          JOIN platform_accounts pa ON pa.id = apt.account_id
+          WHERE apt.tenant_id = ${device.tenantId} AND apt.status = 'pending'${platformFilter}
+            AND (pa.agent_device_id IS NULL OR pa.agent_device_id = ${device.id})
+          ORDER BY apt.created_at
           LIMIT ${limit}
-          FOR UPDATE SKIP LOCKED
+          FOR UPDATE OF apt SKIP LOCKED
         )
         RETURNING id, content_id, account_id, platform, account_name, video_source, caption, title, attempts
       `);
@@ -302,6 +304,14 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         })
         .where(eq(agentPublishTasks.id, task.id));
 
+      // PR-A16: 设备成功推完该账号的任务 = 该设备持有此账号登录态 → 自动绑定 (后续任务只派它)
+      if (body.status === "success" || body.status === "manual_pending") {
+        await db
+          .update(platformAccounts)
+          .set({ agentDeviceId: device.id, updatedAt: new Date() })
+          .where(and(eq(platformAccounts.id, task.accountId), eq(platformAccounts.tenantId, device.tenantId)));
+      }
+
       if (body.status === "success") {
         await db
           .insert(contentPublishLog)
@@ -350,6 +360,22 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       .from(agentDevices)
       .where(eq(agentDevices.tenantId, request.tenantId))
       .orderBy(desc(agentDevices.createdAt));
+    // PR-A16: 各设备绑定的账号 (登录态持有关系), 一次查全租户再按设备归组
+    const boundAccounts = await db
+      .select({
+        deviceId: platformAccounts.agentDeviceId,
+        accountName: platformAccounts.accountName,
+        platform: platformAccounts.platform,
+      })
+      .from(platformAccounts)
+      .where(eq(platformAccounts.tenantId, request.tenantId));
+    const accountsByDevice = new Map<string, Array<{ accountName: string; platform: string }>>();
+    for (const a of boundAccounts) {
+      if (!a.deviceId) continue;
+      const list = accountsByDevice.get(a.deviceId) ?? [];
+      list.push({ accountName: a.accountName, platform: a.platform });
+      accountsByDevice.set(a.deviceId, list);
+    }
     const now = Date.now();
     return {
       code: "OK",
@@ -357,6 +383,7 @@ export async function agentAdminRoutes(app: FastifyInstance) {
         devices: rows.map((d) => ({
           ...d,
           online: d.status === "active" && !!d.lastSeenAt && now - d.lastSeenAt.getTime() < 90_000,
+          accounts: accountsByDevice.get(d.id) ?? [],
         })),
       },
     };

@@ -26,6 +26,8 @@ import { AgentApi, ApiError, type AgentAccount, type AgentTask } from "./api.js"
 import { logger } from "./log.js";
 import { isLoggedIn, launchAccountBrowser, openPlatformHome } from "./browser.js";
 import { PLATFORM_PUSHERS } from "./pushers.js";
+import { notify } from "./notify.js";
+import { cmdInstallService, cmdServiceStatus, cmdUninstallService } from "./service.js";
 
 const AGENT_VERSION = "0.1.0";
 
@@ -199,6 +201,7 @@ async function cmdStatus(args: string[]): Promise<void> {
 // ===== run =====
 function warnLoginExpired(task: AgentTask): void {
   const label = platformLabel(task.platform);
+  notify("BossMate: 账号登录失效", `[${label}] ${task.accountName} 需要重新扫码 (bossmate-agent login)`);
   console.error("");
   console.error("  ⚠️ ════════════════════════════════════════════════════════");
   console.error(`  ⚠️  账号 [${label}] ${task.accountName} 本机登录态已失效!`);
@@ -265,6 +268,7 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
       keptBrowsers.set(task.accountId, browser);
       await api.reportResult(task.id, "manual_pending", result.message ?? "已填好, 请人工点发布");
       logger.warn(`🟡 任务 ${task.id.slice(0, 8)}… [${label}] ${task.accountName}: 已填好停在发布页 — 请在浏览器点【发布】, 完成后关闭该窗口`);
+      notify("BossMate: 待你点发布", `[${label}] ${task.accountName} 内容已填好, 去浏览器窗口点【发布】(可能要过一次短信验证)`);
     } else {
       await api.reportResult(task.id, "success");
       logger.info(`任务 ${task.id.slice(0, 8)}… 完成: 草稿已推到 [${label}] ${task.accountName}, 请在平台后台确认发布`);
@@ -277,6 +281,7 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
       warnLoginExpired(task);
     } else {
       logger.error({ taskId: task.id, err: msg }, "任务执行失败");
+      notify("BossMate: 任务失败", `[${label}] ${task.accountName}: ${msg.slice(0, 80)}`);
       await captureFailShot(page, task);
       await api.reportResult(task.id, "failed", msg.slice(0, 500))
         .catch((e) => logger.error("回报 failed 失败:", e instanceof Error ? e.message : e));
@@ -367,6 +372,9 @@ function printHelp(): void {
   login [--all]                         本地浏览器扫码登录平台账号 (--all 全部账号依次扫码)
   status [--fast]                       服务器连通 + 各账号登录态体检 (--fast 只看本地档案, 不开浏览器)
   run                                   主循环: 每 15s 领任务 → 本地浏览器推草稿到视频号/抖音 → 回报
+  install-service                       安装常驻服务 (macOS): 开机自启+崩溃自动拉起, 不用开终端
+  uninstall-service                     卸载常驻服务
+  service-status                        查看常驻服务运行状态
   help                                  显示本帮助
 
 示例:
@@ -385,6 +393,9 @@ async function main(): Promise<void> {
     case "login": return cmdLogin(rest);
     case "status": return cmdStatus(rest);
     case "run": return cmdRun();
+    case "install-service": return cmdInstallService();
+    case "uninstall-service": return cmdUninstallService();
+    case "service-status": return cmdServiceStatus();
     case undefined:
     case "help":
     case "--help":
