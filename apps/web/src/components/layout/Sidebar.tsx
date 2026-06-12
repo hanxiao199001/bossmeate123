@@ -18,6 +18,7 @@ import {
   IconSettings,
   IconBarChart,
   IconLogOut,
+  IconSparkles,
   type IconProps,
 } from "../ui/Icons";
 
@@ -30,6 +31,7 @@ interface NavItem {
 
 const PRIMARY_NAV: NavItem[] = [
   { to: "/", icon: IconHome, label: "首页", matchPrefix: "" }, // 精确匹配 / 即可
+  { to: "/today", icon: IconSparkles, label: "今日", matchPrefix: "/today" }, // PR-W2 驾驶舱
   { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench" },
   { to: "/content", icon: IconFolder, label: "内容管理", matchPrefix: "/content" },
   { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar" },

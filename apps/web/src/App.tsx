@@ -11,6 +11,7 @@ import ChatPage from "./pages/ChatPage";
 import ContentPage from "./pages/ContentPage";
 import ContentDetailPage from "./pages/ContentDetailPage";
 import DashboardPage from "./pages/DashboardPage";
+import TodayPage from "./pages/TodayPage"; // PR-W2 今日驾驶舱
 // 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
 // import KeywordsPage from "./pages/KeywordsPage";
 import WorkflowPage from "./pages/WorkflowPage";
@@ -90,6 +91,18 @@ export default function App() {
         }
       />
       <Route path="/recommendations" element={<Navigate to="/workbench" replace />} />
+
+      {/* PR-W2: 今日驾驶舱 — 老板每日工作流统一入口 */}
+      <Route
+        path="/today"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <TodayPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
 
       {/* 5-21 P3 销售雷达 (老板视角 hero + 5 tab + leads list) */}
       <Route

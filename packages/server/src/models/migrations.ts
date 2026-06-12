@@ -162,4 +162,22 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_pa_agent_device ON platform_accounts (agent_device_id);
     `,
   },
+  {
+    version: "009_cost_ledger",
+    description:
+      "PR-W1: 成本台账 — 每笔真金白银扣费(DVH合成/TTS/渲染/LLM)记一行流水, 按租户+时间可聚合出今日/本月消耗; 预算闸与今日驾驶舱的数据底座",
+    sql: `
+      CREATE TABLE IF NOT EXISTS cost_ledger (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        kind VARCHAR(20) NOT NULL,
+        content_id UUID REFERENCES contents(id) ON DELETE SET NULL,
+        amount_cents INTEGER NOT NULL,
+        quantity INTEGER,
+        note VARCHAR(300),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_cost_ledger_tenant_time ON cost_ledger (tenant_id, created_at DESC);
+    `,
+  },
 ];

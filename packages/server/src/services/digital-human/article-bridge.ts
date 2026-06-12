@@ -13,6 +13,7 @@ import { queryDvhTaskUntilDone } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
+import { checkBudget, estimateDvhCents, recordCost, DVH_CENTS_PER_SECOND } from "../billing/cost-ledger.js";
 
 export interface DvhBridgeOptions {
   db: typeof dbType;
@@ -62,12 +63,24 @@ async function produceVideo(text: string, title: string, templateId: TemplateId,
   let taskUuid: string | undefined;
   let rawVideoUrl: string | undefined;
   let durationMs = 0;
+  // PR-W1 预算闸: submit 即扣费, 所以闸必须在 submit 之前。超限直接抛 — 不退 mock, 让调用方看到原因。
+  const gate = await checkBudget(tenantId, estimateDvhCents(text));
+  if (!gate.allowed) {
+    throw new Error(`BUDGET_EXCEEDED: ${gate.reason}`);
+  }
   try {
     const submit = await submitDvhTask({ text, templateId, tenantId, title });
     taskUuid = submit.taskUuid;
     const query = await queryDvhTaskUntilDone(taskUuid);
     rawVideoUrl = query.videoUrl;   // ★ 付费产物到手 — 此后不可丢
     durationMs = query.durationMs;
+    // PR-W1 成本台账: 拿到付费产物即记账 (0.165元/秒)。fire-and-forget, 不影响主流程。
+    void recordCost({
+      tenantId, kind: "dvh",
+      amountCents: Math.round((durationMs / 1000) * DVH_CENTS_PER_SECOND),
+      quantity: Math.round(durationMs / 1000),
+      note: `DVH合成 ${title.slice(0, 50)} (task ${taskUuid})`,
+    });
     // PR #252: ffmpeg burn-in 自定义字幕. postprocess 内部已 fallback 原 videoUrl, 正常不抛.
     const pp = await postprocessVideoWithSubtitle({
       videoUrl: rawVideoUrl,
@@ -85,6 +98,12 @@ async function produceVideo(text: string, title: string, templateId: TemplateId,
     // ★ submit 成功 (已扣费) 但 query 失败/超时: 阿里云任务可能仍在跑/已完成. 记 orphanTaskUuid 供后续 recover, 不静默吞.
     if (taskUuid) {
       logger.error({ err: msg, taskUuid }, "dvh.bridge.paid_task_orphaned_query_failed");
+      // PR-W1: submit 已扣费但拿不到实际时长 — 按预估记账, note 标孤儿供核对
+      void recordCost({
+        tenantId, kind: "dvh",
+        amountCents: estimateDvhCents(text),
+        note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
+      });
       const m = getMockDvhFixture(templateId);
       return { ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false };
     }

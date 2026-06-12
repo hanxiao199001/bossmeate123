@@ -94,6 +94,17 @@ export async function articlesRoutes(app: FastifyInstance) {
       });
     }
 
+    // PR-W1 预算闸前置: fire-and-forget 之前先查, 超限给用户看得见的 403 而不是静默不出片
+    {
+      const { checkBudget, estimateDvhCents } = await import("../services/billing/cost-ledger.js");
+      const meta = article.metadata as { videoScript?: string } | null;
+      const narration = meta?.videoScript ?? "x".repeat(300); // 没脚本按 90 秒保守预估
+      const gate = await checkBudget(request.tenantId, estimateDvhCents(narration));
+      if (!gate.allowed) {
+        return reply.code(403).send({ code: "BUDGET_EXCEEDED", message: gate.reason });
+      }
+    }
+
     void triggerDvhFromArticle({
       db,
       tenantId: request.tenantId,

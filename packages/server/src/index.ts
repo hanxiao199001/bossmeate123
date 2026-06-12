@@ -24,6 +24,7 @@ import { wechatRoutes } from "./routes/wechat.js";
 import { wechatCallbackRoutes } from "./routes/wechat-callback.js";
 import { douyinCallbackRoutes } from "./routes/douyin-callback.js";
 import { agentPublishRoutes, agentAdminRoutes } from "./routes/agent.js";
+import { todayRoutes } from "./routes/today.js";
 import { workWechatCallbackRoutes } from "./routes/work-wechat-callback.js";
 import { accountRoutes } from "./routes/accounts.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
@@ -195,6 +196,7 @@ async function bootstrap() {
     await protectedApp.register(videoRoutes, { prefix: `${env.API_PREFIX}/video` });
     // Agent-1 (B轨): Agent 设备管理 + 派单（用户 JWT）
     await protectedApp.register(agentAdminRoutes, { prefix: env.API_PREFIX });
+    await protectedApp.register(todayRoutes, { prefix: env.API_PREFIX }); // PR-W2 今日驾驶舱
   });
 
   // 初始化 AI 提供商

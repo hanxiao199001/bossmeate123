@@ -1166,6 +1166,26 @@ export const journalUsage = pgTable(
 // ============ Agent-1 (B轨): 本地发布 Agent — 设备表 ============
 // 本地 Agent 跑在客户电脑(家用IP+有头浏览器), 轮询服务器领发布任务。
 // token 明文只在配对响应出现一次, 服务端只存 sha256 hex (token_hash)。
+// ============ PR-W1: 成本台账 — 真金白银扣费流水 ============
+// kind: dvh(数字人合成 0.165元/秒) | tts | render | llm。amount_cents 人民币分。
+// quantity: 计量数 (dvh=秒)。今日/本月消耗 = SUM(amount_cents) WHERE created_at 范围。
+export const costLedger = pgTable(
+  "cost_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "set null" }),
+    amountCents: integer("amount_cents").notNull(),
+    quantity: integer("quantity"),
+    note: varchar("note", { length: 300 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_cost_ledger_tenant_time").on(table.tenantId, table.createdAt),
+  ]
+);
+
 export const agentDevices = pgTable(
   "agent_devices",
   {
