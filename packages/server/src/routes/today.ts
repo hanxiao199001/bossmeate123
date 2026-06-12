@@ -9,7 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { agentPublishTasks, contentPublishLog, contents, tenants } from "../models/schema.js";
+import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenants } from "../models/schema.js";
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 
 function startOfToday(): Date {
@@ -23,7 +23,7 @@ export async function todayRoutes(app: FastifyInstance) {
     const tenantId = request.tenantId;
     const since = startOfToday();
 
-    const [rows, tasks, [pubCount], spend, [tenant]] = await Promise.all([
+    const [rows, tasks, [pubCount], spend, [tenant], accounts, pubByAccount] = await Promise.all([
       db
         .select({
           id: contents.id,
@@ -40,6 +40,7 @@ export async function todayRoutes(app: FastifyInstance) {
       db
         .select({
           id: agentPublishTasks.id,
+          accountId: agentPublishTasks.accountId,
           platform: agentPublishTasks.platform,
           accountName: agentPublishTasks.accountName,
           status: agentPublishTasks.status,
@@ -56,7 +57,36 @@ export async function todayRoutes(app: FastifyInstance) {
         .where(and(eq(contentPublishLog.tenantId, tenantId), gte(contentPublishLog.createdAt, since))),
       getSpend(tenantId),
       db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, tenantId)).limit(1),
+      // PR-W3 账号发布矩阵: 全部启用账号
+      db
+        .select({
+          id: platformAccounts.id,
+          platform: platformAccounts.platform,
+          accountName: platformAccounts.accountName,
+        })
+        .from(platformAccounts)
+        .where(and(eq(platformAccounts.tenantId, tenantId), eq(platformAccounts.status, "active")))
+        .orderBy(platformAccounts.platform, platformAccounts.accountName),
+      // 各账号今日发布数 (publish log)
+      db
+        .select({
+          accountId: contentPublishLog.accountId,
+          count: sql<string>`COUNT(*)`,
+        })
+        .from(contentPublishLog)
+        .where(and(eq(contentPublishLog.tenantId, tenantId), gte(contentPublishLog.createdAt, since)))
+        .groupBy(contentPublishLog.accountId),
     ]);
+
+    // 各账号今日 Agent 队列数 (pending/claimed/manual_pending 算在途)
+    const queueByAccount = new Map<string, number>();
+    for (const t of tasks) {
+      if (t.status === "pending" || t.status === "claimed" || t.status === "manual_pending") {
+        const accId = (t as { accountId?: string }).accountId;
+        if (accId) queueByAccount.set(accId, (queueByAccount.get(accId) ?? 0) + 1);
+      }
+    }
+    const pubMap = new Map(pubByAccount.map((r) => [r.accountId, Number(r.count)]));
 
     const budget: BudgetConfig =
       ((tenant?.config as { budgetConfig?: BudgetConfig } | null)?.budgetConfig) ?? {};
@@ -78,6 +108,11 @@ export async function todayRoutes(app: FastifyInstance) {
           };
         }),
         agentTasks: tasks,
+        accounts: accounts.map((a) => ({
+          ...a,
+          publishedToday: pubMap.get(a.id) ?? 0,
+          queuedToday: queueByAccount.get(a.id) ?? 0,
+        })),
         publishedToday: Number(pubCount?.count ?? 0),
         spend: { todayCents: spend.todayCents, monthCents: spend.monthCents },
         budget,
