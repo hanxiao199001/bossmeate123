@@ -792,6 +792,57 @@ export async function adminRoutes(app: FastifyInstance) {
 
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // PR-Z4
 
+  /**
+   * PR-Y1: 企业画像链路 (跨行业客户开通) — 三步:
+   *   1. POST /admin/onboarding/profile {materials[], questionnaire?} → 提炼画像存 tenant config
+   *   2. POST /admin/onboarding/derive-accounts {overwrite?} → 每号角色定位+persona 回写
+   *   3. POST /admin/onboarding/topic-pool {count?} → 选题池入 keywords (tenant 私有)
+   * 注: 作用于"调用者自己的租户" — 给客户开通时用客户租户的 admin 身份调用。
+   */
+  app.post("/onboarding/profile", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { materials?: unknown[]; questionnaire?: Record<string, string> };
+    const materials = (Array.isArray(body.materials) ? body.materials : [])
+      .map(String).map((m) => m.trim()).filter((m) => m.length >= 50).slice(0, 10);
+    if (materials.length === 0) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "至少提供 1 段 ≥50 字的公司资料 (官网/产品介绍/历史文章)" });
+    }
+    try {
+      const { extractCompanyProfile } = await import("../services/onboarding/company-profile.js");
+      const profile = await extractCompanyProfile({
+        tenantId: request.tenantId, userId: request.user.userId,
+        materials, questionnaire: body.questionnaire,
+      });
+      return { code: "OK", data: { profile } };
+    } catch (err) {
+      logger.error({ err }, "PR-Y1 画像提炼失败");
+      return reply.code(500).send({ code: "PROFILE_FAILED", message: err instanceof Error ? err.message : "画像提炼失败" });
+    }
+  });
+  app.post("/onboarding/derive-accounts", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { overwrite?: boolean };
+    try {
+      const { deriveAccountPositioning } = await import("../services/onboarding/company-profile.js");
+      const result = await deriveAccountPositioning({
+        tenantId: request.tenantId, userId: request.user.userId, overwrite: body.overwrite === true,
+      });
+      return { code: "OK", data: { accounts: result } };
+    } catch (err) {
+      return reply.code(500).send({ code: "DERIVE_FAILED", message: err instanceof Error ? err.message : "定位推导失败" });
+    }
+  });
+  app.post("/onboarding/topic-pool", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { count?: number };
+    try {
+      const { generateTopicPool } = await import("../services/onboarding/company-profile.js");
+      const topics = await generateTopicPool({
+        tenantId: request.tenantId, userId: request.user.userId, count: body.count,
+      });
+      return { code: "OK", data: { topics, count: topics.length } };
+    } catch (err) {
+      return reply.code(500).send({ code: "TOPICS_FAILED", message: err instanceof Error ? err.message : "选题池生成失败" });
+    }
+  });
+
   /** PR-Z4: 租户套餐管理 — {plan, expiresAt, monthlyArticleQuota, monthlyVideoQuota, accountLimit} */
   app.get("/tenant-billing/:tenantId", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const { tenantId } = request.params as { tenantId: string };
