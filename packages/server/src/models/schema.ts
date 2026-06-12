@@ -782,6 +782,10 @@ export const platformAccounts = pgTable(
     agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id, { onDelete: "set null" }),
     // PR-K: 账号期刊定位 — domestic=只做国内核心 / international=只做国外期刊 / both=两者都做(默认)
     journalScope: varchar("journal_scope", { length: 20 }).notNull().default("both"),
+    // PR-W5: 账号领域定位 — 该账号只生成此学科内容 (medicine/psychology/...; NULL=不限, 按日轮换)
+    discipline: varchar("discipline", { length: 20 }),
+    // PR-W5b: 领域定位多选 — 数组, 空=不限按日轮换 (取代单选 discipline)
+    disciplines: jsonb("disciplines").default([]).notNull(),
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
     templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息

@@ -180,4 +180,21 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_cost_ledger_tenant_time ON cost_ledger (tenant_id, created_at DESC);
     `,
   },
+  {
+    version: "010_pa_discipline",
+    description:
+      "PR-W5: 账号领域定位 — platform_accounts.discipline (该账号只生成/发布此学科的内容; NULL=不限按日轮换)。配合一键生成 exclusive 模式: 每账号生成各自领域的专属内容, 解决全账号发同样文章的同质化撞车",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS discipline VARCHAR(20);
+    `,
+  },
+  {
+    version: "011_pa_disciplines_multi",
+    description:
+      "PR-W5b: 账号领域定位改多选 — disciplines JSONB 数组(一个号可跨多领域, 生成时从其领域池选题); 旧单选 discipline 自动迁入数组",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS disciplines JSONB NOT NULL DEFAULT '[]';
+      UPDATE platform_accounts SET disciplines = jsonb_build_array(discipline) WHERE discipline IS NOT NULL AND disciplines = '[]'::jsonb;
+    `,
+  },
 ];

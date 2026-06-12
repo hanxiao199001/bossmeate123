@@ -50,7 +50,15 @@ interface Account {
   platform: string;
   isVerified: boolean;
   status: string;
+  discipline?: string | null; // PR-W5 账号领域定位(旧单选)
+  disciplines?: string[]; // PR-W5b 多选
 }
+
+const DISC_LABEL: Record<string, string> = {
+  medicine: "医学", psychology: "心理", engineering: "工程", economics: "经管",
+  biology: "生物", education: "教育", law: "法学", agriculture: "农林",
+  computer: "计算机", environment: "环境", chemistry: "化学", physics: "物理",
+};
 
 interface ManualGenerateModalProps {
   open: boolean;
@@ -74,6 +82,10 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
   const [skipPublish, setSkipPublish] = useState(false);
+  // PR-W5: exclusive=每账号独家内容(默认, 不撞车); broadcast=同文多发
+  const [assignMode, setAssignMode] = useState<"exclusive" | "broadcast">("exclusive");
+  const pairsRef = useRef<Array<{ batchId: string; accountId: string }>>([]);
+  const [publishNote, setPublishNote] = useState<string | null>(null);
   // 进度
   const [phase, setPhase] = useState<"idle" | "generating" | "done" | "error">("idle");
   const [batchIds, setBatchIds] = useState<string[]>([]);
@@ -112,6 +124,7 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
     if (batchIds.length === 0 || phase !== "generating") return;
     startedAtRef.current = Date.now();
     const doneSet = new Set<string>();
+    const articleByBatch = new Map<string, string>(); // PR-W5: batch→生成的文章
 
     pollRef.current = setInterval(async () => {
       const elapsed = Date.now() - startedAtRef.current;
@@ -129,12 +142,22 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
           const row = (res.data as any)?.rows?.[0];
           if (row?.status === "generated" || row?.status === "failed") {
             doneSet.add(bid);
+            if (row?.status === "generated" && row?.articleId) articleByBatch.set(bid, row.articleId);
             setCompletedCount(doneSet.size);
           }
         } catch { /* ignore */ }
       }
       if (doneSet.size >= batchIds.length) {
         cleanup();
+        // PR-W5: exclusive 配对发布 — 每篇只发自己的账号
+        const pairs = pairsRef.current
+          .map((p) => ({ articleId: articleByBatch.get(p.batchId), accountId: p.accountId }))
+          .filter((p): p is { articleId: string; accountId: string } => !!p.articleId);
+        if (pairs.length > 0) {
+          api.post("/admin/bulk-distribute", { pairs })
+            .then(() => setPublishNote(`已按账号配对派发 ${pairs.length} 个发布任务 (每号独家内容)`))
+            .catch((e: any) => setPublishNote(`生成完成, 但派发失败: ${e?.message ?? "未知错误"}`));
+        }
         setPhase("done");
         setTimeout(() => onComplete(""), 1500);
       }
@@ -165,10 +188,12 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
         count: actualCount,
         template,
         accountIds: skipPublish ? [] : [...selectedAccountIds],
+        assignMode: skipPublish ? "broadcast" : assignMode,
       });
       const data = (res.data as any)?.data ?? res.data;
       const ids = data?.batchIds ?? [];
       if (!ids.length) throw new Error("无 batchId 返回");
+      pairsRef.current = data?.batchAccountPairs ?? [];
       setBatchIds(ids);
     } catch (err: any) {
       setError(err?.response?.data?.message || err?.message || "请求失败");
@@ -323,6 +348,28 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
             </div>
             {/* 6-11 施工包C1 (审计 2.1): 扁平列表 → 统一 AccountSelector (按平台分组 + 平台全选 + 已验证✓) */}
             {!skipPublish && (
+              <div className="flex items-center gap-3 mb-2 text-xs">
+                <button type="button" disabled={generating} onClick={() => setAssignMode("exclusive")}
+                  className={`px-2 py-1 rounded-lg border ${assignMode === "exclusive" ? "border-blue-500 bg-blue-50 text-blue-700 font-medium" : "border-gray-200 text-gray-500"}`}>
+                  每号独家内容 (按账号领域, 互不重复)
+                </button>
+                <button type="button" disabled={generating} onClick={() => setAssignMode("broadcast")}
+                  className={`px-2 py-1 rounded-lg border ${assignMode === "broadcast" ? "border-blue-500 bg-blue-50 text-blue-700 font-medium" : "border-gray-200 text-gray-500"}`}>
+                  同文多发
+                </button>
+              </div>
+            )}
+            {!skipPublish && assignMode === "exclusive" && (
+              <div className="text-xs text-gray-400 mb-1.5">
+                数量 = 每个账号几篇。账号领域:{" "}
+                {accounts.filter((a) => selectedAccountIds.has(a.id)).map((a) => {
+                  const ds = (a.disciplines && a.disciplines.length > 0) ? a.disciplines : (a.discipline ? [a.discipline] : []);
+                  return `${a.accountName}${ds.length > 0 ? `(${ds.map((d) => DISC_LABEL[d] ?? d).join("·")})` : "(未设·按日轮换)"}`;
+                }).join("、") || "未选账号"}
+                {" "}— 未设定位的去「账号」页配
+              </div>
+            )}
+            {!skipPublish && (
               <div className="max-h-40 overflow-y-auto">
                 <AccountSelector
                   accounts={accounts.filter((a) => a.status === "active" || a.isVerified)}
@@ -341,6 +388,9 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
         {/* Shared: error + progress + buttons (both tabs) */}
         {error && (
           <div className="mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+        )}
+        {publishNote && (
+          <div className="mt-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700">{publishNote}</div>
         )}
 
         {generating && (

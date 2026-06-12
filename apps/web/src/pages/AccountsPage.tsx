@@ -12,6 +12,8 @@ interface Account {
   credentials: Record<string, unknown>;
   groupName?: string;
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
+  discipline?: string | null; // PR-W5 领域定位(旧单选)
+  disciplines?: string[]; // PR-W5b 领域定位多选
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
@@ -313,6 +315,23 @@ const handleScopeChange = async (accountId: string, scope: string) => {
       // 静默, 失败保持原值
     }
   };
+
+  // PR-W5b: 账号领域定位(多选) — 一键生成 exclusive 模式从该号的领域池里选题
+  const handleDisciplineToggle = async (account: Account, disc: string) => {
+    const cur = new Set(account.disciplines ?? (account.discipline ? [account.discipline] : []));
+    cur.has(disc) ? cur.delete(disc) : cur.add(disc);
+    try {
+      await api.patch(`/accounts/${account.id}`, { disciplines: [...cur] });
+      fetchAccounts();
+    } catch { /* 静默 */ }
+  };
+  const [discEditId, setDiscEditId] = useState<string | null>(null);
+  const DISC_OPTIONS: Array<[string, string]> = [
+    ["medicine", "医学"], ["psychology", "心理"], ["engineering", "工程"], ["economics", "经管"],
+    ["biology", "生物"], ["education", "教育"], ["law", "法学"], ["agriculture", "农林"],
+    ["computer", "计算机"], ["environment", "环境"], ["chemistry", "化学"], ["physics", "物理"],
+  ];
+  const discLabel = (v: string) => DISC_OPTIONS.find(([k]) => k === v)?.[1] ?? v;
 
   const handleDelete = async (accountId: string) => {
     if (!confirm("确定要删除这个账号吗？")) return;
@@ -695,7 +714,34 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                 <option value="domestic">国内核心</option>
                                 <option value="international">国外期刊</option>
                               </select>
+                              <button
+                                onClick={() => setDiscEditId(discEditId === account.id ? null : account.id)}
+                                title="领域定位(可多选) — 一键生成时该账号只产这些领域的内容"
+                                className="text-xs px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 cursor-pointer hover:bg-indigo-100"
+                              >
+                                {(() => {
+                                  const ds = account.disciplines ?? (account.discipline ? [account.discipline] : []);
+                                  return ds.length > 0 ? `领域: ${ds.map(discLabel).join("·")}` : "领域不限 ▾";
+                                })()}
+                              </button>
                             </div>
+                            {discEditId === account.id && (
+                              <div className="flex flex-wrap gap-1.5 my-1.5">
+                                {DISC_OPTIONS.map(([k, label]) => {
+                                  const ds = new Set(account.disciplines ?? (account.discipline ? [account.discipline] : []));
+                                  const on = ds.has(k);
+                                  return (
+                                    <button
+                                      key={k}
+                                      onClick={() => handleDisciplineToggle(account, k)}
+                                      className={`text-xs px-2 py-0.5 rounded-full border ${on ? "border-indigo-500 bg-indigo-600 text-white" : "border-gray-200 bg-white text-gray-600 hover:border-indigo-300"}`}
+                                    >
+                                      {label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
                             <div className="flex items-center gap-3 text-xs text-gray-500">
                               <span>创建于 {new Date(account.createdAt).toLocaleDateString("zh-CN")}</span>
                               {account.lastPublishAt && (

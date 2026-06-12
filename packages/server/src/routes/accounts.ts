@@ -29,6 +29,8 @@ const createAccountSchema = z.object({
   groupName: z.string().optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
   journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
+  discipline: z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"]).nullable().optional(), // PR-W5 领域定位(单选, 兼容)
+  disciplines: z.array(z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"])).max(12).optional(), // PR-W5b 多选
 });
 
 const updateAccountSchema = z.object({
@@ -39,6 +41,8 @@ const updateAccountSchema = z.object({
   capability: z.enum(["full", "draft_only"]).optional(),
   templateId: z.string().uuid().nullable().optional(), // PR Q.2: 绑定模板（NULL=用全局默认）
   journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
+  discipline: z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"]).nullable().optional(), // PR-W5 领域定位(单选, 兼容)
+  disciplines: z.array(z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"])).max(12).optional(), // PR-W5b 多选
 });
 
 const publishSchema = z.object({
@@ -146,6 +150,8 @@ export async function accountRoutes(app: FastifyInstance) {
           accountName: body.accountName,
           credentials: encryptedCreds as any,
           groupName: body.groupName,
+          discipline: body.discipline ?? null,
+          disciplines: body.disciplines ?? (body.discipline ? [body.discipline] : []),
           journalScope: body.journalScope ?? "both",
           isVerified: false,
           // 默认 draft_only（保守兜底），仅当前端显式选择"已认证"时才存 full
@@ -228,6 +234,8 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.capability) updateData.capability = body.capability;
       if (body.templateId !== undefined) updateData.templateId = body.templateId;
       if (body.journalScope) updateData.journalScope = body.journalScope;
+      if (body.discipline !== undefined) updateData.discipline = body.discipline; // PR-W5
+      if (body.disciplines !== undefined) updateData.disciplines = body.disciplines; // PR-W5b 多选
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {
