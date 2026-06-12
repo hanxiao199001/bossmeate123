@@ -66,6 +66,16 @@ function yuan(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/** PR-W4: 原始报错 → 人话 (老板不需要看堆栈) */
+function friendlyError(raw: string | null, status: string): string {
+  if (status === "login_expired") return "登录失效 — 需在客户机重新扫码";
+  if (!raw) return "失败";
+  if (/SingletonLock|Failed to launch the browser process|ProcessSingleton/.test(raw)) return "浏览器启动冲突 (旧版本问题, 已修复, 可忽略)";
+  if (/status 须为/.test(raw)) return "服务器版本不匹配 (已修复, 可忽略)";
+  if (/fetch failed|ECONNREFUSED|timeout/i.test(raw)) return "网络波动, 可重派";
+  return raw.slice(0, 60);
+}
+
 export default function TodayPage() {
   const [data, setData] = useState<TodayData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,6 +97,18 @@ export default function TodayPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // PR-W4: 任务收口 — 已发完 / 取消
+  const [finishing, setFinishing] = useState<string | null>(null);
+  const finishTask = async (id: string, action: "published" | "cancel") => {
+    setFinishing(id);
+    try {
+      await api.post(`/agent-admin/tasks/${id}/finish`, { action });
+      void load();
+    } finally {
+      setFinishing(null);
+    }
+  };
 
   // PR-W3: 一键派发 — 视频→本地Agent(dispatch), 文章→服务器发布(/publish)
   const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
@@ -153,7 +175,7 @@ export default function TodayPage() {
   }
 
   const manualTasks = data.agentTasks.filter((t) => t.status === "manual_pending");
-  const failedTasks = data.agentTasks.filter((t) => t.status === "failed" || t.status === "login_expired");
+  const failedTasks = data.agentTasks.filter((t) => t.status === "failed" || t.status === "login_expired").slice(0, 5);
   const articles = data.contents.filter((c) => c.type !== "video");
   const videos = data.contents.filter((c) => c.type === "video");
   const dailyBudget = data.budget.dailyLimitYuan;
@@ -220,17 +242,23 @@ export default function TodayPage() {
           <h2 className="text-sm font-semibold text-amber-800 mb-2">⚡ 等你动手</h2>
           <div className="space-y-1.5">
             {manualTasks.map((t) => (
-              <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800">
-                <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
-                <span className="font-medium">{t.accountName}</span>
-                <span className="text-gray-600">内容已填好停在发布页 — 去弹出的浏览器窗口点【发布】</span>
+              <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800 min-w-0">
+                <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
+                <span className="font-medium shrink-0 whitespace-nowrap">{t.accountName}</span>
+                <span className="text-gray-600 truncate min-w-0 flex-1">已填好停在发布页 — 去浏览器点【发布】</span>
+                <button onClick={() => void finishTask(t.id, "published")} disabled={finishing === t.id}
+                  className="shrink-0 text-xs px-2 py-0.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">已发完 ✓</button>
+                <button onClick={() => void finishTask(t.id, "cancel")} disabled={finishing === t.id}
+                  className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-50">取消</button>
               </div>
             ))}
             {failedTasks.map((t) => (
-              <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800">
-                <span className="px-1.5 py-0.5 rounded text-xs bg-rose-100 text-rose-700">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
-                <span className="font-medium">{t.accountName}</span>
-                <span className="text-rose-600 truncate">{t.status === "login_expired" ? "登录失效, 需在客户机重新扫码" : (t.error ?? "失败")}</span>
+              <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800 min-w-0">
+                <span className="px-1.5 py-0.5 rounded text-xs bg-rose-100 text-rose-700 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
+                <span className="font-medium shrink-0 whitespace-nowrap">{t.accountName}</span>
+                <span className="text-rose-600 truncate min-w-0 flex-1">{friendlyError(t.error, t.status)}</span>
+                <button onClick={() => void finishTask(t.id, "cancel")} disabled={finishing === t.id}
+                  className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-50">忽略</button>
               </div>
             ))}
           </div>
@@ -336,11 +364,11 @@ export default function TodayPage() {
             {data.agentTasks.map((t) => {
               const st = TASK_STATUS[t.status] ?? { label: t.status, cls: "bg-gray-100 text-gray-500" };
               return (
-                <div key={t.id} className="flex items-center gap-2 py-1">
+                <div key={t.id} className="flex items-center gap-2 py-1 min-w-0">
                   <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${st.cls}`}>{st.label}</span>
                   <span className="text-xs text-gray-400 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
-                  <span className="text-sm text-gray-800 truncate">{t.accountName}</span>
-                  {t.error && t.status !== "manual_pending" && <span className="text-xs text-rose-500 truncate">{t.error}</span>}
+                  <span className="text-sm text-gray-800 shrink-0 whitespace-nowrap">{t.accountName}</span>
+                  {(t.status === "failed" || t.status === "login_expired") && <span className="text-xs text-rose-500 truncate min-w-0 flex-1">{friendlyError(t.error, t.status)}</span>}
                 </div>
               );
             })}

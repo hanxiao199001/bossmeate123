@@ -12,10 +12,17 @@ import { db } from "../models/db.js";
 import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenants } from "../models/schema.js";
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 
+/** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
+const BJ_OFFSET_MS = 8 * 3600_000;
+
 function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const bj = new Date(Date.now() + BJ_OFFSET_MS);
+  bj.setUTCHours(0, 0, 0, 0);
+  return new Date(bj.getTime() - BJ_OFFSET_MS);
+}
+
+function todayDateString(): string {
+  return new Date(Date.now() + BJ_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 export async function todayRoutes(app: FastifyInstance) {
@@ -94,7 +101,7 @@ export async function todayRoutes(app: FastifyInstance) {
     return {
       code: "OK",
       data: {
-        date: since.toISOString().slice(0, 10),
+        date: todayDateString(),
         contents: rows.map((r) => {
           const meta = r.metadata as { videoUrl?: string; source?: string } | null;
           return {
@@ -107,7 +114,7 @@ export async function todayRoutes(app: FastifyInstance) {
             source: meta?.source ?? null,
           };
         }),
-        agentTasks: tasks,
+        agentTasks: tasks.map((t) => ({ ...t, error: t.error ? t.error.slice(0, 160) : null })),
         accounts: accounts.map((a) => ({
           ...a,
           publishedToday: pubMap.get(a.id) ?? 0,

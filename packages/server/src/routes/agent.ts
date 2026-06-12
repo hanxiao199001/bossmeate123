@@ -463,6 +463,53 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * POST /agent-admin/tasks/:id/finish {action} — PR-W4 人工收口:
+   *   published: manual_pending → success (用户已在浏览器点完发布) + 写 publish log
+   *   cancel:    pending/manual_pending/failed/login_expired → canceled (清掉不想要的)
+   * 没有这个闭环, manual_pending 会永远挂在今日页"等你动手"里。
+   */
+  app.post("/agent-admin/tasks/:id/finish", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) return reply.code(400).send({ code: "BAD_REQUEST", message: "id 非法" });
+    const body = (request.body ?? {}) as { action?: string };
+    const action = body.action === "published" ? "published" : body.action === "cancel" ? "cancel" : null;
+    if (!action) return reply.code(400).send({ code: "BAD_REQUEST", message: "action 须为 published | cancel" });
+
+    const [task] = await db
+      .select()
+      .from(agentPublishTasks)
+      .where(and(eq(agentPublishTasks.id, id), eq(agentPublishTasks.tenantId, request.tenantId)))
+      .limit(1);
+    if (!task) return reply.code(404).send({ code: "NOT_FOUND", message: "任务不存在" });
+
+    if (action === "published") {
+      if (task.status !== "manual_pending") {
+        return reply.code(409).send({ code: "BAD_STATUS", message: `仅"待人工点发布"的任务可确认已发, 当前为 ${task.status}` });
+      }
+      await db.update(agentPublishTasks)
+        .set({ status: "success", error: null, finishedAt: new Date(), updatedAt: new Date() })
+        .where(eq(agentPublishTasks.id, task.id));
+      await db.insert(contentPublishLog)
+        .values({ tenantId: task.tenantId, contentId: task.contentId, accountId: task.accountId, status: "success", initiatedBy: "agent" })
+        .onConflictDoUpdate({
+          target: [contentPublishLog.contentId, contentPublishLog.accountId],
+          set: { status: "success", initiatedBy: "agent", updatedAt: new Date() },
+        });
+      return { code: "OK", data: { id: task.id, status: "success" } };
+    }
+
+    // cancel
+    const cancelable = new Set(["pending", "manual_pending", "failed", "login_expired"]);
+    if (!cancelable.has(task.status)) {
+      return reply.code(409).send({ code: "BAD_STATUS", message: `状态 ${task.status} 不可取消` });
+    }
+    await db.update(agentPublishTasks)
+      .set({ status: "canceled", finishedAt: new Date(), updatedAt: new Date() })
+      .where(eq(agentPublishTasks.id, task.id));
+    return { code: "OK", data: { id: task.id, status: "canceled" } };
+  });
+
   /** GET /agent-admin/tasks?contentId= — 查任务状态 (前端轮询进度) */
   app.get("/agent-admin/tasks", async (request, reply) => {
     const q = (request.query ?? {}) as { contentId?: string };
