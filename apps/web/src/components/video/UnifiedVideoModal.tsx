@@ -60,6 +60,19 @@ export default function UnifiedVideoModal({
   const [articleIdInput, setArticleIdInput] = useState("");
   const [topic, setTopic] = useState("");
   const [avatar, setAvatar] = useState<string>(DVH_TEMPLATES[0].value);
+  // PR-X2: 形象目录 — 从 /admin/dvh-catalog 拉, 失败回退默认 4 个
+  const [avatarOptions, setAvatarOptions] = useState<Array<{ value: string; label: string }>>([...DVH_TEMPLATES]);
+  useEffect(() => {
+    if (!open) return;
+    api.get("/admin/dvh-catalog")
+      .then((r) => {
+        const list = ((r.data as any)?.data?.catalog ?? (r.data as any)?.catalog ?? []) as Array<{ key: string; templateLabel?: string; avatarLabel?: string }>;
+        if (Array.isArray(list) && list.length > 0) {
+          setAvatarOptions(list.map((c) => ({ value: c.key, label: c.templateLabel || c.avatarLabel || c.key })));
+        }
+      })
+      .catch(() => { /* 回退默认 */ });
+  }, [open]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "generating_article" | "triggering_video">("idle");
@@ -79,7 +92,7 @@ export default function UnifiedVideoModal({
   useEffect(() => {
     if (!open) return;
     setTab(lockedArticleId ? "article" : (defaultTab ?? "article"));
-    if (defaultAvatar && DVH_TEMPLATES.some((t) => t.value === defaultAvatar)) {
+    if (defaultAvatar && (avatarOptions.some((t) => t.value === defaultAvatar) || DVH_TEMPLATES.some((t) => t.value === defaultAvatar))) {
       setAvatar(defaultAvatar);
     }
   }, [open, lockedArticleId, defaultTab, defaultAvatar]);
@@ -306,7 +319,7 @@ export default function UnifiedVideoModal({
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">主播</label>
               <div className="grid grid-cols-4 gap-2">
-                {DVH_TEMPLATES.map((t) => (
+                {avatarOptions.map((t) => (
                   <label
                     key={t.value}
                     className={`px-2 py-1.5 border rounded-lg cursor-pointer text-xs text-center ${

@@ -80,10 +80,12 @@ export async function articlesRoutes(app: FastifyInstance) {
 
     const metaTemplateId = (article.metadata as { templateId?: string } | null)?.templateId;
     const templateId = body.templateId || metaTemplateId;
-    if (!templateId || !(templateId in TEMPLATE_AVATAR_VOICE_MAP)) {
+    // PR-X2: 改目录解析 — 支持 config 扩展的自定义形象 key
+    const { resolveAvatarVoice } = await import("../services/digital-human/template-mapping.js");
+    if (!templateId || !(await resolveAvatarVoice(templateId))) {
       return reply.code(400).send({
         code: "NO_TEMPLATE_ID",
-        message: `templateId 缺失或非法 (${templateId ?? "null"})，需 4 主播之一: ${Object.keys(TEMPLATE_AVATAR_VOICE_MAP).join(", ")}`,
+        message: `templateId 缺失或不在形象目录中 (${templateId ?? "null"})`,
       });
     }
 

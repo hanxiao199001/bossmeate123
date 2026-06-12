@@ -349,7 +349,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 tenantId: request.tenantId,
                 userId: request.user.userId,
                 filename: `excl-${acct.accountName.slice(0, 12)}-${kw.keyword.slice(0, 16)}-${Date.now()}`,
-                rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, priority: 1 }],
+                rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, priority: 1, accountId: acct.id }],
               });
               batchIds.push(result.batchId);
               batchAccountPairs.push({ batchId: result.batchId, accountId: acct.id });
@@ -466,8 +466,10 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const body = generateVideoSchema.parse(request.body);
       const templateId = body.avatarTemplate as TemplateId;
-      if (!(templateId in TEMPLATE_AVATAR_VOICE_MAP)) {
-        return reply.code(400).send({ code: "BAD_TEMPLATE", message: `avatarTemplate 非法: ${templateId}` });
+      // PR-X2: 目录解析 (支持扩展形象)
+      const { resolveAvatarVoice } = await import("../services/digital-human/template-mapping.js");
+      if (!(await resolveAvatarVoice(templateId))) {
+        return reply.code(400).send({ code: "BAD_TEMPLATE", message: `avatarTemplate 不在形象目录中: ${templateId}` });
       }
       if (isRealMode() && (!process.env.DVH_TENANT_ID || !process.env.DVH_APP_ID)) {
         return reply.code(503).send({ code: "NO_DVH", message: "DVH_REAL_MODE=true 但 DVH 凭证缺失" });
@@ -752,6 +754,40 @@ export async function adminRoutes(app: FastifyInstance) {
     await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
     logger.info({ contentQuota: clean, total }, "PR-O 每日内容配置(按类型)已更新");
     return { code: "OK", data: { contentQuota: clean, total } };
+  });
+
+  /**
+   * PR-X2: DVH 形象目录 — 默认4个 + 管理员扩展 (从阿里云控制台拿真实 avatarCode/voiceCode 后添加)。
+   * GET 给前端主播选择器; PATCH 整体替换扩展条目 (存 SYSTEM config.automationConfig.dvhCatalog)。
+   */
+  app.get("/dvh-catalog", async () => {
+    const { loadDvhCatalog } = await import("../services/digital-human/template-mapping.js");
+    return { code: "OK", data: { catalog: await loadDvhCatalog() } };
+  });
+  app.patch("/dvh-catalog", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { entries?: unknown[] };
+    if (!Array.isArray(body.entries) || body.entries.length > 50) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "entries 须为数组(≤50)" });
+    }
+    const clean = body.entries
+      .map((e) => e as Record<string, unknown>)
+      .filter((e) => typeof e.key === "string" && e.key && typeof e.avatarCode === "string" && e.avatarCode && typeof e.voiceCode === "string" && e.voiceCode)
+      .map((e) => ({
+        key: String(e.key).slice(0, 40),
+        avatarCode: String(e.avatarCode).slice(0, 100),
+        avatarLabel: String(e.avatarLabel || e.key).slice(0, 60),
+        voiceCode: String(e.voiceCode).slice(0, 60),
+        voiceLabel: String(e.voiceLabel || e.voiceCode).slice(0, 60),
+        templateLabel: String(e.templateLabel || e.key).slice(0, 60),
+        ...(typeof e.backgroundUrl === "string" && e.backgroundUrl ? { backgroundUrl: e.backgroundUrl.slice(0, 500) } : {}),
+      }));
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const cfg = (t?.config as Record<string, unknown>) || {};
+    const auto = (cfg.automationConfig as Record<string, unknown>) || {};
+    cfg.automationConfig = { ...auto, dvhCatalog: clean };
+    await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    logger.info({ count: clean.length }, "PR-X2 DVH 形象目录已更新");
+    return { code: "OK", data: { entries: clean } };
   });
 
   /** PR-W7: 每日生成/分发时间 — 仪表盘可配, 保存即热更新调度 */

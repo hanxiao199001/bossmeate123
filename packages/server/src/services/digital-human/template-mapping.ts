@@ -52,3 +52,57 @@ export const TEMPLATE_AVATAR_VOICE_MAP: Record<TemplateId, AvatarVoiceMapping> =
     templateLabel: "E 行业",
   },
 };
+
+
+// ===== PR-X2: 形象/音色目录化 — 默认 4 个 + SYSTEM config 扩展 (不再硬编码上限) =====
+// 管理员从阿里云 DVH 控制台拿到新形象/音色的真实 Code 后, 通过 PATCH /admin/dvh-catalog 添加,
+// key 可以是新名字(出现在前端主播选择器), 也可以覆盖默认 4 个的形象配置。
+import { eq } from "drizzle-orm";
+import { db } from "../../models/db.js";
+import { tenants } from "../../models/schema.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
+
+export interface DvhCatalogEntry extends AvatarVoiceMapping {
+  key: string;
+}
+
+function isValidEntry(e: unknown): e is DvhCatalogEntry {
+  const x = e as Record<string, unknown>;
+  return !!x && typeof x.key === "string" && !!x.key
+    && typeof x.avatarCode === "string" && !!x.avatarCode
+    && typeof x.voiceCode === "string" && !!x.voiceCode;
+}
+
+/** 默认 4 个 + config 扩展合并 (config 同 key 覆盖默认) */
+export async function loadDvhCatalog(): Promise<DvhCatalogEntry[]> {
+  const defaults: DvhCatalogEntry[] = (Object.entries(TEMPLATE_AVATAR_VOICE_MAP) as Array<[TemplateId, AvatarVoiceMapping]>)
+    .map(([key, m]) => ({ key, ...m }));
+  try {
+    const [t] = await db.select({ config: tenants.config }).from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const extras = (((t?.config as any)?.automationConfig?.dvhCatalog) ?? []) as unknown[];
+    const cleanExtras = extras.filter(isValidEntry).map((e) => ({
+      key: e.key.slice(0, 40),
+      avatarCode: e.avatarCode,
+      avatarLabel: e.avatarLabel || e.key,
+      voiceCode: e.voiceCode,
+      voiceLabel: e.voiceLabel || e.voiceCode,
+      templateLabel: e.templateLabel || e.key,
+      ...(e.backgroundUrl ? { backgroundUrl: e.backgroundUrl } : {}),
+    }));
+    const merged = new Map<string, DvhCatalogEntry>();
+    for (const d of defaults) merged.set(d.key, d);
+    for (const e of cleanExtras) merged.set(e.key, e);
+    return [...merged.values()];
+  } catch {
+    return defaults;
+  }
+}
+
+/** key → 形象映射 (目录里找, 找不到回退硬编码默认, 都没有 = null) */
+export async function resolveAvatarVoice(key: string): Promise<AvatarVoiceMapping | null> {
+  const catalog = await loadDvhCatalog();
+  const hit = catalog.find((c) => c.key === key);
+  if (hit) return hit;
+  return (TEMPLATE_AVATAR_VOICE_MAP as Record<string, AvatarVoiceMapping>)[key] ?? null;
+}

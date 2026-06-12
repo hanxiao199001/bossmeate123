@@ -44,6 +44,7 @@ export async function createBatch(input: CreateBatchInput): Promise<{ batchId: s
     topic: r.topic,
     journalId: r.journalId,
     template: r.template,
+    accountId: r.accountId ?? null, // PR-X1
     priority: r.priority,
   }));
   const insertedRows = await db.insert(batchRows).values(rowsToInsert).returning({ id: batchRows.id, priority: batchRows.priority });

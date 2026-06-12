@@ -12,7 +12,7 @@ import { submitDvhTask } from "./submit-task.js";
 import { queryDvhTaskUntilDone } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
-import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
+import { resolveAvatarVoice, type TemplateId } from "./template-mapping.js";
 import { checkBudget, estimateDvhCents, recordCost, DVH_CENTS_PER_SECOND } from "../billing/cost-ledger.js";
 
 export interface DvhBridgeOptions {
@@ -20,7 +20,7 @@ export interface DvhBridgeOptions {
   tenantId: string;
   userId: string;
   articleContentId: string;
-  templateId: TemplateId;
+  templateId: TemplateId | string; // PR-X2: 目录扩展后支持自定义 key
   conversationId?: string | null;
   journalId?: string;
 }
@@ -53,9 +53,9 @@ interface ProducedVideo {
   realMode: boolean;
 }
 
-async function produceVideo(text: string, title: string, templateId: TemplateId, tenantId: string): Promise<ProducedVideo> {
+async function produceVideo(text: string, title: string, templateId: TemplateId | string, tenantId: string): Promise<ProducedVideo> {
   if (!isRealMode()) {
-    const m = getMockDvhFixture(templateId);
+    const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
     return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false };
   }
   // PR #261 (5-29): 防烧钱 — submit 即扣费 (0.165 元/秒). 一旦 query 拿到付费 videoUrl,
@@ -104,12 +104,12 @@ async function produceVideo(text: string, title: string, templateId: TemplateId,
         amountCents: estimateDvhCents(text),
         note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
       });
-      const m = getMockDvhFixture(templateId);
+      const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
       return { ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false };
     }
     // submit 都没成功 — 未扣费, 正常 fallback mock.
     logger.warn({ err: msg, templateId }, "dvh.bridge.real_failed_fallback_mock");
-    const m = getMockDvhFixture(templateId);
+    const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
     return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false };
   }
 }
@@ -145,7 +145,7 @@ export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<voi
     const title = article.title ?? "BossMate";
     // PR #241: extractNarration 改签 — 传 article 让其内部判断 metadata.videoScript 优先
     const narration = extractNarration(article);
-    const mapping = TEMPLATE_AVATAR_VOICE_MAP[templateId];
+    const mapping = (await resolveAvatarVoice(String(templateId))) ?? { avatarCode: "", avatarLabel: "", voiceCode: "", voiceLabel: "", templateLabel: String(templateId) };
     const produced = await produceVideo(narration, title, templateId, tenantId);
 
     const videoMetadata = {

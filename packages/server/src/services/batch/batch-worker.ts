@@ -94,12 +94,29 @@ export function startBatchWorker(): Worker<BatchRowJob> {
       if (!article) throw new Error("ArticleSkill 未注册");
 
       try {
+        // PR-X1: 行绑定了账号(独家模式) → 注入该账号的人设/风格画像
+        let personaPrompt = "";
+        if ((row as { accountId?: string | null }).accountId) {
+          try {
+            const { platformAccounts } = await import("../../models/schema.js");
+            const [acct] = await db
+              .select({ persona: platformAccounts.persona, styleProfile: platformAccounts.styleProfile })
+              .from(platformAccounts)
+              .where(eq(platformAccounts.id, (row as { accountId?: string }).accountId!))
+              .limit(1);
+            if (acct) {
+              const { buildPersonaSuffix } = await import("../skills/structure-variation.js");
+              personaPrompt = buildPersonaSuffix(acct.persona, acct.styleProfile);
+            }
+          } catch { /* 人设注入失败不影响生成 */ }
+        }
         const skillContext = {
           tenantId,
           user: { userId, role: "owner" }, // batch 用 system user 默认 owner 权限
           metadata: {
             templateId: mapTemplateLetter(row.template),
             ...(row.journalId ? { journalId: row.journalId } : {}),
+            ...(personaPrompt ? { personaPrompt } : {}),
           },
         };
         // ArticleSkill.handle 是 conversation-driven (含发布等流程)，batch 路径用直接生成

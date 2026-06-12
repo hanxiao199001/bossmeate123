@@ -786,6 +786,10 @@ export const platformAccounts = pgTable(
     discipline: varchar("discipline", { length: 20 }),
     // PR-W5b: 领域定位多选 — 数组, 空=不限按日轮换 (取代单选 discipline)
     disciplines: jsonb("disciplines").default([]).notNull(),
+    // PR-X1: 人设画像 — 自由文本(语气/自称/受众/口头禅/禁忌), 生成时注入 prompt
+    persona: text("persona"),
+    // PR-X3: 风格画像 — 喂范文后 LLM 提炼的风格描述, 生成时注入 prompt
+    styleProfile: text("style_profile"),
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
     templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息
@@ -1072,6 +1076,8 @@ export const batchRows = pgTable(
     topic: text("topic").notNull(),
     journalId: uuid("journal_id"), // 选填，缺则 AI 自动推荐
     template: varchar("template", { length: 30 }), // A/B/C/E（缺 = default）
+    // PR-X1: 独家生成时绑定账号 — worker 据此注入该账号的人设/风格画像
+    accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "set null" }),
     priority: integer("priority").default(3), // 1-5（决定队列顺序）
     // status: pending | generating | generated | failed
     status: varchar("status", { length: 20 }).notNull().default("pending"),

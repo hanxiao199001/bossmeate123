@@ -23,6 +23,7 @@ import { env } from "../../config/env.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
+import { buildVariationSuffix } from "./structure-variation.js"; // PR-X1 结构组合引擎
 import { validateAIContent, type ValidationIssue, extractClaimedFacts, verifyClaimsAgainstDb } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
@@ -227,6 +228,8 @@ export class ArticleSkill implements ISkill {
     // T4-3-1: 从 metadata 读 templateId（默认 getDefaultTemplateId()='shunshi-style' as of task #11）
     // PR #123 P6（5-15）：metadata 缺时优先读 tenant_preferences.default_template，仍缺才走 default
     let explicitTemplateId = context.metadata?.templateId as string | undefined;
+    // PR-X1: batch worker 注入的账号人设/风格 prompt (独家模式)
+    const personaPrompt = (context.metadata?.personaPrompt as string) || "";
     if (!explicitTemplateId) {
       try {
         const { getPreference, setPreference } = await import("../preferences.js");
@@ -261,6 +264,7 @@ export class ArticleSkill implements ISkill {
       variants,
       templateIds,
       context.tenantId, // task #35: 透传给 generateJournalRecommendation 拉 contact_meta
+      personaPrompt, // PR-X1
     );
     const totalVariants = (extraVariants?.length ?? 0) + 1;
 
@@ -555,6 +559,7 @@ export class ArticleSkill implements ISkill {
     variants: number = 1,
     templateIds: string[] = [getDefaultTemplateId()],
     tenantId?: string,
+    personaPrompt: string = "", // PR-X1
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -629,7 +634,7 @@ export class ArticleSkill implements ISkill {
     // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
     // T4-3-4: 每个 variant 用 templateIds[i]，缺位时退回 templateIds[0] / default
     const primaryTemplateId = templateIds[0] ?? getDefaultTemplateId();
-    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId, tenantId);
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId, tenantId, personaPrompt);
 
     // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性 + 不同 templateId）
     if (requestedVariants > 1) {
@@ -640,7 +645,7 @@ export class ArticleSkill implements ISkill {
       }>> = [];
       for (let i = 1; i < requestedVariants; i++) {
         const tid = templateIds[i] ?? primaryTemplateId;
-        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, tid, tenantId));
+        subPromises.push(this.generateJournalRecommendation(requirement, finalJournalData, tid, tenantId, personaPrompt));
       }
       const extraVariants = await Promise.all(subPromises);
       logger.info(
@@ -822,6 +827,7 @@ export class ArticleSkill implements ISkill {
     journalData: CollectionResult,
     templateId: string = getDefaultTemplateId(),
     tenantId?: string,
+    extraPromptSuffix: string = "", // PR-X1: 账号人设/风格画像 (batch 独家模式注入)
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -908,7 +914,9 @@ export class ArticleSkill implements ISkill {
     if (templateAware.templateName) {
       logger.info({ variantId, templateName: templateAware.templateName, styleTag: templateAware.styleTag, suffixLen: templateAware.suffix.length }, "Q.3 template-aware prompt 已注入");
     }
-    const aiContentRaw = await this.generateJournalAIContent(journal, templateAware.suffix);
+    // PR-X1: 模板骨架 + 结构变化指令(每次随机) + 账号人设/风格 — 三层正交防同质化
+    const fullSuffix = `${templateAware.suffix}${buildVariationSuffix()}${extraPromptSuffix}`;
+    const aiContentRaw = await this.generateJournalAIContent(journal, fullSuffix);
 
     // 2.5 数据校验：AI 输出 vs 真实数据交叉验证
     const validation = validateAIContent(aiContentRaw, journal);

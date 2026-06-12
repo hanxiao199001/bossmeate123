@@ -14,6 +14,8 @@ interface Account {
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
   discipline?: string | null; // PR-W5 领域定位(旧单选)
   disciplines?: string[]; // PR-W5b 领域定位多选
+  persona?: string | null; // PR-X1 人设画像
+  styleProfile?: string | null; // PR-X3 风格画像
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
@@ -332,6 +334,37 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     ["computer", "计算机"], ["environment", "环境"], ["chemistry", "化学"], ["physics", "物理"],
   ];
   const discLabel = (v: string) => DISC_OPTIONS.find(([k]) => k === v)?.[1] ?? v;
+
+  // PR-X1/X3: 人设 + 风格学习面板
+  const [personaEditId, setPersonaEditId] = useState<string | null>(null);
+  const [personaDraft, setPersonaDraft] = useState("");
+  const [samplesDraft, setSamplesDraft] = useState("");
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [styleLearning, setStyleLearning] = useState(false);
+  const openPersona = (a: Account) => {
+    setPersonaEditId(personaEditId === a.id ? null : a.id);
+    setPersonaDraft(a.persona ?? "");
+    setSamplesDraft("");
+  };
+  const savePersona = async (accountId: string) => {
+    setPersonaSaving(true);
+    try {
+      await api.patch(`/accounts/${accountId}`, { persona: personaDraft.trim() || null });
+      toast.success("人设已保存");
+      fetchAccounts();
+    } catch { toast.error("保存失败"); } finally { setPersonaSaving(false); }
+  };
+  const learnStyle = async (accountId: string) => {
+    const samples = samplesDraft.split(/\n-{3,}\n/).map((t) => t.trim()).filter((t) => t.length >= 100);
+    if (samples.length === 0) { toast.error("贴至少 1 篇 ≥100 字的范文 (多篇用单独一行 --- 分隔)"); return; }
+    setStyleLearning(true);
+    try {
+      await api.post(`/accounts/${accountId}/learn-style`, { samples });
+      toast.success("风格画像已提炼并保存");
+      setSamplesDraft("");
+      fetchAccounts();
+    } catch { toast.error("风格提炼失败"); } finally { setStyleLearning(false); }
+  };
 
   const handleDelete = async (accountId: string) => {
     if (!confirm("确定要删除这个账号吗？")) return;
@@ -724,6 +757,13 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                   return ds.length > 0 ? `领域: ${ds.map(discLabel).join("·")}` : "领域不限 ▾";
                                 })()}
                               </button>
+                              <button
+                                onClick={() => openPersona(account)}
+                                title="人设画像与风格学习 — 该账号生成内容的语气与文风"
+                                className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer ${account.persona || account.styleProfile ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" : "border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100"}`}
+                              >
+                                {account.persona || account.styleProfile ? "人设·风格 ✓" : "人设·风格 ▾"}
+                              </button>
                             </div>
                             {discEditId === account.id && (
                               <div className="flex flex-wrap gap-1.5 my-1.5">
@@ -740,6 +780,41 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                     </button>
                                   );
                                 })}
+                              </div>
+                            )}
+                            {personaEditId === account.id && (
+                              <div className="my-2 p-3 rounded-lg border border-amber-100 bg-amber-50/40 space-y-2">
+                                <div>
+                                  <div className="text-xs font-medium text-gray-700 mb-1">人设画像 (语气 / 自称 / 受众称呼 / 口头禅 / 禁忌)</div>
+                                  <textarea
+                                    value={personaDraft}
+                                    onChange={(e) => setPersonaDraft(e.target.value)}
+                                    rows={3}
+                                    placeholder="例: 自称「卡卡学姐」, 称读者「同学们」, 语气亲切带点毒舌, 爱用反问句, 禁谈政治, 受众是硕博生和青椒..."
+                                    className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+                                  />
+                                  <button onClick={() => void savePersona(account.id)} disabled={personaSaving}
+                                    className="mt-1 text-xs px-3 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50">
+                                    {personaSaving ? "保存中…" : "保存人设"}
+                                  </button>
+                                </div>
+                                <div>
+                                  <div className="text-xs font-medium text-gray-700 mb-1">
+                                    风格学习 — 贴 1-5 篇范文 (自己的爆款或对标号文章, 多篇用单独一行 --- 分隔)
+                                    {account.styleProfile && <span className="text-emerald-600 ml-2">已有风格画像 ✓ (重新提炼会覆盖)</span>}
+                                  </div>
+                                  <textarea
+                                    value={samplesDraft}
+                                    onChange={(e) => setSamplesDraft(e.target.value)}
+                                    rows={4}
+                                    placeholder="把范文全文贴进来..."
+                                    className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:border-amber-400"
+                                  />
+                                  <button onClick={() => void learnStyle(account.id)} disabled={styleLearning}
+                                    className="mt-1 text-xs px-3 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">
+                                    {styleLearning ? "提炼中… (约30秒)" : "提炼风格画像"}
+                                  </button>
+                                </div>
                               </div>
                             )}
                             <div className="flex items-center gap-3 text-xs text-gray-500">

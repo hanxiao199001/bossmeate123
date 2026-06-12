@@ -197,4 +197,14 @@ export const MIGRATIONS: Migration[] = [
       UPDATE platform_accounts SET disciplines = jsonb_build_array(discipline) WHERE discipline IS NOT NULL AND disciplines = '[]'::jsonb;
     `,
   },
+  {
+    version: "012_account_persona_style",
+    description:
+      "PR-X1/X3: 账号人设画像(persona 自由文本注入生成prompt) + 风格画像(style_profile 由范文LLM提炼) + batch_rows.account_id(独家生成时按账号注入人设)",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS persona TEXT;
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS style_profile TEXT;
+      ALTER TABLE batch_rows ADD COLUMN IF NOT EXISTS account_id UUID REFERENCES platform_accounts(id) ON DELETE SET NULL;
+    `,
+  },
 ];

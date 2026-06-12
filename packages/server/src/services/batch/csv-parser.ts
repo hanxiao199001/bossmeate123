@@ -19,6 +19,7 @@ export interface CsvRow {
   journalId: string | null;
   template: "A" | "B" | "C" | "E" | null;
   priority: number;
+  accountId?: string | null; // PR-X1: 独家生成时绑定账号(注入人设)
 }
 
 export interface CsvParseResult {

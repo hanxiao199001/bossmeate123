@@ -43,6 +43,7 @@ const updateAccountSchema = z.object({
   journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
   discipline: z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"]).nullable().optional(), // PR-W5 领域定位(单选, 兼容)
   disciplines: z.array(z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"])).max(12).optional(), // PR-W5b 多选
+  persona: z.string().max(2000).nullable().optional(), // PR-X1 人设画像
 });
 
 const publishSchema = z.object({
@@ -236,6 +237,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.journalScope) updateData.journalScope = body.journalScope;
       if (body.discipline !== undefined) updateData.discipline = body.discipline; // PR-W5
       if (body.disciplines !== undefined) updateData.disciplines = body.disciplines; // PR-W5b 多选
+      if (body.persona !== undefined) updateData.persona = body.persona; // PR-X1 人设
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {
@@ -505,6 +507,50 @@ export async function accountRoutes(app: FastifyInstance) {
 
   app.get("/accounts/keepalive", async () => {
     return { running: isKeepaliveRunning(), lastSummary: getLastKeepaliveSummary() };
+  });
+
+  /**
+   * PR-X3: 风格学习 — 喂 1-5 篇范文(自己的爆款或对标号文章), LLM 提炼风格画像存账号,
+   * 之后该账号的独家生成都会模仿此风格 (经 batch worker → personaPrompt 注入)。
+   */
+  app.post("/accounts/:id/learn-style", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { samples?: string[] };
+    const samples = (Array.isArray(body.samples) ? body.samples : [])
+      .map((t) => String(t).trim())
+      .filter((t) => t.length >= 100)
+      .slice(0, 5);
+    if (samples.length === 0) {
+      return reply.code(400).send({ code: "BAD_SAMPLES", message: "至少提供 1 篇 ≥100 字的范文" });
+    }
+    const [acct] = await db
+      .select({ id: platformAccounts.id, accountName: platformAccounts.accountName })
+      .from(platformAccounts)
+      .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, request.tenantId)))
+      .limit(1);
+    if (!acct) return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+
+    try {
+      const { chat } = await import("../services/ai/chat-service.js");
+      const joined = samples.map((t, i) => `【范文${i + 1}】\n${t.slice(0, 4000)}`).join("\n\n");
+      const res = await chat({
+        tenantId: request.tenantId,
+        userId: request.user.userId,
+        conversationId: `style-learn-${id}`,
+        message: joined,
+        systemPrompt: `你是文风分析师。从用户提供的范文中提炼可复用的"风格画像", 输出 300-500 字纯文本(不要markdown标题), 必须覆盖: 1.语气与人设(怎么称呼自己和读者) 2.句式节奏(长短句/段落长度) 3.开头套路 4.高频用词与口头禅 5.数据呈现习惯 6.结尾习惯 7.三条"模仿此风格写作时的硬性要求"。只描述风格, 不复述内容。`,
+      });
+      const styleProfile = res.content.trim().slice(0, 2000);
+      await db
+        .update(platformAccounts)
+        .set({ styleProfile, updatedAt: new Date() })
+        .where(eq(platformAccounts.id, id));
+      logger.info({ accountId: id, samples: samples.length, len: styleProfile.length }, "PR-X3 风格画像已提炼并保存");
+      return { code: "OK", data: { styleProfile } };
+    } catch (err) {
+      logger.error({ err, accountId: id }, "PR-X3 风格学习失败");
+      return reply.code(500).send({ code: "LEARN_FAILED", message: "风格提炼失败, 请稍后重试" });
+    }
   });
 
   app.post("/publish", async (request, reply) => {

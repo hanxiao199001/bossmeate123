@@ -11,13 +11,13 @@
  */
 import * as $Util from "@alicloud/tea-util";
 import { createDvhClient, $avatar20220130 } from "./client.js";
-import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "./template-mapping.js";
+import { resolveAvatarVoice, type TemplateId } from "./template-mapping.js";
 import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
 
 export interface DvhSubmitOptions {
   text: string;
-  templateId: TemplateId;
+  templateId: TemplateId | string; // PR-X2: 目录扩展后支持自定义 key
   tenantId: string;
   title?: string;
 }
@@ -33,7 +33,7 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
   const appId = process.env.DVH_APP_ID;
   if (!dvhTenantId) throw new Error("DVH_TENANT_ID 缺失");
   if (!appId) throw new Error("DVH_APP_ID 缺失");
-  const mapping = TEMPLATE_AVATAR_VOICE_MAP[opts.templateId];
+  const mapping = await resolveAvatarVoice(String(opts.templateId)); // PR-X2 目录解析
   if (!mapping) throw new Error(`DVH templateId 不存在: ${opts.templateId}`);
 
   const client = createDvhClient();
