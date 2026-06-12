@@ -317,9 +317,16 @@ export async function adminRoutes(app: FastifyInstance) {
             ? (acct.disciplines as string[])
             : acct.discipline ? [acct.discipline] : [];
           const discs = acctDiscs.length > 0 ? acctDiscs : (rotation.length > 0 ? rotation : null);
+          // PR-W5c 防撞加固: 冷却阶梯放宽 30→14→7 天, 绝不放到 0 — 题库太薄时宁可少生成也不出近期旧题
           let cands = await selectCandidates({ disciplines: discs, cooldownDays: 30, poolSize: perAccount * 6 });
+          for (const cd of [14, 7]) {
+            if (cands.length >= perAccount + usedKeywordIds.size) break;
+            const more = await selectCandidates({ disciplines: discs, cooldownDays: cd, poolSize: perAccount * 6 });
+            const have = new Set(cands.map((c) => c.id));
+            cands = cands.concat(more.filter((m) => !have.has(m.id)));
+          }
           if (cands.length < perAccount) {
-            cands = cands.concat(await selectCandidates({ disciplines: discs, cooldownDays: 0, poolSize: perAccount * 6 }));
+            logger.warn({ accountId: acct.id, discs, available: cands.length, want: perAccount }, "PR-W5c 该领域题库薄, 本轮少生成 (7天冷却内的题不复用)");
           }
           let made = 0;
           for (const kw of cands) {
