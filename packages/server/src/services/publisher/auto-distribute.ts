@@ -48,7 +48,19 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
   let totalQueued = 0;
   for (const t of enabled) {
     try {
-      const { pairs, unmatched } = await computeSmartPairs({ tenantId: t.id, articleIds: poolIds });
+      // PR-Z1 多租户隔离: 租户有自己当日生成的池就用自己的 (客户间不发同样的文章); 没有才用系统共享池
+      const own = await db
+        .select({ id: contents.id })
+        .from(contents)
+        .where(and(
+          eq(contents.tenantId, t.id),
+          eq(contents.type, "article"),
+          gte(contents.createdAt, startOfTodayBJ()),
+          inArray(contents.status, ["generated", "draft"]),
+        ))
+        .limit(100);
+      const useIds = own.length > 0 ? own.map((o) => o.id) : poolIds;
+      const { pairs, unmatched } = await computeSmartPairs({ tenantId: t.id, articleIds: useIds });
       if (pairs.length === 0) {
         logger.info({ tenantId: t.id, unmatched: unmatched.length }, "PR-W6 auto-distribute: 该租户无可配对内容");
         continue;

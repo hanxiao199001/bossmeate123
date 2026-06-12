@@ -137,6 +137,15 @@ export async function accountRoutes(app: FastifyInstance) {
    */
   app.post("/accounts", async (request, reply) => {
     try {
+      // PR-Z4 套餐闸: 账号数上限
+      {
+        const { checkBilling, logBillingDenied } = await import("../services/billing/plan.js");
+        const bill = await checkBilling(request.tenantId, "add_account");
+        if (!bill.allowed) {
+          logBillingDenied(request.tenantId, "add_account", bill.reason);
+          return reply.code(403).send({ code: "BILLING_LIMIT", message: bill.reason });
+        }
+      }
       const body = createAccountSchema.parse(request.body);
 
       // 1. 加密凭证后入库，先标 is_verified=false；verify 放到入库后重新做，

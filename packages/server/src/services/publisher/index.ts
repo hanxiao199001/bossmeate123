@@ -139,6 +139,17 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     throw new Error("内容标题和正文不能为空");
   }
 
+  // PR-Z3 合规层: 硬词拦截(封号级风险), 软词(广告法/医疗红线)警告放行; 发布体追加 AI 生成标识
+  const { checkCompliance, appendAiLabel } = await import("../compliance/content-check.js");
+  const compliance = await checkCompliance(`${content.title}\n${content.body}`);
+  if (compliance.blocked) {
+    throw new Error(`内容未通过合规检查, 已拦截发布。命中高危词: ${compliance.hardHits.join("、")}`);
+  }
+  if (compliance.softHits.length > 0) {
+    logger.warn({ contentId, softHits: compliance.softHits }, "PR-Z3 软词警告(广告法/医疗红线), 放行但建议人工复核");
+  }
+  content.body = await appendAiLabel(content.body);
+
   // 自动提取正文第一张 http 图片作为封面（用于微信 thumb_media_id）
   let autoCoverUrl = options?.coverImageUrl;
   if (!autoCoverUrl && content.body) {

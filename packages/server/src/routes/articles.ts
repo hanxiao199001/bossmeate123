@@ -96,6 +96,16 @@ export async function articlesRoutes(app: FastifyInstance) {
       });
     }
 
+    // PR-Z4 套餐闸: 到期/月视频配额
+    {
+      const { checkBilling, logBillingDenied } = await import("../services/billing/plan.js");
+      const bill = await checkBilling(request.tenantId, "generate_video");
+      if (!bill.allowed) {
+        logBillingDenied(request.tenantId, "generate_video", bill.reason);
+        return reply.code(403).send({ code: "BILLING_LIMIT", message: bill.reason });
+      }
+    }
+
     // PR-W1 预算闸前置: fire-and-forget 之前先查, 超限给用户看得见的 403 而不是静默不出片
     {
       const { checkBudget, estimateDvhCents } = await import("../services/billing/cost-ledger.js");

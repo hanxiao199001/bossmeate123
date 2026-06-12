@@ -790,6 +790,35 @@ export async function adminRoutes(app: FastifyInstance) {
     return { code: "OK", data: { entries: clean } };
   });
 
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // PR-Z4
+
+  /** PR-Z4: 租户套餐管理 — {plan, expiresAt, monthlyArticleQuota, monthlyVideoQuota, accountLimit} */
+  app.get("/tenant-billing/:tenantId", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    if (!UUID_RE.test(tenantId)) return reply.code(400).send({ code: "BAD_REQUEST", message: "tenantId 非法" });
+    const { readBillingPlan } = await import("../services/billing/plan.js");
+    return { code: "OK", data: { billing: await readBillingPlan(tenantId) } };
+  });
+  app.patch("/tenant-billing/:tenantId", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    if (!UUID_RE.test(tenantId)) return reply.code(400).send({ code: "BAD_REQUEST", message: "tenantId 非法" });
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const num = (v: unknown) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n > 0 ? n : undefined; };
+    const billing: Record<string, unknown> = {};
+    if (typeof body.plan === "string" && body.plan) billing.plan = String(body.plan).slice(0, 30);
+    if (typeof body.expiresAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.expiresAt)) billing.expiresAt = body.expiresAt;
+    if (num(body.monthlyArticleQuota)) billing.monthlyArticleQuota = num(body.monthlyArticleQuota);
+    if (num(body.monthlyVideoQuota)) billing.monthlyVideoQuota = num(body.monthlyVideoQuota);
+    if (num(body.accountLimit)) billing.accountLimit = num(body.accountLimit);
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+    if (!t) return reply.code(404).send({ code: "NOT_FOUND", message: "租户不存在" });
+    const cfg = (t.config as Record<string, unknown>) || {};
+    cfg.billing = billing; // 空对象 = 清除限制
+    await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, tenantId));
+    logger.info({ tenantId, billing }, "PR-Z4 租户套餐已更新");
+    return { code: "OK", data: { billing } };
+  });
+
   /** PR-W7: 每日生成/分发时间 — 仪表盘可配, 保存即热更新调度 */
   app.get("/schedule-times", { preHandler: adminOnlyMiddleware }, async () => {
     const { readScheduleTimes } = await import("../services/scheduler.js");

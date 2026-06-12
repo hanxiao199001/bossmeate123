@@ -24,6 +24,15 @@ export interface CreateBatchInput {
 
 /** 创建 batch + 拆 row + 入队（priority 高的先跑） */
 export async function createBatch(input: CreateBatchInput): Promise<{ batchId: string; rowCount: number }> {
+  // PR-Z4 套餐闸: 到期/月文章配额 (SYSTEM 租户与未配 billing 的租户不受影响)
+  {
+    const { checkBilling, logBillingDenied } = await import("../billing/plan.js");
+    const gate = await checkBilling(input.tenantId, "generate_article");
+    if (!gate.allowed) {
+      logBillingDenied(input.tenantId, "generate_article", gate.reason);
+      throw new Error(`BILLING_LIMIT: ${gate.reason}`);
+    }
+  }
   const [batch] = await db
     .insert(batches)
     .values({

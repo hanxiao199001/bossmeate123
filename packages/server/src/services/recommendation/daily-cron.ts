@@ -143,7 +143,14 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   const contentQuota = await getContentQuota();
   if (contentQuota) {
     logger.info({ types: Object.keys(contentQuota) }, "PR-O3 走按类型生成引擎");
-    return runDailyContentByType(contentQuota);
+    const sysResult = await runDailyContentByType(contentQuota);
+    // PR-Z1 多租户隔离: 配了自己 contentQuota 的租户各自生成进自己的池 (互不共享, 客户间不撞文)
+    try {
+      await runTenantOwnedDailyContent();
+    } catch (err) {
+      logger.error({ err: err instanceof Error ? err.message : err }, "PR-Z1 租户自有池生成异常 (不影响系统池)");
+    }
+    return sysResult;
   }
 
   const dayOfWeek = new Date().getDay();
@@ -304,6 +311,32 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics"];
 const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
 
+/** PR-Z1: 给每个配了自己 contentQuota 的租户生成自有内容池 */
+async function runTenantOwnedDailyContent(): Promise<void> {
+  const { users } = await import("../../models/schema.js");
+  const allTenants = await db.select({ id: tenants.id, config: tenants.config }).from(tenants);
+  for (const t of allTenants) {
+    if (t.id === SYSTEM_RECOMMENDATION_TENANT_ID) continue;
+    const raw = (t.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)
+      ?.automationConfig?.contentQuota;
+    if (!raw || typeof raw !== "object") continue;
+    const clean: Record<string, { count: number; disciplines: string[] }> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const count = Math.floor(Number(v?.count)) || 0;
+      if (count > 0) clean[k] = { count, disciplines: Array.isArray(v?.disciplines) ? v!.disciplines.map(String) : [] };
+    }
+    if (Object.keys(clean).length === 0) continue;
+    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, t.id)).limit(1);
+    if (!u) continue;
+    try {
+      const r = await runDailyContentByType(clean, { tenantId: t.id, userId: u.id });
+      logger.info({ tenantId: t.id, enqueued: r.articlesEnqueued }, "PR-Z1 租户自有池生成完成");
+    } catch (err) {
+      logger.error({ tenantId: t.id, err: err instanceof Error ? err.message : err }, "PR-Z1 租户自有池生成失败 (跳过)");
+    }
+  }
+}
+
 /** 读 SYSTEM 租户的 contentQuota(按类型配额)。空/未配 → null。 */
 export async function getContentQuota(): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
   try {
@@ -335,9 +368,14 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
-export async function runDailyContentByType(cq: Record<string, { count: number; disciplines: string[] }>): Promise<DailyRecommendationResult> {
+export async function runDailyContentByType(
+  cq: Record<string, { count: number; disciplines: string[] }>,
+  // PR-Z1 多租户隔离: 指定目标租户则内容落到该租户自己的池 (默认 SYSTEM 全局池, 向后兼容)
+  target?: { tenantId: string; userId: string },
+): Promise<DailyRecommendationResult> {
   const startedAt = new Date().toISOString();
-  const SYS = SYSTEM_RECOMMENDATION_TENANT_ID;
+  const SYS = target?.tenantId ?? SYSTEM_RECOMMENDATION_TENANT_ID;
+  const SYS_USER = target?.userId ?? SYSTEM_RECOMMENDATION_USER_ID;
   const batchIds: string[] = [];
   const failures: Array<{ keyword: string; error: string }> = [];
   let roundupCount = 0;
@@ -354,7 +392,7 @@ export async function runDailyContentByType(cq: Record<string, { count: number; 
         if (type === "roundup") {
           const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: 3, audience: "普通院校教师" });
           const [row] = await db.insert(contents).values({
-            tenantId: SYS, userId: SYSTEM_RECOMMENDATION_USER_ID, type: "article", title, body: html,
+            tenantId: SYS, userId: SYS_USER, type: "article", title, body: html,
             ...initialStatusFields("draft"),
             metadata: { source: "roundup", templateId: "journal-roundup", discipline, journalCovers },
           }).returning({ id: contents.id });
@@ -369,7 +407,7 @@ export async function runDailyContentByType(cq: Record<string, { count: number; 
           const cands = await selectCandidates({ disciplines: [discipline], cooldownDays: 0, poolSize: 5 });
           const topic = cands[0]?.keyword ?? discipline;
           const result = await createBatch({
-            tenantId: SYS, userId: SYSTEM_RECOMMENDATION_USER_ID,
+            tenantId: SYS, userId: SYS_USER,
             filename: `daily-${type}-${discipline}-${new Date().toISOString().slice(0, 10)}`,
             rows: [{ rowIndex: 1, topic, journalId, template: "A", priority: 3 }],
           });
