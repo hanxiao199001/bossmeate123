@@ -99,6 +99,32 @@ export default function TodayPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // PR-W7: 生成/分发时间设置
+  const [times, setTimes] = useState<{ generateTime: string; distributeTime: string } | null>(null);
+  const [timeEditing, setTimeEditing] = useState(false);
+  const [genT, setGenT] = useState("03:00");
+  const [distT, setDistT] = useState("07:00");
+  const [timeSaving, setTimeSaving] = useState(false);
+  useEffect(() => {
+    api.get<{ generateTime: string; distributeTime: string }>("/admin/schedule-times")
+      .then((r) => {
+        const d = (r.data as any)?.data ?? r.data;
+        if (d?.generateTime) { setTimes(d); setGenT(d.generateTime); setDistT(d.distributeTime); }
+      })
+      .catch(() => { /* 非 admin 等, 不显示 */ });
+  }, []);
+  const saveTimes = async () => {
+    setTimeSaving(true);
+    try {
+      const r = await api.patch("/admin/schedule-times", { generateTime: genT, distributeTime: distT });
+      const d = (r.data as any)?.data ?? r.data;
+      if (d?.generateTime) setTimes(d);
+      setTimeEditing(false);
+    } finally {
+      setTimeSaving(false);
+    }
+  };
+
   // PR-W6: 每日自动分发开关
   const [autoSaving, setAutoSaving] = useState(false);
   const toggleAutoDistribute = async () => {
@@ -215,6 +241,21 @@ export default function TodayPage() {
           >
             {data.autoDistribute ? "每日自动分发: 开" : "每日自动分发: 关"}
           </button>
+          {times && !timeEditing && (
+            <button onClick={() => setTimeEditing(true)} title="每日生成与自动分发的执行时间"
+              className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 hover:border-gray-300">
+              ⏰ 生成 {times.generateTime} · 分发 {times.distributeTime}
+            </button>
+          )}
+          {timeEditing && (
+            <span className="flex items-center gap-1.5 text-xs">
+              生成 <input type="time" value={genT} onChange={(e) => setGenT(e.target.value)} className="px-1 py-0.5 border border-gray-200 rounded" />
+              分发 <input type="time" value={distT} onChange={(e) => setDistT(e.target.value)} className="px-1 py-0.5 border border-gray-200 rounded" />
+              <button onClick={() => void saveTimes()} disabled={timeSaving}
+                className="px-2 py-0.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">{timeSaving ? "…" : "保存"}</button>
+              <button onClick={() => setTimeEditing(false)} className="text-gray-400 hover:text-gray-600">取消</button>
+            </span>
+          )}
           <button onClick={() => void load()} className="text-xs text-indigo-600 hover:underline">刷新</button>
         </div>
       </div>

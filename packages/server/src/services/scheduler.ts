@@ -453,6 +453,49 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
 
 // ============ 启动调度器 ============
 
+// ===== PR-W7: 生成/分发时间可配 (SYSTEM config.automationConfig.scheduleTimes) =====
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+
+export function parseHHMM(v: unknown, fallback: string): { h: number; m: number; str: string } {
+  const str = typeof v === "string" && TIME_RE.test(v) ? v : fallback;
+  const m = TIME_RE.exec(str)!;
+  return { h: Number(m[1]), m: Number(m[2]), str: `${String(Number(m[1])).padStart(2, "0")}:${m[2]}` };
+}
+
+export async function readScheduleTimes(): Promise<{ generateTime: string; distributeTime: string }> {
+  try {
+    const { SYSTEM_RECOMMENDATION_TENANT_ID } = await import("../config/system-recommendation.js");
+    const [t] = await db.select({ config: tenants.config }).from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const st = ((t?.config as any)?.automationConfig?.scheduleTimes) ?? {};
+    return {
+      generateTime: parseHHMM(st.generateTime, "03:00").str,
+      distributeTime: parseHHMM(st.distributeTime, "07:00").str,
+    };
+  } catch {
+    return { generateTime: "03:00", distributeTime: "07:00" };
+  }
+}
+
+/** 按配置(或新值)重注册两个每日任务 — 启动时和设置保存时调用, BullMQ upsert 幂等 */
+export async function applyScheduleTimes(times?: { generateTime?: string; distributeTime?: string }): Promise<{ generateTime: string; distributeTime: string }> {
+  const cur = await readScheduleTimes();
+  const gen = parseHHMM(times?.generateTime, cur.generateTime);
+  const dist = parseHHMM(times?.distributeTime, cur.distributeTime);
+  await crawlerQueue.upsertJobScheduler(
+    "daily-recommendation-schedule",
+    { pattern: `${gen.m} ${gen.h} * * *`, tz: "Asia/Shanghai" },
+    { name: "daily-recommendation", data: { type: "daily-recommendation" as SchedulerJobType } }
+  );
+  await crawlerQueue.upsertJobScheduler(
+    "daily-auto-distribute-schedule",
+    { pattern: `${dist.m} ${dist.h} * * *`, tz: "Asia/Shanghai" },
+    { name: "daily-auto-distribute", data: { type: "daily-auto-distribute" as SchedulerJobType } }
+  );
+  logger.info({ generateTime: gen.str, distributeTime: dist.str }, "PR-W7 每日生成/分发时间已应用");
+  return { generateTime: gen.str, distributeTime: dist.str };
+}
+
 export function startScheduler() {
   const connection = getRedisConnection();
 
@@ -592,25 +635,8 @@ async function registerCronJobs() {
     }
   );
 
-  // PR #130 V2.5（5-13）：每日 03:00 BJ 自动生成 10 篇推荐 article 入 system tenant
-  await crawlerQueue.upsertJobScheduler(
-    "daily-recommendation-schedule",
-    { pattern: "0 3 * * *", tz: "Asia/Shanghai" },
-    {
-      name: "daily-recommendation",
-      data: { type: "daily-recommendation" as SchedulerJobType },
-    }
-  );
-
-  // PR-W6: 每日 07:00 BJ 推荐池自动配对分发 (在 03:00 生成之后; 只对开了 autoDistribute 的租户生效)
-  await crawlerQueue.upsertJobScheduler(
-    "daily-auto-distribute-schedule",
-    { pattern: "0 7 * * *", tz: "Asia/Shanghai" },
-    {
-      name: "daily-auto-distribute",
-      data: { type: "daily-auto-distribute" as SchedulerJobType },
-    }
-  );
+  // PR #130 + PR-W6 + PR-W7: 每日生成/分发 — 时间从 SYSTEM config 读 (默认 03:00 / 07:00), 仪表盘可改
+  await applyScheduleTimes();
 
   // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）
   await crawlerQueue.upsertJobScheduler(

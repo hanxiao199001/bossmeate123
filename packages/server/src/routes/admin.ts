@@ -754,6 +754,29 @@ export async function adminRoutes(app: FastifyInstance) {
     return { code: "OK", data: { contentQuota: clean, total } };
   });
 
+  /** PR-W7: 每日生成/分发时间 — 仪表盘可配, 保存即热更新调度 */
+  app.get("/schedule-times", { preHandler: adminOnlyMiddleware }, async () => {
+    const { readScheduleTimes } = await import("../services/scheduler.js");
+    return { code: "OK", data: await readScheduleTimes() };
+  });
+  app.patch("/schedule-times", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { generateTime?: string; distributeTime?: string };
+    const re = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+    if ((body.generateTime && !re.test(body.generateTime)) || (body.distributeTime && !re.test(body.distributeTime))) {
+      return reply.code(400).send({ code: "BAD_TIME", message: "时间格式须为 HH:MM" });
+    }
+    const { applyScheduleTimes } = await import("../services/scheduler.js");
+    const applied = await applyScheduleTimes(body);
+    // 持久化到 SYSTEM config (重启后生效)
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    const cfg = (t?.config as Record<string, unknown>) || {};
+    const auto = (cfg.automationConfig as Record<string, unknown>) || {};
+    cfg.automationConfig = { ...auto, scheduleTimes: applied };
+    await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    logger.info(applied, "PR-W7 每日生成/分发时间已保存");
+    return { code: "OK", data: applied };
+  });
+
   // 5-19 PR #171: SSE stream admin only (跟随 POST /bulk-distribute 同权限)
   app.get("/bulk-distribute/:batchId/stream", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const { batchId } = request.params as { batchId: string };
