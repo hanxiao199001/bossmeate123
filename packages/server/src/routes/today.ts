@@ -123,8 +123,19 @@ export async function todayRoutes(app: FastifyInstance) {
         publishedToday: Number(pubCount?.count ?? 0),
         spend: { todayCents: spend.todayCents, monthCents: spend.monthCents },
         budget,
+        autoDistribute: (((tenant?.config as Record<string, any>)?.automationConfig)?.autoDistribute) === true,
       },
     };
+  });
+
+  /** PUT /today/automation {autoDistribute} — PR-W6 每日自动分发开关 */
+  app.put("/today/automation", async (request) => {
+    const body = (request.body ?? {}) as { autoDistribute?: boolean };
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, request.tenantId)).limit(1);
+    const config = (t?.config as Record<string, unknown>) ?? {};
+    const automationConfig = { ...((config.automationConfig as Record<string, unknown>) ?? {}), autoDistribute: body.autoDistribute === true };
+    await db.update(tenants).set({ config: { ...config, automationConfig } }).where(eq(tenants.id, request.tenantId));
+    return { code: "OK", data: { autoDistribute: body.autoDistribute === true } };
   });
 
   /** PUT /today/budget {dailyLimitYuan?, monthlyLimitYuan?} — 设预算 (0/空 = 不限) */

@@ -86,17 +86,26 @@ export default function ContentWorkbenchPage() {
     if (selectedIds.size === 0 || selectedAccountIds.size === 0) return;
     setBulkSubmitting(true);
     try {
+      // PR-W6: 先智能配对 (文章学科↔账号领域, 每篇一号), 再按 pairs 精确发布 — 不再笛卡尔积同文多发
+      const assign = await api.post<{ pairs: Array<{ articleId: string; accountId: string }>; unmatched: any[] }>(
+        "/admin/smart-assign",
+        { articleIds: [...selectedIds], accountIds: [...selectedAccountIds] }
+      );
+      const assignData = (assign.data as any)?.data ?? assign.data;
+      const pairs = assignData?.pairs ?? [];
+      const unmatchedCount = assignData?.unmatched?.length ?? 0;
+      if (pairs.length === 0) {
+        toast.error(`没有可配对的文章 (${unmatchedCount} 篇无匹配账号 — 检查账号领域定位)`);
+        return;
+      }
       const res = await api.post<{ batchId: string; total: number; skipped: number; queued: number }>(
         "/admin/bulk-distribute",
-        {
-          articleIds: [...selectedIds],
-          accountIds: [...selectedAccountIds],
-        }
+        { pairs }
       );
       const data = (res.data as any);
       if (!data?.batchId) throw new Error("无 batchId 返回");
       setBulkBatchId(data.batchId);
-      toast.success(`已入队 ${data.queued} 个发布任务 (${data.skipped} 重复跳过)`);
+      toast.success(`按领域配对 ${pairs.length} 对已入队${unmatchedCount ? `, ${unmatchedCount} 篇无匹配账号跳过` : ""} (${data.skipped} 重复跳过)`);
     } catch (err: any) {
       toast.error(err?.message || "批量发布请求失败");
     } finally {

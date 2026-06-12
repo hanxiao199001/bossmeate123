@@ -44,7 +44,8 @@ export type SchedulerJobType =
   | "monthly-journal-refresh"  // PR #178：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
   | "content-retention-cleanup" // PR #178：每日 03:30 BJ 60 天保留清理
   | "stale-review-cleanup"     // 清理超时未审核内容（3天）
-  | "login-keepalive";         // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
+  | "login-keepalive"          // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
+  | "daily-auto-distribute";   // PR-W6: 每日 07:00 BJ 推荐池按账号领域自动配对分发(草稿), 租户开关 autoDistribute
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -327,6 +328,12 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return result;
     }
 
+    case "daily-auto-distribute": {
+      // PR-W6: 对开了 autoDistribute 的租户, 把今日推荐池文章按账号领域配对, 入 bulk 队列(公众号草稿)
+      const { runDailyAutoDistribute } = await import("./publisher/auto-distribute.js");
+      return runDailyAutoDistribute();
+    }
+
     case "monthly-journal-refresh": {
       // PR #177：每月 1 日 04:00 BJ 月度期刊池刷新 + 异常检测
       const { refreshJournalsPool } = await import("../scripts/refresh-journals-pool.js");
@@ -592,6 +599,16 @@ async function registerCronJobs() {
     {
       name: "daily-recommendation",
       data: { type: "daily-recommendation" as SchedulerJobType },
+    }
+  );
+
+  // PR-W6: 每日 07:00 BJ 推荐池自动配对分发 (在 03:00 生成之后; 只对开了 autoDistribute 的租户生效)
+  await crawlerQueue.upsertJobScheduler(
+    "daily-auto-distribute-schedule",
+    { pattern: "0 7 * * *", tz: "Asia/Shanghai" },
+    {
+      name: "daily-auto-distribute",
+      data: { type: "daily-auto-distribute" as SchedulerJobType },
     }
   );
 

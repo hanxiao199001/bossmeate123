@@ -535,6 +535,28 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
+   * POST /admin/smart-assign {articleIds, accountIds?} — PR-W6 智能配对预览
+   * 按"文章学科↔账号领域"配对(每篇一个号, 负载均衡), 返回 pairs 供 bulk-distribute 精确发布。
+   */
+  app.post("/smart-assign", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const body = z.object({
+        articleIds: z.array(z.string().uuid()).min(1).max(50),
+        accountIds: z.array(z.string().uuid()).max(20).optional(),
+      }).parse(request.body);
+      const { computeSmartPairs } = await import("../services/publisher/smart-assign.js");
+      const result = await computeSmartPairs({ tenantId: request.tenantId, articleIds: body.articleIds, accountIds: body.accountIds });
+      return { code: "OK", data: result };
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({ code: "BAD_REQUEST", message: err.errors[0]?.message ?? "参数错误" });
+      }
+      logger.error({ err }, "PR-W6 smart-assign 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "配对失败" });
+    }
+  });
+
+  /**
    * POST /admin/bulk-distribute
    * body: { articleIds: uuid[], accountIds: uuid[], options?: {throttleMs: 3000} }
    * 返回: { batchId, total, skipped, queued }

@@ -41,6 +41,7 @@ interface TodayData {
   publishedToday: number;
   spend: { todayCents: number; monthCents: number };
   budget: { dailyLimitYuan?: number; monthlyLimitYuan?: number };
+  autoDistribute?: boolean; // PR-W6 每日自动分发开关
 }
 
 const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号", wechat: "公众号" };
@@ -97,6 +98,19 @@ export default function TodayPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // PR-W6: 每日自动分发开关
+  const [autoSaving, setAutoSaving] = useState(false);
+  const toggleAutoDistribute = async () => {
+    if (!data) return;
+    setAutoSaving(true);
+    try {
+      await api.put("/today/automation", { autoDistribute: !data.autoDistribute });
+      void load();
+    } finally {
+      setAutoSaving(false);
+    }
+  };
 
   // PR-W4: 任务收口 — 已发完 / 取消
   const [finishing, setFinishing] = useState<string | null>(null);
@@ -192,7 +206,17 @@ export default function TodayPage() {
             {manualTasks.length > 0 && <span className="text-amber-600 font-medium"> · {manualTasks.length} 条等你点发布</span>}
           </p>
         </div>
-        <button onClick={() => void load()} className="text-xs text-indigo-600 hover:underline">刷新</button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void toggleAutoDistribute()}
+            disabled={autoSaving}
+            title="开启后每天 07:00 自动把当日推荐按账号领域配对分发到各公众号草稿箱"
+            className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${data.autoDistribute ? "border-emerald-500 bg-emerald-50 text-emerald-700 font-medium" : "border-gray-200 text-gray-500 hover:border-gray-300"}`}
+          >
+            {data.autoDistribute ? "每日自动分发: 开" : "每日自动分发: 关"}
+          </button>
+          <button onClick={() => void load()} className="text-xs text-indigo-600 hover:underline">刷新</button>
+        </div>
       </div>
 
       {/* 花费卡 */}
