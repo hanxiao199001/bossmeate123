@@ -12,6 +12,7 @@ import { db } from "../models/db.js";
 import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenants } from "../models/schema.js";
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+import { logger } from "../config/logger.js";
 
 /** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
 const BJ_OFFSET_MS = 8 * 3600_000;
@@ -131,6 +132,20 @@ export async function todayRoutes(app: FastifyInstance) {
         autoDistribute: (((tenant?.config as Record<string, any>)?.automationConfig)?.autoDistribute) === true,
       },
     };
+  });
+
+  /** POST /today/generate-now — PR-W8: 手动触发一次每日推荐生成 (错过 03:00 或想立即测试时用) */
+  app.post("/today/generate-now", async (_request, reply) => {
+    try {
+      const { runDailyRecommendation } = await import("../services/recommendation/daily-cron.js");
+      // fire-and-forget: 生成耗时长(每篇数秒), 立即返回, 前端轮询今日页看结果
+      void runDailyRecommendation()
+        .then((r) => logger.info({ enqueued: r.articlesEnqueued }, "PR-W8 手动触发每日生成完成"))
+        .catch((e) => logger.error({ err: e instanceof Error ? e.message : e }, "PR-W8 手动触发每日生成失败"));
+      return { code: "OK", data: { started: true } };
+    } catch (err) {
+      return reply.code(500).send({ code: "TRIGGER_FAILED", message: err instanceof Error ? err.message : "触发失败" });
+    }
   });
 
   /** GET /today/roi?days=7 — PR-P1 ROI 周报 */

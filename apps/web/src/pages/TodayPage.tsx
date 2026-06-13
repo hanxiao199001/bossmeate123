@@ -99,6 +99,19 @@ export default function TodayPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // PR-W8: 手动触发今日生成
+  const [genNow, setGenNow] = useState(false);
+  const triggerGenerate = async () => {
+    setGenNow(true);
+    try {
+      await api.post("/today/generate-now", {});
+      // 生成异步进行, 30s 后刷新一次
+      setTimeout(() => void load(), 30000);
+    } finally {
+      setTimeout(() => setGenNow(false), 30000);
+    }
+  };
+
   // PR-P1: 指标录入
   const [metricFor, setMetricFor] = useState<string | null>(null);
   const [mViews, setMViews] = useState("");
@@ -284,6 +297,11 @@ export default function TodayPage() {
               <button onClick={() => setTimeEditing(false)} className="text-gray-400 hover:text-gray-600">取消</button>
             </span>
           )}
+          <button onClick={() => void triggerGenerate()} disabled={genNow}
+            title="立即生成一轮今日推荐内容 (不必等定时, 约30秒-1分钟后刷新可见)"
+            className="text-xs px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50">
+            {genNow ? "生成中…稍后刷新" : "立即生成今日内容"}
+          </button>
           <button onClick={() => void load()} className="text-xs text-indigo-600 hover:underline">刷新</button>
         </div>
       </div>
