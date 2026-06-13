@@ -105,10 +105,16 @@ async function callLlm(js: JRow[], audience: string): Promise<Partial<RoundupDat
   const user = js.map((j, i) =>
     `期刊${i + 1}: ${j.name} | 学科:${j.discipline ?? "?"} | 核心:${catalogLabels(j)} | 审稿周期:${j.reviewCycle ?? "未知"} | 录用率:${j.acceptanceRate != null ? Math.round(j.acceptanceRate * 100) + "%" : "未知"} | 收稿范围:${(j.scopeDescription ?? "").slice(0, 200) || "未知"}`,
   ).join("\n") + `\n\n目标人群: ${audience}`;
-  const resp = await provider.chat({
-    messages: [{ role: "system", content: sys }, { role: "user", content: user }],
-    temperature: 0.8, maxTokens: Math.min(8000, 1400 + js.length * 700),
-  });
+  // PR-Q4: 盘点 LLM 调用加超时 — 原直调 provider.chat 无超时, provider 卡住会一直挂到10分钟看门狗才失败。
+  // 150s 仍无响应即快速失败(可重试/走 ruleFallback), 不再干等也不堵后续生成。
+  const ROUNDUP_LLM_TIMEOUT_MS = 150_000;
+  const resp = await Promise.race([
+    provider.chat({
+      messages: [{ role: "system", content: sys }, { role: "user", content: user }],
+      temperature: 0.8, maxTokens: Math.min(8000, 1400 + js.length * 700),
+    }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("ROUNDUP_LLM_TIMEOUT")), ROUNDUP_LLM_TIMEOUT_MS)),
+  ]);
   let text = resp.content.trim().replace(/^```json\s*/i, "").replace(/```\s*$/g, "").trim();
   const first = text.indexOf("{"), last = text.lastIndexOf("}");
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
