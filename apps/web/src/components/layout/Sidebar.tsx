@@ -45,6 +45,7 @@ const SECONDARY_NAV: NavItem[] = [
 
 // admin only (owner/admin role)，PR #111 期刊审计入口从 DashboardPage 搬来
 const ADMIN_NAV: NavItem[] = [
+  { to: "/onboarding", icon: IconSparkles, label: "客户开通", matchPrefix: "/onboarding" },
   { to: "/admin/journals/audit", icon: IconBarChart, label: "期刊审计", matchPrefix: "/admin/journals/audit" },
 ];
 

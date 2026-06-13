@@ -99,6 +99,34 @@ export default function TodayPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // PR-P1: 指标录入
+  const [metricFor, setMetricFor] = useState<string | null>(null);
+  const [mViews, setMViews] = useState("");
+  const [mFollowers, setMFollowers] = useState("");
+  const [mInquiries, setMInquiries] = useState("");
+  const [mPlatform, setMPlatform] = useState("wechat");
+  const [mSaving, setMSaving] = useState(false);
+  const saveMetric = async (contentId: string) => {
+    setMSaving(true);
+    try {
+      await api.post("/today/metrics", {
+        contentId, accountId: "", platform: mPlatform,
+        views: Number(mViews) || 0, followers: Number(mFollowers) || 0, inquiries: Number(mInquiries) || 0,
+      });
+      setMetricFor(null); setMViews(""); setMFollowers(""); setMInquiries("");
+      const r = await api.get("/today/roi?days=7");
+      setRoi((r.data as any)?.data ?? r.data);
+    } finally { setMSaving(false); }
+  };
+
+  // PR-P1: ROI 周报
+  const [roi, setRoi] = useState<{ rangeDays: number; measuredCount: number; totalViews: number; totalFollowers: number; totalInquiries: number; avgViews: number; topContents: Array<{ contentId: string; title: string | null; views: number; platform: string }> } | null>(null);
+  useEffect(() => {
+    api.get("/today/roi?days=7")
+      .then((r) => setRoi((r.data as any)?.data ?? r.data))
+      .catch(() => { /* 无数据 */ });
+  }, []);
+
   // PR-W7: 生成/分发时间设置
   const [times, setTimes] = useState<{ generateTime: string; distributeTime: string } | null>(null);
   const [timeEditing, setTimeEditing] = useState(false);
@@ -330,6 +358,47 @@ export default function TodayPage() {
         </div>
       )}
 
+      {/* PR-P1: ROI 周报 */}
+      <div className="bg-white border border-gray-100 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold text-gray-800">近 7 天效果 (ROI)</h2>
+          <span className="text-xs text-gray-400">{roi?.measuredCount ? `已回收 ${roi.measuredCount} 篇数据` : "暂无回收数据 — 运营在内容详情页填阅读量后显示"}</span>
+        </div>
+        {roi && roi.measuredCount > 0 ? (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: "总阅读", v: roi.totalViews },
+                { label: "篇均阅读", v: roi.avgViews },
+                { label: "涨粉", v: roi.totalFollowers },
+                { label: "咨询线索", v: roi.totalInquiries },
+              ].map((m) => (
+                <div key={m.label} className="bg-gray-50 rounded-lg px-3 py-2">
+                  <div className="text-xs text-gray-400">{m.label}</div>
+                  <div className="text-lg font-bold text-gray-900">{m.v.toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+            {roi.topContents.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs text-gray-400 mb-1">本周 Top 内容</div>
+                <div className="space-y-1">
+                  {roi.topContents.map((c) => (
+                    <Link key={c.contentId} to={`/content/${c.contentId}`} className="flex items-center gap-2 text-sm hover:bg-gray-50 px-2 -mx-2 py-0.5 rounded">
+                      <span className="text-xs text-gray-400 shrink-0">{PLATFORM_LABEL[c.platform] ?? c.platform}</span>
+                      <span className="text-gray-800 truncate flex-1">{c.title ?? "(无标题)"}</span>
+                      <span className="text-xs text-indigo-600 shrink-0">{c.views.toLocaleString()} 阅读</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-sm text-gray-400">发布后,运营把各平台后台的阅读量填回内容详情页,这里就能看到效果汇总和续费依据。</div>
+        )}
+      </div>
+
       {/* 账号发布矩阵 */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">
         <h2 className="text-sm font-semibold text-gray-800 mb-2">账号矩阵 ({data.accounts.length})</h2>
@@ -384,7 +453,27 @@ export default function TodayPage() {
                             {isPicking ? "收起" : "发布到…"}
                           </button>
                         )}
+                        <button
+                          onClick={() => setMetricFor(metricFor === c.id ? null : c.id)}
+                          title="录入该内容的阅读量等效果数据"
+                          className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+                        >
+                          填数据
+                        </button>
                       </div>
+                      {metricFor === c.id && (
+                        <div className="ml-2 mb-2 p-3 rounded-lg border border-gray-200 bg-gray-50 flex flex-wrap items-end gap-2">
+                          <select value={mPlatform} onChange={(e) => setMPlatform(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg">
+                            <option value="wechat">公众号</option>
+                            <option value="douyin">抖音</option>
+                            <option value="wechat_video">视频号</option>
+                          </select>
+                          <label className="text-xs text-gray-500">阅读<input value={mViews} onChange={(e) => setMViews(e.target.value)} className="ml-1 w-16 px-1 py-1 border border-gray-200 rounded" /></label>
+                          <label className="text-xs text-gray-500">涨粉<input value={mFollowers} onChange={(e) => setMFollowers(e.target.value)} className="ml-1 w-14 px-1 py-1 border border-gray-200 rounded" /></label>
+                          <label className="text-xs text-gray-500">咨询<input value={mInquiries} onChange={(e) => setMInquiries(e.target.value)} className="ml-1 w-12 px-1 py-1 border border-gray-200 rounded" /></label>
+                          <button onClick={() => void saveMetric(c.id)} disabled={mSaving} className="text-xs px-3 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">{mSaving ? "…" : "保存"}</button>
+                        </div>
+                      )}
                       {isPicking && (
                         <div className="ml-2 mb-2 p-3 rounded-lg border border-indigo-100 bg-indigo-50/40">
                           <div className="text-xs text-gray-500 mb-1.5">

@@ -12,6 +12,7 @@ import ContentPage from "./pages/ContentPage";
 import ContentDetailPage from "./pages/ContentDetailPage";
 import DashboardPage from "./pages/DashboardPage";
 import TodayPage from "./pages/TodayPage"; // PR-W2 今日驾驶舱
+import OnboardingWizardPage from "./pages/OnboardingWizardPage"; // PR-Y2 开通向导
 // 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
 // import KeywordsPage from "./pages/KeywordsPage";
 import WorkflowPage from "./pages/WorkflowPage";
@@ -91,6 +92,18 @@ export default function App() {
         }
       />
       <Route path="/recommendations" element={<Navigate to="/workbench" replace />} />
+
+      {/* PR-Y2: 新客户开通向导 */}
+      <Route
+        path="/onboarding"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <OnboardingWizardPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
 
       {/* PR-W2: 今日驾驶舱 — 老板每日工作流统一入口 */}
       <Route

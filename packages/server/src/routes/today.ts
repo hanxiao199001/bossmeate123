@@ -128,6 +128,32 @@ export async function todayRoutes(app: FastifyInstance) {
     };
   });
 
+  /** GET /today/roi?days=7 — PR-P1 ROI 周报 */
+  app.get("/today/roi", async (request) => {
+    const q = (request.query ?? {}) as { days?: string };
+    const days = Math.min(Math.max(Number(q.days) || 7, 1), 90);
+    const { buildRoiReport } = await import("../services/metrics/roi.js");
+    return { code: "OK", data: await buildRoiReport(request.tenantId, days) };
+  });
+
+  /** POST /today/metrics {contentId, accountId, platform, views, likes, shares, followers, inquiries} — PR-P1 运营手填指标 */
+  app.post("/today/metrics", async (request, reply) => {
+    const b = (request.body ?? {}) as Record<string, unknown>;
+    const contentId = String(b.contentId ?? "");
+    const accountId = String(b.accountId ?? "");
+    const platform = String(b.platform ?? "");
+    if (!contentId || !platform) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: "contentId 与 platform 必填" });
+    }
+    const { recordMetric } = await import("../services/metrics/roi.js");
+    await recordMetric({
+      tenantId: request.tenantId, contentId, accountId, platform,
+      views: Number(b.views) || 0, likes: Number(b.likes) || 0, shares: Number(b.shares) || 0,
+      followers: Number(b.followers) || 0, inquiries: Number(b.inquiries) || 0, source: "manual",
+    });
+    return { code: "OK" };
+  });
+
   /** PUT /today/automation {autoDistribute} — PR-W6 每日自动分发开关 */
   app.put("/today/automation", async (request) => {
     const body = (request.body ?? {}) as { autoDistribute?: boolean };
