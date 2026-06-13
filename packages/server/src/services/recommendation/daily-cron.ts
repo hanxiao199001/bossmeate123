@@ -84,6 +84,8 @@ export async function selectCandidates(opts: {
   disciplines: string[] | null; // null = 全学科
   cooldownDays: number;
   poolSize: number;
+  tenantId?: string;          // PR-V1: 限定租户(取 onboarding 选题池)
+  sourcePlatform?: string;    // PR-V1: 限定来源(如 "onboarding")
 }): Promise<Array<{ id: string; keyword: string; category: string | null }>> {
   const { disciplines, cooldownDays, poolSize } = opts;
 
@@ -95,6 +97,12 @@ export async function selectCandidates(opts: {
 
   if (disciplines && disciplines.length > 0) {
     whereClause = sql`${whereClause} AND ${keywordsTable.category} IN (${sql.join(disciplines.map(d => sql`${d}`), sql`, `)})`;
+  }
+  if (opts.tenantId) {
+    whereClause = sql`${whereClause} AND ${keywordsTable.tenantId} = ${opts.tenantId}`;
+  }
+  if (opts.sourcePlatform) {
+    whereClause = sql`${whereClause} AND ${keywordsTable.sourcePlatform} = ${opts.sourcePlatform}`;
   }
 
   return db
@@ -401,6 +409,26 @@ export async function runDailyContentByType(
             journalIds.forEach((jid) => uniqueJournals.add(jid));
           }
           roundupCount++;
+        } else if (type === "topicPool") {
+          // PR-V1 跨行业最后一公里: 从本租户 onboarding 选题池取题, 通用生成(不挂期刊)
+          const cands = await selectCandidates({
+            disciplines: null, cooldownDays: 7, poolSize: 5,
+            tenantId: SYS, sourcePlatform: "onboarding",
+          });
+          const pick = cands[0];
+          if (!pick) { logger.info({ tenantId: SYS }, "PR-V1 选题池无可用新题, 跳过"); continue; }
+          const { generateByFormat } = await import("../content-engine/format-generators.js");
+          const gen = await generateByFormat({
+            tenantId: SYS, userId: SYS_USER, topic: pick.keyword, format: "article",
+          });
+          const [row] = await db.insert(contents).values({
+            tenantId: SYS, userId: SYS_USER, type: "article",
+            title: gen.title, body: gen.body,
+            ...initialStatusFields("draft"),
+            metadata: { source: "topic_pool", topic: pick.keyword, ...gen.metadata },
+          }).returning({ id: contents.id });
+          if (row?.id) batchIds.push(row.id);
+          await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, pick.id));
         } else if (type === "domestic" || type === "international") {
           const journalId = await pickScopedFreshJournal(SYS, type, discipline);
           if (!journalId) { logger.info({ type, discipline }, "PR-O3 该范围无可用新刊, 跳过"); continue; }

@@ -734,7 +734,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
   app.patch("/daily-content-config", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const body = (request.body as { contentQuota?: Record<string, { count?: unknown; disciplines?: unknown }> } | null) || {};
-    const validTypes = new Set(["domestic", "international", "roundup"]);
+    const validTypes = new Set(["domestic", "international", "roundup", "topicPool"]); // PR-V1 跨行业选题池
     const validDisc = new Set<string>(ALL_DISCIPLINES.map((d) => d.code));
     const clean: Record<string, { count: number; disciplines: string[] }> = {};
     let total = 0;

@@ -128,6 +128,22 @@ export async function generateTopicPool(opts: {
     compositeScore: 50,
     crawlDate: new Date().toISOString().slice(0, 10),
   })));
+  // PR-V1: 自动给该租户配 topicPool 每日配额, 让每日生成从选题池取题(跨行业最后一公里)
+  try {
+    const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, opts.tenantId)).limit(1);
+    const cfg = (t?.config as Record<string, any>) ?? {};
+    const auto = (cfg.automationConfig as Record<string, any>) ?? {};
+    const cq = (auto.contentQuota as Record<string, any>) ?? {};
+    if (!cq.topicPool) {
+      cq.topicPool = { count: Math.min(5, topics.length), disciplines: [] };
+      auto.contentQuota = cq;
+      cfg.automationConfig = auto;
+      await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, opts.tenantId));
+      logger.info({ tenantId: opts.tenantId }, "PR-V1 已自动配 topicPool 每日配额");
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "PR-V1 自动配 topicPool 配额失败(可手动配)");
+  }
   logger.info({ tenantId: opts.tenantId, count: topics.length }, "PR-Y1 选题池已入库");
   return topics;
 }
