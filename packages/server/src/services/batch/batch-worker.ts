@@ -151,7 +151,8 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         const artMetaForGate = (result.artifact as { metadata?: Record<string, unknown> } | undefined)?.metadata || {};
         const qPassed = artMetaForGate.qualityPassed;
         const qScore = typeof artMetaForGate.qualityScore === "number" ? artMetaForGate.qualityScore : undefined;
-        const failed = qPassed === false || (qScore !== undefined && qScore < 60);
+        // PR-U2(调) 只在质检明确判不通过时转待审; 尊重原质检结论, 不再用分数二次卡(过严会误伤)
+        const failed = qPassed === false;
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
           await db.update(contents)

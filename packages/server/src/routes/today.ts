@@ -135,7 +135,7 @@ export async function todayRoutes(app: FastifyInstance) {
   });
 
   /** POST /today/approve/:contentId — PR-U2 人工采用待审内容 (needs_review → generated) */
-  app.post("/approve/:contentId", async (request, reply) => {
+  app.post("/today/approve/:contentId", async (request, reply) => {
     const { contentId } = request.params as { contentId: string };
     const [c] = await db.select({ id: contents.id, status: contents.status })
       .from(contents)
