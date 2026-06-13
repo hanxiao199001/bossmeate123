@@ -64,6 +64,8 @@ export interface RoiReport {
   totalInquiries: number;
   avgViews: number;
   measuredCount: number;
+  qualityCount: number;   // PR-FW: 优质文章数 (阅读 > 中位数1.5倍)
+  medianViews: number;
   topContents: Array<{ contentId: string; title: string | null; views: number; platform: string }>;
 }
 
@@ -88,6 +90,10 @@ export async function buildRoiReport(tenantId: string, rangeDays = 7): Promise<R
     totalFollowers += r.followers ?? 0; totalInquiries += r.inquiries ?? 0;
   }
   const measuredCount = list.length;
+  // PR-FW 优质判定: 高于本批阅读中位数 1.5 倍 (相对基准, 大号小号公平)
+  const sortedViews = list.map((r) => r.views ?? 0).sort((a, b) => a - b);
+  const medianViews = sortedViews.length > 0 ? sortedViews[Math.floor(sortedViews.length / 2)]! : 0;
+  const qualityCount = list.filter((r) => (r.views ?? 0) > medianViews * 1.5).length;
   const topContents = [...list]
     .sort((a, b) => (b.views ?? 0) - (a.views ?? 0))
     .slice(0, 5)
@@ -99,6 +105,8 @@ export async function buildRoiReport(tenantId: string, rangeDays = 7): Promise<R
     totalViews, totalLikes, totalShares, totalFollowers, totalInquiries,
     avgViews: measuredCount > 0 ? Math.round(totalViews / measuredCount) : 0,
     measuredCount,
+    qualityCount,
+    medianViews,
     topContents,
   };
 }

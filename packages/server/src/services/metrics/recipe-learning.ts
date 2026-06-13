@@ -9,6 +9,7 @@ import { db } from "../../models/db.js";
 import type { RecipeWeights } from "../skills/structure-variation.js";
 import { logger } from "../../config/logger.js";
 
+const MATURE_DAYS = 7;        // 成熟窗口: 发布满7天才算数(文章阅读长尾, 早期数据不作准)
 const MIN_SAMPLES = 10;       // 全局样本下限, 不够不学
 const COMPONENTS: Array<keyof RecipeWeights> = ["titleFormula", "hook", "cta", "scriptStyle"];
 
@@ -26,6 +27,8 @@ export async function getRecipeWeights(tenantId: string): Promise<RecipeWeights 
   let weights: RecipeWeights | undefined;
   try {
     // 取该租户每篇内容的 recipe 各组件 + 最新阅读快照
+    // 成熟窗口: 只统计发布满 MATURE_DAYS 天的文章(早期半熟数据会冤枉配方);
+    // 取"发布后约第 MATURE_DAYS 天"的快照做同龄比(不同龄文章口径一致)。
     const rows = await db.execute(sql`
       SELECT
         c.metadata->'variationRecipe'->>'titleFormula' AS title_formula,
@@ -36,10 +39,13 @@ export async function getRecipeWeights(tenantId: string): Promise<RecipeWeights 
       FROM contents c
       JOIN LATERAL (
         SELECT views FROM content_metrics m
-        WHERE m.content_id = c.id ORDER BY m.snapshot_date DESC LIMIT 1
+        WHERE m.content_id = c.id
+          AND m.snapshot_date <= (c.created_at::date + ${MATURE_DAYS})
+        ORDER BY m.snapshot_date DESC LIMIT 1
       ) cm ON true
       WHERE c.tenant_id = ${tenantId}
         AND c.metadata ? 'variationRecipe'
+        AND c.created_at <= NOW() - INTERVAL '${sql.raw(String(MATURE_DAYS))} days'
         AND cm.views > 0
     `);
     const list = ((rows as any).rows ?? []) as Array<Record<string, any>>;

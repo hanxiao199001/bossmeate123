@@ -157,6 +157,33 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       return { ok: true, serverTime: new Date().toISOString(), deviceId: request.agentDevice!.id };
     });
 
+    /**
+     * POST /agent/metrics — PR-FW Agent 读数据回报。
+     * Agent 用登录浏览器读各平台创作者后台的阅读/播放数据, 批量回报 → content_metrics。
+     * body: { items: [{ contentId, platform, views?, likes?, shares?, followers?, inquiries? }] }
+     */
+    authed.post("/agent/metrics", async (request, reply) => {
+      const device = request.agentDevice!;
+      const body = (request.body ?? {}) as { items?: Array<Record<string, unknown>> };
+      const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+      if (items.length === 0) return reply.code(400).send({ code: "BAD_REQUEST", message: "items 必填" });
+      const { recordMetric } = await import("../services/metrics/roi.js");
+      let ok = 0;
+      for (const it of items) {
+        const contentId = String(it.contentId ?? "");
+        const platform = String(it.platform ?? "");
+        if (!UUID_RE.test(contentId) || !platform) continue;
+        await recordMetric({
+          tenantId: device.tenantId, contentId, accountId: "", platform,
+          views: Number(it.views) || 0, likes: Number(it.likes) || 0, shares: Number(it.shares) || 0,
+          followers: Number(it.followers) || 0, inquiries: Number(it.inquiries) || 0, source: "api",
+        });
+        ok++;
+      }
+      logger.info({ deviceId: device.id, reported: ok }, "PR-FW Agent 指标回报");
+      return { code: "OK", data: { reported: ok } };
+    });
+
     /** GET /agent/accounts — 本租户可本地发布的账号列表 (douyin/wechat_video, Agent login 命令列账号用) */
     authed.get("/agent/accounts", async (request) => {
       const device = request.agentDevice!;
