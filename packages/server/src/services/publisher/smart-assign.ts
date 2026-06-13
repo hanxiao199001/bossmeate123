@@ -6,9 +6,9 @@
  *   3. 每篇只配一个号 (独家), 同轮负载均衡 — 谁分到的少给谁。
  *   4. 配不上的文章返回 unmatched, 由调用方决定跳过或提示。
  */
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { contents, journals, platformAccounts } from "../../models/schema.js";
+import { contents, contentPublishLog, journals, platformAccounts, tenants } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 
 export interface SmartPair {
@@ -76,12 +76,33 @@ export async function computeSmartPairs(opts: {
     return { pairs: [], unmatched: articleIds.map((id) => ({ articleId: id, discipline: null, reason: "无可用公众号" })) };
   }
 
-  const arts = await db
+  const artsRaw = await db
     .select({ id: contents.id, metadata: contents.metadata })
     .from(contents)
     .where(inArray(contents.id, articleIds));
+  // PR-B1 精品优先: 名额有限时, 质检分高的先占坑
+  const arts = [...artsRaw].sort((a, b) => {
+    const sa = Number((a.metadata as any)?.qualityScore ?? (a.metadata as any)?.aiScore ?? 0);
+    const sb = Number((b.metadata as any)?.qualityScore ?? (b.metadata as any)?.aiScore ?? 0);
+    return sb - sa;
+  });
 
-  const load = new Map<string, number>(accounts.map((a) => [a.id, 0]));
+  // PR-B1 宁缺毋滥: 每号每日发布上限 (公众号订阅号本就日发1次; 配置可覆盖)
+  const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+  const cfgLimit = Number((t?.config as any)?.publishLimits?.perAccountPerDay);
+  const DAILY_CAP = Number.isFinite(cfgLimit) && cfgLimit > 0 ? Math.floor(cfgLimit) : 1; // 公众号默认 1/天
+  // 今日各号已发数 (北京时间当日)
+  const bj = new Date(Date.now() + 8 * 3600_000); bj.setUTCHours(0, 0, 0, 0);
+  const since = new Date(bj.getTime() - 8 * 3600_000);
+  const pubRows = await db
+    .select({ accountId: contentPublishLog.accountId, n: sql<string>`COUNT(*)` })
+    .from(contentPublishLog)
+    .where(and(eq(contentPublishLog.tenantId, tenantId), gte(contentPublishLog.createdAt, since)))
+    .groupBy(contentPublishLog.accountId);
+  const publishedToday = new Map<string, number>(pubRows.map((r) => [r.accountId, Number(r.n)]));
+
+  // load 起点 = 今日已发数, 这样上限对"今日已发+本轮分配"一起生效
+  const load = new Map<string, number>(accounts.map((a) => [a.id, publishedToday.get(a.id) ?? 0]));
   const pairs: SmartPair[] = [];
   const unmatched: SmartAssignResult["unmatched"] = [];
 
@@ -90,9 +111,15 @@ export async function computeSmartPairs(opts: {
     // 领域匹配的号优先; 领域不限的号兜底
     const matching = accounts.filter((a) => disc && a.disciplines.includes(disc));
     const open = accounts.filter((a) => a.disciplines.length === 0);
-    const candidates = matching.length > 0 ? matching : open;
-    if (candidates.length === 0) {
+    const candidatesAll = matching.length > 0 ? matching : open;
+    // PR-B1: 剔除已达每日上限的号 (今日已发+本轮已分 >= DAILY_CAP)
+    const candidates = candidatesAll.filter((a) => (load.get(a.id) ?? 0) < DAILY_CAP);
+    if (candidatesAll.length === 0) {
       unmatched.push({ articleId: art.id, discipline: disc, reason: `没有领域含"${disc}"或不限领域的公众号` });
+      continue;
+    }
+    if (candidates.length === 0) {
+      unmatched.push({ articleId: art.id, discipline: disc, reason: `匹配的号今日已达发布上限(${DAILY_CAP}篇/天),宁缺毋滥` });
       continue;
     }
     // 负载均衡: 本轮分到最少的优先

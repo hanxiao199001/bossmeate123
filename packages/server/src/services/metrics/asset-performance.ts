@@ -27,7 +27,9 @@ async function aggregateByMetaKey(tenantId: string, contentType: "article" | "vi
         COUNT(*) AS n
       FROM contents c
       JOIN LATERAL (
-        SELECT views FROM content_metrics m
+        -- PR-B2 轻量信号: 阅读为0时用互动代理
+        SELECT GREATEST(m.views, m.likes*10 + m.comments*15 + m.shares*20) AS views
+        FROM content_metrics m
         WHERE m.content_id = c.id
           AND m.snapshot_date <= (c.created_at::date + ${MATURE_DAYS})
         ORDER BY m.snapshot_date DESC LIMIT 1

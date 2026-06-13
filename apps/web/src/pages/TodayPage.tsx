@@ -18,6 +18,7 @@ interface TodayContent {
 
 interface TodayAgentTask {
   id: string;
+  contentId?: string;
   platform: string;
   accountName: string | null;
   status: string;
@@ -202,10 +203,15 @@ export default function TodayPage() {
 
   // PR-W4: 任务收口 — 已发完 / 取消
   const [finishing, setFinishing] = useState<string | null>(null);
-  const finishTask = async (id: string, action: "published" | "cancel") => {
+  const finishTask = async (id: string, action: "published" | "cancel", contentId?: string, platform?: string) => {
     setFinishing(id);
     try {
       await api.post(`/agent-admin/tasks/${id}/finish`, { action });
+      // PR-B2 发布即填: 标记已发完后自动打开填数据框, 把回填并进发布动作
+      if (action === "published" && contentId) {
+        setMetricFor(contentId);
+        if (platform) setMPlatform(platform);
+      }
       void load();
     } finally {
       setFinishing(null);
@@ -379,7 +385,7 @@ export default function TodayPage() {
                 <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
                 <span className="font-medium shrink-0 whitespace-nowrap">{t.accountName}</span>
                 <span className="text-gray-600 truncate min-w-0 flex-1">已填好停在发布页 — 去浏览器点【发布】</span>
-                <button onClick={() => void finishTask(t.id, "published")} disabled={finishing === t.id}
+                <button onClick={() => void finishTask(t.id, "published", t.contentId, t.platform)} disabled={finishing === t.id}
                   className="shrink-0 text-xs px-2 py-0.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">已发完 ✓</button>
                 <button onClick={() => void finishTask(t.id, "cancel")} disabled={finishing === t.id}
                   className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-50">取消</button>

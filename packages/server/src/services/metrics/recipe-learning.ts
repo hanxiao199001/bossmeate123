@@ -38,7 +38,9 @@ export async function getRecipeWeights(tenantId: string): Promise<RecipeWeights 
         cm.views AS views
       FROM contents c
       JOIN LATERAL (
-        SELECT views FROM content_metrics m
+        -- PR-B2 轻量信号: 阅读为0时用互动代理(在看/评论/分享), 让只填互动也能喂飞轮
+        SELECT GREATEST(m.views, m.likes*10 + m.comments*15 + m.shares*20) AS views
+        FROM content_metrics m
         WHERE m.content_id = c.id
           AND m.snapshot_date <= (c.created_at::date + ${MATURE_DAYS})
         ORDER BY m.snapshot_date DESC LIMIT 1

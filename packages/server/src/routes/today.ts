@@ -53,6 +53,7 @@ export async function todayRoutes(app: FastifyInstance) {
       db
         .select({
           id: agentPublishTasks.id,
+          contentId: agentPublishTasks.contentId,
           accountId: agentPublishTasks.accountId,
           platform: agentPublishTasks.platform,
           accountName: agentPublishTasks.accountName,
