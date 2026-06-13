@@ -376,6 +376,32 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
+// PR-Q2 模板多元+智能: 在 4 个真·排版模板间按"模板效果"加权轮换(无数据均匀)。
+// data-card/storytelling/listicle/shunshi-style 各有不同 HTML 生成器→真视觉多元; 阅读高的权重高→越用越智能。
+const LAYOUT_TEMPLATES = ["shunshi-style", "data-card", "storytelling", "listicle"] as const;
+async function buildTemplateWeights(tenantId: string): Promise<Record<string, number>> {
+  const w: Record<string, number> = Object.fromEntries(LAYOUT_TEMPLATES.map((t) => [t, 1]));
+  try {
+    const { getAssetPerformance } = await import("../metrics/asset-performance.js");
+    const { templates } = await getAssetPerformance(tenantId);
+    if (templates.length > 0) {
+      const avgAll = templates.reduce((s, t) => s + t.avgViews, 0) / templates.length;
+      if (avgAll > 0) {
+        for (const t of templates) {
+          if (t.key in w) w[t.key] = Math.max(0.5, t.avgViews / avgAll); // 相对均值, 低分留探索机会
+        }
+      }
+    }
+  } catch { /* 无数据均匀 */ }
+  return w;
+}
+function pickTemplateId(weights: Record<string, number>): string {
+  const total = LAYOUT_TEMPLATES.reduce((s, t) => s + (weights[t] ?? 1), 0);
+  let r = Math.random() * total;
+  for (const t of LAYOUT_TEMPLATES) { r -= weights[t] ?? 1; if (r <= 0) return t; }
+  return "shunshi-style";
+}
+
 export async function runDailyContentByType(
   cq: Record<string, { count: number; disciplines: string[] }>,
   // PR-Z1 多租户隔离: 指定目标租户则内容落到该租户自己的池 (默认 SYSTEM 全局池, 向后兼容)
@@ -384,6 +410,7 @@ export async function runDailyContentByType(
   const startedAt = new Date().toISOString();
   const SYS = target?.tenantId ?? SYSTEM_RECOMMENDATION_TENANT_ID;
   const SYS_USER = target?.userId ?? SYSTEM_RECOMMENDATION_USER_ID;
+  const tplWeights = await buildTemplateWeights(SYS); // PR-Q2 模板加权
   const batchIds: string[] = [];
   const failures: Array<{ keyword: string; error: string }> = [];
   let roundupCount = 0;
@@ -442,7 +469,7 @@ export async function runDailyContentByType(
           const result = await createBatch({
             tenantId: SYS, userId: SYS_USER,
             filename: `daily-${type}-${discipline}-${new Date().toISOString().slice(0, 10)}`,
-            rows: [{ rowIndex: 1, topic, journalId, template: "A", priority: 3 }],
+            rows: [{ rowIndex: 1, topic, journalId, templateId: pickTemplateId(tplWeights), template: "A", priority: 3 }],
           });
           batchIds.push(result.batchId);
           uniqueJournals.add(journalId);

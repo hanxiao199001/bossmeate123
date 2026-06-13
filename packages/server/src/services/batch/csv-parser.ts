@@ -20,6 +20,7 @@ export interface CsvRow {
   template: "A" | "B" | "C" | "E" | null;
   priority: number;
   accountId?: string | null; // PR-X1: 独家生成时绑定账号(注入人设)
+  templateId?: string | null; // PR-Q2: 直接指定排版模板id(覆盖letter映射, 用于每日轮换真模板)
 }
 
 export interface CsvParseResult {

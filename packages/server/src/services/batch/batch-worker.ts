@@ -216,6 +216,8 @@ export async function stopBatchWorker(): Promise<void> {
 /** csv 'A/B/C/E' → templateId（Q.2 4 模板）。null → undefined（caller 走 default） */
 function mapTemplateLetter(letter: string | null): string | undefined {
   if (!letter) return undefined;
+  // PR-Q2: 已是真模板id(含连字符, 如 shunshi-style/data-card) → 直接用, 不走 letter 映射
+  if (letter.includes("-")) return letter;
   const map: Record<string, string> = {
     A: "shunshi-style",
     B: "marketing-conversion",

@@ -52,7 +52,7 @@ export async function createBatch(input: CreateBatchInput): Promise<{ batchId: s
     rowIndex: r.rowIndex,
     topic: r.topic,
     journalId: r.journalId,
-    template: r.template,
+    template: r.templateId ?? r.template, // PR-Q2: templateId(真模板id) 优先, 否则 letter
     accountId: r.accountId ?? null, // PR-X1
     priority: r.priority,
   }));
