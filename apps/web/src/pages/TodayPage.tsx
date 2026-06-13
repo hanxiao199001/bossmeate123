@@ -145,6 +145,14 @@ export default function TodayPage() {
     } finally { setMSaving(false); }
   };
 
+  // PR-FW3: 资产效果榜
+  const [assets, setAssets] = useState<{ templates: Array<{ key: string; label: string; count: number; avgViews: number }>; avatars: Array<{ key: string; label: string; count: number; avgViews: number }> } | null>(null);
+  useEffect(() => {
+    api.get("/today/asset-performance")
+      .then((r) => setAssets((r.data as any)?.data ?? r.data))
+      .catch(() => { /* 无数据 */ });
+  }, []);
+
   // PR-P1: ROI 周报
   const [roi, setRoi] = useState<{ rangeDays: number; measuredCount: number; totalViews: number; totalFollowers: number; totalInquiries: number; avgViews: number; topContents: Array<{ contentId: string; title: string | null; views: number; platform: string }> } | null>(null);
   useEffect(() => {
@@ -430,6 +438,46 @@ export default function TodayPage() {
           <div className="text-sm text-gray-400">发布后,运营把各平台后台的阅读量填回内容详情页,这里就能看到效果汇总和续费依据。</div>
         )}
       </div>
+
+      {/* PR-FW3: 模板效果榜 (数据足够才显示) */}
+      {assets && (assets.templates.length > 0 || assets.avatars.length > 0) && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <h2 className="text-sm font-semibold text-gray-800 mb-2">哪种内容更受欢迎 (近期成熟数据)</h2>
+          <div className="grid sm:grid-cols-2 gap-4">
+            {assets.templates.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-400 mb-1">图文模板 · 平均阅读</div>
+                <div className="space-y-1">
+                  {assets.templates.map((t, i) => (
+                    <div key={t.key} className="flex items-center gap-2 text-sm">
+                      <span className={`w-4 text-xs ${i === 0 ? "text-amber-500" : "text-gray-300"}`}>{i === 0 ? "★" : i + 1}</span>
+                      <span className="text-gray-700 flex-1 truncate">{t.label}</span>
+                      <span className="text-xs text-gray-400">{t.count}篇</span>
+                      <span className="text-indigo-600 font-medium">{t.avgViews.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {assets.avatars.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-400 mb-1">数字人形象 · 平均播放</div>
+                <div className="space-y-1">
+                  {assets.avatars.map((t, i) => (
+                    <div key={t.key} className="flex items-center gap-2 text-sm">
+                      <span className={`w-4 text-xs ${i === 0 ? "text-amber-500" : "text-gray-300"}`}>{i === 0 ? "★" : i + 1}</span>
+                      <span className="text-gray-700 flex-1 truncate">{t.label}</span>
+                      <span className="text-xs text-gray-400">{t.count}条</span>
+                      <span className="text-indigo-600 font-medium">{t.avgViews.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">系统会自动多用表现好的配方/模板。数据越多越准。</div>
+        </div>
+      )}
 
       {/* 账号发布矩阵 */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">

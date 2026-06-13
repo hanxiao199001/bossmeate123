@@ -163,6 +163,12 @@ export async function todayRoutes(app: FastifyInstance) {
     }
   });
 
+  /** GET /today/asset-performance — PR-FW3 模板/形象效果榜 */
+  app.get("/today/asset-performance", async (request) => {
+    const { getAssetPerformance } = await import("../services/metrics/asset-performance.js");
+    return { code: "OK", data: await getAssetPerformance(request.tenantId) };
+  });
+
   /** GET /today/roi?days=7 — PR-P1 ROI 周报 */
   app.get("/today/roi", async (request) => {
     const q = (request.query ?? {}) as { days?: string };
