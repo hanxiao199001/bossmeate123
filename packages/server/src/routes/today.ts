@@ -7,10 +7,11 @@
  *   spend        今日/本月真实消耗 (cost_ledger) + 预算配置
  */
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, or, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenants } from "../models/schema.js";
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 
 /** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
 const BJ_OFFSET_MS = 8 * 3600_000;
@@ -41,7 +42,11 @@ export async function todayRoutes(app: FastifyInstance) {
           metadata: contents.metadata,
         })
         .from(contents)
-        .where(and(eq(contents.tenantId, tenantId), gte(contents.createdAt, since)))
+        // PR-W8: 与内容工坊同口径 — 自己租户 + 共享推荐池(每日生成进 SYSTEM 池), 否则今日页恒显示 0
+        .where(and(
+          or(eq(contents.tenantId, tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
+          gte(contents.createdAt, since),
+        ))
         .orderBy(desc(contents.createdAt))
         .limit(200),
       db
