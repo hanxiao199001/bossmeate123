@@ -734,13 +734,11 @@ export async function generateWechatJournalArticleHtml(
   const sellingPoints = analyzeSellingPoints(journal);
   const sections: string[] = [];
 
-  // 获取封面（HD 优先，fallback LetPub）
-  let cover: CoverResult;
-  try {
-    cover = await getJournalCover(journal as any);
-  } catch {
-    cover = { url: journal.coverUrl || "", isHd: false };
-  }
+  // PR-Q5: 不在渲染时实时抓封面 — getJournalCover 对非Springer刊(如Elsevier)会串行白试十几秒,
+  //   叠加LLM慢拖到生成超时; 封面抓取成功率本就低。直接用已缓存的 coverUrlHd/coverUrl, 跟顺仕美途一致。
+  const cover: CoverResult = (journal as any).coverUrlHd
+    ? { url: (journal as any).coverUrlHd, isHd: true }
+    : { url: journal.coverUrl || "", isHd: false };
 
   // 区块 1: 免责
   if (journal.synthetic) sections.push(renderDisclaimer());
