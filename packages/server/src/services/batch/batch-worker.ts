@@ -121,8 +121,13 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         };
         // ArticleSkill.handle 是 conversation-driven (含发布等流程)，batch 路径用直接生成
         // 简化：用 row.topic 作 user input，复用 handle 流程（生成完写 contents body）
-        const result = await (article as { handle: (input: string, history: unknown[], ctx: unknown) => Promise<{ reply: string; artifact?: { body: string; title?: string } }> })
-          .handle(row.topic, [], skillContext);
+        // PR-Q6 整篇硬超时(釜底抽薪): 任何环节(补数据/LLM/渲染)卡住超 180s 即快速失败, 不再干等到10分钟看门狗。
+        const GEN_HARD_TIMEOUT_MS = 180_000;
+        const result = await Promise.race([
+          (article as { handle: (input: string, history: unknown[], ctx: unknown) => Promise<{ reply: string; artifact?: { body: string; title?: string } }> })
+            .handle(row.topic, [], skillContext),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("生成超时(180秒) — 可能补期刊数据或模型响应卡住, 请重试")), GEN_HARD_TIMEOUT_MS)),
+        ]);
 
         if (result.artifact?.body) {
           // 5-23 hotfix #164: merge artifact.metadata 进 contents.metadata

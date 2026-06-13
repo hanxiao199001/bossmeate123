@@ -91,7 +91,7 @@ export function generateBarChart(options: BarChartOptions): string {
 export function generateIFTrendChart(
   ifHistory: Array<{ year: number; value: number }>
 ): string {
-  if (ifHistory.length === 0) return "";
+  if (!Array.isArray(ifHistory) || ifHistory.length === 0) return ""; // PR-Q7: 防 null/对象 .map 崩溃
 
   return generateBarChart({
     title: "近10年的影响因子",
@@ -110,7 +110,7 @@ export function generateIFTrendChart(
 export function generatePubVolumeChart(
   pubHistory: Array<{ year: number; count: number }>
 ): string {
-  if (pubHistory.length === 0) return "";
+  if (!Array.isArray(pubHistory) || pubHistory.length === 0) return ""; // PR-Q7: 防 null/对象 .map 崩溃
 
   return generateBarChart({
     title: "近10年的发文量",

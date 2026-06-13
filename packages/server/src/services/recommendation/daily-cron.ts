@@ -378,7 +378,9 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
 // PR-Q2 模板多元+智能: 在 4 个真·排版模板间按"模板效果"加权轮换(无数据均匀)。
 // data-card/storytelling/listicle/shunshi-style 各有不同 HTML 生成器→真视觉多元; 阅读高的权重高→越用越智能。
-const LAYOUT_TEMPLATES = ["shunshi-style", "data-card", "storytelling", "listicle"] as const;
+// PR-Q7: 自动轮换暂只用已审过的顺仕美途(其余3个有硬伤: 故事裸标签/数据卡片超时/曾崩溃, 修好再放回)。
+// 用户仍可在"排版样式"下拉手动选其余模板测试/修复。
+const LAYOUT_TEMPLATES = ["shunshi-style"] as const;
 async function buildTemplateWeights(tenantId: string): Promise<Record<string, number>> {
   const w: Record<string, number> = Object.fromEntries(LAYOUT_TEMPLATES.map((t) => [t, 1]));
   try {
