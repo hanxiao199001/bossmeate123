@@ -48,6 +48,8 @@ const generateAndPublishSchema = z.object({
   journalIds: z.array(z.string().uuid()).default([]),
   // 通用
   template: z.enum(["A", "B", "C", "E"]).default("A"),
+  // PR-Q2: 排版模板 (顺仕美途/数据卡片/故事/清单), 缺省=不指定走默认; "rotate"=随机轮换
+  layoutTemplateId: z.enum(["shunshi-style", "data-card", "storytelling", "listicle", "rotate"]).optional(),
   accountIds: z.array(z.string().uuid()).default([]),
   // PR-W5: exclusive=每账号按自己领域生成专属内容(count=每账号篇数, 互不重复); broadcast=老行为
   assignMode: z.enum(["exclusive", "broadcast"]).default("broadcast"),
@@ -86,6 +88,13 @@ const bulkDistributeSchema = z.object({
 });
 
 const MAX_CARTESIAN = 200; // 笛卡尔积 safety cap
+
+// PR-Q2: 排版模板解析 — 指定id直接用; "rotate"或缺省→随机轮换4个真排版模板; 让用户能手动选排版
+const LAYOUT_POOL = ["shunshi-style", "data-card", "storytelling", "listicle"];
+function resolveLayout(v?: string): string | undefined {
+  if (!v || v === "rotate") return LAYOUT_POOL[Math.floor(Math.random() * LAYOUT_POOL.length)];
+  return v;
+}
 
 // 期刊 confidence 下限 (admin 生成时只用高质量期刊数据)
 const MIN_JOURNAL_CONFIDENCE = 90;
@@ -412,7 +421,7 @@ export async function adminRoutes(app: FastifyInstance) {
               tenantId: request.tenantId,
               userId: request.user.userId,
               filename: `auto-${kw.keyword.slice(0, 20)}-${Date.now()}`,
-              rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, priority: 1 }],
+              rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, templateId: resolveLayout(body.layoutTemplateId), priority: 1 }],
             });
             batchIds.push(result.batchId);
             selectedKeywordIds.push(kw.id);

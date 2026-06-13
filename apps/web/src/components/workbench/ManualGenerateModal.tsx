@@ -78,6 +78,8 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
   const [countOption, setCountOption] = useState<CountOption>(5);
   const [customCount, setCustomCount] = useState(5);
   const [template, setTemplate] = useState<Template>("A");
+  // PR-Q2: 排版模板 (视觉版式), 与上面"模板"(语气)正交。rotate=随机轮换
+  const [layout, setLayout] = useState<string>("rotate");
   // 段 3: 账号 + 发布
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
@@ -186,6 +188,7 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
         discipline,
         count: actualCount,
         template,
+        layoutTemplateId: layout,
         accountIds: [], // 生成阶段不发, 生成完再直发(见 poll-complete)
       });
       const data = (res.data as any)?.data ?? res.data;
@@ -331,6 +334,18 @@ export default function ManualGenerateModal({ open, onClose, onComplete }: Manua
                   </label>
                 ))}
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-2">排版样式</label>
+              <select value={layout} onChange={(e) => setLayout(e.target.value)} disabled={generating}
+                className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm">
+                <option value="rotate">自动轮换 (按效果智能选, 推荐)</option>
+                <option value="shunshi-style">顺仕美途 (权威数据卡)</option>
+                <option value="data-card">数据卡片型</option>
+                <option value="storytelling">故事叙述型</option>
+                <option value="listicle">清单点评型</option>
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">想逐个看 4 种排版,就选具体样式各生成一篇。</p>
             </div>
           </div>
 
