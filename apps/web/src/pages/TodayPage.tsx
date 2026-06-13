@@ -50,6 +50,7 @@ const CONTENT_STATUS: Record<string, { label: string; cls: string }> = {
   generating: { label: "生成中", cls: "bg-blue-50 text-blue-600" },
   generated: { label: "已生成", cls: "bg-emerald-50 text-emerald-600" },
   published: { label: "已发布", cls: "bg-indigo-50 text-indigo-600" },
+  needs_review: { label: "待审·质检未过", cls: "bg-amber-50 text-amber-700" },
   failed: { label: "失败", cls: "bg-rose-50 text-rose-600" },
   archived: { label: "已归档", cls: "bg-gray-100 text-gray-400" },
 };
@@ -98,6 +99,18 @@ export default function TodayPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // PR-U2: 采用待审内容
+  const [approving, setApproving] = useState<string | null>(null);
+  const approveContent = async (contentId: string) => {
+    setApproving(contentId);
+    try {
+      await api.post(`/today/approve/${contentId}`, {});
+      void load();
+    } finally {
+      setApproving(null);
+    }
+  };
 
   // PR-W8: 手动触发今日生成
   const [genNow, setGenNow] = useState(false);
@@ -268,6 +281,7 @@ export default function TodayPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900">今日 · {data.date}</h1>
+          <p className="text-xs text-gray-400 mt-0.5">老板看板 — 今天产出什么、花了多少、效果如何、要你点什么，一屏看完</p>
           <p className="text-sm text-gray-500 mt-0.5">
             生成 {data.contents.length} 条 · 发布 {data.publishedToday} 条
             {manualTasks.length > 0 && <span className="text-amber-600 font-medium"> · {manualTasks.length} 条等你点发布</span>}
@@ -463,7 +477,17 @@ export default function TodayPage() {
                       <div className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-gray-50 group">
                         <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${st.cls}`}>{st.label}</span>
                         <Link to={`/content/${c.id}`} className="text-sm text-gray-800 truncate flex-1 group-hover:text-indigo-600">{c.title ?? "(无标题)"}</Link>
-                        {(c.status === "generated" || c.status === "draft") && eligible.length > 0 && (
+                        {c.status === "needs_review" && (
+                          <button
+                            onClick={() => void approveContent(c.id)}
+                            disabled={approving === c.id}
+                            title="质检未过, 看过没问题就采用 (转为可发)"
+                            className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                          >
+                            {approving === c.id ? "…" : "采用"}
+                          </button>
+                        )}
+                        {c.status === "generated" && eligible.length > 0 && (
                           <button
                             onClick={() => { setPicking(isPicking ? null : c); setPickedIds(new Set()); }}
                             className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50"

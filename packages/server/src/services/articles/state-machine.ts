@@ -24,6 +24,7 @@ export type ArticleStatus =
   | "generating"
   | "failed"
   | "generated"
+  | "needs_review"   // PR-U2: 质检未过, 待人工复核(不可直接发)
   | "published"
   | "archived";
 
@@ -32,6 +33,7 @@ export const ARTICLE_STATUSES: readonly ArticleStatus[] = [
   "generating",
   "failed",
   "generated",
+  "needs_review",
   "published",
   "archived",
 ] as const;
@@ -42,9 +44,10 @@ export const ARTICLE_STATUSES: readonly ArticleStatus[] = [
  */
 export const ALLOWED_TRANSITIONS: Readonly<Record<ArticleStatus, readonly ArticleStatus[]>> = {
   draft: ["generating", "archived"],
-  generating: ["generated", "failed"],
+  generating: ["generated", "failed", "needs_review"], // PR-U2: 质检未过 → needs_review
   failed: ["generating", "archived"], // 重试 / 放弃
   generated: ["published", "draft", "archived"], // 发布 / 回退编辑 / 归档
+  needs_review: ["generated", "draft", "archived"], // 人工采用 / 退回编辑 / 弃
   published: ["archived"],
   archived: [],
 } as const;

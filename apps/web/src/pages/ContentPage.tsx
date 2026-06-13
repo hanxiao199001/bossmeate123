@@ -250,7 +250,7 @@ export default function ContentPage() {
     <div className="min-h-screen bg-[#F6F7F9]">
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航统一走 MainLayout 侧边栏 (退出在 Sidebar 底部) */}
       <div className="max-w-7xl mx-auto py-6 px-6">
-        <PageHeader title="内容管理" />
+        <PageHeader title="内容管理" subtitle="资料库 — 检索、查阅、归档全部内容。生成去「内容工坊」，每天动作去「今日」。" />
         {/* P0-B：6 tabs（全部 + 5 状态，archived 默认不显示）*/}
         {stats && (
           <div className="grid grid-cols-3 md:grid-cols-6 gap-4 mb-6">

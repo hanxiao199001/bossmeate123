@@ -244,6 +244,10 @@ export default function ContentWorkbenchPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F6F7F9]">
+      {/* PR-U1 操作收口: 一句话定位 */}
+      <div className="bg-white px-4 pt-2.5 text-xs text-gray-400 border-b border-slate-100">
+        运营生产线 — 在这里挑选题、生成、预览、配账号发布。看效果去「今日」，查旧内容去「内容管理」。
+      </div>
       {/* 5-21 P0: 顶部 nav 已搬 sidebar (MainLayout), 此处只剩业务 tab */}
       {/* 5-19 PR #171: 砍 isAdmin gate — 生成按钮全 user 开放 (PR #161 admin only 过严, 韩宵也看不到) */}
       <WorkbenchTopBar

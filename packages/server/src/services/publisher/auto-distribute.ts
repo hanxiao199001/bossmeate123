@@ -29,7 +29,7 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
       eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID),
       eq(contents.type, "article"),
       gte(contents.createdAt, startOfTodayBJ()),
-      inArray(contents.status, ["generated", "draft"]),
+      eq(contents.status, "generated"), // PR-U2 只自动分发质检通过的
     ))
     .limit(100);
   if (pool.length === 0) {
@@ -56,7 +56,7 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
           eq(contents.tenantId, t.id),
           eq(contents.type, "article"),
           gte(contents.createdAt, startOfTodayBJ()),
-          inArray(contents.status, ["generated", "draft"]),
+          eq(contents.status, "generated"), // PR-U2 只自动分发质检通过的
         ))
         .limit(100);
       const useIds = own.length > 0 ? own.map((o) => o.id) : poolIds;

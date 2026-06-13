@@ -147,10 +147,23 @@ export function startBatchWorker(): Worker<BatchRowJob> {
             .where(eq(contents.id, content.id));
         }
 
-        // 5. generating → generated
-        await transitionStatus(content.id, "generating", "generated");
-        await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
-        logger.info({ rowId, contentId: content.id }, "P4 batch row 生成成功");
+        // 5. PR-U2 质检前置: 质检明确未过 → needs_review(待审, 不进可发); 否则 generated
+        const artMetaForGate = (result.artifact as { metadata?: Record<string, unknown> } | undefined)?.metadata || {};
+        const qPassed = artMetaForGate.qualityPassed;
+        const qScore = typeof artMetaForGate.qualityScore === "number" ? artMetaForGate.qualityScore : undefined;
+        const failed = qPassed === false || (qScore !== undefined && qScore < 60);
+        if (failed) {
+          await transitionStatus(content.id, "generating", "needs_review");
+          await db.update(contents)
+            .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify({ needsReview: true })}::jsonb` })
+            .where(eq(contents.id, content.id));
+          await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
+          logger.info({ rowId, contentId: content.id, qScore }, "PR-U2 质检未过, 转 needs_review 待人工复核");
+        } else {
+          await transitionStatus(content.id, "generating", "generated");
+          await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
+          logger.info({ rowId, contentId: content.id }, "P4 batch row 生成成功");
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ rowId, err: msg, autoRetryCount }, "P4 batch row 生成失败");

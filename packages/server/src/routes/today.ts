@@ -134,6 +134,21 @@ export async function todayRoutes(app: FastifyInstance) {
     };
   });
 
+  /** POST /today/approve/:contentId — PR-U2 人工采用待审内容 (needs_review → generated) */
+  app.post("/approve/:contentId", async (request, reply) => {
+    const { contentId } = request.params as { contentId: string };
+    const [c] = await db.select({ id: contents.id, status: contents.status })
+      .from(contents)
+      .where(and(eq(contents.id, contentId), or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID))))
+      .limit(1);
+    if (!c) return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+    if (c.status !== "needs_review") {
+      return reply.code(409).send({ code: "BAD_STATUS", message: `仅待审内容可采用, 当前 ${c.status}` });
+    }
+    await db.update(contents).set({ status: "generated", statusUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(contents.id, contentId));
+    return { code: "OK", data: { id: contentId, status: "generated" } };
+  });
+
   /** POST /today/generate-now — PR-W8: 手动触发一次每日推荐生成 (错过 03:00 或想立即测试时用) */
   app.post("/today/generate-now", async (_request, reply) => {
     try {

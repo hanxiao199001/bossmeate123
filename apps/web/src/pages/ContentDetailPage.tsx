@@ -729,12 +729,12 @@ export default function ContentDetailPage() {
   // 5-9 PR P0 state-machine: 旧 'approved' → 新 'generated'. canPublish 加 'generated'
   // 让推荐池文章 (system tenant cron 产出 status='generated') 能直接发, 不再灰按钮.
   // 'approved' 保留作历史兼容 (老数据未 migration 过).
+  // PR-U2 质检前置: 只有 generated/approved 可发; draft 与 needs_review(质检未过)不可直接发
   const canPublish =
     !showVariantCompare &&
     !currentIsRejected &&
     (content.status === "generated" ||
-      content.status === "approved" ||
-      content.status === "draft");
+      content.status === "approved");
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

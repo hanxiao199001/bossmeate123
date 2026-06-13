@@ -127,7 +127,7 @@ async function runSingleArticleVariant(
     title: finalArticle.title,
     body: finalArticle.body,
     // P0-A2：质检通过 → 'generated'（旧 reviewing 映射），未过 → 'draft'
-    ...initialStatusFields(finalQuality.overallPassed ? "generated" : "draft"),
+    ...initialStatusFields(finalQuality.overallPassed ? "generated" : "needs_review"), // PR-U2 质检未过→待审
     metadata: {
       outline: outline.sections.map((s) => s.heading),
       qualityScore: finalQuality.totalScore,

@@ -421,11 +421,16 @@ export async function runDailyContentByType(
           const gen = await generateByFormat({
             tenantId: SYS, userId: SYS_USER, topic: pick.keyword, format: "article",
           });
+          // PR-U2 轻量质检: 字数下限 + 合规硬词; 过 → generated, 不过 → needs_review
+          const { checkCompliance } = await import("../compliance/content-check.js");
+          const comp = await checkCompliance(`${gen.title}\n${gen.body}`);
+          const plainLen = (gen.body || "").replace(/<[^>]+>/g, "").length;
+          const qcPass = plainLen >= 300 && !comp.blocked;
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article",
             title: gen.title, body: gen.body,
-            ...initialStatusFields("draft"),
-            metadata: { source: "topic_pool", topic: pick.keyword, ...gen.metadata },
+            ...initialStatusFields(qcPass ? "generated" : "needs_review"),
+            metadata: { source: "topic_pool", topic: pick.keyword, needsReview: !qcPass, ...gen.metadata },
           }).returning({ id: contents.id });
           if (row?.id) batchIds.push(row.id);
           await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, pick.id));
