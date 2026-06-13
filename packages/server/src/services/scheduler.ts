@@ -45,7 +45,8 @@ export type SchedulerJobType =
   | "content-retention-cleanup" // PR #178：每日 03:30 BJ 60 天保留清理
   | "stale-review-cleanup"     // 清理超时未审核内容（3天）
   | "login-keepalive"          // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
-  | "daily-auto-distribute";   // PR-W6: 每日 07:00 BJ 推荐池按账号领域自动配对分发(草稿), 租户开关 autoDistribute
+  | "daily-auto-distribute"    // PR-W6: 每日 07:00 BJ 推荐池按账号领域自动配对分发(草稿), 租户开关 autoDistribute
+  | "journal-gap-fill";        // PR-FW: 每日补全缺 IF/分区/录用率 的期刊(知识库自愈)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -332,6 +333,25 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       // PR-W6: 对开了 autoDistribute 的租户, 把今日推荐池文章按账号领域配对, 入 bulk 队列(公众号草稿)
       const { runDailyAutoDistribute } = await import("./publisher/auto-distribute.js");
       return runDailyAutoDistribute();
+    }
+
+    case "journal-gap-fill": {
+      // PR-FW 知识库自愈: 优先补全缺关键决策字段(IF/中科院分区/录用率)的期刊
+      const { sql: gsql, or: gor, isNull: gisNull } = await import("drizzle-orm");
+      const gaps = await db
+        .select({ id: journals.id })
+        .from(journals)
+        .where(gor(gisNull(journals.impactFactor), gisNull(journals.casPartition), gisNull(journals.acceptanceRate)))
+        .orderBy(gsql`${journals.confidence} DESC NULLS LAST`) // 先补高可信度的(更可能被推荐用到)
+        .limit(80);
+      const { enrichJournal } = await import("./journal-enricher/orchestrator.js");
+      let ok = 0, bad = 0;
+      for (const g of gaps) {
+        try { await enrichJournal(g.id, {}); ok++; }
+        catch (err) { logger.warn({ id: g.id, err }, "PR-FW gap-fill 失败(跳过)"); bad++; }
+      }
+      logger.info({ candidates: gaps.length, ok, bad }, "PR-FW 期刊缺字段补全完成");
+      return { ok, bad, candidates: gaps.length };
     }
 
     case "monthly-journal-refresh": {
@@ -637,6 +657,13 @@ async function registerCronJobs() {
 
   // PR #130 + PR-W6 + PR-W7: 每日生成/分发 — 时间从 SYSTEM config 读 (默认 03:00 / 07:00), 仪表盘可改
   await applyScheduleTimes();
+
+  // PR-FW: 每日 05:30 BJ 期刊缺字段补全(在生成前, 让当天推荐用上更全数据)
+  await crawlerQueue.upsertJobScheduler(
+    "journal-gap-fill-schedule",
+    { pattern: "30 5 * * *", tz: "Asia/Shanghai" },
+    { name: "journal-gap-fill", data: { type: "journal-gap-fill" as SchedulerJobType } }
+  );
 
   // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）
   await crawlerQueue.upsertJobScheduler(

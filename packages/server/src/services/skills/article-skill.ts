@@ -23,7 +23,7 @@ import { env } from "../../config/env.js";
 import { selectVariantTemplates } from "./template-preference.js";
 import { ensureJournalEnriched } from "../crawler/springer-journal-fetcher.js";
 import { buildTemplateAwarePromptSuffix } from "./template-prompt-injector.js";
-import { buildVariationSuffix } from "./structure-variation.js"; // PR-X1 结构组合引擎
+import { buildVariation } from "./structure-variation.js"; // PR-X1 结构组合引擎 + PR-FW 加权
 import { validateAIContent, type ValidationIssue, extractClaimedFacts, verifyClaimsAgainstDb } from "./ai-content-validator.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../crawler/journal-image-crawler.js";
 import { persistJournalCover } from "../crawler/journal-cover-persist.js";
@@ -101,6 +101,7 @@ interface GeneratedArticle {
   tags: string[];
   wordCount: number;
   videoScript?: string; // PR #241: 视频脚本独立字段
+  variationRecipe?: import("./structure-variation.js").VariationRecipe; // PR-FW: 本篇配方, 飞轮归因
 }
 
 interface QualityReport {
@@ -339,6 +340,7 @@ export class ArticleSkill implements ISkill {
           qualityPassed: quality.passed,
           aiScore: quality.aiScore,
           hardMetrics: quality.hardMetrics,
+          variationRecipe: article.variationRecipe, // PR-FW 飞轮归因
           issues: quality.issues,
           suggestions: quality.suggestions,
           publishIntent: parsed.publishIntent,
@@ -915,7 +917,16 @@ export class ArticleSkill implements ISkill {
       logger.info({ variantId, templateName: templateAware.templateName, styleTag: templateAware.styleTag, suffixLen: templateAware.suffix.length }, "Q.3 template-aware prompt 已注入");
     }
     // PR-X1: 模板骨架 + 结构变化指令(每次随机) + 账号人设/风格 — 三层正交防同质化
-    const fullSuffix = `${templateAware.suffix}${buildVariationSuffix()}${extraPromptSuffix}`;
+    // PR-FW 飞轮: 按该租户已学到的配方权重加权抽取(无数据则均匀随机)
+    let recipeWeights;
+    try {
+      if (tenantId) {
+        const { getRecipeWeights } = await import("../metrics/recipe-learning.js");
+        recipeWeights = await getRecipeWeights(tenantId);
+      }
+    } catch { /* 学习失败不影响生成 */ }
+    const variation = buildVariation(recipeWeights);
+    const fullSuffix = `${templateAware.suffix}${variation.suffix}${extraPromptSuffix}`;
     const aiContentRaw = await this.generateJournalAIContent(journal, fullSuffix);
 
     // 2.5 数据校验：AI 输出 vs 真实数据交叉验证
@@ -992,6 +1003,7 @@ export class ArticleSkill implements ISkill {
       tags: ["期刊推荐", journal.discipline || "学术", journal.partition || ""].filter(Boolean),
       wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
       videoScript: aiContent.videoScript,
+      variationRecipe: variation.recipe, // PR-FW
     };
 
     // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)

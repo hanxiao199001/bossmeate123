@@ -133,7 +133,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           // PR #242 (5-23): 加 videoScript — PR #241 输出该字段, bridge 读 metadata.videoScript
           //   触发 DVH 90 秒视频朗读. 缺则 fallback 老 extractNarration (title + body 前 80 字).
           const metaMerge: Record<string, unknown> = {};
-          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript"]) {
+          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe"]) {
             if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
           }
           await db
