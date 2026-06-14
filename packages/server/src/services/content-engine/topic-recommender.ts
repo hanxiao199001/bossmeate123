@@ -13,6 +13,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals, dailyRecommendations, tenants, keywordHistory } from "../../models/schema.js";
 import { eq, and, desc, or, ilike } from "drizzle-orm";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { getTrendReport, type TrendLabel } from "../agents/keyword-trend.js";
 import { chat } from "../ai/chat-service.js";
 import { nanoid } from "nanoid";
@@ -90,8 +91,54 @@ export interface DailyRecommendationReport {
 
 // ============ 核心 ============
 
+/**
+ * 从"每日内容设置"(SYSTEM 租户 contentQuota/dailyQuota)推导关注学科, 与每日内容生成同源。
+ * 返回 null = 不限学科(全学科); 非空数组 = 仅这些学科。
+ * - dailyQuota={medicine:3,...} → 取 count>0 的学科 code
+ * - contentQuota={domestic:{count,disciplines[]},...} → 取各类型 disciplines 并集;
+ *   只要有一个 count>0 的类型未限定 disciplines(空数组=全学科) → 返回 null 不过滤
+ */
+async function getConfiguredFocusDisciplines(): Promise<string[] | null> {
+  try {
+    const [sys] = await db
+      .select({ config: tenants.config })
+      .from(tenants)
+      .where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID))
+      .limit(1);
+    const auto = ((sys?.config as Record<string, any> | null) || {}).automationConfig || {};
+    const set = new Set<string>();
+    const dq = auto.dailyQuota;
+    if (dq && typeof dq === "object") {
+      for (const [k, v] of Object.entries(dq)) if (Number(v) > 0) set.add(k);
+    }
+    const cq = auto.contentQuota;
+    if (cq && typeof cq === "object") {
+      for (const v of Object.values(cq) as Array<{ count?: unknown; disciplines?: unknown }>) {
+        if (!v || Number(v.count) <= 0) continue;
+        const ds = Array.isArray(v.disciplines) ? v.disciplines.map(String) : [];
+        if (ds.length === 0) return null; // 该类型未限定学科 = 全学科, 整体不过滤
+        for (const d of ds) set.add(d);
+      }
+    }
+    return set.size > 0 ? [...set] : null;
+  } catch (err) {
+    logger.warn({ err: String(err) }, "推导关注学科失败, 回退全学科");
+    return null;
+  }
+}
+
+/** 失效今日推荐缓存(删当天所有租户记录) — 每日内容设置保存后调, 下次查看即按新学科重算。 */
+export async function invalidateTodayRecommendations(): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await db.delete(dailyRecommendations).where(eq(dailyRecommendations.date, today));
+  const n = (res as unknown as { rowCount?: number }).rowCount ?? 0;
+  logger.info({ date: today, deleted: n }, "今日推荐缓存已失效(设置变更)");
+  return n;
+}
+
 export async function generateDailyRecommendations(
-  tenantId: string
+  tenantId: string,
+  forceRefresh = false,
 ): Promise<DailyRecommendationReport> {
   const today = new Date().toISOString().slice(0, 10);
   logger.info({ tenantId, date: today }, "开始生成每日选题推荐");
@@ -108,7 +155,7 @@ export async function generateDailyRecommendations(
     )
     .limit(1);
 
-  if (existing.length > 0) {
+  if (!forceRefresh && existing.length > 0) {
     return {
       date: today,
       tenantId,
@@ -117,17 +164,9 @@ export async function generateDailyRecommendations(
     };
   }
 
-  // Step 1: 读取租户学科偏好配置
-  const [tenant] = await db
-    .select()
-    .from(tenants)
-    .where(eq(tenants.id, tenantId))
-    .limit(1);
-
-  const tenantConfig = (tenant?.config || {}) as Record<string, any>;
-  const automationConfig = tenantConfig.automationConfig || {};
-  // focusDisciplines: 用户配置的关注学科列表，空数组 = 全学科
-  const focusDisciplines: string[] = automationConfig.focusDisciplines || [];
+  // Step 1: 学科偏好来自"每日内容设置"(SYSTEM 租户 contentQuota/dailyQuota), 与每日内容生成同源。
+  // null = 不限学科(全学科); 非空数组 = 仅这些学科。删除原 focusDisciplines(无写入端的孤字段)。
+  const focusDisciplines: string[] | null = await getConfiguredFocusDisciplines();
 
   // Step 2: 获取趋势数据
   const trendReport = await getTrendReport(tenantId);
@@ -181,7 +220,7 @@ export async function generateDailyRecommendations(
 
   // Step 3: 按学科偏好过滤
   let filteredCandidates = allCandidates;
-  if (focusDisciplines.length > 0) {
+  if (focusDisciplines && focusDisciplines.length > 0) {
     filteredCandidates = allCandidates.filter((t) => {
       const cat = t.category || inferCategoryFromKeyword(t.keyword);
       return !cat || focusDisciplines.includes(cat);
@@ -357,9 +396,10 @@ export async function generateDailyRecommendations(
  * 获取今日推荐（如果还没生成则自动生成）
  */
 export async function getTodayRecommendations(
-  tenantId: string
+  tenantId: string,
+  forceRefresh = false,
 ): Promise<DailyRecommendationReport> {
-  return generateDailyRecommendations(tenantId);
+  return generateDailyRecommendations(tenantId, forceRefresh);
 }
 
 /**

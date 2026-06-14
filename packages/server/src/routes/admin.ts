@@ -728,6 +728,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const auto = (cfg.automationConfig as Record<string, unknown>) || {};
     cfg.automationConfig = { ...auto, dailyQuota: clean };
     await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    // 设置变更 → 失效今日选题推荐缓存, 下次查看按新学科重算 (与每日内容设置同源)
+    try { const { invalidateTodayRecommendations } = await import("../services/content-engine/topic-recommender.js"); await invalidateTodayRecommendations(); } catch (err) { logger.warn({ err: String(err) }, "失效今日推荐缓存失败(不影响保存)"); }
     logger.info({ quota: clean, total }, "PR #223 每日推荐配额已更新");
     return { code: "OK", data: { quota: clean, total } };
   });
@@ -761,6 +763,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const auto = (cfg.automationConfig as Record<string, unknown>) || {};
     cfg.automationConfig = { ...auto, contentQuota: clean };
     await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
+    // 设置变更 → 失效今日选题推荐缓存, 下次查看按新学科重算
+    try { const { invalidateTodayRecommendations } = await import("../services/content-engine/topic-recommender.js"); await invalidateTodayRecommendations(); } catch (err) { logger.warn({ err: String(err) }, "失效今日推荐缓存失败(不影响保存)"); }
     logger.info({ contentQuota: clean, total }, "PR-O 每日内容配置(按类型)已更新");
     return { code: "OK", data: { contentQuota: clean, total } };
   });

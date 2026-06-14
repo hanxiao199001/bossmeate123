@@ -26,6 +26,18 @@ export async function recommendationRoutes(app: FastifyInstance) {
     }
   });
 
+  // POST /recommendations/today/refresh — 强制重算今日推荐(设置改了想立刻看新结果时用)
+  app.post("/today/refresh", async (request, reply) => {
+    try {
+      const tenantId = request.tenantId;
+      const report = await getTodayRecommendations(tenantId, true);
+      return { code: "OK", data: report };
+    } catch (err) {
+      logger.error({ err }, "刷新今日推荐失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
   // GET /recommendations/history?days=7
   app.get("/history", async (request, reply) => {
     try {
