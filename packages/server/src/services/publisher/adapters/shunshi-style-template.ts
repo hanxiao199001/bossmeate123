@@ -1137,27 +1137,47 @@ export async function generateShunshiStyleHtml(
   const { resolveChartConfig } = await import("../../skills/chart-config-resolver.js");
   const { typesSet, palette } = resolveChartConfig(chartConfig);
 
-  // 公众号精简版 (老韩 6-14 拍板): 23 块 → 精炼 ~10 块。去重(审稿周期只在推荐指数块出现一次)、
-  // 消矛盾(风险只由 CAR 块发声, 砍掉派生投稿建议块的"预警名单安全"以免与 CAR 高风险打架)、
-  // 砍价值低/重复块(JcrFullPanel/版面费独立块/出版频率/TopN机构/引用饼/自引/IfHistory分析/CarRisk分析/
-  //   ScopeCitations分析/派生投稿建议/优势/注意/时间线/同档对比)。
-  sections.push(renderHeroBlock(journal));                            //  封面/品牌头
-  sections.push(renderBasicInfoBlock(journal));                       //  ISSN/出版商
-  sections.push(renderJcrQuartileBlock(journal));                     //  分区
-  if (typesSet.has("if-history-line")) sections.push(renderIfHistoryChart(journal)); //  IF 趋势图(命中才渲)
-  sections.push(renderImpactFactorBlock(journal));                    //  IF
-  sections.push(renderCarHistoryBlock(journal));                      //  风险(唯一风险发声处)
-  sections.push(renderPublicationCostsBlock(journal));                //  版面费(投稿决策关键, 省地方)
-  sections.push(renderScopeDetailsBlock(journal));                    //  收稿范围
-  if (typesSet.has("annual-volume-bar")) sections.push(renderAnnualVolumeChart(journal)); //  发文量图
-  sections.push(renderRecommendationScoreBlock(journal));             //  推荐指数+审稿周期(审稿周期唯一出现处)
-  sections.push(renderTargetAudienceBlock(journal));                 //  适合人群
-  sections.push(renderAiSubmissionAdvice(aiContent));                 //  投稿建议(唯一, 砍掉派生重复块)
-  sections.push(renderSummaryBlock(aiContent));                       //  综合点评(一句话总评)
-  sections.push(renderMarketingCtaBlock(journal));                    //  投稿协助 CTA
-  sections.push(renderContactBlock(tenant));                          //  联系方式
-  sections.push(renderDisclaimerBlock());                             //  免责
-  sections.push(renderFooterBlock(journal));                          //  页脚
+  // 公众号丰富版 (老韩 6-14 拍板恢复): 恢复 PR-Q1 砍掉的价值模块, 但保留两处去重修复 ——
+  //   (1) 审稿周期仍只在推荐指数块出现一次; (2) 风险仍只由 CAR 块发声。
+  //   唯一仍不恢复的是派生投稿建议块 renderSubmissionAdviceBlock(它同时是审稿周期重复展示 + "预警名单安全"矛盾源)。
+  const wrapChart = (svg: string) => svg ? `<section style="margin:0 0 18px 0;padding:8px 0;">${svg}</section>` : "";
+
+  sections.push(renderHeroBlock(journal));                            //  1 封面/品牌头
+  sections.push(renderBasicInfoBlock(journal));                       //  2 ISSN/出版商
+  sections.push(renderJcrQuartileBlock(journal));                     //  3 分区
+  if (typesSet.has("if-history-line")) sections.push(renderIfHistoryChart(journal)); //  4 IF 趋势图(命中才渲)
+  sections.push(renderImpactFactorBlock(journal));                    //  5 IF
+  sections.push(renderCarHistoryBlock(journal));                      //  6 风险(唯一风险发声处)
+  sections.push(renderJcrFullPanel(journal));                         //  7 JCR 完整面板
+  sections.push(renderScopeDetailsBlock(journal));                    //  8 收稿范围
+  sections.push(renderPublicationCostsBlock(journal));                //  9 版面费
+  sections.push(renderFrequencyBlock(journal));                       // 10 出版频率
+  if (typesSet.has("annual-volume-bar")) sections.push(renderAnnualVolumeChart(journal)); // 11 发文量图
+  sections.push(renderTopInstitutionsBlock(journal));                 // 12 TopN 机构
+  if (typesSet.has("citing-pie")) sections.push(renderCitingJournalsPie(journal)); // 13 引用来源饼
+  if (typesSet.has("accept-rate-bar")) sections.push(wrapChart(renderAcceptRateBarChart(journal.acceptanceRate ?? null)));
+  if (typesSet.has("fee-pie")) sections.push(wrapChart(renderFeePieChart(journal.apcFee ?? null)));
+  if (typesSet.has("review-cycle-bar")) sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
+  sections.push(renderSelfCitationBadge(journal));                    // 14 自引徽章
+  sections.push(renderRecommendationScoreBlock(journal));             // 15 推荐指数+审稿周期(审稿周期唯一出现处)
+  sections.push(renderIfHistoryAnalysis(aiContent));                  // 15a IF 历史深度分析
+  sections.push(renderCarRiskAnalysis(aiContent));                    // 15b CAR 风险深度分析
+  sections.push(renderScopeAndCitations(aiContent));                  // 15c 收稿范围+引用深度分析
+  sections.push(renderAiSubmissionAdvice(aiContent));                 // 15d 投稿建议(唯一, 派生重复块不恢复)
+  sections.push(renderSummaryBlock(aiContent));                       // 16 综合点评(一句话总评)
+  // 编辑型板块簇按期刊种子确定性重排, 多篇文章版式不雷同
+  const editorialCluster = seededOrder([
+    renderAdvantagesBlock(journal, aiContent),    // 优势
+    renderCautionsBlock(journal, aiContent),      // 注意
+    renderTargetAudienceBlock(journal),           // 适合人群
+    renderTimelineBlock(journal),                 // 投稿时间线
+    renderPeerComparisonBlock(journal),           // 同档对比
+  ], journalLayoutSeed(journal));
+  for (const blk of editorialCluster) sections.push(blk);
+  sections.push(renderMarketingCtaBlock(journal));                    // 投稿协助 CTA
+  sections.push(renderContactBlock(tenant));                          // 联系方式
+  sections.push(renderDisclaimerBlock());                             // 免责
+  sections.push(renderFooterBlock(journal));                          // 页脚
 
   // PR Q.7.2：runtime palette 注入。占位字符串 → palette 实色（4 套主色调真差异化）。
   // PR Q.6 D5：sectionCount 控制 4 套区块数差异化（A=23 默认 / B=15 / C=18 / E=23 上限）。
