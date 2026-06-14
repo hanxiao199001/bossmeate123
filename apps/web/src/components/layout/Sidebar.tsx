@@ -14,9 +14,10 @@ import {
   IconFolder,
   IconRadar,
   IconSmartphone,
-  IconCoins,
   IconSettings,
   IconBarChart,
+  IconFileText,
+  IconUsers,
   IconLogOut,
   IconSparkles,
   type IconProps,
@@ -27,26 +28,30 @@ interface NavItem {
   icon: ComponentType<IconProps>;
   label: string;
   matchPrefix?: string;
+  adminOnly?: boolean; // owner/admin 才显示
 }
 
-const PRIMARY_NAV: NavItem[] = [
-  { to: "/", icon: IconHome, label: "首页", matchPrefix: "" }, // 精确匹配 / 即可
-  { to: "/today", icon: IconSparkles, label: "今日", matchPrefix: "/today" }, // PR-W2 驾驶舱
+// 6-14 目录重构: 按首页"产出→处理→效果"日常闭环分三组, 心智模型与首页引导对齐。
+// 每日运营 — 日常内容生产闭环
+const DAILY_NAV: NavItem[] = [
+  { to: "/", icon: IconHome, label: "首页", matchPrefix: "" }, // 总览/入口, 精确匹配 /
+  { to: "/today", icon: IconSparkles, label: "今日待办", matchPrefix: "/today" }, // PR-W2 驾驶舱: 干活的地方, 与首页分工
   { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench" },
   { to: "/content", icon: IconFolder, label: "内容管理", matchPrefix: "/content" },
   { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar" },
-  { to: "/accounts", icon: IconSmartphone, label: "账号", matchPrefix: "/accounts" },
+  { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts" }, // 对齐首页"去账号矩阵派发"
 ];
 
-const SECONDARY_NAV: NavItem[] = [
-  { to: "/cost-comparison", icon: IconCoins, label: "ROI 演示", matchPrefix: "/cost-comparison" },
+// 效果与数据 — 看效果 + 核心数据资产
+const DATA_NAV: NavItem[] = [
+  { to: "/cost-comparison", icon: IconBarChart, label: "效果分析", matchPrefix: "/cost-comparison" }, // 原"ROI演示", 对齐首页第3步"看效果"
+  { to: "/admin/journals/audit", icon: IconFileText, label: "期刊审计", matchPrefix: "/admin/journals/audit", adminOnly: true }, // 核心数据资产, 从admin底部提上来
+];
+
+// 系统 — 配置与 ToB 开通
+const SYSTEM_NAV: NavItem[] = [
   { to: "/settings", icon: IconSettings, label: "设置", matchPrefix: "/settings" },
-];
-
-// admin only (owner/admin role)，PR #111 期刊审计入口从 DashboardPage 搬来
-const ADMIN_NAV: NavItem[] = [
-  { to: "/onboarding", icon: IconSparkles, label: "客户开通", matchPrefix: "/onboarding" },
-  { to: "/admin/journals/audit", icon: IconBarChart, label: "期刊审计", matchPrefix: "/admin/journals/audit" },
+  { to: "/onboarding", icon: IconUsers, label: "客户开通", matchPrefix: "/onboarding", adminOnly: true }, // 独立图标(原与今日撞Sparkles)
 ];
 
 function isActive(pathname: string, item: NavItem): boolean {
@@ -80,9 +85,16 @@ export default function Sidebar() {
   const logout = useAuthStore((s) => s.logout);
   const role = user?.role;
   const isAdmin = role === "owner" || role === "admin";
-  const secondaryNav = isAdmin ? [...SECONDARY_NAV, ...ADMIN_NAV] : SECONDARY_NAV;
-  // 6-11 销售板块藏而不删(见 utils/featureFlags.ts)
-  const primaryNav = SALES_RADAR_ENABLED ? PRIMARY_NAV : PRIMARY_NAV.filter((i) => i.to !== "/sales-radar");
+  // 统一过滤: adminOnly 项非管理员隐藏; 销售雷达受 feature flag 控制(藏而不删)
+  const visible = (items: NavItem[]) =>
+    items.filter((i) => {
+      if (i.adminOnly && !isAdmin) return false;
+      if (i.to === "/sales-radar" && !SALES_RADAR_ENABLED) return false;
+      return true;
+    });
+  const dailyNav = visible(DAILY_NAV);
+  const dataNav = visible(DATA_NAV);
+  const systemNav = visible(SYSTEM_NAV);
 
   return (
     <aside className="fixed top-0 left-0 z-30 h-screen w-52 bg-slate-900 flex flex-col">
@@ -96,23 +108,40 @@ export default function Sidebar() {
 
       {/* nav */}
       <nav className="flex-1 overflow-y-auto py-2 px-3">
-        <div className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">工作台</div>
+        <div className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">每日运营</div>
         <ul className="space-y-0.5">
-          {primaryNav.map((item) => (
+          {dailyNav.map((item) => (
             <li key={item.to}>
               <NavLinkItem item={item} active={isActive(pathname, item)} />
             </li>
           ))}
         </ul>
 
-        <div className="px-3 mt-5 mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">管理</div>
-        <ul className="space-y-0.5">
-          {secondaryNav.map((item) => (
-            <li key={item.to}>
-              <NavLinkItem item={item} active={isActive(pathname, item)} />
-            </li>
-          ))}
-        </ul>
+        {dataNav.length > 0 && (
+          <>
+            <div className="px-3 mt-5 mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">效果与数据</div>
+            <ul className="space-y-0.5">
+              {dataNav.map((item) => (
+                <li key={item.to}>
+                  <NavLinkItem item={item} active={isActive(pathname, item)} />
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {systemNav.length > 0 && (
+          <>
+            <div className="px-3 mt-5 mb-1.5 text-[10px] uppercase tracking-wider text-slate-600">系统</div>
+            <ul className="space-y-0.5">
+              {systemNav.map((item) => (
+                <li key={item.to}>
+                  <NavLinkItem item={item} active={isActive(pathname, item)} />
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </nav>
 
       {/* 底部用户 */}
