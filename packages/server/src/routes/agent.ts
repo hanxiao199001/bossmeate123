@@ -25,9 +25,10 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { resolve, sep, join } from "node:path";
+import { createZip, type ZipEntry } from "../utils/zip.js";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import {
@@ -371,6 +372,97 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     } while (PAIRING_CODES.has(code));
     PAIRING_CODES.set(code, { tenantId: request.tenantId, expiresAt: Date.now() + PAIRING_TTL_MS });
     return { code: "OK", data: { code, expiresInSec: PAIRING_TTL_MS / 1000 } };
+  });
+
+  /**
+   * POST /agent-admin/launcher-config — 生成含「服务器地址 + 一次性配对码」的客户配置 (bossmate.cfg 内容)。
+   * 前端拿 cfg 文本触发下载, 客户把它放进 agent 文件夹双击启动器即免输码自动配对。
+   * 配对码同样 10 分钟有效、一次性 (复用 PAIRING_CODES)。
+   */
+  app.post("/agent-admin/launcher-config", async (request) => {
+    const body = (request.body ?? {}) as { origin?: string; deviceName?: string };
+    // 服务器地址: 优先用前端传的 origin (与网页同源, 确保客户可达), 否则从请求头推导
+    const proto = (request.headers["x-forwarded-proto"] as string) || request.protocol || "http";
+    const host = String(request.headers["host"] ?? "");
+    const serverUrl = (typeof body.origin === "string" && /^https?:\/\//.test(body.origin))
+      ? body.origin.replace(/\/+$/, "")
+      : `${proto}://${host}`;
+    const deviceName = (body.deviceName ? String(body.deviceName).slice(0, 60) : "") || "客户电脑";
+    sweepExpiredCodes();
+    let code = "";
+    do {
+      code = String(Math.floor(100000 + Math.random() * 900000));
+    } while (PAIRING_CODES.has(code));
+    PAIRING_CODES.set(code, { tenantId: request.tenantId, expiresAt: Date.now() + PAIRING_TTL_MS });
+    const cfg =
+      "# BossMate Agent 配对配置 — 放进 agent 文件夹, 双击启动器即自动配对 (配对码 10 分钟有效, 过期重新下载)\n" +
+      `SERVER_URL=${serverUrl}\n` +
+      `PAIR_CODE=${code}\n` +
+      `DEVICE_NAME=${deviceName}\n`;
+    return { code: "OK", data: { cfg, pairCode: code, serverUrl, expiresInSec: PAIRING_TTL_MS / 1000 } };
+  });
+
+  /**
+   * POST /agent-admin/client-package — 一键打包完整客户端启动包 (zip, 流式下载)。
+   * 内含: 预构建 dist/ + 双击启动器(Mac/Win) + 运行时 package.json + 使用说明 + 内置一次性配对码的 bossmate.cfg。
+   * 客户解压后双击启动器即免输码自动配对。零依赖打 zip (utils/zip), 不依赖系统 zip / npm 包。
+   * 前提: 服务端须已构建 agent (部署含 pnpm --filter @bossmate/agent build)。
+   */
+  app.post("/agent-admin/client-package", async (request, reply) => {
+    // 定位 agent 目录 (兼容 cwd=packages/server 或 仓库根)
+    const candidates = [
+      resolve(process.cwd(), "../agent"),
+      resolve(process.cwd(), "packages/agent"),
+      resolve(process.cwd(), "../../packages/agent"),
+    ];
+    const agentDir = candidates.find((d) => existsSync(join(d, "launcher", "start-agent.command")) && existsSync(join(d, "dist", "cli.js")));
+    if (!agentDir) {
+      return reply.code(503).send({ code: "AGENT_NOT_BUILT", message: "服务端暂未构建 agent 产物, 请确认部署已执行 pnpm --filter @bossmate/agent build" });
+    }
+
+    const body = (request.body ?? {}) as { origin?: string; deviceName?: string };
+    const proto = (request.headers["x-forwarded-proto"] as string) || request.protocol || "http";
+    const host = String(request.headers["host"] ?? "");
+    const serverUrl = (typeof body.origin === "string" && /^https?:\/\//.test(body.origin))
+      ? body.origin.replace(/\/+$/, "")
+      : `${proto}://${host}`;
+    const deviceName = (body.deviceName ? String(body.deviceName).slice(0, 60) : "") || "客户电脑";
+
+    sweepExpiredCodes();
+    let code = "";
+    do { code = String(Math.floor(100000 + Math.random() * 900000)); } while (PAIRING_CODES.has(code));
+    PAIRING_CODES.set(code, { tenantId: request.tenantId, expiresAt: Date.now() + PAIRING_TTL_MS });
+
+    const entries: ZipEntry[] = [];
+    // dist/ 递归
+    const distDir = join(agentDir, "dist");
+    for (const rel of readdirSync(distDir, { recursive: true }) as string[]) {
+      const abs = join(distDir, rel);
+      try { if (!statSync(abs).isFile()) continue; } catch { continue; }
+      entries.push({ name: `dist/${rel.split(sep).join("/")}`, data: readFileSync(abs) });
+    }
+    // 启动器 + 说明
+    for (const f of ["start-agent.command", "start-agent.bat", "使用说明.txt"]) {
+      const abs = join(agentDir, "launcher", f);
+      if (existsSync(abs)) entries.push({ name: f, data: readFileSync(abs), mode: f.endsWith(".command") ? 0o100755 : 0o100644 });
+    }
+    // 运行时 package.json (只留运行依赖)
+    try {
+      const pkg = JSON.parse(readFileSync(join(agentDir, "package.json"), "utf8")) as { version?: string; dependencies?: Record<string, string> };
+      const runtimePkg = { name: "bossmate-agent-client", private: true, version: pkg.version ?? "0.1.0", type: "module", dependencies: pkg.dependencies ?? {} };
+      entries.push({ name: "package.json", data: Buffer.from(JSON.stringify(runtimePkg, null, 2) + "\n", "utf8") });
+    } catch { /* 缺 package.json 不致命 */ }
+    // 内置码 cfg
+    const cfg = "# BossMate Agent 配对配置 (随包内置, 配对码 10 分钟有效)\n" +
+      `SERVER_URL=${serverUrl}\nPAIR_CODE=${code}\nDEVICE_NAME=${deviceName}\n`;
+    entries.push({ name: "bossmate.cfg", data: Buffer.from(cfg, "utf8") });
+
+    const zip = createZip(entries);
+    logger.info({ tenantId: request.tenantId, files: entries.length, bytes: zip.length }, "agent 客户端启动包已打包");
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", "attachment; filename=\"bossmate-agent-client.zip\"")
+      .send(zip);
   });
 
   /** GET /agent-admin/devices — 本租户设备列表 (online = lastSeenAt < 90s) */

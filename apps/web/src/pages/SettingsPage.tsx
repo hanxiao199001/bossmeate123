@@ -4,6 +4,7 @@ import { api } from "../utils/api";
 import ContactMetaSection from "../components/ContactMetaSection";
 import PageHeader from "../components/ui/PageHeader";
 import { toast } from "../components/Toast";
+import { useAuthStore } from "../hooks/useAuthStore";
 import { IconMonitor } from "../components/ui/Icons";
 
 interface WechatConfig {
@@ -135,6 +136,63 @@ export default function SettingsPage() {
       /* 错误已由 api 统一 toast */
     } finally {
       setPairingLoading(false);
+    }
+  };
+
+  // 下载客户配置 bossmate.cfg (含服务器地址 + 一次性配对码) — 客户放进 agent 文件夹双击启动器即免输码
+  const handleDownloadClientConfig = async () => {
+    try {
+      const res = await api.post<{ cfg: string; pairCode: string; serverUrl: string; expiresInSec: number }>(
+        "/agent-admin/launcher-config",
+        { origin: window.location.origin },
+      );
+      if (!res.data?.cfg) return;
+      const blob = new Blob([res.data.cfg], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "bossmate.cfg";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("已下载 bossmate.cfg — 放进客户的 agent 启动包文件夹, 再双击启动器即可");
+    } catch {
+      /* 错误已由 api 统一 toast */
+    }
+  };
+
+  // 一键下载完整客户包 zip (含预构建 dist + 启动器 + 内置配对码) — 客户解压双击即用
+  const [pkgLoading, setPkgLoading] = useState(false);
+  const handleDownloadClientPackage = async () => {
+    setPkgLoading(true);
+    try {
+      const token = useAuthStore.getState().token;
+      const res = await fetch("/api/v1/agent-admin/client-package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      if (!res.ok) {
+        let msg = "生成客户包失败";
+        try { const j = await res.json(); if (j?.message) msg = j.message; } catch { /* 非JSON */ }
+        toast.error(msg);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "bossmate-agent-客户端.zip";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("已下载完整客户包 — 解压后双击启动器即可(已内置配对码)");
+    } catch {
+      toast.error("下载失败, 请重试");
+    } finally {
+      setPkgLoading(false);
     }
   };
 
@@ -366,6 +424,25 @@ export default function SettingsPage() {
             >
               {pairingLoading ? "生成中…" : pairing ? "重新生成配对码" : "生成配对码"}
             </button>
+            <button
+              onClick={handleDownloadClientPackage}
+              disabled={pkgLoading}
+              className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
+                pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
+              }`}
+            >
+              {pkgLoading ? "打包中…" : "一键下载完整客户包"}
+            </button>
+            <button
+              onClick={handleDownloadClientConfig}
+              className="ml-2 px-5 py-2 rounded-lg text-sm font-medium text-indigo-700 border border-indigo-200 bg-white hover:bg-indigo-50 active:scale-95 transition-all"
+            >
+              只下载配置(含配对码)
+            </button>
+            <p className="mt-2 text-xs text-slate-500">
+              新客户/新电脑推荐「一键下载完整客户包」: 解压后双击启动器即用(已内置配对码)。
+              客户已有客户包时, 用「只下载配置」拿 bossmate.cfg 覆盖即可换新码。
+            </p>
             {pairing && (
               <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 p-4">
                 <div className="font-mono text-3xl font-bold tracking-[0.35em] text-indigo-600 select-all">

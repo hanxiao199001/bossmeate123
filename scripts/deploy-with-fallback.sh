@@ -71,6 +71,9 @@ cd "$REMOTE_PATH"
 ${PULL_BLOCK}
 pnpm install --frozen-lockfile 2>&1 | tail -3
 pnpm --filter @bossmate/server build 2>&1 | tail -3
+# PR-A18: 构建 agent → 服务端"一键下载完整客户包"路由需要 packages/agent/dist。
+# 非致命(|| true): agent 构建失败不阻断主部署, 仅一键客户包暂不可用。
+pnpm --filter @bossmate/agent build 2>&1 | tail -3 || echo "⚠️ agent build 失败, 一键客户包暂不可用(不影响主部署)"
 # PR Q.7.1: deploy:smart 漏 build 前端（5-7 user 验收暴露：dist 5-4 mtime stale，
 # PR Q.0/Q.2/Q.3/Q.4/Q.7 前端改动从未自动 deploy 到服务器）。nginx serve
 # /home/projects/bossmate/apps/web/dist；build 后新 hash 文件自动 serve，浏览器硬刷可见。
