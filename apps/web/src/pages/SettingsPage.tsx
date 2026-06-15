@@ -155,7 +155,8 @@ export default function SettingsPage() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // 延迟释放 blob URL: 立即 revoke 会让部分浏览器(尤其带安全扫描的)下载不收尾, 卡成 .crdownload
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       toast.success("已下载 bossmate.cfg — 放进客户的 agent 启动包文件夹, 再双击启动器即可");
     } catch {
       /* 错误已由 api 统一 toast */
@@ -187,7 +188,8 @@ export default function SettingsPage() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // 延迟释放 blob URL: 立即 revoke 会让部分浏览器(尤其带安全扫描的)下载不收尾, 卡成 .crdownload
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       toast.success("已下载完整客户包 — 解压后双击启动器即可(已内置配对码)");
     } catch {
       toast.error("下载失败, 请重试");
