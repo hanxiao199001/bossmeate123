@@ -74,3 +74,5 @@ deploy-v2.py
 dist-client/
 dist-portable-win/
 bossmate-agent-Windows-便携.zip
+dist-portable-mac/
+bossmate-agent-Mac-便携.zip
