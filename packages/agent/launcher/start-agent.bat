@@ -49,8 +49,8 @@ if not exist "node_modules" (
 
 REM 4) Pair if not paired yet
 if not exist "%USERPROFILE%\.bossmate-agent\config.json" (
-  if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL (e.g. http://122.152.234.155): "
-  if "!PAIR_CODE!"=="" set /p "PAIR_CODE=Pairing code (6 digits from the web): "
+  if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://122.152.234.155 : "
+  if "!PAIR_CODE!"=="" set /p "PAIR_CODE=Pairing code 6 digits from the web : "
   echo Pairing...
   node dist\cli.js pair "!SERVER_URL!" "!PAIR_CODE!" "!DEVICE_NAME!"
   if errorlevel 1 (

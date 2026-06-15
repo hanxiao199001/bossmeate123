@@ -7,6 +7,7 @@ import puppeteerExtraImport from "puppeteer-extra";
 import StealthPluginImport from "puppeteer-extra-plugin-stealth";
 import type { Browser, Page } from "puppeteer";
 import { mkdir, readlink, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { profileDir } from "./config.js";
 import { logger } from "./log.js";
@@ -25,6 +26,34 @@ const LAUNCH_ARGS = [
   "--hide-scrollbars",
   "--window-size=1366,900",
 ];
+
+// 用系统自带浏览器(免装 Node 便携版需要): Windows→Edge, Mac→Edge/Chrome。
+// 找不到则返回 undefined → puppeteer 回退自带 Chromium(开发机/装了 puppeteer 的情况)。
+// 可用环境变量 BOSSMATE_BROWSER_PATH 强制指定。
+function findSystemBrowser(): string | undefined {
+  if (process.env.BOSSMATE_BROWSER_PATH && existsSync(process.env.BOSSMATE_BROWSER_PATH)) {
+    return process.env.BOSSMATE_BROWSER_PATH;
+  }
+  const cands = process.platform === "win32"
+    ? [
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      ]
+    : process.platform === "darwin"
+    ? [
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      ]
+    : [];
+  for (const c of cands) {
+    try { if (existsSync(c)) return c; } catch { /* noop */ }
+  }
+  return undefined;
+}
+const SYSTEM_BROWSER = findSystemBrowser();
+if (SYSTEM_BROWSER) logger.info({ browser: SYSTEM_BROWSER }, "使用系统浏览器(免下 Chromium)");
 
 /** 平台主页 (登录入口 = 创作后台首页, 未登录会出登录页/弹窗) */
 export const PLATFORM_HOME: Record<string, string> = {
@@ -64,6 +93,8 @@ export async function launchAccountBrowser(accountId: string): Promise<Browser> 
       userDataDir: dir,
       args: LAUNCH_ARGS,
       defaultViewport: { width: 1366, height: 900 },
+      // 便携版: 用系统 Edge/Chrome; 未找到则 undefined → 回退自带 Chromium
+      ...(SYSTEM_BROWSER ? { executablePath: SYSTEM_BROWSER } : {}),
     })) as unknown as Browser;
 
   let browser: Browser;

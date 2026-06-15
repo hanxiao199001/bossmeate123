@@ -72,3 +72,5 @@ deploy-v2.py
 .clean-main/
 .review-stash/
 dist-client/
+dist-portable-win/
+bossmate-agent-Windows-便携.zip
