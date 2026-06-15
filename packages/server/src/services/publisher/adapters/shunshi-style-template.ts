@@ -211,7 +211,20 @@ function renderP1Placeholder(_opts: {
   message: string;
   submessage?: string;
 }): string {
-  return "";
+  // 老韩 6-15: "占位补满"优先于隐身 — 数据缺也保留结构, muted 小字诚实标注, 不伪装真数据。
+  const { title, icon, message, submessage } = _opts;
+  return `<section style="margin:0 0 18px 0;padding:16px 18px;background:#FAFAFA;border-radius:6px;text-align:center;">` +
+    `<p style="margin:0 0 5px 0;font-size:15px;font-weight:600;color:${TEXT};line-height:1.5;">${esc(icon)} ${esc(title)}</p>` +
+    `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.6;">${esc(message)}${submessage ? " · " + esc(submessage) : ""}</p>` +
+    `</section>`;
+}
+
+/** 数据缺失时的诚实占位 (老韩 6-15: 占位补满优先于隐身)。muted 小字, 不伪装成真数据。 */
+function renderMissingDataBlock(title: string, note = "暂无公开数据"): string {
+  return `<section style="margin:0 0 18px 0;padding:14px 16px;background:#FAFAFA;border-radius:6px;text-align:center;">` +
+    `<p style="margin:0 0 4px 0;font-size:14px;font-weight:600;color:${TEXT};line-height:1.5;">${esc(title)}</p>` +
+    `<p style="margin:0;font-size:13px;color:${MUTED};line-height:1.6;">${esc(note)}</p>` +
+    `</section>`;
 }
 
 /** P2 灰阶 value：缺值显示"未公开"（PR #135 5-12: 原"暂无"被 user 反馈像假数据） */
@@ -611,8 +624,8 @@ function renderFrequencyBlock(journal: JournalInfo): string {
   if (!freq && journal.frequency) {
     freq = journal.frequency;
   }
-  // PR #146 (5-14): NULL → 整块 skip（原 greyOrValue 兜底成灰"未知"，被 PR #135/#136 漏掉）
-  if (!freq) return "";
+  // 老韩 6-15: 数据缺改占位补满(原 NULL→skip)
+  if (!freq) return renderMissingDataBlock("出版周期");
 
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">出版周期</p>` +
@@ -646,7 +659,7 @@ function renderAnnualVolumeChart(journal: JournalInfo): string {
 function renderTopInstitutionsBlock(journal: JournalInfo): string {
   const raw = (journal as any).publicationStats;
   if (!isPublicationStats(raw) || !Array.isArray(raw.topInstitutions) || raw.topInstitutions.length === 0) {
-    return ""; // P3 隐藏
+    return renderMissingDataBlock("国内 TOP 5 发文机构"); // 老韩 6-15: 占位补满(原隐藏)
   }
   const top5 = raw.topInstitutions.slice(0, 5);
   const items = top5
@@ -981,13 +994,14 @@ function renderTargetAudienceBlock(journal: JournalInfo): string {
 // ============ 区块 19c: 投稿时间线 (PR #203, 由审稿周期/刊期派生) ============
 // 把"投稿→初审→录用→见刊"画成预期时间线。仅用 reviewCycle + frequency 真值, 无审稿周期则 skip。
 function renderTimelineBlock(journal: JournalInfo): string {
+  // 老韩 6-15: 无审稿周期也渲染时间线结构, 该步诚实标注"暂无"(原整块 skip)
   const rc = journal.reviewCycle;
-  if (!rc) return ""; // 审稿周期是时间线的核心锚点, 没有就不渲染 (不编造)
+  const rcSub = rc ? esc(rc) : "周期暂无公开数据";
   const rawStats = (journal as any).publicationStats;
   const freq = isPublicationStats(rawStats) && typeof rawStats.frequency === "string" ? rawStats.frequency : (journal.frequency || null);
   const steps: Array<{ label: string; sub: string }> = [
     { label: "投稿", sub: "提交系统" },
-    { label: "初审 / 外审", sub: esc(rc) },
+    { label: "初审 / 外审", sub: rcSub },
     { label: "录用", sub: "完成修回后" },
     { label: "见刊", sub: freq ? `刊期 ${esc(freq)}` : "排版上线" },
   ];
@@ -1009,7 +1023,7 @@ function renderTimelineBlock(journal: JournalInfo): string {
 // 给读者一个"横向参照": 同档位还有哪些选择, 各自 IF/录用率/版面费如何。全用可信字段, 无 peer 则 skip。
 function renderPeerComparisonBlock(journal: JournalInfo): string {
   const peers = journal.peerJournals;
-  if (!peers || peers.length === 0) return "";
+  if (!peers || peers.length === 0) return renderMissingDataBlock("同档期刊对比"); // 老韩 6-15: 占位补满(原隐藏)
   const fmtIF = (v: number | null) => (typeof v === "number" && v > 0 ? v.toFixed(1) : "—"); // PR #209: IF<=0 占位值显示 —
   const fmtAR = (v: number | null) => (typeof v === "number" ? `${(v >= 1 ? v : v * 100).toFixed(0)}%` : "—");
   const fmtAPC = (v: number | null) => (typeof v === "number" ? (v === 0 ? "免费" : `$${v}`) : "—");
@@ -1145,19 +1159,20 @@ export async function generateShunshiStyleHtml(
   sections.push(renderHeroBlock(journal));                            //  1 封面/品牌头
   sections.push(renderBasicInfoBlock(journal));                       //  2 ISSN/出版商
   sections.push(renderJcrQuartileBlock(journal));                     //  3 分区
-  if (typesSet.has("if-history-line")) sections.push(renderIfHistoryChart(journal)); //  4 IF 趋势图(命中才渲)
+  sections.push(renderIfHistoryChart(journal)); //  4 IF 趋势图(老韩6-15: 去门控always渲染, 无数据出占位)
   sections.push(renderImpactFactorBlock(journal));                    //  5 IF
   sections.push(renderCarHistoryBlock(journal));                      //  6 风险(唯一风险发声处)
   sections.push(renderJcrFullPanel(journal));                         //  7 JCR 完整面板
   sections.push(renderScopeDetailsBlock(journal));                    //  8 收稿范围
   sections.push(renderPublicationCostsBlock(journal));                //  9 版面费
   sections.push(renderFrequencyBlock(journal));                       // 10 出版频率
-  if (typesSet.has("annual-volume-bar")) sections.push(renderAnnualVolumeChart(journal)); // 11 发文量图
+  sections.push(renderAnnualVolumeChart(journal)); // 11 发文量图(老韩6-15: always渲染)
   sections.push(renderTopInstitutionsBlock(journal));                 // 12 TopN 机构
   if (typesSet.has("citing-pie")) sections.push(renderCitingJournalsPie(journal)); // 13 引用来源饼
-  if (typesSet.has("accept-rate-bar")) sections.push(wrapChart(renderAcceptRateBarChart(journal.acceptanceRate ?? null)));
-  if (typesSet.has("fee-pie")) sections.push(wrapChart(renderFeePieChart(journal.apcFee ?? null)));
-  if (typesSet.has("review-cycle-bar")) sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
+  // 老韩6-15: 录用率/版面费/审稿周期图去门控 always 渲染(各函数空数据返回"", 有数据才出图; 如 APC 存在→版面费饼真出图)
+  sections.push(wrapChart(renderAcceptRateBarChart(journal.acceptanceRate ?? null)));
+  sections.push(wrapChart(renderFeePieChart(journal.apcFee ?? null)));
+  sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
   sections.push(renderSelfCitationBadge(journal));                    // 14 自引徽章
   sections.push(renderRecommendationScoreBlock(journal));             // 15 推荐指数+审稿周期(审稿周期唯一出现处)
   sections.push(renderIfHistoryAnalysis(aiContent));                  // 15a IF 历史深度分析
