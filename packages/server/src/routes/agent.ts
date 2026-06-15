@@ -420,13 +420,15 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       return reply.code(503).send({ code: "AGENT_NOT_BUILT", message: "服务端暂未构建 agent 产物, 请确认部署已执行 pnpm --filter @bossmate/agent build" });
     }
 
-    const body = (request.body ?? {}) as { origin?: string; deviceName?: string };
+    const body = (request.body ?? {}) as { origin?: string; deviceName?: string; platform?: string };
     const proto = (request.headers["x-forwarded-proto"] as string) || request.protocol || "http";
     const host = String(request.headers["host"] ?? "");
     const serverUrl = (typeof body.origin === "string" && /^https?:\/\//.test(body.origin))
       ? body.origin.replace(/\/+$/, "")
       : `${proto}://${host}`;
     const deviceName = (body.deviceName ? String(body.deviceName).slice(0, 60) : "") || "客户电脑";
+    // 按系统拆包: 只放对应启动器, 防客户点错 (windows=只 .bat, mac=只 .command, 其它=两个都放向后兼容)
+    const platform = body.platform === "windows" || body.platform === "mac" ? body.platform : "both";
 
     sweepExpiredCodes();
     let code = "";
@@ -441,8 +443,11 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       try { if (!statSync(abs).isFile()) continue; } catch { continue; }
       entries.push({ name: `dist/${rel.split(sep).join("/")}`, data: readFileSync(abs) });
     }
-    // 启动器 + 说明
-    for (const f of ["start-agent.command", "start-agent.bat", "使用说明.txt"]) {
+    // 启动器(按系统) + 说明
+    const launchers = platform === "windows" ? ["start-agent.bat"]
+      : platform === "mac" ? ["start-agent.command"]
+      : ["start-agent.command", "start-agent.bat"];
+    for (const f of [...launchers, "使用说明.txt"]) {
       const abs = join(agentDir, "launcher", f);
       if (existsSync(abs)) entries.push({ name: f, data: readFileSync(abs), mode: f.endsWith(".command") ? 0o100755 : 0o100644 });
     }
@@ -458,10 +463,13 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     entries.push({ name: "bossmate.cfg", data: Buffer.from(cfg, "utf8") });
 
     const zip = createZip(entries);
-    logger.info({ tenantId: request.tenantId, files: entries.length, bytes: zip.length }, "agent 客户端启动包已打包");
+    const fname = platform === "windows" ? "bossmate-agent-Windows.zip"
+      : platform === "mac" ? "bossmate-agent-Mac.zip"
+      : "bossmate-agent-client.zip";
+    logger.info({ tenantId: request.tenantId, platform, files: entries.length, bytes: zip.length }, "agent 客户端启动包已打包");
     return reply
       .header("Content-Type", "application/zip")
-      .header("Content-Disposition", "attachment; filename=\"bossmate-agent-client.zip\"")
+      .header("Content-Disposition", `attachment; filename="${fname}"`)
       .send(zip);
   });
 

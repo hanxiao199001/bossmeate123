@@ -165,14 +165,14 @@ export default function SettingsPage() {
 
   // 一键下载完整客户包 zip (含预构建 dist + 启动器 + 内置配对码) — 客户解压双击即用
   const [pkgLoading, setPkgLoading] = useState(false);
-  const handleDownloadClientPackage = async () => {
+  const handleDownloadClientPackage = async (platform: "windows" | "mac") => {
     setPkgLoading(true);
     try {
       const token = useAuthStore.getState().token;
       const res = await fetch("/api/v1/agent-admin/client-package", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ origin: window.location.origin }),
+        body: JSON.stringify({ origin: window.location.origin, platform }),
       });
       if (!res.ok) {
         let msg = "生成客户包失败";
@@ -184,13 +184,13 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "bossmate-agent-客户端.zip";
+      a.download = platform === "windows" ? "bossmate-agent-Windows.zip" : "bossmate-agent-Mac.zip";
       document.body.appendChild(a);
       a.click();
       a.remove();
       // 延迟释放 blob URL: 立即 revoke 会让部分浏览器(尤其带安全扫描的)下载不收尾, 卡成 .crdownload
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      toast.success("已下载完整客户包 — 解压后双击启动器即可(已内置配对码)");
+      toast.success(`已下载 ${platform === "windows" ? "Windows" : "Mac"} 客户包 — 发给客户解压双击即可(已内置配对码)`);
     } catch {
       toast.error("下载失败, 请重试");
     } finally {
@@ -427,13 +427,22 @@ export default function SettingsPage() {
               {pairingLoading ? "生成中…" : pairing ? "重新生成配对码" : "生成配对码"}
             </button>
             <button
-              onClick={handleDownloadClientPackage}
+              onClick={() => handleDownloadClientPackage("windows")}
               disabled={pkgLoading}
               className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
                 pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
               }`}
             >
-              {pkgLoading ? "打包中…" : "一键下载完整客户包"}
+              {pkgLoading ? "打包中…" : "下载客户包 · Windows"}
+            </button>
+            <button
+              onClick={() => handleDownloadClientPackage("mac")}
+              disabled={pkgLoading}
+              className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
+                pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
+              }`}
+            >
+              {pkgLoading ? "打包中…" : "下载客户包 · Mac"}
             </button>
             <button
               onClick={handleDownloadClientConfig}
@@ -442,7 +451,7 @@ export default function SettingsPage() {
               只下载配置(含配对码)
             </button>
             <p className="mt-2 text-xs text-slate-500">
-              新客户/新电脑推荐「一键下载完整客户包」: 解压后双击启动器即用(已内置配对码)。
+              按客户系统下载对应包(只含该系统启动器, 防点错): Windows 解压双击 start-agent.bat, Mac 双击 start-agent.command。
               客户已有客户包时, 用「只下载配置」拿 bossmate.cfg 覆盖即可换新码。
             </p>
             {pairing && (
