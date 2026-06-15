@@ -24,6 +24,15 @@ import type { JournalInfo, CollectionResult } from "../../data-collection/journa
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { esc } from "../../skills/journal-template.js";
 
+/**
+ * 去掉 AI 自由文本里可能夹带的 HTML 标签 (LLM 有时会把正文包成 <p>/<strong>),
+ * 否则下游 esc() 会把这些标签转义成可见的裸标签 (如 "这本期刊<p><strong>...").
+ * 剥成纯文本后再交给 esc 转义。保留换行供投稿建议按句切分。
+ */
+function plain(str: string | null | undefined): string {
+  return (str || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+}
+
 type Abstracts = CollectionResult["abstracts"];
 
 // ============ 工具：从 recommendation 文本派生项目符号清单 ============
@@ -67,7 +76,7 @@ function deriveSubmissionTips(recommendation: string, journal: JournalInfo): str
 
 function renderPainPointHook(journal: JournalInfo, aiContent: AIGeneratedContent): string {
   // 优先用 AI 给的 editorComment（口语化），否则按 journal 学科生成痛点
-  const hook = aiContent.editorComment ||
+  const hook = plain(aiContent.editorComment) ||
     `还在为 ${journal.discipline || "学术"} 投稿屡屡被拒发愁？花了几个月写的论文，到底该投哪本期刊？`;
 
   return `<section style="margin:16px 0 20px 0;padding:18px 20px;background:#FFF8F0;border-left:4px solid #FF9800;border-radius:6px;">` +
@@ -84,8 +93,10 @@ function renderStoryIntro(journal: JournalInfo, aiContent: AIGeneratedContent): 
   const partitionText = partition ? `${esc(partition)} 区期刊` : "权威期刊";
 
   // 用 scopeDescription 作为故事背景（如有），fallback 为合成开场
-  const scope = aiContent.scopeDescription
-    ? esc(aiContent.scopeDescription).slice(0, 150)
+  // 先 plain() 剥掉 AI 夹带的 HTML, 再 esc, 避免裸标签
+  const scopeText = plain(aiContent.scopeDescription);
+  const scope = scopeText
+    ? esc(scopeText).slice(0, 150)
     : `专注于${esc(journal.discipline || "本领域")}前沿研究`;
 
   return `<section style="margin:0 0 20px 0;font-size:15px;line-height:1.8;color:#333;">` +
@@ -144,7 +155,7 @@ function renderCaseAnalysis(abstracts: Abstracts | undefined): string {
   if (!abstracts || abstracts.length === 0) return "";
 
   const a = abstracts[0];
-  const text = (a.abstractText || "").trim();
+  const text = plain(a.abstractText);
   if (!text || text.length < 60) return "";
 
   // 截到 200 字以内（避免太长破坏阅读节奏）
@@ -153,7 +164,7 @@ function renderCaseAnalysis(abstracts: Abstracts | undefined): string {
   return `<section style="margin:0 0 22px 0;">` +
     `<p style="margin:0 0 8px 0;font-size:15px;font-weight:600;color:#333;">📚 该刊近期发文样例</p>` +
     `<blockquote style="margin:0;padding:14px 18px;background:#F5F5F5;border-left:3px solid #BDBDBD;border-radius:4px;font-size:14px;line-height:1.7;color:#555;font-style:italic;">` +
-      `<p style="margin:0 0 6px 0;font-weight:500;color:#333;font-style:normal;">${esc(a.title || "（未提供标题）")}</p>` +
+      `<p style="margin:0 0 6px 0;font-weight:500;color:#333;font-style:normal;">${esc(plain(a.title) || "（未提供标题）")}</p>` +
       `<p style="margin:0;">${esc(excerpt)}</p>` +
     `</blockquote>` +
     `</section>`;
@@ -162,7 +173,7 @@ function renderCaseAnalysis(abstracts: Abstracts | undefined): string {
 // ============ 区块 5: 投稿建议（• 项目符号） ============
 
 function renderSubmissionTips(journal: JournalInfo, aiContent: AIGeneratedContent): string {
-  const tips = deriveSubmissionTips(aiContent.recommendation || "", journal);
+  const tips = deriveSubmissionTips(plain(aiContent.recommendation), journal);
 
   const items = tips
     .map(
