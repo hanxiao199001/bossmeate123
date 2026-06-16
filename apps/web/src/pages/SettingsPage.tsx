@@ -164,9 +164,10 @@ export default function SettingsPage() {
   };
 
   // 一键下载完整客户包 zip (含预构建 dist + 启动器 + 内置配对码) — 客户解压双击即用
-  const [pkgLoading, setPkgLoading] = useState(false);
+  const [pkgKey, setPkgKey] = useState<string | null>(null); // 哪个下载按钮在加载, 各按钮独立
   const handleDownloadClientPackage = async (platform: "windows" | "mac", portable = false) => {
-    setPkgLoading(true);
+    const k = `${platform}${portable ? "-p" : ""}`;
+    setPkgKey(k);
     try {
       const token = useAuthStore.getState().token;
       const res = await fetch("/api/v1/agent-admin/client-package", {
@@ -196,7 +197,7 @@ export default function SettingsPage() {
     } catch {
       toast.error("下载失败, 请重试");
     } finally {
-      setPkgLoading(false);
+      setPkgKey(null);
     }
   };
 
@@ -430,40 +431,40 @@ export default function SettingsPage() {
             </button>
             <button
               onClick={() => handleDownloadClientPackage("windows")}
-              disabled={pkgLoading}
+              disabled={pkgKey === "windows"}
               className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
+                pkgKey === "windows" ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
               }`}
             >
-              {pkgLoading ? "打包中…" : "下载客户包 · Windows"}
+              {pkgKey === "windows" ? "打包中…" : "下载客户包 · Windows"}
             </button>
             <button
               onClick={() => handleDownloadClientPackage("mac")}
-              disabled={pkgLoading}
+              disabled={pkgKey === "mac"}
               className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
+                pkgKey === "mac" ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
               }`}
             >
-              {pkgLoading ? "打包中…" : "下载客户包 · Mac"}
+              {pkgKey === "mac" ? "打包中…" : "下载客户包 · Mac"}
             </button>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 onClick={() => handleDownloadClientPackage("windows", true)}
-                disabled={pkgLoading}
+                disabled={pkgKey === "windows-p"}
                 className={`px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                  pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
+                  pkgKey === "windows-p" ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
                 }`}
               >
-                {pkgLoading ? "生成中…" : "下载 · Windows(免装Node)"}
+                {pkgKey === "windows-p" ? "生成中(约1-2分)…" : "下载 · Windows(免装Node)"}
               </button>
               <button
                 onClick={() => handleDownloadClientPackage("mac", true)}
-                disabled={pkgLoading}
+                disabled={pkgKey === "mac-p"}
                 className={`px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                  pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
+                  pkgKey === "mac-p" ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
                 }`}
               >
-                {pkgLoading ? "生成中…" : "下载 · Mac(免装Node)"}
+                {pkgKey === "mac-p" ? "生成中(约1-2分)…" : "下载 · Mac(免装Node)"}
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-500">
