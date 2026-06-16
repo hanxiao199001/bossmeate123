@@ -65,7 +65,8 @@ export async function fetchRecommendations(input: FetchRecommendationsInput): Pr
     LEFT JOIN journals j ON j.id = NULLIF(c.metadata->>'journalId', '')::uuid
     ${skipJoin}
     WHERE c.tenant_id = ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid
-      AND c.status = 'generated'
+      -- 老韩 6-15: 纳入 needs_review, 让待审内容也进工坊批量发布(发布时合规层兜底); 前端按 status 标'待审'
+      AND c.status IN ('generated', 'needs_review')
       AND c.created_at > NOW() - INTERVAL '${sql.raw(`${FRESH_WINDOW_DAYS} days`)}'
       -- 5-23 PR #162: filter 有 body-level fact warnings 的 (validator 标 hasWarnings=true)
       -- IS DISTINCT FROM 处理 NULL: 老文章无该字段 → NULL → NOT 'true' = 留, 新文章命中 warnings → 排除

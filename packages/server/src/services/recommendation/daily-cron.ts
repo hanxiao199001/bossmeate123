@@ -430,7 +430,8 @@ export async function runDailyContentByType(
           const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: 3, audience: "普通院校教师" });
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article", title, body: html,
-            ...initialStatusFields("draft"),
+            // 多刊盘点是成品文章, 直接 generated 进批量发布(原误存 draft 导致进不了内容工坊批量导入)
+            ...initialStatusFields("generated"),
             metadata: { source: "roundup", templateId: "journal-roundup", discipline, journalCovers },
           }).returning({ id: contents.id });
           if (row?.id && journalIds.length) {
@@ -485,9 +486,14 @@ export async function runDailyContentByType(
       }
     }
   }
-  logger.info({ roundupCount, articles: batchIds.length, failures: failures.length }, "PR-O3 每日内容(按类型)生成完成");
+  const totalProduced = batchIds.length + roundupCount;
+  if (totalProduced === 0) {
+    // 零产出告警: 别再静默停摆几天没人发现。失败明细一并打出, 便于定位(余额/冷却/候选枯竭)。
+    logger.error({ tenant: SYS, failures, types: Object.keys(cq) }, "⚠️ 每日生成零产出! 请检查 LLM 余额 / 期刊冷却 / 候选词。详见 failures");
+  }
+  logger.info({ roundupCount, articles: batchIds.length, failures: failures.length, totalProduced }, "PR-O3 每日内容(按类型)生成完成");
   return {
-    selectedKeywords: batchIds.length, articlesEnqueued: batchIds.length + roundupCount,
+    selectedKeywords: batchIds.length, articlesEnqueued: totalProduced,
     failures, batchIds, startedAt, finishedAt: new Date().toISOString(),
     fallbackLevel: 0, diversityStats: { uniqueJournals: uniqueJournals.size, disciplines: [...usedDisc] },
   };

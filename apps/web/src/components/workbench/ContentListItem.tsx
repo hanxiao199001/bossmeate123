@@ -6,6 +6,7 @@
 export interface WorkbenchListItem {
   id: string;
   title: string | null;
+  status?: string | null; // 老韩6-15: needs_review 标'待审'
   metadata?: Record<string, unknown> | null;
   createdAt?: string | null; // PR #186: 生成时间 (列表项显示相对时间)
   journal?: {
@@ -81,6 +82,9 @@ export default function ContentListItem({
       )}
       <button onClick={onClick} className="flex-1 min-w-0 text-left">
         <p className={`text-sm font-medium line-clamp-2 ${selected ? "text-blue-900" : "text-gray-900"}`}>
+          {item.status === "needs_review" && (
+            <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">待审</span>
+          )}
           {item.title || "(无标题)"}
         </p>
         {meta.length > 0 && (
