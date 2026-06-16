@@ -26,6 +26,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { stat } from "node:fs/promises";
 import { resolve, sep, join } from "node:path";
 import { createZip, type ZipEntry } from "../utils/zip.js";
@@ -57,6 +59,9 @@ const RESULT_STATUSES = new Set(["success", "failed", "login_expired", "manual_p
 
 // ===== 配对码内存表 (一次性, 10 分钟过期; 重启即失效 — 配对是低频人工操作, 可接受) =====
 const PAIRING_CODES = new Map<string, { tenantId: string; expiresAt: number }>();
+const execFileP = promisify(execFile);
+// 免装Node便携包懒构建锁(防并发重复构建), key = platform
+const portableBuildLocks = new Map<string, Promise<void>>();
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 
 function sweepExpiredCodes() {
@@ -450,7 +455,7 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       return reply.code(503).send({ code: "AGENT_NOT_BUILT", message: "服务端暂未构建 agent 产物, 请确认部署已执行 pnpm --filter @bossmate/agent build" });
     }
 
-    const body = (request.body ?? {}) as { origin?: string; deviceName?: string; platform?: string };
+    const body = (request.body ?? {}) as { origin?: string; deviceName?: string; platform?: string; portable?: boolean };
     const proto = (request.headers["x-forwarded-proto"] as string) || request.protocol || "http";
     const host = String(request.headers["host"] ?? "");
     const serverUrl = (typeof body.origin === "string" && /^https?:\/\//.test(body.origin))
@@ -459,6 +464,42 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     const deviceName = (body.deviceName ? String(body.deviceName).slice(0, 60) : "") || "客户电脑";
     // 按系统拆包: 只放对应启动器, 防客户点错 (windows=只 .bat, mac=只 .command, 其它=两个都放向后兼容)
     const platform = body.platform === "windows" || body.platform === "mac" ? body.platform : "both";
+
+    // 免装Node便携包: 懒构建(首次约1-2分钟下载Node+vendor+打包) → 缓存 → 流式下发。SERVER_URL 注入到包内 cfg。
+    if (body.portable === true && (platform === "windows" || platform === "mac")) {
+      const zipName = platform === "windows" ? "bossmate-agent-Windows-便携.zip" : "bossmate-agent-Mac-便携.zip";
+      const zipPath = join(agentDir, zipName);
+      const scriptName = platform === "windows" ? "build-portable-win.mjs" : "build-portable-mac.mjs";
+      if (!existsSync(zipPath)) {
+        let inflight = portableBuildLocks.get(platform);
+        if (!inflight) {
+          inflight = (async () => {
+            logger.info({ platform }, "开始构建免装Node便携包(首次, 服务器下载Node+vendor+打包, 约1-2分钟)");
+            await execFileP("node", [join(agentDir, "scripts", scriptName)], {
+              cwd: agentDir,
+              env: { ...process.env, SERVER_URL: serverUrl },
+              timeout: 6 * 60 * 1000,
+              maxBuffer: 20 * 1024 * 1024,
+            });
+          })().finally(() => portableBuildLocks.delete(platform));
+          portableBuildLocks.set(platform, inflight);
+        }
+        try {
+          await inflight;
+        } catch (err) {
+          logger.error({ err: err instanceof Error ? err.message : err, platform }, "便携包构建失败");
+          return reply.code(500).send({ code: "BUILD_FAILED", message: "便携包生成失败(服务器下载Node/打包出错), 详见服务器日志" });
+        }
+      }
+      if (!existsSync(zipPath)) {
+        return reply.code(500).send({ code: "BUILD_FAILED", message: "便携包未生成" });
+      }
+      logger.info({ platform, zipPath }, "流式下发免装Node便携包");
+      return reply
+        .header("Content-Type", "application/zip")
+        .header("Content-Disposition", `attachment; filename="${zipName}"`)
+        .send(createReadStream(zipPath));
+    }
 
     sweepExpiredCodes();
     let code = "";

@@ -14,6 +14,7 @@ import { execSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, createWriteStream } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { zipFolder } from "./lib/zipdir.mjs";
 import { Readable } from "node:stream";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -124,10 +125,6 @@ console.log(`6/6 打包 zip…`);
 const zipName = "bossmate-agent-Windows-便携.zip";
 const zipPath = join(agentRoot, zipName);
 rmSync(zipPath, { force: true });
-try {
-  execSync(`cd "${out}" && zip -r -q -X "${zipPath}" .`, { stdio: "inherit", shell: "/bin/bash" });
-} catch {
-  console.log("系统 zip 不可用, 请手动把 dist-portable-win 文件夹压成 zip。");
-}
+await zipFolder(out, zipPath);
 console.log(`\n完成 → ${zipPath}`);
 console.log("把这个 zip 发给 Windows 客户即可(微信传文件, 别走浏览器下载)。");

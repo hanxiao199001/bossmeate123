@@ -165,14 +165,14 @@ export default function SettingsPage() {
 
   // 一键下载完整客户包 zip (含预构建 dist + 启动器 + 内置配对码) — 客户解压双击即用
   const [pkgLoading, setPkgLoading] = useState(false);
-  const handleDownloadClientPackage = async (platform: "windows" | "mac") => {
+  const handleDownloadClientPackage = async (platform: "windows" | "mac", portable = false) => {
     setPkgLoading(true);
     try {
       const token = useAuthStore.getState().token;
       const res = await fetch("/api/v1/agent-admin/client-package", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ origin: window.location.origin, platform }),
+        body: JSON.stringify({ origin: window.location.origin, platform, portable }),
       });
       if (!res.ok) {
         let msg = "生成客户包失败";
@@ -184,13 +184,15 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = platform === "windows" ? "bossmate-agent-Windows.zip" : "bossmate-agent-Mac.zip";
+      a.download = portable
+        ? (platform === "windows" ? "bossmate-agent-Windows-免装Node.zip" : "bossmate-agent-Mac-免装Node.zip")
+        : (platform === "windows" ? "bossmate-agent-Windows.zip" : "bossmate-agent-Mac.zip");
       document.body.appendChild(a);
       a.click();
       a.remove();
       // 延迟释放 blob URL: 立即 revoke 会让部分浏览器(尤其带安全扫描的)下载不收尾, 卡成 .crdownload
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      toast.success(`已下载 ${platform === "windows" ? "Windows" : "Mac"} 客户包 — 发给客户解压双击即可(已内置配对码)`);
+      toast.success(`已下载 ${platform === "windows" ? "Windows" : "Mac"} ${portable ? "免装Node " : ""}客户包 — 发给客户解压双击即可`);
     } catch {
       toast.error("下载失败, 请重试");
     } finally {
@@ -444,6 +446,29 @@ export default function SettingsPage() {
             >
               {pkgLoading ? "打包中…" : "下载客户包 · Mac"}
             </button>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                onClick={() => handleDownloadClientPackage("windows", true)}
+                disabled={pkgLoading}
+                className={`px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
+                  pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
+                }`}
+              >
+                {pkgLoading ? "生成中…" : "下载 · Windows(免装Node)"}
+              </button>
+              <button
+                onClick={() => handleDownloadClientPackage("mac", true)}
+                disabled={pkgLoading}
+                className={`px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
+                  pkgLoading ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
+                }`}
+              >
+                {pkgLoading ? "生成中…" : "下载 · Mac(免装Node)"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              「免装Node」版客户解压双击即用、无需装任何东西(推荐)。首次点击服务器要现打包, 约 1-2 分钟, 请耐心等; 之后秒下。
+            </p>
             <button
               onClick={handleDownloadClientConfig}
               className="ml-2 px-5 py-2 rounded-lg text-sm font-medium text-indigo-700 border border-indigo-200 bg-white hover:bg-indigo-50 active:scale-95 transition-all"

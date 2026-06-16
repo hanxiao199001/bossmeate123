@@ -13,6 +13,7 @@ import { execSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { zipFolder } from "./lib/zipdir.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const agentRoot = join(here, "..");
@@ -132,10 +133,6 @@ writeFileSync(join(out, "使用说明.txt"),
 console.log("6/6 打包 zip…");
 const zipPath = join(agentRoot, "bossmate-agent-Mac-便携.zip");
 rmSync(zipPath, { force: true });
-try {
-  execSync(`cd "${out}" && zip -r -q -X "${zipPath}" .`, { stdio: "inherit", shell: "/bin/bash" });
-} catch {
-  console.log("系统 zip 不可用, 请手动把 dist-portable-mac 文件夹压成 zip。");
-}
+await zipFolder(out, zipPath);
 console.log(`\n完成 → ${zipPath}`);
 console.log("把这个 zip 发给 Mac 客户即可(微信传文件)。Intel/Apple Silicon 都能跑。");
