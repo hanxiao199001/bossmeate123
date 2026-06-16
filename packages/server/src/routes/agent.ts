@@ -495,9 +495,11 @@ export async function agentAdminRoutes(app: FastifyInstance) {
         return reply.code(500).send({ code: "BUILD_FAILED", message: "便携包未生成" });
       }
       logger.info({ platform, zipPath }, "流式下发免装Node便携包");
+      // 响应头文件名必须 ASCII(中文会报 Invalid character in header); 真实下载名由前端 a.download 决定
+      const asciiName = platform === "windows" ? "bossmate-agent-windows-portable.zip" : "bossmate-agent-mac-portable.zip";
       return reply
         .header("Content-Type", "application/zip")
-        .header("Content-Disposition", `attachment; filename="${zipName}"`)
+        .header("Content-Disposition", `attachment; filename="${asciiName}"`)
         .send(createReadStream(zipPath));
     }
 
