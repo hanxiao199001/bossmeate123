@@ -2,11 +2,11 @@
  * PR #133 V2.5 Day 1 (5-12): 推荐 feed 数据层.
  *
  * 主流程 (RecommendationFeedPage 用):
- *  1. SELECT contents WHERE tenant_id = SYSTEM_RECOMMENDATION_TENANT_ID
+ *  1. SELECT contents WHERE tenant_id IN (user 自己租户, SYSTEM 共享池)
  *  2. LEFT JOIN journals ON c.metadata->>'journalId' (用 jsonb 拿期刊元数据)
  *  3. 过滤 status='generated' + created_at within last 7 days (新鲜)
  *  4. 排除 user 已 skip 的 (LEFT JOIN user_skip_log)
- *  5. ORDER BY journal.confidence DESC NULLS LAST, c.created_at DESC
+ *  5. ORDER BY c.created_at DESC (最新优先), journal.confidence DESC 次序
  *  6. LIMIT (default 10)
  *
  * Decision 3 (5-11 锁): 卡片封面用 journals.coverImageUrl + fallback emoji (前端处理).
@@ -64,7 +64,7 @@ export async function fetchRecommendations(input: FetchRecommendationsInput): Pr
     FROM contents c
     LEFT JOIN journals j ON j.id = NULLIF(c.metadata->>'journalId', '')::uuid
     ${skipJoin}
-    WHERE c.tenant_id = ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid
+    WHERE c.tenant_id IN (${input.userTenantId}::uuid, ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid)
       -- 老韩 6-15: 纳入 needs_review, 让待审内容也进工坊批量发布(发布时合规层兜底); 前端按 status 标'待审'
       AND c.status IN ('generated', 'needs_review')
       AND c.created_at > NOW() - INTERVAL '${sql.raw(`${FRESH_WINDOW_DAYS} days`)}'
@@ -72,7 +72,8 @@ export async function fetchRecommendations(input: FetchRecommendationsInput): Pr
       -- IS DISTINCT FROM 处理 NULL: 老文章无该字段 → NULL → NOT 'true' = 留, 新文章命中 warnings → 排除
       AND (c.metadata->>'hasWarnings' IS DISTINCT FROM 'true')
       ${skipFilter}
-    ORDER BY j.confidence DESC NULLS LAST, c.created_at DESC
+    -- 老韩6-15: 改为最新优先(原按置信度排会把刚生成的低置信刊挤出limit, 用户看不到新内容)
+    ORDER BY c.created_at DESC, j.confidence DESC NULLS LAST
     LIMIT ${limit}
   `);
 
