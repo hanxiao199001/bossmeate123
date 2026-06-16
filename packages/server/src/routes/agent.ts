@@ -186,10 +186,11 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         ...(nickname ? { realNickname: nickname } : {}),
         profileSyncedAt: new Date().toISOString(),
       };
-      const set: Record<string, unknown> = { metadata: meta, updatedAt: new Date() };
+      // 登录即绑定到该设备(原 PR-A16 是首次成功发布才绑, 会有多设备领单竞争; 登录即绑更准)
+      const set: Record<string, unknown> = { metadata: meta, agentDeviceId: device.id, updatedAt: new Date() };
       if (uid) set.accountId = uid;
       await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
-      logger.info({ accountId: id, nickname, uid }, "agent 回填账号真实信息");
+      logger.info({ accountId: id, nickname, uid, deviceId: device.id }, "agent 回填账号真实信息+绑定设备");
       return { code: "OK" };
     });
 
