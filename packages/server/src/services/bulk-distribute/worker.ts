@@ -8,10 +8,9 @@
  * worker INSERT 也用 ON CONFLICT UPDATE — 防 race / 重发场景.
  */
 import { Worker, Job } from "bullmq";
-import { sql, eq, and } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { contentPublishLog, platformAccounts, contents, agentPublishTasks } from "../../models/schema.js";
-import { buildPushCaptions } from "../publisher/draft-push.js";
+import { contentPublishLog } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { getRedisConnection } from "../task/queue.js";
 import { publishToAccounts } from "../publisher/index.js";
@@ -41,53 +40,21 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
       let errorMessage: string | null = null;
 
       try {
-        // 抖音/视频号: 登录态在客户本机, 服务器无凭证 → 派给本地 Agent(建任务, Agent 领单上传草稿), 不走服务器凭证发布
-        const [acct] = await db
-          .select({ id: platformAccounts.id, accountName: platformAccounts.accountName, platform: platformAccounts.platform })
-          .from(platformAccounts)
-          .where(and(eq(platformAccounts.id, accountId), eq(platformAccounts.tenantId, tenantId)))
-          .limit(1);
-        if (acct && (acct.platform === "douyin" || acct.platform === "wechat_video")) {
-          const [content] = await db
-            .select({ id: contents.id, type: contents.type, title: contents.title, body: contents.body })
-            .from(contents)
-            .where(eq(contents.id, contentId))
-            .limit(1);
-          const videoSource = content?.type === "video" ? content.body : null;
-          if (!content) {
-            errorMessage = "内容不存在";
-          } else if (!videoSource) {
-            errorMessage = "抖音/视频号需视频内容(请先生成数字人视频)";
-          } else {
-            const { captions, titles } = await buildPushCaptions(content.id, tenantId, [acct]);
-            await db.insert(agentPublishTasks).values({
-              tenantId,
-              contentId: content.id,
-              accountId: acct.id,
-              platform: acct.platform,
-              accountName: acct.accountName,
-              videoSource,
-              caption: captions[0] ?? content.title ?? "",
-              title: (titles[0] ?? content.title ?? "").slice(0, 200),
-            });
-            status = "success"; // 已派给 Agent(异步上传草稿), 进度计成功
-          }
+        // 6-16: 派发拆分已下沉到 publishToAccounts(抖音/视频号→本地Agent建任务; 公众号等→凭证发布),
+        // worker 不再自己判平台, 统一交给它(admin 信任 system 内容, forceOverride 跳 P2 风控)。
+        const results = await publishToAccounts({
+          contentId,
+          tenantId,
+          accountIds: [accountId],
+          forceOverride: true,
+          overrideReason: "bulk-distribute admin-trusted",
+        });
+        const r = results[0];
+        if (r?.success) {
+          status = "success";
+          mediaId = r.mediaId ?? null;
         } else {
-          // 公众号等凭证型平台: 服务器侧发布
-          const results = await publishToAccounts({
-            contentId,
-            tenantId,
-            accountIds: [accountId],
-            forceOverride: true, // admin 信任 system 内容, 跳 P2 风控
-            overrideReason: "bulk-distribute admin-trusted",
-          });
-          const r = results[0];
-          if (r?.success) {
-            status = "success";
-            mediaId = r.mediaId ?? null;
-          } else {
-            errorMessage = (r?.error || r?.message || "publish 失败").slice(0, 500);
-          }
+          errorMessage = (r?.error || r?.message || "publish 失败").slice(0, 500);
         }
       } catch (err) {
         errorMessage = (err instanceof Error ? err.message : String(err)).slice(0, 500);

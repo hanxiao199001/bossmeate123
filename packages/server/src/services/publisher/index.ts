@@ -19,6 +19,7 @@ import { XiaohongshuAdapter } from "./adapters/xiaohongshu.js";
 import { DouyinAdapter } from "./adapters/douyin.js";
 import { WechatVideoAdapter } from "./adapters/wechat-video.js";
 import { hydrateAccount, decryptCredentialField } from "./credentials-loader.js";
+import { AGENT_PLATFORMS, dispatchVideoToAgent } from "./agent-dispatch.js";
 import { auditContent, type AuditHit } from "../risk-control/audit-content.js";
 import {
   getLeadCaptureConfig,
@@ -212,9 +213,39 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     logger.info({ contentId, overrideReason: req.overrideReason, accountIds }, "P2 强制放行发布 (跳过 audit gate)");
   }
 
-  // 4. 并发发布到各账号
-  const results: PublishResult[] = await Promise.all(
-    targetAccounts.map(async (account) => {
+  // 6-16: 抖音/视频号登录态在客户本机、服务器无凭证 → 派给本地 Agent(建任务), 不走凭证发布。
+  // 拆分下沉到此, 所有调 /publish 的入口(工坊直发/今日/详情/workflow)默认都正确。
+  const agentTargets = targetAccounts.filter((a) => AGENT_PLATFORMS.has(a.platform));
+  const serverTargets = targetAccounts.filter((a) => !AGENT_PLATFORMS.has(a.platform));
+
+  let agentResults: PublishResult[] = [];
+  if (agentTargets.length > 0) {
+    try {
+      const tasks = await dispatchVideoToAgent({
+        content: { id: contentId, type: content.type, title: content.title, body: content.body },
+        tenantId,
+        accounts: agentTargets.map((a) => ({ id: a.id, accountName: a.accountName, platform: a.platform })),
+      });
+      const has = new Set(tasks.map((t) => t.accountId));
+      agentResults = agentTargets.map((a) => ({
+        accountId: a.id,
+        accountName: a.accountName,
+        platform: a.platform,
+        success: has.has(a.id),
+        mode: "draft_only" as const,
+        message: "已派单给本地 Agent，等待领取上传到草稿箱（需 Agent 已配对并在线）",
+      }));
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "派单失败";
+      agentResults = agentTargets.map((a) => ({
+        accountId: a.id, accountName: a.accountName, platform: a.platform, success: false, error,
+      }));
+    }
+  }
+
+  // 4. 并发发布到各账号(仅服务器凭证平台; 抖音/视频号已在上面派单)
+  const serverResults: PublishResult[] = await Promise.all(
+    serverTargets.map(async (account) => {
       const adapter = getAdapter(account.platform);
       if (!adapter) {
         return {
@@ -349,6 +380,8 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
       }
     })
   );
+
+  const results: PublishResult[] = [...agentResults, ...serverResults];
 
   // 4. 仅当至少一个账号真的"群发成功"(mode==='full') 才把 content 标 published。
   // draft_only 模式下内容只在微信草稿箱，真正发没发还没定，保留原状态。

@@ -43,7 +43,7 @@ import {
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
-import { buildPushCaptions } from "../services/publisher/draft-push.js";
+import { dispatchVideoToAgent } from "../services/publisher/agent-dispatch.js";
 
 type AgentDevice = typeof agentDevices.$inferSelect;
 
@@ -642,20 +642,11 @@ export async function agentAdminRoutes(app: FastifyInstance) {
         .where(and(inArray(platformAccounts.id, accountIds), eq(platformAccounts.tenantId, request.tenantId)));
       if (accts.length === 0) return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
 
-      const { captions, titles } = await buildPushCaptions(content.id, request.tenantId, accts);
-      const tasks = await db
-        .insert(agentPublishTasks)
-        .values(accts.map((a, i) => ({
-          tenantId: request.tenantId,
-          contentId: content.id,
-          accountId: a.id,
-          platform: a.platform,
-          accountName: a.accountName,
-          videoSource,
-          caption: captions[i] ?? captions[0] ?? content.title ?? "",
-          title: (titles[i] ?? titles[0] ?? content.title ?? "").slice(0, 200),
-        })))
-        .returning();
+      const tasks = await dispatchVideoToAgent({
+        content: { id: content.id, type: content.type, title: content.title, body: content.body },
+        tenantId: request.tenantId,
+        accounts: accts,
+      });
       logger.info({ contentId: content.id, count: tasks.length, tenantId: request.tenantId }, "agent 派单");
       return { code: "OK", data: { tasks } };
     } catch (err) {

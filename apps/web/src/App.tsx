@@ -10,24 +10,12 @@ import RegisterPage from "./pages/RegisterPage";
 import ContentDetailPage from "./pages/ContentDetailPage";
 import TodayPage from "./pages/TodayPage"; // PR-W2 今日驾驶舱
 import OnboardingWizardPage from "./pages/OnboardingWizardPage"; // PR-Y2 开通向导
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import KeywordsPage from "./pages/KeywordsPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import SettingsPage from "./pages/SettingsPage";
 import AccountsPage from "./pages/AccountsPage";
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import TemplatesPage from "./pages/TemplatesPage";
 import AdminJournalsAuditPage from "./pages/AdminJournalsAuditPage";
 import BatchProgressPage from "./pages/BatchProgressPage";
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import KnowledgePage from "./pages/KnowledgePage";
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import DataDashboardPage from "./pages/DataDashboardPage";
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import SalesPage from "./pages/SalesPage";
 import VideoCreationPage from "./pages/VideoCreationPage";
-// 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
-// import JournalsAdminPage from "./pages/JournalsAdminPage";
 import JournalDetailPage from "./pages/JournalDetailPage";
 import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
@@ -142,17 +130,6 @@ export default function App() {
       />
 
       {/* 6-16: /chat 整页下线 — 全站统一用右下角 ChatFab 抽屉, 整页无任何入口链接 */}
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      <Route
-        path="/keywords"
-        element={
-          <ProtectedRoute>
-            <KeywordsPage />
-          </ProtectedRoute>
-        }
-      />
-      */}
       {/* 6-16: 内容管理合并进内容工坊「全部」标签; /content 列表重定向到工坊(详情 /content/:id 不变) */}
       <Route path="/content" element={<Navigate to="/workbench" replace />} />
       <Route
@@ -165,31 +142,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <DataDashboardPage />
-          </ProtectedRoute>
-        }
-      />
-      */}
-
-      {/* PR Q.2: 内容模板管理 admin UI */}
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      <Route
-        path="/templates"
-        element={
-          <ProtectedRoute>
-            <TemplatesPage />
-          </ProtectedRoute>
-        }
-      />
-      */}
 
       {/* PR 2 (5-9 早): 期刊数据审计页 (admin only) */}
       <Route
@@ -215,18 +167,6 @@ export default function App() {
         }
       />
 
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      <Route
-        path="/knowledge"
-        element={
-          <ProtectedRoute>
-            <KnowledgePage />
-          </ProtectedRoute>
-        }
-      />
-      */}
-
       <Route
         path="/settings"
         element={
@@ -250,20 +190,6 @@ export default function App() {
         }
       />
 
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      {import.meta.env.VITE_SALES_ENABLED === "true" && (
-        <Route
-          path="/sales"
-          element={
-            <ProtectedRoute>
-              <SalesPage />
-            </ProtectedRoute>
-          }
-        />
-      )}
-      */}
-
       <Route
         path="/video/create"
         element={
@@ -285,19 +211,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
-      {/* Day 2 PR B: admin 期刊管理（owner/admin only） */}
-      {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
-      {/*
-      <Route
-        path="/admin/journals"
-        element={
-          <ProtectedAdminRoute>
-            <JournalsAdminPage />
-          </ProtectedAdminRoute>
-        }
-      />
-      */}
 
       {/* PR #125: 期刊详情页 — 修 audit 页 [👁️ 查看] 跳首页 bug */}
       <Route
