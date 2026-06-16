@@ -679,8 +679,8 @@ export default function ContentDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
         <p className="text-gray-500">内容不存在</p>
-        <Link to="/content" className="text-blue-600 hover:text-blue-700 text-sm">
-          返回内容列表
+        <Link to="/workbench" className="text-blue-600 hover:text-blue-700 text-sm">
+          返回内容工坊
         </Link>
       </div>
     );

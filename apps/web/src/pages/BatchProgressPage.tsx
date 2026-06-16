@@ -118,7 +118,7 @@ export default function BatchProgressPage() {
       {/* 6-11 施工包C2-a (审计2.5): 手写顶栏已删, 导航走 MainLayout 侧边栏; 返回链接+标题+下载按钮迁到内容区顶部 */}
       <div className="max-w-6xl mx-auto py-6 px-6">
         <div className="mb-6">
-          <Link to="/content" className="text-indigo-600 hover:text-indigo-500 text-sm font-medium">← 返回内容列表</Link>
+          <Link to="/workbench" className="text-indigo-600 hover:text-indigo-500 text-sm font-medium">← 返回内容工坊</Link>
           <PageHeader
             className="mt-2"
             title="批量生成进度"

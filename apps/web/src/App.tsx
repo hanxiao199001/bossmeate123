@@ -7,9 +7,7 @@ import ProtectedAdminRoute from "./components/ProtectedAdminRoute";
 // 页面
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
-import ChatPage from "./pages/ChatPage";
 import ContentDetailPage from "./pages/ContentDetailPage";
-import DashboardPage from "./pages/DashboardPage";
 import TodayPage from "./pages/TodayPage"; // PR-W2 今日驾驶舱
 import OnboardingWizardPage from "./pages/OnboardingWizardPage"; // PR-Y2 开通向导
 // 6-10 老韩拍板下线(审计3.1/3.2), 路由已注释
@@ -73,7 +71,7 @@ export default function App() {
         element={
           <ProtectedRoute>
             <MainLayout>
-              <DashboardPage />
+              <TodayPage />
             </MainLayout>
           </ProtectedRoute>
         }
@@ -104,17 +102,8 @@ export default function App() {
         }
       />
 
-      {/* PR-W2: 今日驾驶舱 — 老板每日工作流统一入口 */}
-      <Route
-        path="/today"
-        element={
-          <ProtectedRoute>
-            <MainLayout>
-              <TodayPage />
-            </MainLayout>
-          </ProtectedRoute>
-        }
-      />
+      {/* 6-16: 今日驾驶舱已升为首页(/); /today 保留重定向防老书签 */}
+      <Route path="/today" element={<Navigate to="/" replace />} />
 
       {/* 5-21 P3 销售雷达 (老板视角 hero + 5 tab + leads list) */}
       <Route
@@ -152,26 +141,7 @@ export default function App() {
         }
       />
 
-      <Route
-        path="/chat"
-        element={
-          <ProtectedRoute>
-            <MainLayout>
-              <ChatPage />
-            </MainLayout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/chat/:conversationId"
-        element={
-          <ProtectedRoute>
-            <MainLayout>
-              <ChatPage />
-            </MainLayout>
-          </ProtectedRoute>
-        }
-      />
+      {/* 6-16: /chat 整页下线 — 全站统一用右下角 ChatFab 抽屉, 整页无任何入口链接 */}
       {/* 6-10 老韩拍板下线(审计3.1/3.2), 代码保留可随时恢复 */}
       {/*
       <Route

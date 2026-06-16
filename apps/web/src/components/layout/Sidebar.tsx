@@ -18,7 +18,6 @@ import {
   IconFileText,
   IconUsers,
   IconLogOut,
-  IconSparkles,
   type IconProps,
 } from "../ui/Icons";
 
@@ -33,8 +32,7 @@ interface NavItem {
 // 6-14 目录重构: 按首页"产出→处理→效果"日常闭环分三组, 心智模型与首页引导对齐。
 // 每日运营 — 日常内容生产闭环
 const DAILY_NAV: NavItem[] = [
-  { to: "/", icon: IconHome, label: "首页", matchPrefix: "" }, // 总览/入口, 精确匹配 /
-  { to: "/today", icon: IconSparkles, label: "今日待办", matchPrefix: "/today" }, // PR-W2 驾驶舱: 干活的地方, 与首页分工
+  { to: "/", icon: IconHome, label: "今日", matchPrefix: "" }, // 6-16 首页=今日驾驶舱(合并原首页+今日待办), 精确匹配 /
   { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench" },
   { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar" },
   { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts" }, // 对齐首页"去账号矩阵派发"

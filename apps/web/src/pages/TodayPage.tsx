@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
+import { useAuthStore } from "../hooks/useAuthStore";
+import Greeting from "../components/dashboard/Greeting";
 
 interface TodayContent {
   id: string;
@@ -80,6 +82,7 @@ function friendlyError(raw: string | null, status: string): string {
 }
 
 export default function TodayPage() {
+  const user = useAuthStore((s) => s.user);
   const [data, setData] = useState<TodayData | null>(null);
   const [loading, setLoading] = useState(true);
   const [budgetEditing, setBudgetEditing] = useState(false);
@@ -291,6 +294,7 @@ export default function TodayPage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">
+      <Greeting userName={user?.name} />
       {/* 头部: 日期 + 花费 + 预算 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -608,7 +612,7 @@ export default function TodayPage() {
       <div className="bg-white border border-gray-100 rounded-xl p-4">
         <h2 className="text-sm font-semibold text-gray-800 mb-2">本地 Agent 发布任务 ({data.agentTasks.length})</h2>
         {data.agentTasks.length === 0 ? (
-          <div className="text-sm text-gray-400">今日暂无发布任务 — 去 <Link to="/content" className="text-indigo-600 hover:underline">内容管理</Link> 挑内容派发</div>
+          <div className="text-sm text-gray-400">今日暂无发布任务 — 去 <Link to="/workbench" className="text-indigo-600 hover:underline">内容工坊</Link> 挑内容派发</div>
         ) : (
           <div className="space-y-1">
             {data.agentTasks.map((t) => {
