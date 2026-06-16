@@ -8,6 +8,7 @@ export interface PreviewContent {
   id: string;
   title: string | null;
   body: string | null;
+  type?: string | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -35,7 +36,9 @@ export default function ContentPreviewPane({ content, loading }: ContentPreviewP
   }
 
   const journalName = (content.metadata as { journalName?: string } | null | undefined)?.journalName;
-  const preview = content.body ? stripHtml(content.body).slice(0, 800) : "";
+  const isVideo = content.type === "video";
+  const coverUrl = (content.metadata as { coverUrl?: string } | null | undefined)?.coverUrl;
+  const preview = content.body && !isVideo ? stripHtml(content.body).slice(0, 800) : "";
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -45,11 +48,30 @@ export default function ContentPreviewPane({ content, loading }: ContentPreviewP
           <p className="text-sm text-gray-500 mb-4">期刊：{journalName}</p>
         )}
         <div className="border-t border-gray-200 pt-4 mb-4" />
-        <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-          {preview || "(暂无正文内容)"}
-        </p>
-        {content.body && content.body.length > 800 && (
-          <p className="text-xs text-gray-400 mt-3">… 前 800 字预览，完整编辑请点下方按钮</p>
+        {isVideo ? (
+          <div className="bg-black rounded-xl p-4 flex justify-center">
+            <div className="w-full max-w-md">
+              {content.body ? (
+                <video src={content.body} controls poster={coverUrl} className="w-full rounded-lg" />
+              ) : (
+                <p className="text-gray-400 text-sm text-center py-10">(视频地址缺失)</p>
+              )}
+              {content.body && (
+                <div className="mt-3 text-center">
+                  <a href={content.body} download className="text-xs text-indigo-300 hover:text-indigo-200">⬇ 下载视频</a>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+              {preview || "(暂无正文内容)"}
+            </p>
+            {content.body && content.body.length > 800 && (
+              <p className="text-xs text-gray-400 mt-3">… 前 800 字预览，完整编辑请点下方按钮</p>
+            )}
+          </>
         )}
         <div className="mt-6">
           <Link
