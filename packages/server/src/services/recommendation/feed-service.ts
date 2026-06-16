@@ -68,9 +68,8 @@ export async function fetchRecommendations(input: FetchRecommendationsInput): Pr
       -- 老韩 6-15: 纳入 needs_review, 让待审内容也进工坊批量发布(发布时合规层兜底); 前端按 status 标'待审'
       AND c.status IN ('generated', 'needs_review')
       AND c.created_at > NOW() - INTERVAL '${sql.raw(`${FRESH_WINDOW_DAYS} days`)}'
-      -- 5-23 PR #162: filter 有 body-level fact warnings 的 (validator 标 hasWarnings=true)
-      -- IS DISTINCT FROM 处理 NULL: 老文章无该字段 → NULL → NOT 'true' = 留, 新文章命中 warnings → 排除
-      AND (c.metadata->>'hasWarnings' IS DISTINCT FROM 'true')
+      -- 老韩6-15: 原 PR#162 把 hasWarnings=true 的直接排除出 feed, 导致刚生成的单篇文章(过校验被标警告)看不到、无法批量发布。
+      -- 改为不排除, 仍返回 metadata.hasWarnings, 前端标"⚠️校验"让用户自己判断(发布时合规层仍兜底)。
       ${skipFilter}
     -- 老韩6-15: 改为最新优先(原按置信度排会把刚生成的低置信刊挤出limit, 用户看不到新内容)
     ORDER BY c.created_at DESC, j.confidence DESC NULLS LAST

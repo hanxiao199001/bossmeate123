@@ -85,6 +85,9 @@ export default function ContentListItem({
           {item.status === "needs_review" && (
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">待审</span>
           )}
+          {(item.metadata as { hasWarnings?: boolean } | null | undefined)?.hasWarnings && (
+            <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700">⚠️校验</span>
+          )}
           {item.title || "(无标题)"}
         </p>
         {meta.length > 0 && (
