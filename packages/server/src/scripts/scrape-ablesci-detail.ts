@@ -137,12 +137,21 @@ function parseReviewCycle(text: string): string | null {
   const m = text.match(/(?:平均审稿速度|审稿速度|审稿周期|审稿时长)[\s:：]+([^\n。;；]+?)(?=\s{2,}|平均录用|录用比例|录用率|接受率|$)/);
   if (!m) return null;
   let v = m[1].trim().replace(/\s+/g, " ");
-  // 去前缀冗余: "平均 3 月" 保留; "约 6 周" 保留; 但 ablesci 偶尔带 HTML 标签碎屑
   v = v.replace(/<[^>]+>/g, "").trim();
+  // 6-16 规整: ablesci HTML 在字段值前夹了中间短语(如"网友分享经验："), 剥掉避免存成长句
+  v = v.replace(/网友分享经验[:：]?/g, "").replace(/网友分享[:：]?/g, "").replace(/经验[:：]/g, "").trim();
   if (!v) return null;
-  if (v.length > 48) v = v.slice(0, 48);
   // 必须含 月/周/天/年/month/week/day, 否则可能误抓
   if (!/月|周|天|年|month|week|day/i.test(v)) return null;
+  // 抽取干净时长: "X月/周/天/年"(含小数/范围), 丢掉"平均"等前缀噪音, 整数去掉 .0
+  const dur = v.match(/(\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?)\s*(个?月|周|天|年|months?|weeks?|days?)/i);
+  if (dur) {
+    let num = dur[1].replace(/\s+/g, "");
+    if (!/[-~]/.test(num)) { const n = parseFloat(num); if (Number.isInteger(n)) num = String(n); }
+    v = `${num}${dur[2]}`;
+  } else if (v.length > 20) {
+    v = v.slice(0, 20);
+  }
   return v;
 }
 
