@@ -362,17 +362,29 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
   return null;
 }
 
-/** 选一本 定位+学科 且 冷却期内未用过 的刊(随机)。无则 null。 */
+/** 选一本 定位+学科 的刊。逐级兜底保证篇数=配置:
+ *  ① 范围+学科+15天新刊(最佳) → ② 去冷却(同范围同学科里取最久未用) → ③ 去学科(保范围+新刊)
+ *  → ④ 仅范围(最久未用) → ⑤ 去范围(仅新刊) → ⑥ 全放开(最久未用)。
+ *  根因: 国内刊 discipline 大面积为空 + 小学科15天冷却耗尽, 严选会大量空名额; 兜底让每个名额都出刊。 */
 async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
-  const conds = [
-    eq(journals.status, "active"),
-    sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`,
-    sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`,
-  ];
-  const sc = journalScopeCondition(scope);
-  if (sc) conds.push(sc);
-  const [j] = await db.select({ id: journals.id }).from(journals).where(and(...conds)).orderBy(sql`random()`).limit(1);
-  return j?.id ?? null;
+  const active = eq(journals.status, "active");
+  const sc = journalScopeCondition(scope); // SQL | null
+  const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
+  const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
+  // 去冷却的层级按"最久未用"优先, 保证轮换(而非反复用同几本)
+  const lru = sql`(SELECT max(ju.used_at) FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId}) ASC NULLS FIRST`;
+  const rnd = sql`random()`;
+  const pick = async (conds: Array<unknown>, order: unknown): Promise<string | null> => {
+    const cs = conds.filter(Boolean) as Parameters<typeof and>;
+    const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
+    return j?.id ?? null;
+  };
+  return (await pick([active, sc, disc, fresh], rnd))
+    ?? (await pick([active, sc, disc], lru))
+    ?? (await pick([active, sc, fresh], rnd))
+    ?? (await pick([active, sc], lru))
+    ?? (await pick([active, fresh], rnd))
+    ?? (await pick([active], lru));
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
