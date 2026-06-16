@@ -25,6 +25,8 @@ const LAUNCH_ARGS = [
   "--disable-dev-shm-usage",
   "--hide-scrollbars",
   "--window-size=1366,900",
+  // 6-16 抖音反滑块: 去掉 navigator.webdriver / 自动化特征, 减少风控弹滑块
+  "--disable-blink-features=AutomationControlled",
 ];
 
 // 用系统自带浏览器(免装 Node 便携版需要): Windows→Edge, Mac→Edge/Chrome。
@@ -92,6 +94,8 @@ export async function launchAccountBrowser(accountId: string): Promise<Browser> 
       headless: false,
       userDataDir: dir,
       args: LAUNCH_ARGS,
+      // 去掉 "正由自动测试软件控制" 横幅 + --enable-automation 标记(抖音据此弹滑块)
+      ignoreDefaultArgs: ["--enable-automation"],
       defaultViewport: { width: 1366, height: 900 },
       // 便携版: 用系统 Edge/Chrome; 未找到则 undefined → 回退自带 Chromium
       ...(SYSTEM_BROWSER ? { executablePath: SYSTEM_BROWSER } : {}),
