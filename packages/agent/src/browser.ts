@@ -3,18 +3,25 @@
  * 扫码与推送同一浏览器环境, 登录态原生在磁盘上, 不做 cookie 移植
  * (抖音 cookie 移植必被风控踢 — server browser-session.ts 实测结论)。
  */
-import puppeteerExtraImport from "puppeteer-extra";
+import addExtraImport from "puppeteer-extra";
+import rebrowserImport from "rebrowser-puppeteer";
 import StealthPluginImport from "puppeteer-extra-plugin-stealth";
-import type { Browser, Page } from "puppeteer";
+import type { Browser, Page } from "rebrowser-puppeteer";
 import { mkdir, readlink, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { profileDir } from "./config.js";
 import { logger } from "./log.js";
 
+// 显式锁定 rebrowser 的 CDP Runtime.enable 修复模式(默认即 addBinding, 显式写防上游改默认)
+process.env.REBROWSER_PATCHES_RUNTIME_FIX_MODE ??= "addBinding";
+
 // CJS interop unwrap — 与 server browser-session.ts 同 idiom (@alicloud 同坑见 MEMORY)
-const puppeteerExtra: any = (puppeteerExtraImport as any)?.default ?? puppeteerExtraImport;
+const rebrowser: any = (rebrowserImport as any)?.default ?? rebrowserImport;
 const StealthPlugin: () => any = (StealthPluginImport as any)?.default ?? StealthPluginImport;
+// addExtra 把 stealth 挂到 rebrowser 内核上(rebrowser 补 CDP 层,stealth 补 JS 层,互补)
+const addExtra: any = (addExtraImport as any)?.default ?? addExtraImport;
+const puppeteerExtra: any = addExtra(rebrowser);
 puppeteerExtra.use(StealthPlugin());
 
 // launch args 参考 server browser-session.ts LAUNCH_ARGS (窗口尺寸改 1366x900 与推送视口一致)

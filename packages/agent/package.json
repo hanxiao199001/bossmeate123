@@ -13,7 +13,7 @@
     "start": "node dist/cli.js run"
   },
   "dependencies": {
-    "puppeteer": "^23.11.0",
+    "rebrowser-puppeteer": "23.10.3",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },

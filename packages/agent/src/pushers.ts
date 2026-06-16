@@ -10,7 +10,7 @@
  */
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Page } from "puppeteer";
+import type { Page } from "rebrowser-puppeteer";
 import { logger } from "./log.js";
 import { SCREENSHOTS_DIR } from "./config.js";
 

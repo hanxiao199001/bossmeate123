@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { mkdir, stat, unlink } from "node:fs/promises";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import type { Browser, Page } from "puppeteer";
+import type { Browser, Page } from "rebrowser-puppeteer";
 import {
   CONFIG_PATH,
   SCREENSHOTS_DIR,
@@ -259,10 +259,10 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
     } else {
       keptBrowsers.delete(task.accountId); // 已断开的记录清掉
       browser = await launchAccountBrowser(task.accountId);
-      page = await openPlatformHome(browser, task.platform);
+      page = await openPlatformHome(browser!, task.platform);
     }
 
-    if (!(await isLoggedIn(page, task.platform))) {
+    if (!(await isLoggedIn(page!, task.platform))) {
       await api.reportResult(task.id, "login_expired", "Agent 本机浏览器登录态失效");
       warnLoginExpired(task);
       return;
@@ -276,12 +276,12 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
 
     const pusher = PLATFORM_PUSHERS[task.platform];
     if (!pusher) throw new Error(`平台 ${task.platform} 暂不支持本地推草稿`);
-    const result = await pusher({ page, videoPath, caption: task.caption ?? "", title: task.title ?? "" });
+    const result = await pusher({ page: page!, videoPath, caption: task.caption ?? "", title: task.title ?? "" });
 
     if (result && result.manual) {
       // 半自动(抖音): 已填好停在发布页, 浏览器保持打开让用户点发布。不关浏览器。
       keepBrowserOpen = true;
-      keptBrowsers.set(task.accountId, browser);
+      keptBrowsers.set(task.accountId, browser!);
       await api.reportResult(task.id, "manual_pending", result.message ?? "已填好, 请人工点发布");
       logger.warn(`🟡 任务 ${task.id.slice(0, 8)}… [${label}] ${task.accountName}: 已填好停在发布页 — 请在浏览器点【发布】, 完成后关闭该窗口`);
       notify("BossMate: 待你点发布", `[${label}] ${task.accountName} 内容已填好, 去浏览器窗口点【发布】(可能要过一次短信验证)`);
