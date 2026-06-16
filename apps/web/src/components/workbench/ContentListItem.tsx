@@ -6,6 +6,7 @@
 export interface WorkbenchListItem {
   id: string;
   title: string | null;
+  type?: string | null; // article=图文 / video=视频, 用于列表类型标
   status?: string | null; // 老韩6-15: needs_review 标'待审'
   metadata?: Record<string, unknown> | null;
   createdAt?: string | null; // PR #186: 生成时间 (列表项显示相对时间)
@@ -82,6 +83,11 @@ export default function ContentListItem({
       )}
       <button onClick={onClick} className="flex-1 min-w-0 text-left">
         <p className={`text-sm font-medium line-clamp-2 ${selected ? "text-blue-900" : "text-gray-900"}`}>
+          {item.type === "video" ? (
+            <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-100 text-rose-700">🎬 视频</span>
+          ) : (
+            <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-100 text-sky-700">📄 图文</span>
+          )}
           {item.status === "needs_review" && (
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">待审</span>
           )}
