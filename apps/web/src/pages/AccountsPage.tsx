@@ -9,6 +9,8 @@ interface Account {
   id: string;
   platform: string;
   accountName: string;
+  accountId?: string | null; // 平台真实账号ID(抖音号等), 扫码登录回填
+  metadata?: { realNickname?: string } | null; // 含扫码回填的真实昵称
   credentials: Record<string, unknown>;
   groupName?: string;
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
@@ -725,6 +727,11 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                           <div className="flex-1">
                             <div className="flex items-center gap-3 mb-2">
                               <h4 className="font-medium text-gray-900">{account.accountName}</h4>
+                              {(account.metadata?.realNickname || account.accountId) && (
+                                <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full" title="扫码登录回填的真实账号">
+                                  实登: {account.metadata?.realNickname || ""}{account.accountId ? ` (${account.accountId})` : ""}
+                                </span>
+                              )}
                               <span
                                 className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
                                   STATUS_COLORS[account.status] || "bg-gray-100 text-gray-600"

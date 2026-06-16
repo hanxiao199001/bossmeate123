@@ -114,6 +114,32 @@ export async function launchAccountBrowser(accountId: string): Promise<Browser> 
   return browser;
 }
 
+/** 登录成功后抓取平台真实账号信息(昵称 + 平台账号ID), 用于回填账号管理防张冠李戴。
+ *  抓不到不报错(返回空), 纯文本正则提取, 抗 DOM 改版。 */
+export async function scrapeAccountProfile(page: Page, platform: string): Promise<{ nickname?: string; uid?: string }> {
+  try {
+    const txt = (await page
+      .evaluate(() => {
+        const doc = (globalThis as any).document;
+        return doc?.body?.innerText || "";
+      })
+      .catch(() => "")) as string;
+    if (!txt) return {};
+    if (platform === "douyin") {
+      const uid = txt.match(/抖音号[:：]\s*([0-9A-Za-z_.\-]{4,32})/)?.[1];
+      let nickname: string | undefined;
+      const m = txt.match(/([^\n\r|｜]{2,24})\s*[|｜]\s*抖音号[:：]/);
+      if (m) nickname = m[1].trim();
+      return { nickname, uid };
+    }
+    if (platform === "wechat_video") {
+      const uid = txt.match(/视频号(?:ID|账号|号)?[:：]?\s*([A-Za-z0-9_\-]{4,})/)?.[1];
+      return { uid };
+    }
+  } catch { /* noop */ }
+  return {};
+}
+
 /** 打开平台主页, 留 3s 渲染。默认复用首个标签页; newTab=true 时新开标签页
  *  (复用半自动任务留下的浏览器时必须新开, 不能动用户待点发布的那个标签)。 */
 export async function openPlatformHome(browser: Browser, platform: string, newTab = false): Promise<Page> {

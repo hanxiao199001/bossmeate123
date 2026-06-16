@@ -159,6 +159,36 @@ export async function agentPublishRoutes(app: FastifyInstance) {
     });
 
     /**
+     * POST /agent/accounts/:id/profile {nickname?, uid?} — 登录成功后回填平台真实账号信息。
+     * 解决"账号管理标签(如'叫老肖就行')与实际登录的抖音号对不上"。
+     * 写 accountId(平台账号ID) + metadata.realNickname; 账号须属于该设备租户。
+     */
+    authed.post("/agent/accounts/:id/profile", async (request, reply) => {
+      const device = request.agentDevice!;
+      const { id } = request.params as { id: string };
+      const b = (request.body ?? {}) as { nickname?: string; uid?: string };
+      const nickname = b.nickname ? String(b.nickname).slice(0, 100) : undefined;
+      const uid = b.uid ? String(b.uid).slice(0, 100) : undefined;
+      if (!nickname && !uid) return reply.code(400).send({ code: "BAD_REQUEST", message: "nickname/uid 至少一个" });
+      const [acc] = await db
+        .select({ id: platformAccounts.id, metadata: platformAccounts.metadata })
+        .from(platformAccounts)
+        .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, device.tenantId)))
+        .limit(1);
+      if (!acc) return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+      const meta = {
+        ...((acc.metadata as Record<string, unknown>) ?? {}),
+        ...(nickname ? { realNickname: nickname } : {}),
+        profileSyncedAt: new Date().toISOString(),
+      };
+      const set: Record<string, unknown> = { metadata: meta, updatedAt: new Date() };
+      if (uid) set.accountId = uid;
+      await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
+      logger.info({ accountId: id, nickname, uid }, "agent 回填账号真实信息");
+      return { code: "OK" };
+    });
+
+    /**
      * POST /agent/metrics — PR-FW Agent 读数据回报。
      * Agent 用登录浏览器读各平台创作者后台的阅读/播放数据, 批量回报 → content_metrics。
      * body: { items: [{ contentId, platform, views?, likes?, shares?, followers?, inquiries? }] }

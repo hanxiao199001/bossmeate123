@@ -122,6 +122,11 @@ export class AgentApi {
     await pipeline(Readable.fromWeb(resp.body as any), createWriteStream(destPath));
   }
 
+  /** 登录成功后回填平台真实账号信息(昵称/账号ID) → 更新账号管理 */
+  async reportAccountProfile(accountId: string, profile: { nickname?: string; uid?: string }): Promise<void> {
+    await this.request(`/agent/accounts/${accountId}/profile`, { method: "POST", body: profile });
+  }
+
   async reportResult(taskId: string, status: ResultStatus, error?: string): Promise<void> {
     await this.request(`/agent/tasks/${taskId}/result`, {
       method: "POST",

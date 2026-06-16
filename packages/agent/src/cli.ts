@@ -24,7 +24,7 @@ import {
 } from "./config.js";
 import { AgentApi, ApiError, type AgentAccount, type AgentTask } from "./api.js";
 import { logger } from "./log.js";
-import { isLoggedIn, launchAccountBrowser, openPlatformHome } from "./browser.js";
+import { isLoggedIn, launchAccountBrowser, openPlatformHome, scrapeAccountProfile } from "./browser.js";
 import { PLATFORM_PUSHERS } from "./pushers.js";
 import { notify } from "./notify.js";
 import { cmdInstallService, cmdServiceStatus, cmdUninstallService } from "./service.js";
@@ -87,7 +87,21 @@ async function cmdPair(args: string[]): Promise<void> {
 
 // ===== login =====
 /** 单账号扫码: 开有头浏览器到平台主页, 用户手机扫码, 3s 一拍轮询登录判定 */
-async function loginAccount(account: AgentAccount): Promise<boolean> {
+/** 登录成功后抓真实账号信息回填(失败忽略) */
+async function reportProfile(page: Page, account: AgentAccount, api?: AgentApi): Promise<void> {
+  if (!api) return;
+  try {
+    const prof = await scrapeAccountProfile(page, account.platform);
+    if (prof.uid || prof.nickname) {
+      await api.reportAccountProfile(account.id, prof);
+      logger.info(`[${platformLabel(account.platform)}] 账号信息已回填: ${prof.nickname ?? ""}${prof.uid ? " (" + prof.uid + ")" : ""}`);
+    }
+  } catch (err) {
+    logger.warn(`账号信息回填失败(忽略): ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function loginAccount(account: AgentAccount, api?: AgentApi): Promise<boolean> {
   const label = platformLabel(account.platform);
   logger.info(`[${label}] ${account.accountName}: 正在打开浏览器, 请用该账号绑定的手机 App 扫码登录...`);
   let browser: Browser | null = null;
@@ -96,6 +110,7 @@ async function loginAccount(account: AgentAccount): Promise<boolean> {
     const page = await openPlatformHome(browser, account.platform);
     if (await isLoggedIn(page, account.platform)) {
       logger.info(`[${label}] ${account.accountName}: 本地已是登录态, 无需重新扫码`);
+      await reportProfile(page, account, api);
       return true;
     }
     logger.info(`[${label}] ${account.accountName}: 等待扫码 (最长 ${LOGIN_WAIT_MS / 60_000} 分钟, 中途关浏览器即放弃)...`);
@@ -109,6 +124,7 @@ async function loginAccount(account: AgentAccount): Promise<boolean> {
       if (await isLoggedIn(page, account.platform)) {
         await sleep(2_000); // 等登录后跳转/cookie 落稳
         logger.info(`[${label}] ${account.accountName}: 登录成功, 登录态已落在本机 profile`);
+        await reportProfile(page, account, api);
         return true;
       }
     }
@@ -154,7 +170,7 @@ async function cmdLogin(args: string[]): Promise<void> {
 
   let ok = 0;
   for (const account of selected) {
-    if (await loginAccount(account)) ok++;
+    if (await loginAccount(account, api)) ok++;
   }
   logger.info(`登录完成: 成功 ${ok}/${selected.length}。下一步: bossmate-agent run (开始领任务)`);
 }
