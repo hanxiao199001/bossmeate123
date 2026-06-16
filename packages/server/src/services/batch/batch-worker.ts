@@ -13,9 +13,9 @@
  * 强依赖 P0 状态机。
  */
 import { Worker, Job } from "bullmq";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, isNull } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { batchRows, contents } from "../../models/schema.js";
+import { batchRows, contents, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import {
   initialStatusFields,
@@ -196,6 +196,22 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           await transitionStatus(content.id, "generating", "failed", { errorMessage: msg });
         } catch {}
         await updateRowProgress(rowId, "failed", { articleId: content.id, errorMessage: msg });
+
+        // 6-17 #1: 生成彻底失败 → 回滚 daily-cron 入队时写的"占位"冷却(provisional, contentId 为空),
+        // 否则这本刊被白锁 JOURNAL_COOLDOWN_DAYS 天却零产出(memory「今日推荐没新内容」根因)。
+        // 只删 contentId 为空的占位行; roundup/成功内容写的冷却(带 contentId)不动。
+        if (row.journalId) {
+          try {
+            await db.delete(journalUsage).where(and(
+              eq(journalUsage.tenantId, tenantId),
+              eq(journalUsage.journalId, row.journalId),
+              isNull(journalUsage.contentId),
+            ));
+            logger.info({ rowId, journalId: row.journalId }, "#1 生成失败, 已回滚占位冷却(该刊重新可选)");
+          } catch (e) {
+            logger.warn({ rowId, journalId: row.journalId, e }, "#1 回滚 journal_usage 失败(非阻塞)");
+          }
+        }
       }
     },
     {

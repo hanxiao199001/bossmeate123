@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { platformAccounts, contentPublishLog } from "../models/schema.js";
+import { platformAccounts, contentPublishLog, agentDevices } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
@@ -82,6 +82,17 @@ export async function accountRoutes(app: FastifyInstance) {
         .where(and(...conditions))
         .orderBy(desc(platformAccounts.updatedAt));
 
+      // 6-17 #4: 抖音/视频号发布走本地 Agent → "能不能发"取决于绑定设备是否在线, 而非服务器扫码态。
+      const devs = await db
+        .select({ id: agentDevices.id, status: agentDevices.status, lastSeenAt: agentDevices.lastSeenAt })
+        .from(agentDevices)
+        .where(eq(agentDevices.tenantId, request.tenantId));
+      const nowMs = Date.now();
+      const onlineDevs = new Set(
+        devs.filter((d) => d.status === "active" && d.lastSeenAt && nowMs - d.lastSeenAt.getTime() < 90_000).map((d) => d.id),
+      );
+      const agentOnlineOf = (a: typeof accounts[number]) => (a.agentDeviceId ? onlineDevs.has(a.agentDeviceId) : false);
+
       // 解密并脱敏凭证信息
       const masked = accounts.map(a => {
         try {
@@ -92,6 +103,7 @@ export async function accountRoutes(app: FastifyInstance) {
             ...a,
             loginState: undefined, // PR-S1: 加密登录态不出接口
             credentials: maskCredentials(parsedCreds),
+            agentOnline: agentOnlineOf(a),
           };
         } catch (err) {
           // 如果解密失败，使用原始凭证直接脱敏（向后兼容）
@@ -100,6 +112,7 @@ export async function accountRoutes(app: FastifyInstance) {
             ...a,
             loginState: undefined,
             credentials: maskCredentials(a.credentials as Record<string, any>),
+            agentOnline: agentOnlineOf(a),
           };
         }
       });

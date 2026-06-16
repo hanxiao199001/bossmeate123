@@ -8,8 +8,9 @@
  * 现在统一: publishToAccounts(/publish) 与 /agent-admin/dispatch 都调这里,
  * 「视频→Agent / 文章→服务器」的判定只此一处 (AGENT_PLATFORMS)。
  */
+import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
-import { agentPublishTasks } from "../../models/schema.js";
+import { agentPublishTasks, agentDevices } from "../../models/schema.js";
 import { buildPushCaptions } from "./draft-push.js";
 
 /** 登录态在客户本机、服务器无凭证的平台 → 走本地 Agent 推草稿, 不走服务器凭证发布 */
@@ -32,6 +33,10 @@ export async function dispatchVideoToAgent(params: {
   if (accounts.length === 0) return [];
   const videoSource = content.type === "video" ? content.body : null;
   if (!videoSource) throw new Error("内容不是视频或缺少视频地址，无法派单给本地 Agent");
+  // 6-17 #8: 没有已配对的 active 设备就别空建任务(否则前端报"等待领取"实则石沉大海, 任务永远无人领)
+  const [dev] = await db.select({ id: agentDevices.id }).from(agentDevices)
+    .where(and(eq(agentDevices.tenantId, tenantId), eq(agentDevices.status, "active"))).limit(1);
+  if (!dev) throw new Error("没有已配对的 Agent 设备 — 请先在客户电脑启动并配对 Agent，再发布抖音/视频号");
   const { captions, titles } = await buildPushCaptions(content.id, tenantId, accounts);
   return db
     .insert(agentPublishTasks)

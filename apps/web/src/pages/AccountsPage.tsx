@@ -24,6 +24,8 @@ interface Account {
   // PR-S4: 浏览器登录态 (抖音/视频号扫码登录 → 推草稿箱)
   loginStatus?: "none" | "logged_in" | "expired";
   loginAt?: string;
+  agentDeviceId?: string | null; // 6-17 #4: 绑定的本地Agent设备
+  agentOnline?: boolean; // 6-17 #4: 该设备是否在线(后端按 lastSeenAt<90s 判定)
   createdAt: string;
   updatedAt: string;
 }
@@ -839,20 +841,21 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                             {/* PR-S4: 抖音/视频号 — 登录状态 + 扫码登录 (推草稿箱前置条件) */}
                             {["douyin", "wechat_video"].includes(account.platform) && (
                               <>
+                                {/* 6-17 #4: 抖音/视频号发布走本地Agent → 徽标看"Agent设备是否在线", 不再用服务器扫码态(会显示"已登录"实则发不出) */}
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                  account.loginStatus === "logged_in"
+                                  account.agentOnline
                                     ? "bg-green-100 text-green-700"
-                                    : account.loginStatus === "expired"
-                                      ? "bg-red-100 text-red-600"
+                                    : account.agentDeviceId
+                                      ? "bg-amber-100 text-amber-700"
                                       : "bg-gray-100 text-gray-500"
-                                }`}>
-                                  {account.loginStatus === "logged_in" ? "✓ 已登录" : account.loginStatus === "expired" ? "登录失效" : "未登录"}
+                                }`} title={account.agentDeviceId ? "已绑定本地Agent设备" : "尚未绑定任何Agent设备 — 在客户机扫码登录后自动绑定"}>
+                                  {account.agentOnline ? "🟢 Agent在线" : account.agentDeviceId ? "⚪ Agent离线" : "未绑定设备"}
                                 </span>
                                 <button
                                   onClick={() => startQrLogin(account)}
                                   className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 active:scale-95 transition-all"
                                 >
-                                  {account.loginStatus === "logged_in" ? "重新扫码" : "📱 扫码登录"}
+                                  {account.agentDeviceId ? "重新扫码" : "📱 扫码登录"}
                                 </button>
                               </>
                             )}

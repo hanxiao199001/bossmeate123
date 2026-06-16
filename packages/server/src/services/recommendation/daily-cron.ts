@@ -150,6 +150,11 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   // PR-O3: 配了"按类型"配额 → 走新引擎(多刊盘点+国内/国外单篇); 否则回退旧"按学科"路径。
   const contentQuota = await getContentQuota();
   if (contentQuota) {
+    // 6-17 #11: 两套配额互斥, 按类型(contentQuota)优先 → 按学科(dailyQuota)被静默忽略。配了两套就告警, 防"配了不生效又不知道"。
+    try {
+      const dq = await getDailyQuota();
+      if (dq) logger.warn({ types: Object.keys(contentQuota), disciplines: Object.keys(dq) }, "#11 同时配了按类型与按学科配额 — 按类型优先, 按学科本次被忽略");
+    } catch { /* 探测性调用, 失败忽略 */ }
     logger.info({ types: Object.keys(contentQuota) }, "PR-O3 走按类型生成引擎");
     const sysResult = await runDailyContentByType(contentQuota);
     // PR-Z1 多租户隔离: 配了自己 contentQuota 的租户各自生成进自己的池 (互不共享, 客户间不撞文)

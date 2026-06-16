@@ -43,6 +43,7 @@ import {
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+import { transitionToStatus } from "../services/articles/state-machine.js";
 import { dispatchVideoToAgent } from "../services/publisher/agent-dispatch.js";
 
 type AgentDevice = typeof agentDevices.$inferSelect;
@@ -176,11 +177,20 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       const uid = b.uid ? String(b.uid).slice(0, 100) : undefined;
       if (!nickname && !uid) return reply.code(400).send({ code: "BAD_REQUEST", message: "nickname/uid 至少一个" });
       const [acc] = await db
-        .select({ id: platformAccounts.id, metadata: platformAccounts.metadata })
+        .select({ id: platformAccounts.id, accountId: platformAccounts.accountId, metadata: platformAccounts.metadata })
         .from(platformAccounts)
         .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, device.tenantId)))
         .limit(1);
       if (!acc) return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+      // 6-17 P0: 防张冠李戴 — 该账号已记录平台号且与本次登录的 uid 不一致, 多半是客户在本机选错了号,
+      // 拒绝静默覆盖+绑定, 让用户先核对(避免真实账号信息+设备绑定落到错账号, 之后全发错号)。
+      if (uid && acc.accountId && acc.accountId !== uid) {
+        logger.warn({ accountId: id, existing: acc.accountId, incoming: uid, deviceId: device.id }, "回填 uid 与已记录不一致, 拒绝");
+        return reply.code(409).send({
+          code: "ACCOUNT_MISMATCH",
+          message: `该账号已绑定平台号 ${acc.accountId}, 与本次登录的 ${uid} 不一致 — 请确认没在本机选错账号`,
+        });
+      }
       const meta = {
         ...((acc.metadata as Record<string, unknown>) ?? {}),
         ...(nickname ? { realNickname: nickname } : {}),
@@ -369,7 +379,8 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         .where(eq(agentPublishTasks.id, task.id));
 
       // PR-A16: 设备成功推完该账号的任务 = 该设备持有此账号登录态 → 自动绑定 (后续任务只派它)
-      if (body.status === "success" || body.status === "manual_pending") {
+      // 6-17: 只认 success — manual_pending 是"自动发失败丢人工", 不证明该设备持有效登录态, 绑了会锁死在坏设备
+      if (body.status === "success") {
         await db
           .update(platformAccounts)
           .set({ agentDeviceId: device.id, updatedAt: new Date() })
@@ -600,7 +611,15 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       .where(and(eq(agentDevices.id, id), eq(agentDevices.tenantId, request.tenantId)))
       .returning({ id: agentDevices.id });
     if (updated.length === 0) return reply.code(404).send({ code: "NOT_FOUND", message: "设备不存在" });
-    return { code: "OK", data: { id, status: "disabled" } };
+    // 6-17 P0: 吊销同时解绑该设备的账号, 否则 agentDeviceId 残留 → 旧设备 token 已废领不到、
+    // 其它设备被 claim 过滤排除 → 该账号派单永久死单。解绑后任意在线设备可重新领。
+    const unbound = await db
+      .update(platformAccounts)
+      .set({ agentDeviceId: null, updatedAt: new Date() })
+      .where(and(eq(platformAccounts.agentDeviceId, id), eq(platformAccounts.tenantId, request.tenantId)))
+      .returning({ id: platformAccounts.id });
+    logger.info({ deviceId: id, unboundAccounts: unbound.length }, "吊销设备并解绑其账号");
+    return { code: "OK", data: { id, status: "disabled", unboundAccounts: unbound.length } };
   });
 
   /**
@@ -688,6 +707,14 @@ export async function agentAdminRoutes(app: FastifyInstance) {
           target: [contentPublishLog.contentId, contentPublishLog.accountId],
           set: { status: "success", initiatedBy: "agent", updatedAt: new Date() },
         });
+      // 6-17 #7: 自有内容确认已发 → 转 published, 让工坊「已发布」tab 收录视频。
+      // SYSTEM 共享推荐内容不动全局状态(各租户发布只在 content_publish_log 各自留痕, 不互相污染)。
+      try {
+        const [c] = await db.select({ tenantId: contents.tenantId }).from(contents).where(eq(contents.id, task.contentId)).limit(1);
+        if (c && c.tenantId === task.tenantId) await transitionToStatus(task.contentId, "published");
+      } catch (e) {
+        logger.warn({ taskId: task.id, e: e instanceof Error ? e.message : e }, "#7 转 published 失败(非阻塞)");
+      }
       return { code: "OK", data: { id: task.id, status: "success" } };
     }
 

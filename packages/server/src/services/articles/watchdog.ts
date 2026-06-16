@@ -19,6 +19,8 @@ import { transitionToStatus, InvalidTransitionError } from "./state-machine.js";
 export const WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000; // 10 分钟
 export const WATCHDOG_INTERVAL_MS = 60 * 1000; // 1 分钟
 export const WATCHDOG_ERROR_MESSAGE = "Generation timeout (10 minutes)";
+// 6-17 #6: needs_review 超过 7 天无人处理 → 自动归档, 防质检未过的内容永远卡 feed「待审」越积越多
+export const NEEDS_REVIEW_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000;
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -78,11 +80,38 @@ export function startWatchdog(): void {
     checkStuckGenerating().catch((err) =>
       logger.error({ err }, "P0-B watchdog: 顶层未捕获异常"),
     );
+    checkStaleNeedsReview().catch((err) =>
+      logger.error({ err }, "#6 needs_review 归档: 顶层未捕获异常"),
+    );
   }, WATCHDOG_INTERVAL_MS);
   logger.info(
     { intervalMs: WATCHDOG_INTERVAL_MS, timeoutMs: WATCHDOG_TIMEOUT_MS },
     "P0-B watchdog: 启动 ✅",
   );
+}
+
+/**
+ * #6: needs_review 超时(默认 7 天)自动归档。needs_review→archived 是合法转移。
+ */
+export async function checkStaleNeedsReview(
+  timeoutMs: number = NEEDS_REVIEW_TIMEOUT_MS,
+): Promise<{ stale: number; archived: number }> {
+  const cutoff = new Date(Date.now() - timeoutMs);
+  const rows = await db
+    .select({ id: contents.id })
+    .from(contents)
+    .where(and(eq(contents.status, "needs_review"), lt(contents.statusUpdatedAt, cutoff)));
+  let archived = 0;
+  for (const row of rows) {
+    try {
+      await transitionToStatus(row.id, "archived");
+      archived++;
+    } catch (err) {
+      if (!(err instanceof InvalidTransitionError)) logger.error({ id: row.id, err }, "#6 needs_review 归档异常");
+    }
+  }
+  if (rows.length > 0) logger.info({ stale: rows.length, archived }, "#6 needs_review 超时自动归档完成");
+  return { stale: rows.length, archived };
 }
 
 /** 停止 watchdog（shutdown / 测试用）。 */
