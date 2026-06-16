@@ -11,7 +11,6 @@ import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
 import {
   IconHome,
   IconPenSquare,
-  IconFolder,
   IconRadar,
   IconSmartphone,
   IconSettings,
@@ -37,7 +36,6 @@ const DAILY_NAV: NavItem[] = [
   { to: "/", icon: IconHome, label: "首页", matchPrefix: "" }, // 总览/入口, 精确匹配 /
   { to: "/today", icon: IconSparkles, label: "今日待办", matchPrefix: "/today" }, // PR-W2 驾驶舱: 干活的地方, 与首页分工
   { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench" },
-  { to: "/content", icon: IconFolder, label: "内容管理", matchPrefix: "/content" },
   { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar" },
   { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts" }, // 对齐首页"去账号矩阵派发"
 ];

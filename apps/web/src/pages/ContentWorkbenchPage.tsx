@@ -36,9 +36,9 @@ export default function ContentWorkbenchPage() {
   // 5-21 P0: user/logout 已搬 sidebar (MainLayout), 本页不再用
   const navigate = useNavigate();
 
-  const [tab, setTab] = useState<WorkbenchTab>("recommend");
+  const [tab, setTab] = useState<WorkbenchTab>("all");
   const [items, setItems] = useState<WorkbenchListItem[]>([]);
-  const [counts, setCounts] = useState({ recommend: 0, draft: 0, published: 0 });
+  const [counts, setCounts] = useState({ all: 0, recommend: 0, draft: 0, published: 0 });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -118,7 +118,9 @@ export default function ContentWorkbenchPage() {
   const loadTab = useCallback((t: WorkbenchTab) => {
     const url = t === "recommend"
       ? "/content/recommendations?limit=20"
-      : `/content?status=${t === "draft" ? "draft" : "published"}&pageSize=50`;
+      : t === "all"
+        ? "/content?pageSize=100"
+        : `/content?status=${t === "draft" ? "draft" : "published"}&pageSize=50`;
     api.get<{ data?: { items?: WorkbenchListItem[] } } | { items?: WorkbenchListItem[] }>(url)
       .then((r) => {
         // /content/recommendations 返回 { data: { items } }，/content 返回 { data: { items } } 也是

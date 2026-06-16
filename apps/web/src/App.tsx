@@ -8,7 +8,6 @@ import ProtectedAdminRoute from "./components/ProtectedAdminRoute";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ChatPage from "./pages/ChatPage";
-import ContentPage from "./pages/ContentPage";
 import ContentDetailPage from "./pages/ContentDetailPage";
 import DashboardPage from "./pages/DashboardPage";
 import TodayPage from "./pages/TodayPage"; // PR-W2 今日驾驶舱
@@ -184,16 +183,8 @@ export default function App() {
         }
       />
       */}
-      <Route
-        path="/content"
-        element={
-          <ProtectedRoute>
-            <MainLayout>
-              <ContentPage />
-            </MainLayout>
-          </ProtectedRoute>
-        }
-      />
+      {/* 6-16: 内容管理合并进内容工坊「全部」标签; /content 列表重定向到工坊(详情 /content/:id 不变) */}
+      <Route path="/content" element={<Navigate to="/workbench" replace />} />
       <Route
         path="/content/:id"
         element={

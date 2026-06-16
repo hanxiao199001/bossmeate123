@@ -1,15 +1,16 @@
 /**
  * 5-18 P1 — Workbench 顶部 tab 栏。3 个 tab + 实时 count。
  */
-export type WorkbenchTab = "recommend" | "draft" | "published";
+export type WorkbenchTab = "all" | "recommend" | "draft" | "published";
 
 export interface ContentTabBarProps {
   active: WorkbenchTab;
-  counts: { recommend: number; draft: number; published: number };
+  counts: { all: number; recommend: number; draft: number; published: number };
   onChange: (tab: WorkbenchTab) => void;
 }
 
 const TABS: Array<{ key: WorkbenchTab; label: string }> = [
+  { key: "all", label: "📋 全部" },
   { key: "recommend", label: "📅 今日推荐" },
   { key: "draft", label: "✏️ 草稿" },
   { key: "published", label: "✅ 已发布" },
