@@ -453,7 +453,7 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
   // ---- 表格 (年份 × CAR 指数, 0 值标"未公布") ----
   let table = "";
   if (rows.length > 0) {
-    const headCells = rows.map((d) => `<th style="padding:7px 10px;font-size:13px;color:#fff;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,0.25);">${d.year}</th>`).join("");
+    const headCells = rows.map((d) => `<th style="padding:7px 10px;font-size:13px;background:${BLUE};color:#fff;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,0.25);">${d.year}</th>`).join("");
     const valCells = rows
       .map((d) => {
         const v = typeof d.carIndex === "number" && d.carIndex > 0 ? `${d.carIndex.toFixed(2)}%` : `<span style="color:${MUTED};">未公布</span>`;
@@ -462,7 +462,7 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
       .join("");
     table =
       `<table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;">` +
-      `<thead><tr style="background:${BLUE};"><th style="padding:7px 10px;font-size:13px;color:#fff;font-weight:600;text-align:left;border-right:1px solid rgba(255,255,255,0.25);">CAR 指数</th>${headCells}</tr></thead>` +
+      `<thead><tr style="background:${BLUE};"><th style="padding:7px 10px;font-size:13px;background:${BLUE};color:#fff;font-weight:600;text-align:left;border-right:1px solid rgba(255,255,255,0.25);">CAR 指数</th>${headCells}</tr></thead>` +
       `<tbody><tr><td style="padding:7px 10px;font-size:13px;color:${MUTED};border-right:1px solid #EEE;border-bottom:1px solid #EEE;">年度</td>${valCells}</tr></tbody>` +
       `</table>`;
   }
@@ -995,8 +995,13 @@ function renderTargetAudienceBlock(journal: JournalInfo): string {
 // 把"投稿→初审→录用→见刊"画成预期时间线。仅用 reviewCycle + frequency 真值, 无审稿周期则 skip。
 function renderTimelineBlock(journal: JournalInfo): string {
   // 老韩 6-15: 无审稿周期也渲染时间线结构, 该步诚实标注"暂无"(原整块 skip)
+  // 6-16 手机端: 审稿周期值常是长句(如"网友分享经验：平均3.0个月"), 窄屏格子塞不下 → 抽取核心时长压缩
   const rc = journal.reviewCycle;
-  const rcSub = rc ? esc(rc) : "周期暂无公开数据";
+  let rcSub = "周期待定";
+  if (rc) {
+    const m = rc.match(/(\d+(?:\.\d+)?)\s*(个?月|周|w|天)/i);
+    rcSub = m ? esc(`约${m[1]}${m[2]}`) : esc(rc.length > 8 ? rc.slice(0, 8) + "…" : rc);
+  }
   const rawStats = (journal as any).publicationStats;
   const freq = isPublicationStats(rawStats) && typeof rawStats.frequency === "string" ? rawStats.frequency : (journal.frequency || null);
   const steps: Array<{ label: string; sub: string }> = [

@@ -26,11 +26,17 @@ export function renderReviewCycleBarChart(reviewCycle: string | null | undefined
   const barW = W - PAD_L - PAD_R;
   const fillW = barW * ratio;
   const speedLabel = weeks <= FAST_LIMIT ? "极速审稿" : weeks <= MID_LIMIT ? "标准周期" : "审稿较慢";
+  // 6-16 手机端: reviewCycle 常是长句(如"网友分享经验：平均3.0个月"), 38px巨字会溢出/换行 → 抽核心时长压缩
+  const shortCycle = (() => {
+    const m = reviewCycle.match(/(\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?)\s*(个?月|周|w|天)/i);
+    if (m) return `${m[1].replace(/\s+/g, "")}${m[2]}`;
+    return reviewCycle.length > 6 ? reviewCycle.slice(0, 6) : reviewCycle;
+  })();
 
   return (
     `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="审稿周期 ${weeks} 周">` +
     `<text x="${W / 2}" y="36" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">审稿周期</text>` +
-    `<text x="${W / 2}" y="76" text-anchor="middle" font-size="38" font-weight="800" fill="{{PRIMARY}}">${escSvg(reviewCycle)}</text>` +
+    `<text x="${W / 2}" y="74" text-anchor="middle" font-size="32" font-weight="800" fill="{{PRIMARY}}">${escSvg(shortCycle)}</text>` +
     `<rect x="${PAD_L}" y="${BAR_Y}" width="${barW}" height="${BAR_H}" rx="4" fill="#E0E0E0"/>` +
     `<rect x="${PAD_L}" y="${BAR_Y}" width="${fillW.toFixed(1)}" height="${BAR_H}" rx="4" fill="{{PRIMARY}}"/>` +
     // 业内分段标尺
