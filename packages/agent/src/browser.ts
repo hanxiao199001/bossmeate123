@@ -20,7 +20,10 @@ process.env.REBROWSER_PATCHES_RUNTIME_FIX_MODE ??= "addBinding";
 const rebrowser: any = (rebrowserImport as any)?.default ?? rebrowserImport;
 const StealthPlugin: () => any = (StealthPluginImport as any)?.default ?? StealthPluginImport;
 // addExtra 把 stealth 挂到 rebrowser 内核上(rebrowser 补 CDP 层,stealth 补 JS 层,互补)
-const addExtra: any = (addExtraImport as any)?.default ?? addExtraImport;
+// puppeteer-extra 的 addExtra 是具名函数, 挂在 default.addExtra(CJS interop); 默认导出本身是单例对象不是函数。
+// (CC 当初为过 tsc 改成默认导入取 .default → 取到单例 → "addExtra is not a function" 运行时崩)
+const aeNS: any = addExtraImport;
+const addExtra: any = aeNS?.addExtra ?? aeNS?.default?.addExtra ?? aeNS;
 const puppeteerExtra: any = addExtra(rebrowser);
 puppeteerExtra.use(StealthPlugin());
 
