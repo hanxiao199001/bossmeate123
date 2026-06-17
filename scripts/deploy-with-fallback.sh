@@ -16,7 +16,7 @@ set -euo pipefail
 
 # PR-H: 部署目标可配置 — 迁移到老板新机时只需 export BOSSMATE_DEPLOY_SERVER=ubuntu@119.91.52.13
 #       (或直接改下面默认值), 不用动脚本逻辑。REMOTE_PATH 同理。
-SERVER="${BOSSMATE_DEPLOY_SERVER:-ubuntu@122.152.234.155}"
+SERVER="${BOSSMATE_DEPLOY_SERVER:-ubuntu@119.91.52.13}"
 REMOTE_PATH="${BOSSMATE_REMOTE_PATH:-/home/projects/bossmate}"
 BRANCH="main"
 START=$(date +%s)
