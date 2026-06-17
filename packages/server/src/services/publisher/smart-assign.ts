@@ -27,14 +27,40 @@ interface AccountLite {
   disciplines: string[];
 }
 
+// 6-17 #2: 期刊名→学科 兜底推导(镜像 scripts/backfill-discipline.ts 的 inferDisciplineFromName)。
+// journals.discipline 列对国内刊大面积为空, 直接查列会拿不到 → 配对退化成"领域不限/空置"。
+// 这里在列为空时按期刊名现场推导, 不依赖空列、也不写库, 让独家/领域配对真正生效。
+function inferDisciplineFromName(name: string): string | null {
+  const lower = (name || "").toLowerCase();
+  if (!lower.trim()) return null;
+  if (/\b(lancet|jama|bmj|nejm|medicine|medical|clinical|cancer|cardio|surg|nurs|pharm|immun|infect|epidem|oncol|pathol|radiol|anesthes|dermat|gastro|hepat|nephro|neurol|ophthal|otolar|pediatr|psychiat|urol)\b/.test(lower)) return "medicine";
+  if (/\b(psychol|cognit|behav|mental)\b/.test(lower)) return "psychology";
+  if (/\b(educ|teach|learn|pedagog|curricul)\b/.test(lower)) return "education";
+  if (/\b(econom|financ|business|manag|account|market)\b/.test(lower)) return "economics";
+  if (/\b(engineer|material|energy|electr|mechan|autom)\b/.test(lower)) return "engineering";
+  if (/\b(comput|inform|software|artificial|intellig|data sci|cyber|robot)\b/.test(lower)) return "computer";
+  if (/\b(biolog|biochem|genetic|molecul|cell|microb|ecolog|zoolog|botan)\b/.test(lower)) return "biology";
+  if (/\b(chem|catalys|polym)\b/.test(lower)) return "chemistry";
+  if (/\b(physic|astron|quantum|optic)\b/.test(lower)) return "physics";
+  if (/\b(agric|plant|crop|soil|food|horti|veterina|animal|aqua|forest)\b/.test(lower)) return "agriculture";
+  if (/\b(environ|earth|climat|geolog|ocean|atmosph|sustain)\b/.test(lower)) return "environment";
+  if (/\b(law|legal|juris|crimin)\b/.test(lower)) return "law";
+  if (/\b(social|sociol|polit|commun|anthropo|geograph)\b/.test(lower)) return "economics";
+  // 名字推不出明确学科时返回 null(而非硬塞 multidisciplinary), 让其落"领域不限"兜底号
+  return null;
+}
+
 async function articleDiscipline(meta: Record<string, unknown> | null): Promise<string | null> {
   if (!meta) return null;
   if (typeof meta.discipline === "string" && meta.discipline) return meta.discipline;
   const jid = typeof meta.journalId === "string" ? meta.journalId : null;
   if (jid) {
     try {
-      const [j] = await db.select({ discipline: journals.discipline }).from(journals).where(eq(journals.id, jid)).limit(1);
-      return j?.discipline ?? null;
+      const [j] = await db.select({ discipline: journals.discipline, name: journals.name, nameEn: journals.nameEn })
+        .from(journals).where(eq(journals.id, jid)).limit(1);
+      if (j?.discipline) return j.discipline;
+      // 6-17 #2: discipline 列为空 → 按期刊名现场推导(国内刊该列大面积为空)
+      return inferDisciplineFromName(j?.nameEn || j?.name || "");
     } catch { /* noop */ }
   }
   return null;

@@ -45,6 +45,7 @@ interface TodayData {
   spend: { todayCents: number; monthCents: number };
   budget: { dailyLimitYuan?: number; monthlyLimitYuan?: number };
   autoDistribute?: boolean; // PR-W6 每日自动分发开关
+  publishHealth?: { stuckPending: number; loginExpired: number; failed: number }; // 6-17 #1 发布健康
 }
 
 const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号", wechat: "公众号" };
@@ -378,6 +379,24 @@ export default function TodayPage() {
           </div>
         )}
       </div>
+
+      {/* 6-17 #1 发布健康告警: 派了却发不出的主动提示 */}
+      {data.publishHealth && (data.publishHealth.stuckPending > 0 || data.publishHealth.loginExpired > 0) && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+          <h2 className="text-sm font-semibold text-rose-700 mb-1.5">🔴 发布异常 — 有内容没能发出去</h2>
+          <div className="text-sm text-rose-700/90 space-y-1">
+            {data.publishHealth.stuckPending > 0 && (
+              <div>· <b>{data.publishHealth.stuckPending}</b> 条任务超过 10 分钟没被领取 — 多半是客户电脑的 Agent 没开机或掉线，请提醒客户启动 Agent。</div>
+            )}
+            {data.publishHealth.loginExpired > 0 && (
+              <div>· <b>{data.publishHealth.loginExpired}</b> 条任务登录态失效 — 到 <Link to="/accounts" className="text-indigo-600 hover:underline">账号矩阵</Link> 重新扫码登录。</div>
+            )}
+            {data.publishHealth.failed > 0 && (
+              <div className="text-rose-600/70">· 另有 {data.publishHealth.failed} 条发布失败，见下方任务列表。</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 等你动手 */}
       {(manualTasks.length > 0 || failedTasks.length > 0) && (

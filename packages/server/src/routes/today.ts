@@ -102,6 +102,16 @@ export async function todayRoutes(app: FastifyInstance) {
     }
     const pubMap = new Map(pubByAccount.map((r) => [r.accountId, Number(r.count)]));
 
+    // 6-17 #1 发布健康: 暴露"派了却发不出"的信号。核心是 stuckPending —
+    // Agent 每 15s 轮询领单, pending 超 10 分钟仍没被领 = 客户端 Agent 没开/掉线(任务石沉大海)。
+    const STUCK_PENDING_MS = 10 * 60 * 1000;
+    const nowMs = Date.now();
+    const stuckPending = tasks.filter(
+      (t) => t.status === "pending" && nowMs - new Date(t.createdAt as unknown as string).getTime() > STUCK_PENDING_MS,
+    ).length;
+    const loginExpired = tasks.filter((t) => t.status === "login_expired").length;
+    const failedTasks = tasks.filter((t) => t.status === "failed").length;
+
     const budget: BudgetConfig =
       ((tenant?.config as { budgetConfig?: BudgetConfig } | null)?.budgetConfig) ?? {};
 
@@ -128,6 +138,7 @@ export async function todayRoutes(app: FastifyInstance) {
           queuedToday: queueByAccount.get(a.id) ?? 0,
         })),
         publishedToday: Number(pubCount?.count ?? 0),
+        publishHealth: { stuckPending, loginExpired, failed: failedTasks },
         spend: { todayCents: spend.todayCents, monthCents: spend.monthCents },
         budget,
         autoDistribute: (((tenant?.config as Record<string, any>)?.automationConfig)?.autoDistribute) === true,
