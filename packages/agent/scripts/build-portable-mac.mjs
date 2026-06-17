@@ -52,7 +52,7 @@ writeFileSync(join(out, "package.json"), JSON.stringify({
   name: "bossmate-agent-client", private: true, version: pkg.version, type: "module",
   dependencies: pkg.dependencies ?? {},
 }, null, 2) + "\n");
-execSync("npm install --omit=dev --no-audit --no-fund", {
+execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser Chromium 下载 postinstall(便携用系统Edge, 不加会拖崩→node_modules不全→缺puppeteer-extra)
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
 
