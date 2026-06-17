@@ -284,10 +284,14 @@ function renderHeroBlock(journal: JournalInfo): string {
       `</div>`;
   }
 
+  // 6-17: 渐变占位卡里已经有刊名了, 卡下不再重复一遍(消除"标题出现两次")。只在真图封面(无文字)下补标题。
+  const titleUnder = cover
+    ? `<p style="margin:0;font-size:18px;font-weight:bold;color:${RED};line-height:1.5;">${fullName}</p>` +
+      (cnName ? `<p style="margin:4px 0 0 0;font-size:14px;color:${TEXT};line-height:1.5;">${cnName}</p>` : "")
+    : "";
   return `<section style="margin:0 0 22px 0;text-align:center;">` +
     coverHtml +
-    `<p style="margin:0;font-size:18px;font-weight:bold;color:${RED};line-height:1.5;">${fullName}</p>` +
-    (cnName ? `<p style="margin:4px 0 0 0;font-size:14px;color:${TEXT};line-height:1.5;">${cnName}</p>` : "") +
+    titleUnder +
     ifBadge +
     `</section>`;
 }
@@ -319,6 +323,8 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
   }
   // else: 不渲染"官网："行 (A 方案 — 无真官网就藏按钮, 不引导用户去 Google 搜索)
 
+  // 6-17: 没有任何字段就别渲染一个空灰框(截图里标题下那条空白盒就是这么来的)。
+  if (lines.length === 0) return "";
   const ps = lines
     .map((l) => `<p style="margin:0 0 6px 0;font-size:14px;line-height:1.7;color:${TEXT};">${l}</p>`)
     .join("");
@@ -328,22 +334,32 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
     `</section>`;
 }
 
+// 6-17: 是否有 WoS/SCI 数据信号。国内刊(CSCD/CSSCI/北大核心中文刊)没有 JCR/IF/分区/CAR 这些概念,
+// 套用 WoS 版块只会满屏"未分区/数据采集中/暂无公开数据"占位 → 空洞。无信号则判为国内刊, 跳过这些版块。
+function hasWosData(journal: JournalInfo): boolean {
+  const raw = (journal as { jcrFull?: unknown }).jcrFull;
+  const hasJif = isJcrFull(raw) && Array.isArray(raw.jifSubjects) && raw.jifSubjects.length > 0;
+  const ifv = (journal as { impactFactor?: number | null }).impactFactor;
+  const hasIf = typeof ifv === "number" && ifv > 0;
+  const q = (journal as { partition?: string | null }).partition;
+  const hasQ = typeof q === "string" && /^Q[1-4]$/i.test(q);
+  return hasJif || hasIf || hasQ;
+}
+
 // ============ 区块 3: JCR 分区徽章 ============
 function renderJcrQuartileBlock(journal: JournalInfo): string {
-  let q = journal.partition;
-  let valid = typeof q === "string" && /^Q[1-4]$/i.test(q);
-  // PR #195 (5-20): partition(中科院, 多 NULL) 空时 fallback 到 jcrFull.jifSubjects 最优 zone.
-  if (!valid) {
-    const raw = (journal as { jcrFull?: unknown }).jcrFull;
-    if (isJcrFull(raw) && Array.isArray(raw.jifSubjects)) {
-      const zones = (raw.jifSubjects as Array<{ zone?: string }>)
-        .map((s) => s.zone)
-        .filter((z): z is string => typeof z === "string" && /^Q[1-4]$/i.test(z));
-      if (zones.length > 0) {
-        q = zones.sort()[0].toUpperCase();
-        valid = true;
-      }
-    }
+  // 6-17: 优先用 jifSubjects 最优 zone(与下方"JCR 详细"面板同源), 消除顶部徽标 Q3 / 详细 Q2 自相矛盾。
+  let q: string | null | undefined;
+  let valid = false;
+  const raw = (journal as { jcrFull?: unknown }).jcrFull;
+  if (isJcrFull(raw) && Array.isArray(raw.jifSubjects)) {
+    const zones = (raw.jifSubjects as Array<{ zone?: string }>)
+      .map((s) => s.zone)
+      .filter((z): z is string => typeof z === "string" && /^Q[1-4]$/i.test(z));
+    if (zones.length > 0) { q = zones.sort()[0].toUpperCase(); valid = true; }
+  }
+  if (!valid && typeof journal.partition === "string" && /^Q[1-4]$/i.test(journal.partition)) {
+    q = journal.partition; valid = true;
   }
   const display = valid ? q!.toUpperCase() : "未分区";
   const bg = valid ? RED : "#BDBDBD";
@@ -432,7 +448,12 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
 
   const rows = (Array.isArray(raw.data) ? raw.data : []).slice().sort((a, b) => a.year - b.year);
   const known = rows.filter((d) => typeof d.carIndex === "number" && d.carIndex > 0);
-  const rank = raw.riskRankText || "";
+  // 6-17: jcarindex 未给显式风险等级但有数据时, 按"CAR<5%=低"自行判定, 避免"有 0.84% 数据却显示风险等级未知"的矛盾。
+  let rank = raw.riskRankText || "";
+  if (!rank && known.length > 0) {
+    const maxCar = Math.max(...known.map((d) => d.carIndex));
+    rank = maxCar < 5 ? "低" : maxCar < 10 ? "中" : "高";
+  }
   const riskText = rank === "高" ? "高风险" : rank === "中" ? "中等风险" : rank === "低" ? "低风险" : "";
   const riskColor = rank === "高" ? "#D32F2F" : rank === "中" ? "#F57C00" : "#388E3C";
   // 既无有效数据点也无风险等级 → 不渲染
@@ -1163,10 +1184,12 @@ export async function generateShunshiStyleHtml(
 
   sections.push(renderHeroBlock(journal));                            //  1 封面/品牌头
   sections.push(renderBasicInfoBlock(journal));                       //  2 ISSN/出版商
-  sections.push(renderJcrQuartileBlock(journal));                     //  3 分区
-  sections.push(renderIfHistoryChart(journal)); //  4 IF 趋势图(老韩6-15: 去门控always渲染, 无数据出占位)
-  sections.push(renderImpactFactorBlock(journal));                    //  5 IF
-  sections.push(renderCarHistoryBlock(journal));                      //  6 风险(唯一风险发声处)
+  // 6-17: 国内刊(无 WoS 信号)跳过 JCR/IF/CAR 这些 SCI 专属版块, 否则满屏占位空洞。
+  const wos = hasWosData(journal);
+  if (wos) sections.push(renderJcrQuartileBlock(journal));            //  3 分区
+  if (wos) sections.push(renderIfHistoryChart(journal));              //  4 IF 趋势图
+  if (wos) sections.push(renderImpactFactorBlock(journal));          //  5 IF
+  if (wos) sections.push(renderCarHistoryBlock(journal));            //  6 风险(唯一风险发声处)
   sections.push(renderJcrFullPanel(journal));                         //  7 JCR 完整面板
   sections.push(renderScopeDetailsBlock(journal));                    //  8 收稿范围
   sections.push(renderPublicationCostsBlock(journal));                //  9 版面费
@@ -1180,8 +1203,8 @@ export async function generateShunshiStyleHtml(
   sections.push(wrapChart(renderReviewCycleBarChart(journal.reviewCycle ?? null)));
   sections.push(renderSelfCitationBadge(journal));                    // 14 自引徽章
   sections.push(renderRecommendationScoreBlock(journal));             // 15 推荐指数+审稿周期(审稿周期唯一出现处)
-  sections.push(renderIfHistoryAnalysis(aiContent));                  // 15a IF 历史深度分析
-  sections.push(renderCarRiskAnalysis(aiContent));                    // 15b CAR 风险深度分析
+  if (wos) sections.push(renderIfHistoryAnalysis(aiContent));         // 15a IF 历史深度分析(仅国外刊)
+  if (wos) sections.push(renderCarRiskAnalysis(aiContent));           // 15b CAR 风险深度分析(仅国外刊)
   sections.push(renderScopeAndCitations(aiContent));                  // 15c 收稿范围+引用深度分析
   sections.push(renderAiSubmissionAdvice(aiContent));                 // 15d 投稿建议(唯一, 派生重复块不恢复)
   sections.push(renderSummaryBlock(aiContent));                       // 16 综合点评(一句话总评)
