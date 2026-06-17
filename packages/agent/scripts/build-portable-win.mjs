@@ -117,7 +117,7 @@ const loginBat = [
   "title BossMate Add Account",
   'set "NODE=%~dp0node.exe"',
   'if not exist "%USERPROFILE%\\.bossmate-agent\\config.json" goto notpaired',
-  '"%NODE%" dist\\cli.js add',
+  '"%NODE%" dist\\cli.js ensure-login',
   "echo.",
   "echo Done. To start auto-publishing, run start-agent.bat.",
   "pause",
@@ -141,7 +141,7 @@ writeFileSync(join(out, "使用说明.txt"),
   "3. 窗口提示输入配对码时, 把对接人发你的 6 位数字敲进去回车。\r\n" +
   "4. 会自动弹出 Edge 浏览器, 用手机 App(抖音/微信)扫码登录账号(没有账号会先让你选平台登录一个)。\r\n" +
   "5. 之后保持窗口开着、电脑别休眠, 即自动发布。停止按 Ctrl+C。\r\n\r\n" +
-  "【要再登录/添加一个新账号?】双击同目录的 登录账号.bat → 选平台(抖音/视频号)→ 扫码即可, 不用去网页建号。\r\n" +
+  "【账号要重新扫码登录?】双击同目录的 登录账号.bat, 没登录的账号会自动弹出二维码, 扫一下即可(全程只扫码, 不用输入)。\r\n" +
   "【账号掉线/换号了?】同样双击 登录账号.bat 重新扫码; 或重开 start-agent.bat 也会自动给没登录的号补扫。\r\n\r\n" +
   "本版自带运行环境, 无需安装 Node.js, 用系统自带 Edge 浏览器。\r\n", { encoding: "utf8" });
 

@@ -213,8 +213,7 @@ async function cmdEnsureLogin(_args: string[]): Promise<void> {
   const api = new AgentApi(cfg.serverUrl, cfg.token);
   const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
   if (accounts.length === 0) {
-    logger.info("本机还没有任何抖音/视频号账号 — 进入添加流程。");
-    await cmdAdd([]);
+    logger.info("还没有为这台设备开通任何抖音/视频号账号 — 请联系对接人在后台为你开通(无需你操作)。开通后重开本程序会自动弹出扫码。");
     return;
   }
   const need: AgentAccount[] = [];
@@ -270,14 +269,29 @@ async function cmdStatus(args: string[]): Promise<void> {
 // ===== run =====
 function warnLoginExpired(task: AgentTask): void {
   const label = platformLabel(task.platform);
-  notify("BossMate: 账号登录失效", `[${label}] ${task.accountName} 需要重新扫码 (bossmate-agent login)`);
+  notify("BossMate: 账号需要重新扫码", `[${label}] ${task.accountName} 登录已过期 — 请扫描弹出的浏览器二维码; 若没看到窗口, 双击"登录账号"即可重新扫`);
   console.error("");
   console.error("  ⚠️ ════════════════════════════════════════════════════════");
   console.error(`  ⚠️  账号 [${label}] ${task.accountName} 本机登录态已失效!`);
-  console.error("  ⚠️  任务已回报 login_expired, 该账号后续任务都会卡住。");
-  console.error("  ⚠️  请尽快执行: bossmate-agent login  重新扫码。");
+  console.error("  ⚠️  请扫描弹出的浏览器二维码; 若窗口已关, 双击\"登录账号\"重新扫即可(无需任何命令)。");
   console.error("  ⚠️ ════════════════════════════════════════════════════════");
   console.error("");
+}
+
+/** 6-17: 挂机时登录失效自愈 — 等客户扫页面上的二维码(浏览器已开), 扫上了上报 profile(顺带绑定本机)并返回 true。 */
+async function waitForScanLogin(page: Page, browser: Browser, task: AgentTask, api: AgentApi): Promise<boolean> {
+  const deadline = Date.now() + LOGIN_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(3_000);
+    if (!browser.connected) return false; // 客户把窗口关了 → 放弃
+    if (await isLoggedIn(page, task.platform)) {
+      await sleep(2_000); // 等 cookie 落稳
+      await reportProfile(page, { id: task.accountId, platform: task.platform, accountName: task.accountName, status: "active" } as AgentAccount, api);
+      logger.info(`[${platformLabel(task.platform)}] ${task.accountName} 扫码成功, 继续发布本任务`);
+      return true;
+    }
+  }
+  return false;
 }
 
 /** 失败现场截图到 ~/.bossmate-agent/screenshots/ */
@@ -316,9 +330,18 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
     }
 
     if (!(await isLoggedIn(page!, task.platform))) {
-      await api.reportResult(task.id, "login_expired", "Agent 本机浏览器登录态失效");
-      warnLoginExpired(task);
-      return;
+      // 6-17: 客户不碰终端 — 浏览器已开、二维码就在页面上, 通知客户扫码, 扫上了本任务自动继续发布。
+      notify("BossMate: 请扫码登录", `[${label}] ${task.accountName} 登录已过期 — 请扫描刚弹出的浏览器里的二维码, 扫完会自动继续发布`);
+      logger.warn(`[${label}] ${task.accountName} 登录失效, 已打开扫码页, 等待扫码 (最长 ${LOGIN_WAIT_MS / 60_000} 分钟)...`);
+      const relogged = await waitForScanLogin(page!, browser!, task, api);
+      if (!relogged) {
+        keepBrowserOpen = true;                 // 留着浏览器, 客户晚点也能扫上
+        keptBrowsers.set(task.accountId, browser!);
+        await api.reportResult(task.id, "login_expired", "已弹扫码页, 等待扫码超时(浏览器已留开)");
+        warnLoginExpired(task);
+        return;
+      }
+      // 扫码成功 → 继续往下走发布流程
     }
 
     await mkdir(TMP_DIR, { recursive: true });

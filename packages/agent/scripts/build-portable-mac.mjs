@@ -126,7 +126,7 @@ const loginCmd = [
   'cd "$DIR" || exit 1',
   'xattr -dr com.apple.quarantine "$DIR" 2>/dev/null || true',
   "clear",
-  'echo "=== BossMate 登录/添加账号 ==="',
+  'echo "=== BossMate 扫码登录账号 ==="',
   "echo",
   'ARCH="$(uname -m)"',
   'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
@@ -135,9 +135,9 @@ const loginCmd = [
   '  echo "还没配对设备 — 请先双击 start-agent.command 完成配对, 再来登录账号。"',
   '  echo "按回车关闭。"; read -r _; exit 1',
   "fi",
-  '"$NODE" dist/cli.js add',
+  '"$NODE" dist/cli.js ensure-login',
   "echo",
-  'echo "完成。要让它开始自动发布, 请双击 start-agent.command。按回车关闭。"',
+  'echo "扫码完成。要开始自动发布请双击 start-agent.command。按回车关闭。"',
   "read -r _",
   "",
 ].join("\n");
@@ -156,7 +156,7 @@ writeFileSync(join(out, "使用说明.txt"),
   "3. 窗口提示输入配对码时, 把对接人发你的 6 位数字敲进去回车(过期了会让你重输, 不会卡死)。\n" +
   "4. 会自动弹出浏览器, 用手机 App(抖音/微信)扫码登录账号(没有账号会先让你选平台登录一个)。\n" +
   "5. 之后保持窗口开着、电脑别休眠, 即自动发布。停止按 Ctrl + C。\n\n" +
-  "【要再登录/添加一个新账号?】双击同目录的 \"登录账号.command\" → 选平台(抖音/视频号)→ 扫码即可, 不用去网页建号。\n" +
+  "【账号要重新扫码登录?】双击同目录的 \"登录账号.command\", 没登录的账号会自动弹出二维码, 扫一下即可(全程只扫码, 不用输入任何东西)。\n" +
   "【账号掉线/换号了?】同样双击 \"登录账号.command\" 重新扫码; 或重开 start-agent.command 也会自动给没登录的号补扫。\n\n" +
   "本版自带运行环境, 无需安装 Node.js, 用系统自带 Edge/Chrome 浏览器。\n", { encoding: "utf8" });
 
