@@ -43,6 +43,7 @@ import {
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+import { encryptCredentials } from "../utils/crypto.js";
 import { transitionToStatus } from "../services/articles/state-machine.js";
 import { dispatchVideoToAgent } from "../services/publisher/agent-dispatch.js";
 
@@ -202,6 +203,37 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
       logger.info({ accountId: id, nickname, uid, deviceId: device.id }, "agent 回填账号真实信息+绑定设备");
       return { code: "OK" };
+    });
+
+    /**
+     * POST /agent/accounts/create {platform} — 登录即建号:
+     * Agent 端"添加新账号"时先调它建一个占位账号(绑定本设备), 返回 id;
+     * Agent 随即用该 id 打开浏览器扫码登录, 成功后 /profile 用真实昵称+抖音号替换占位名。
+     * 免去客户"先去网页手动建号"这一步。
+     */
+    authed.post("/agent/accounts/create", async (request, reply) => {
+      const device = request.agentDevice!;
+      const b = (request.body ?? {}) as { platform?: string };
+      const platform = b.platform === "douyin" ? "douyin" : b.platform === "wechat_video" ? "wechat_video" : null;
+      if (!platform) return reply.code(400).send({ code: "BAD_REQUEST", message: "platform 须为 douyin | wechat_video" });
+      const label = platform === "douyin" ? "抖音" : "视频号";
+      const [acc] = await db
+        .insert(platformAccounts)
+        .values({
+          tenantId: device.tenantId,
+          platform,
+          accountName: `待登录·${label}`,        // 占位名, 扫码成功后被真实昵称替换
+          credentials: encryptCredentials(JSON.stringify({})) as any,
+          agentDeviceId: device.id,               // 登录即建号 = 直接绑本机
+          journalScope: "both",
+          disciplines: [],
+          isVerified: true,                        // 半自动无凭证视为就绪
+          capability: "draft_only",
+          status: "active",
+        })
+        .returning({ id: platformAccounts.id, accountName: platformAccounts.accountName, platform: platformAccounts.platform });
+      logger.info({ accountId: acc.id, platform, deviceId: device.id }, "登录即建号: 新建占位账号并绑定设备");
+      return { code: "OK", data: { id: acc.id, accountName: acc.accountName, platform: acc.platform, status: "active" } };
     });
 
     /**

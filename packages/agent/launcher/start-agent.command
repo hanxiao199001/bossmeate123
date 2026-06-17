@@ -51,12 +51,12 @@ if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
   done
   echo
   echo "配对成功! 接下来扫码登录平台账号: 会弹出浏览器, 请用对应账号的手机 App 扫码。"
-  node dist/cli.js login --all || true
   echo
 fi
 
 echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"
 echo
+node dist/cli.js ensure-login || true
 caffeinate -i node dist/cli.js run
 echo
 echo "Agent 已停止。按回车键关闭窗口。"

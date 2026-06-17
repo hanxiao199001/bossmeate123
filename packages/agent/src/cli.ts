@@ -175,6 +175,59 @@ async function cmdLogin(args: string[]): Promise<void> {
   logger.info(`登录完成: 成功 ${ok}/${selected.length}。下一步: bossmate-agent run (开始领任务)`);
 }
 
+// ===== add: 登录即建号(选平台→建占位号→扫码→自动变真号) =====
+async function pickPlatform(): Promise<string | null> {
+  const rl = createInterface({ input: stdin, output: stdout });
+  const ans = (await rl.question("要登录哪个平台? 输入数字:  1) 抖音   2) 视频号  : ")).trim();
+  rl.close();
+  if (ans === "1") return "douyin";
+  if (ans === "2") return "wechat_video";
+  return null;
+}
+
+/** 登录一个全新账号: 不用先去网页建号, 这里选平台→服务器建占位号→打开浏览器扫码→成功后自动回填真实昵称并绑定本机。 */
+async function cmdAdd(_args: string[]): Promise<void> {
+  const cfg = await requireConfig();
+  await ensureDirs();
+  const api = new AgentApi(cfg.serverUrl, cfg.token);
+  const platform = await pickPlatform();
+  if (!platform) { logger.error("没选有效平台(只能输 1 或 2), 已退出。"); return; }
+  logger.info(`正在创建${platformLabel(platform)}账号, 马上打开浏览器, 请用要登录的${platformLabel(platform)}手机 App 扫码...`);
+  let account: AgentAccount;
+  try {
+    account = await api.createAccount(platform);
+  } catch (err) {
+    logger.error(`建号失败: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  const ok = await loginAccount(account, api);
+  logger.info(ok
+    ? `✅ ${platformLabel(platform)}账号已登录并绑定本机, 现在可以从 BossMate 给它派内容了。`
+    : "登录没完成(超时或浏览器被关). 可重新双击该启动器再扫一次。");
+}
+
+// ===== ensure-login: 启动时自动给"本机还没登录"的账号补扫码(已登录的跳过, 不打扰) =====
+async function cmdEnsureLogin(_args: string[]): Promise<void> {
+  const cfg = await requireConfig();
+  await ensureDirs();
+  const api = new AgentApi(cfg.serverUrl, cfg.token);
+  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  if (accounts.length === 0) {
+    logger.info("本机还没有任何抖音/视频号账号 — 进入添加流程。");
+    await cmdAdd([]);
+    return;
+  }
+  const need: AgentAccount[] = [];
+  for (const a of accounts) {
+    let hasProfile = false;
+    try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
+    if (!hasProfile) need.push(a);
+  }
+  if (need.length === 0) { logger.info("所有账号本机均已登录, 无需扫码, 直接开始领任务。"); return; }
+  logger.info(`有 ${need.length} 个账号还没在本机登录, 逐个弹出浏览器扫码(已登录的已跳过)...`);
+  for (const a of need) await loginAccount(a, api);
+}
+
 // ===== status =====
 async function cmdStatus(args: string[]): Promise<void> {
   const cfg = await requireConfig();
@@ -407,6 +460,8 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "pair": return cmdPair(rest);
     case "login": return cmdLogin(rest);
+    case "add": return cmdAdd(rest);
+    case "ensure-login": return cmdEnsureLogin(rest);
     case "status": return cmdStatus(rest);
     case "run": return cmdRun();
     case "install-service": return cmdInstallService();

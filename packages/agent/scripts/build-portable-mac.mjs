@@ -100,11 +100,14 @@ const cmd = [
   '    PAIR_CODE=""',
   "  done",
   "  echo",
-  '  echo "配对成功! 接下来扫码登录账号: 会弹出浏览器, 请用对应账号手机 App 扫码。"',
-  '  "$NODE" dist/cli.js login --all || true',
+  '  echo "配对成功!"',
   "  echo",
   "fi",
   "",
+  '# 6-17: 每次启动给"本机还没登录"的账号补扫码(已登录的自动跳过; 一个账号都没有则引导登录一个)',
+  'echo "检查账号登录状态… 有没登录的会弹出浏览器扫码(已登录的会跳过)。"',
+  '"$NODE" dist/cli.js ensure-login || true',
+  "echo",
   'echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"',
   "echo",
   'caffeinate -i "$NODE" dist/cli.js run',
@@ -116,6 +119,31 @@ const cmd = [
 writeFileSync(join(out, "start-agent.command"), cmd, { encoding: "utf8" });
 chmodSync(join(out, "start-agent.command"), 0o755);
 
+// 6-17: 双击即"登录新账号" — 选平台→弹浏览器扫码→自动建号绑定本机, 不用去网页建号、不碰终端。
+const loginCmd = [
+  "#!/bin/bash",
+  'DIR="$(cd "$(dirname "$0")" && pwd)"',
+  'cd "$DIR" || exit 1',
+  'xattr -dr com.apple.quarantine "$DIR" 2>/dev/null || true',
+  "clear",
+  'echo "=== BossMate 登录/添加账号 ==="',
+  "echo",
+  'ARCH="$(uname -m)"',
+  'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
+  'chmod +x "$NODE" 2>/dev/null || true',
+  'if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then',
+  '  echo "还没配对设备 — 请先双击 start-agent.command 完成配对, 再来登录账号。"',
+  '  echo "按回车关闭。"; read -r _; exit 1',
+  "fi",
+  '"$NODE" dist/cli.js add',
+  "echo",
+  'echo "完成。要让它开始自动发布, 请双击 start-agent.command。按回车关闭。"',
+  "read -r _",
+  "",
+].join("\n");
+writeFileSync(join(out, "登录账号.command"), loginCmd, { encoding: "utf8" });
+chmodSync(join(out, "登录账号.command"), 0o755);
+
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\n" +
   `SERVER_URL=${SERVER_URL}\nPAIR_CODE=\nDEVICE_NAME=\n`, { encoding: "utf8" });
@@ -126,8 +154,10 @@ writeFileSync(join(out, "使用说明.txt"),
   "2. 双击 start-agent.command。\n" +
   "   - 若提示\"无法打开, 来自身份不明的开发者\": 右键点 start-agent.command → 选\"打开\" → 再点\"打开\"(只需一次)。\n" +
   "3. 窗口提示输入配对码时, 把对接人发你的 6 位数字敲进去回车(过期了会让你重输, 不会卡死)。\n" +
-  "4. 会弹出浏览器, 用手机 App(抖音/微信)扫码登录账号。\n" +
+  "4. 会自动弹出浏览器, 用手机 App(抖音/微信)扫码登录账号(没有账号会先让你选平台登录一个)。\n" +
   "5. 之后保持窗口开着、电脑别休眠, 即自动发布。停止按 Ctrl + C。\n\n" +
+  "【要再登录/添加一个新账号?】双击同目录的 \"登录账号.command\" → 选平台(抖音/视频号)→ 扫码即可, 不用去网页建号。\n" +
+  "【账号掉线/换号了?】同样双击 \"登录账号.command\" 重新扫码; 或重开 start-agent.command 也会自动给没登录的号补扫。\n\n" +
   "本版自带运行环境, 无需安装 Node.js, 用系统自带 Edge/Chrome 浏览器。\n", { encoding: "utf8" });
 
 console.log("6/6 打包 zip…");

@@ -103,6 +103,15 @@ export class AgentApi {
     return body.data.accounts;
   }
 
+  /** 登录即建号: 在服务器建一个占位账号(已绑本设备), 返回它供随后扫码登录 */
+  async createAccount(platform: string): Promise<AgentAccount> {
+    const body = await this.request<{ data: AgentAccount }>("/agent/accounts/create", {
+      method: "POST",
+      body: { platform },
+    });
+    return body.data;
+  }
+
   async claimTasks(platforms: string[], limit = 1): Promise<AgentTask[]> {
     const body = await this.request<{ data: { tasks: AgentTask[] } }>("/agent/tasks/claim", {
       method: "POST",
