@@ -37,6 +37,9 @@ const LAUNCH_ARGS = [
   "--window-size=1366,900",
   // 6-16 抖音反滑块: 去掉 navigator.webdriver / 自动化特征, 减少风控弹滑块
   "--disable-blink-features=AutomationControlled",
+  // 6-18 防 Edge 首启体验/默认浏览器询问页占住标签(卡 about:blank 不跳转)
+  "--no-first-run",
+  "--no-default-browser-check",
 ];
 
 // 用系统自带浏览器(免装 Node 便携版需要): Windows→Edge, Mac→Edge/Chrome。
@@ -161,8 +164,21 @@ export async function openPlatformHome(browser: Browser, platform: string, newTa
   const page = newTab ? await browser.newPage() : (pages[0] ?? (await browser.newPage()));
   const home = PLATFORM_HOME[platform];
   if (!home) throw new Error(`平台 ${platform} 不支持本地浏览器登录`);
-  await page.goto(home, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.bringToFront().catch(() => {});
+  // 6-18: 跳转加固 — 重试一次; 即使超时也不硬失败(登录二维码可能已渲染); 记录最终地址便于排查"卡 about:blank"。
+  let navOk = false;
+  for (let attempt = 1; attempt <= 2 && !navOk; attempt++) {
+    try {
+      await page.goto(home, { waitUntil: "domcontentloaded", timeout: 45_000 });
+      navOk = true;
+    } catch (e) {
+      logger.warn(`打开 ${home} 第 ${attempt} 次未在 45s 内完成: ${e instanceof Error ? e.message : e}`);
+      await new Promise((r) => setTimeout(r, 1_500));
+    }
+  }
+  await page.bringToFront().catch(() => {});
   await new Promise((r) => setTimeout(r, 3_000));
+  logger.info(`已打开 ${platform} 登录页, 当前地址: ${page.url()}`);
   return page;
 }
 
