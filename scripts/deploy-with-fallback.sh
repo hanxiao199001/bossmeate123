@@ -63,13 +63,13 @@ fi
 # 直连路径还需 git pull；bundle 路径已 ff-merged，跳过
 PULL_BLOCK=""
 if [ "$DEPLOY_PATH" = "direct" ]; then
-  PULL_BLOCK="git pull --ff-only origin $BRANCH 2>&1 | tail -3"
+  PULL_BLOCK="timeout 30 git pull --ff-only origin $BRANCH 2>&1 | tail -3"
 fi
 ssh "$SERVER" bash <<EOF
 set -euo pipefail
 cd "$REMOTE_PATH"
 ${PULL_BLOCK}
-pnpm install --frozen-lockfile 2>&1 | tail -3
+PUPPETEER_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile 2>&1 | tail -3
 pnpm --filter @bossmate/server build 2>&1 | tail -3
 # PR-A18: 构建 agent → 服务端"一键下载完整客户包"路由需要 packages/agent/dist。
 # 非致命(|| true): agent 构建失败不阻断主部署, 仅一键客户包暂不可用。
