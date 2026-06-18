@@ -101,7 +101,7 @@ async function reportProfile(page: Page, account: AgentAccount, api?: AgentApi):
   }
 }
 
-async function loginAccount(account: AgentAccount, api?: AgentApi): Promise<boolean> {
+async function loginAccount(account: AgentAccount, api?: AgentApi, waitMs: number = LOGIN_WAIT_MS): Promise<boolean> {
   const label = platformLabel(account.platform);
   logger.info(`[${label}] ${account.accountName}: 正在打开浏览器, 请用该账号绑定的手机 App 扫码登录...`);
   let browser: Browser | null = null;
@@ -113,8 +113,8 @@ async function loginAccount(account: AgentAccount, api?: AgentApi): Promise<bool
       await reportProfile(page, account, api);
       return true;
     }
-    logger.info(`[${label}] ${account.accountName}: 等待扫码 (最长 ${LOGIN_WAIT_MS / 60_000} 分钟, 中途关浏览器即放弃)...`);
-    const deadline = Date.now() + LOGIN_WAIT_MS;
+    logger.info(`[${label}] ${account.accountName}: 等待扫码 (最长 ${Math.round(waitMs / 60_000)} 分钟, 中途关浏览器即放弃)...`);
+    const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       await sleep(3_000);
       if (!browser.connected) {
@@ -267,6 +267,25 @@ async function cmdStatus(args: string[]): Promise<void> {
 }
 
 // ===== run =====
+// 6-17: 空闲时主动给"本机还没登录"的抖音/视频号账号弹浏览器扫码 → 一台设备绑多账号, 网页加了号这台在线机器自动弹码, 无需重启/终端。
+const PROACTIVE_LOGIN_WAIT_MS = 2 * 60_000;        // 主动弹码等扫 2 分钟(比被动自愈短, 减少挡领单)
+const PROACTIVE_LOGIN_COOLDOWN_MS = 10 * 60_000;   // 弹了没扫上 → 10 分钟内不再弹同一个, 防骚扰
+async function proactiveLogin(api: AgentApi, cooldown: Map<string, number>): Promise<void> {
+  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  const now = Date.now();
+  for (const a of accounts) {
+    if ((cooldown.get(a.id) ?? 0) > now) continue;           // 冷却中, 跳过
+    let hasProfile = false;
+    try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
+    if (hasProfile) continue;                                  // 已登录, 跳过
+    logger.info(`[${platformLabel(a.platform)}] ${a.accountName}: 未登录, 弹出浏览器请扫码绑定到本机...`);
+    notify("BossMate: 请扫码绑定账号", `[${platformLabel(a.platform)}] ${a.accountName} 请扫描弹出的浏览器二维码, 扫完即绑定本机`);
+    const ok = await loginAccount(a, api, PROACTIVE_LOGIN_WAIT_MS);
+    if (!ok) cooldown.set(a.id, now + PROACTIVE_LOGIN_COOLDOWN_MS); // 没扫上 → 冷却
+    return;                                                    // 一次只处理一个, 处理完回到轮询(发布优先)
+  }
+}
+
 function warnLoginExpired(task: AgentTask): void {
   const label = platformLabel(task.platform);
   notify("BossMate: 账号需要重新扫码", `[${label}] ${task.accountName} 登录已过期 — 请扫描弹出的浏览器二维码; 若没看到窗口, 双击"登录账号"即可重新扫`);
@@ -420,6 +439,11 @@ async function cmdRun(): Promise<void> {
   }
   logger.info(`开始轮询领任务 (每 ${CLAIM_INTERVAL_MS / 1000}s, 平台: ${platforms.map(platformLabel).join("/")})。Ctrl+C 退出。`);
 
+  // 6-17: 主动补登节流 + 每账号冷却(网页新增账号后, 这台在线设备自动弹码绑定)
+  let lastEnsureAt = 0;
+  const ENSURE_INTERVAL_MS = 60_000;
+  const loginCooldown = new Map<string, number>();
+
   while (!stopping) {
     let tasks: AgentTask[] = [];
     try {
@@ -434,6 +458,11 @@ async function cmdRun(): Promise<void> {
     }
 
     if (tasks.length === 0) {
+      // 空闲: 周期性给未登录账号主动弹码(一次一个, 带冷却), 实现"一台设备绑多账号"零终端
+      if (Date.now() - lastEnsureAt > ENSURE_INTERVAL_MS) {
+        lastEnsureAt = Date.now();
+        await proactiveLogin(api, loginCooldown).catch((e) => logger.warn("自动补登检查失败:", e instanceof Error ? e.message : e));
+      }
       await sleep(CLAIM_INTERVAL_MS);
       continue;
     }
