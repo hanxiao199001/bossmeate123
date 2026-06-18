@@ -40,6 +40,15 @@ const LAUNCH_ARGS = [
   // 6-18 防 Edge 首启体验/默认浏览器询问页占住标签(卡 about:blank 不跳转)
   "--no-first-run",
   "--no-default-browser-check",
+  // 6-18 内置 Chromium 在国内: 禁止一切后台连 Google(安全浏览/组件更新/同步/域名上报/ping),
+  // 否则国内连不上 Google 会超时拖慢启动。这些都是后台连接, 不影响访问国内登录页。
+  "--disable-background-networking",
+  "--disable-component-update",
+  "--disable-domain-reliability",
+  "--disable-sync",
+  "--no-pings",
+  "--safebrowsing-disable-auto-update",
+  "--disable-features=Translate,OptimizationHints,MediaRouter,InterestFeedContentSuggestions",
 ];
 
 // 用系统自带浏览器(免装 Node 便携版需要): Windows→Edge, Mac→Edge/Chrome。

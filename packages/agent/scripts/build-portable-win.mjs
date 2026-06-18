@@ -10,9 +10,9 @@
  *   NODE_VER   要打包的 Node 版本 (默认 v22.14.0)
  *   SERVER_URL 写进 cfg 的服务器地址 (默认 http://122.152.234.155)
  */
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, createWriteStream } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipFolder } from "./lib/zipdir.mjs";
 import { Readable } from "node:stream";
@@ -21,6 +21,27 @@ const here = dirname(fileURLToPath(import.meta.url));
 const agentRoot = join(here, "..");
 const out = join(agentRoot, "dist-portable-win");
 const NODE_VER = process.env.NODE_VER || "v22.14.0";
+const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
+// 6-18: 下 win64 独立 Chromium 进 <out>/chrome, 返回 exe 绝对路径(失败 null → 回退系统 Edge)。优先 npmmirror 镜像。
+function downloadChromium(platform) {
+  const cli = join(out, "node_modules", "@puppeteer", "browsers", "lib", "cjs", "main-cli.js");
+  const base = ["install", `chrome@${CHROME_VERSION}`, "--platform", platform, "--path", join(out, "chrome")];
+  const attempts = [
+    [...base, "--base-url", "https://cdn.npmmirror.com/binaries/chrome-for-testing"],
+    base,
+  ];
+  for (const args of attempts) {
+    try {
+      const stdout = execFileSync("node", [cli, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 600000 });
+      const last = stdout.trim().split("\n").pop() || "";
+      const m = last.match(/^\S+@\S+\s+(.+)$/);
+      if (m) { console.log(`   \u2713 Chromium(${platform}) \u2192 ${m[1]}`); return m[1]; }
+    } catch (e) {
+      console.warn(`   Chromium(${platform}) \u4e0b\u8f7d\u5931\u8d25: ${String(e.message || e).slice(0, 140)}`);
+    }
+  }
+  return null;
+}
 const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
 
 async function download(url, dest) {
@@ -49,9 +70,14 @@ writeFileSync(join(out, "package.json"), JSON.stringify({
   name: "bossmate-agent-client", private: true, version: pkg.version, type: "module",
   dependencies: pkg.dependencies ?? {},
 }, null, 2) + "\n");
-execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser Chromium 下载 postinstall(便携用系统Edge, 不加会拖崩→node_modules不全→缺puppeteer-extra)
+execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser 自带 Chromium postinstall(下面单独下 win64)
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
+
+console.log("4.5/6 下载内置 Chromium (win64, 根治系统 Edge 控制错页)…");
+const chromeWin = downloadChromium("win64");
+const relWin = chromeWin ? relative(out, chromeWin).split("/").join("\\") : "";  // 正斜杠→反斜杠(Linux构建, Windows运行)
+if (!chromeWin) console.warn("   ⚠️ Chromium 没下成, 客户端会回退系统 Edge(可能仍有 about:blank)");
 
 console.log(`5/6 写启动器 + 配置 + 说明…`);
 const bat = [
@@ -76,6 +102,9 @@ const bat = [
   ")",
   'if "!DEVICE_NAME!"=="" set "DEVICE_NAME=%COMPUTERNAME%"',
   'set "NODE=%~dp0node.exe"',
+  'rem 6-18: bundled standalone Chromium (fix system-Edge control / about:blank)',
+  `set "BUNDLED_CHROME=%~dp0${relWin}"`,
+  'if exist "%BUNDLED_CHROME%" set "BOSSMATE_BROWSER_PATH=%BUNDLED_CHROME%"',
   "",
   'if exist "%USERPROFILE%\\.bossmate-agent\\config.json" goto run_section',
   "",

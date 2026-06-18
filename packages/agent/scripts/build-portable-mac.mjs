@@ -9,9 +9,9 @@
  *
  * 环境变量: NODE_VER(默认 v18.20.4, 兼容 macOS 10.15+), SERVER_URL(默认 http://122.152.234.155)
  */
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipFolder } from "./lib/zipdir.mjs";
 
@@ -19,6 +19,29 @@ const here = dirname(fileURLToPath(import.meta.url));
 const agentRoot = join(here, "..");
 const out = join(agentRoot, "dist-portable-mac");
 const NODE_VER = process.env.NODE_VER || "v18.20.4";
+// 6-18: 内置独立 Chromium 版本(对齐 rebrowser-puppeteer@23.10.3, 老韩 Mac 实测下过此版)。
+const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
+// 下指定平台的 Chromium 进 <out>/chrome, 返回可执行文件绝对路径(失败返回 null, 非致命 → 回退系统 Edge)。
+// 优先 npmmirror 镜像(国内服务器更稳), 失败再用官方 CDN。
+function downloadChromium(platform) {
+  const cli = join(out, "node_modules", "@puppeteer", "browsers", "lib", "cjs", "main-cli.js");
+  const base = ["install", `chrome@${CHROME_VERSION}`, "--platform", platform, "--path", join(out, "chrome")];
+  const attempts = [
+    [...base, "--base-url", "https://cdn.npmmirror.com/binaries/chrome-for-testing"],
+    base,
+  ];
+  for (const args of attempts) {
+    try {
+      const stdout = execFileSync("node", [cli, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 600000 });
+      const last = stdout.trim().split("\n").pop() || "";
+      const m = last.match(/^\S+@\S+\s+(.+)$/); // 格式: chrome@<buildId> <abs path>
+      if (m) { console.log(`   ✓ Chromium(${platform}) → ${m[1]}`); return m[1]; }
+    } catch (e) {
+      console.warn(`   Chromium(${platform}) 这次下载失败: ${String(e.message || e).slice(0, 140)}`);
+    }
+  }
+  return null;
+}
 const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
 
 function fetchNodeBin(arch, outBin) {
@@ -52,9 +75,16 @@ writeFileSync(join(out, "package.json"), JSON.stringify({
   name: "bossmate-agent-client", private: true, version: pkg.version, type: "module",
   dependencies: pkg.dependencies ?? {},
 }, null, 2) + "\n");
-execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser Chromium 下载 postinstall(便携用系统Edge, 不加会拖崩→node_modules不全→缺puppeteer-extra)
+execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser 自带 Chromium postinstall(下面单独下指定平台的)
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
+
+console.log("4.5/6 下载内置 Chromium (mac arm64 + x64, 根治系统 Edge 控制错页)…");
+const chromeArm = downloadChromium("mac_arm");
+const chromeX64 = downloadChromium("mac");
+const relArm = chromeArm ? relative(out, chromeArm) : "";
+const relX64 = chromeX64 ? relative(out, chromeX64) : "";
+if (!chromeArm && !chromeX64) console.warn("   ⚠️ 两个架构 Chromium 都没下成, 客户端会回退系统 Edge(可能仍有 about:blank 问题)");
 
 console.log("5/6 写启动器 + 配置 + 说明…");
 const cmd = [
@@ -71,6 +101,11 @@ const cmd = [
   'ARCH="$(uname -m)"',
   'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
   'chmod +x "$NODE" 2>/dev/null || true',
+  '# 6-18: 内置独立 Chromium(根治系统 Edge 控制错页/卡 about:blank), 按架构选; 不在则回退系统 Edge。',
+  `ARM_CHROME="$DIR/${relArm}"`,
+  `X64_CHROME="$DIR/${relX64}"`,
+  'if [ "$ARCH" = "arm64" ] && [ -f "$ARM_CHROME" ]; then export BOSSMATE_BROWSER_PATH="$ARM_CHROME"; elif [ -f "$X64_CHROME" ]; then export BOSSMATE_BROWSER_PATH="$X64_CHROME"; fi',
+  '[ -n "$BOSSMATE_BROWSER_PATH" ] && chmod +x "$BOSSMATE_BROWSER_PATH" 2>/dev/null; if [ -n "$BOSSMATE_BROWSER_PATH" ]; then echo "浏览器: 内置 Chromium"; else echo "浏览器: 回退系统 Edge/Chrome"; fi',
   "",
   'SERVER_URL=""; PAIR_CODE=""; DEVICE_NAME=""',
   'if [ -f "bossmate.cfg" ]; then',
