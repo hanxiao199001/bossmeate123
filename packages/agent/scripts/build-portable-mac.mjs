@@ -10,7 +10,7 @@
  * 环境变量: NODE_VER(默认 v18.20.4, 兼容 macOS 10.15+), SERVER_URL(默认 http://122.152.234.155)
  */
 import { execSync, execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync, existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipFolder } from "./lib/zipdir.mjs";
@@ -21,26 +21,27 @@ const out = join(agentRoot, "dist-portable-mac");
 const NODE_VER = process.env.NODE_VER || "v18.20.4";
 // 6-18: 内置独立 Chromium 版本(对齐 rebrowser-puppeteer@23.10.3, 老韩 Mac 实测下过此版)。
 const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
-// 下指定平台的 Chromium 进 <out>/chrome, 返回可执行文件绝对路径(失败返回 null, 非致命 → 回退系统 Edge)。
-// 优先 npmmirror 镜像(国内服务器更稳), 失败再用官方 CDN。
-function downloadChromium(platform) {
-  const cli = join(out, "node_modules", "@puppeteer", "browsers", "lib", "cjs", "main-cli.js");
-  const base = ["install", `chrome@${CHROME_VERSION}`, "--platform", platform, "--path", join(out, "chrome")];
-  const attempts = [
-    [...base, "--base-url", "https://cdn.npmmirror.com/binaries/chrome-for-testing"],
-    base,
-  ];
-  for (const args of attempts) {
-    try {
-      const stdout = execFileSync("node", [cli, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 600000 });
-      const last = stdout.trim().split("\n").pop() || "";
-      const m = last.match(/^\S+@\S+\s+(.+)$/); // 格式: chrome@<buildId> <abs path>
-      if (m) { console.log(`   ✓ Chromium(${platform}) → ${m[1]}`); return m[1]; }
-    } catch (e) {
-      console.warn(`   Chromium(${platform}) 这次下载失败: ${String(e.message || e).slice(0, 140)}`);
-    }
-  }
-  return null;
+// 6-18: 共享 Chromium 缓存(由 prepare-chromium.mjs 预下)。打包只从缓存"复制", 绝不联网下载 —
+// 否则网页下载会卡在"生成中"(现下 150-300MB)。缓存空则跳过, 客户端回退系统 Edge。
+const CHROME_CACHE = join(agentRoot, ".chromium-cache");
+function cachedChromiumExe(platform) {
+  const dir = join(CHROME_CACHE, platform);
+  if (!existsSync(dir)) return null;
+  const name = platform === "win64" ? "chrome.exe" : "Google Chrome for Testing";
+  try {
+    const found = execSync(`find ${JSON.stringify(dir)} -type f -name ${JSON.stringify(name)}`, { encoding: "utf8" }).trim().split("\n")[0];
+    return found || null;
+  } catch { return null; }
+}
+// 把某平台缓存的 Chromium 复制进包, 返回包内相对 exe 路径(/ 分隔); 缓存没有则返回 ""。
+function bundleChromium(platform) {
+  const exe = cachedChromiumExe(platform);
+  if (!exe) { console.warn(`   未找到 ${platform} 的 Chromium 缓存 — 本平台回退系统 Edge(先在服务器跑 prepare-chromium.mjs 预热)`); return ""; }
+  const cacheDir = join(CHROME_CACHE, platform);
+  cpSync(cacheDir, join(out, "chrome", platform), { recursive: true });
+  const rel = join("chrome", platform, relative(cacheDir, exe));
+  console.log(`   ✓ ${platform} Chromium(缓存) → ${rel}`);
+  return rel;
 }
 const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
 
@@ -79,12 +80,9 @@ execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
 
-console.log("4.5/6 下载内置 Chromium (mac arm64 + x64, 根治系统 Edge 控制错页)…");
-const chromeArm = downloadChromium("mac_arm");
-const chromeX64 = downloadChromium("mac");
-const relArm = chromeArm ? relative(out, chromeArm) : "";
-const relX64 = chromeX64 ? relative(out, chromeX64) : "";
-if (!chromeArm && !chromeX64) console.warn("   ⚠️ 两个架构 Chromium 都没下成, 客户端会回退系统 Edge(可能仍有 about:blank 问题)");
+console.log("4.5/6 内置 Chromium (从缓存复制, 秒级; 无缓存则回退系统 Edge)…");
+const relArm = bundleChromium("mac_arm");
+const relX64 = bundleChromium("mac");
 
 console.log("5/6 写启动器 + 配置 + 说明…");
 const cmd = [

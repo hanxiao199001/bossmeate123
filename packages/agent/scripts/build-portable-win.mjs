@@ -11,7 +11,7 @@
  *   SERVER_URL 写进 cfg 的服务器地址 (默认 http://122.152.234.155)
  */
 import { execSync, execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, createWriteStream } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, createWriteStream, existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipFolder } from "./lib/zipdir.mjs";
@@ -22,25 +22,25 @@ const agentRoot = join(here, "..");
 const out = join(agentRoot, "dist-portable-win");
 const NODE_VER = process.env.NODE_VER || "v22.14.0";
 const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
-// 6-18: 下 win64 独立 Chromium 进 <out>/chrome, 返回 exe 绝对路径(失败 null → 回退系统 Edge)。优先 npmmirror 镜像。
-function downloadChromium(platform) {
-  const cli = join(out, "node_modules", "@puppeteer", "browsers", "lib", "cjs", "main-cli.js");
-  const base = ["install", `chrome@${CHROME_VERSION}`, "--platform", platform, "--path", join(out, "chrome")];
-  const attempts = [
-    [...base, "--base-url", "https://cdn.npmmirror.com/binaries/chrome-for-testing"],
-    base,
-  ];
-  for (const args of attempts) {
-    try {
-      const stdout = execFileSync("node", [cli, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 600000 });
-      const last = stdout.trim().split("\n").pop() || "";
-      const m = last.match(/^\S+@\S+\s+(.+)$/);
-      if (m) { console.log(`   \u2713 Chromium(${platform}) \u2192 ${m[1]}`); return m[1]; }
-    } catch (e) {
-      console.warn(`   Chromium(${platform}) \u4e0b\u8f7d\u5931\u8d25: ${String(e.message || e).slice(0, 140)}`);
-    }
-  }
-  return null;
+// 6-18: 从共享缓存复制 Chromium(由 prepare-chromium.mjs 预下), 打包绝不联网 — 否则网页下载卡"生成中"。
+const CHROME_CACHE = join(agentRoot, ".chromium-cache");
+function cachedChromiumExe(platform) {
+  const dir = join(CHROME_CACHE, platform);
+  if (!existsSync(dir)) return null;
+  const name = platform === "win64" ? "chrome.exe" : "Google Chrome for Testing";
+  try {
+    const found = execSync(`find ${JSON.stringify(dir)} -type f -name ${JSON.stringify(name)}`, { encoding: "utf8" }).trim().split("\n")[0];
+    return found || null;
+  } catch { return null; }
+}
+function bundleChromium(platform) {
+  const exe = cachedChromiumExe(platform);
+  if (!exe) { console.warn(`   \u672a\u627e\u5230 ${platform} Chromium \u7f13\u5b58 \u2014 \u56de\u9000\u7cfb\u7edf Edge(\u5148\u8dd1 prepare-chromium.mjs)`); return ""; }
+  const cacheDir = join(CHROME_CACHE, platform);
+  cpSync(cacheDir, join(out, "chrome", platform), { recursive: true });
+  const rel = join("chrome", platform, relative(cacheDir, exe)); // POSIX(Linux构建)
+  console.log(`   \u2713 ${platform} Chromium(\u7f13\u5b58) \u2192 ${rel}`);
+  return rel;
 }
 const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
 
@@ -74,10 +74,8 @@ execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
 
-console.log("4.5/6 下载内置 Chromium (win64, 根治系统 Edge 控制错页)…");
-const chromeWin = downloadChromium("win64");
-const relWin = chromeWin ? relative(out, chromeWin).split("/").join("\\") : "";  // 正斜杠→反斜杠(Linux构建, Windows运行)
-if (!chromeWin) console.warn("   ⚠️ Chromium 没下成, 客户端会回退系统 Edge(可能仍有 about:blank)");
+console.log("4.5/6 内置 Chromium (从缓存复制, 秒级; 无缓存则回退系统 Edge)…");
+const relWin = bundleChromium("win64").split("/").join("\\");  // 正斜杠→反斜杠(Linux构建, Windows运行)
 
 console.log(`5/6 写启动器 + 配置 + 说明…`);
 const bat = [

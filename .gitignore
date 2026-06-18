@@ -76,3 +76,7 @@ dist-portable-win/
 bossmate-agent-Windows-便携.zip
 dist-portable-mac/
 bossmate-agent-Mac-便携.zip
+
+# 6-18: Agent 内置 Chromium 共享缓存(prepare-chromium.mjs 预下, 体积大, 不提交)
+packages/agent/.chromium-cache/
+packages/agent/dist-portable-*/
