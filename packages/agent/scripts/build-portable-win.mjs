@@ -24,6 +24,18 @@ const NODE_VER = process.env.NODE_VER || "v22.14.0";
 const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
 // 6-18: 从共享缓存复制 Chromium(由 prepare-chromium.mjs 预下), 打包绝不联网 — 否则网页下载卡"生成中"。
 const CHROME_CACHE = join(agentRoot, ".chromium-cache");
+// 6-18: 精简 node_modules — 删运行时用不到的(TS源码/类型/map/文档/测试/license), 大幅减小客户包体积。
+// 只保留 .js/.json/.node 等运行时真需要的。在 Linux 服务器上用 find 执行。
+function pruneNodeModules(nm) {
+  if (!existsSync(nm)) return;
+  const before = (() => { try { return execSync(`du -sm ${JSON.stringify(nm)} | cut -f1`, { encoding: "utf8" }).trim(); } catch { return "?"; } })();
+  try {
+    execSync(`find ${JSON.stringify(nm)} -type f \\( -name "*.ts" -o -name "*.map" -o -name "*.md" -o -name "*.markdown" -o -name "*.flow" -o -iname "license*" -o -iname "readme*" -o -name "*.h" -o -name "*.cc" -o -name "*.gyp" \\) -delete 2>/dev/null || true`);
+    execSync(`find ${JSON.stringify(nm)} -type d \\( -name test -o -name tests -o -name __tests__ -o -name example -o -name examples -o -name docs -o -name doc -o -name ".github" -o -name "coverage" \\) -prune -exec rm -rf {} + 2>/dev/null || true`);
+  } catch { /* 非致命 */ }
+  const after = (() => { try { return execSync(`du -sm ${JSON.stringify(nm)} | cut -f1`, { encoding: "utf8" }).trim(); } catch { return "?"; } })();
+  console.log(`   node_modules 瘦身: ${before}MB → ${after}MB`);
+}
 function cachedChromiumExe(platform) {
   const dir = join(CHROME_CACHE, platform);
   if (!existsSync(dir)) return null;
@@ -74,6 +86,8 @@ writeFileSync(join(out, "package.json"), JSON.stringify({
 execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6-17: --ignore-scripts 跳过 rebrowser 自带 Chromium postinstall(下面单独下 win64)
   cwd: out, stdio: "inherit", env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: "true" },
 });
+console.log("4.6/6 精简 node_modules…");
+pruneNodeModules(join(out, "node_modules"));
 
 console.log("4.5/6 内置 Chromium (从缓存复制, 秒级; 无缓存则回退系统 Edge)…");
 const relWin = (bundleChromium("win64").split("/").join("\\")) || "chrome\\__no_chromium__\\chrome.exe";  // 空则用不存在占位(防 if exist 命中包目录)
