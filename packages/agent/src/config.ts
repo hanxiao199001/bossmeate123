@@ -7,7 +7,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 
 export const AGENT_HOME = join(homedir(), ".bossmate-agent");
 export const CONFIG_PATH = join(AGENT_HOME, "config.json");
@@ -47,6 +47,11 @@ export async function loadConfig(): Promise<AgentConfig | null> {
   } catch {
     return null;
   }
+}
+
+/** 6-18: 设备被吊销/401 时清掉本机配对配置, 下次启动自动重新配对(免手动 rm -rf ~/.bossmate-agent)。 */
+export async function clearConfig(): Promise<void> {
+  try { await unlink(CONFIG_PATH); } catch { /* 不存在即可 */ }
 }
 
 export async function saveConfig(cfg: AgentConfig): Promise<void> {

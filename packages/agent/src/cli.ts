@@ -20,7 +20,7 @@ import {
   loadConfig,
   profileDir,
   saveConfig,
-  type AgentConfig,
+  type AgentConfig,  clearConfig,
 } from "./config.js";
 import { AgentApi, ApiError, type AgentAccount, type AgentTask } from "./api.js";
 import { logger } from "./log.js";
@@ -484,7 +484,10 @@ async function cmdRun(): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof ApiError && err.status === 401) {
-        logger.error("token 失效或设备被吊销, 请重新配对:", msg);
+        // 6-18: 被吊销/失效 → 自动清本机配置, 下次双击启动器即重新配对(免手动删 ~/.bossmate-agent)。
+        logger.error("设备已被吊销(或 token 失效) — 已重置本机配置, 请重新双击启动器即可自动重新配对。");
+        await clearConfig();
+        notify("BossMate: 设备已被吊销", "已重置本机配置, 重新双击启动器即可重新配对");
         process.exit(1);
       }
       logger.warn("领任务失败 (稍后重试):", msg);
