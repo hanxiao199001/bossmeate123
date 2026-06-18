@@ -62,7 +62,8 @@ mkdirSync(out, { recursive: true });
 cpSync(join(agentRoot, "dist"), join(out, "dist"), { recursive: true });
 
 console.log(`3/6 下载 Windows node.exe (${NODE_VER})…`);
-await download(`https://nodejs.org/dist/${NODE_VER}/win-x64/node.exe`, join(out, "node.exe"));
+const NODE_MIRROR = process.env.NODE_MIRROR || "https://cdn.npmmirror.com/binaries/node"; // 6-18 国内镜像
+await download(`${NODE_MIRROR}/${NODE_VER}/win-x64/node.exe`, join(out, "node.exe"));
 
 console.log(`4/6 vendor 运行依赖 (跳过 Chromium, 纯 JS 可跨平台)…`);
 const pkg = JSON.parse(readFileSync(join(agentRoot, "package.json"), "utf8"));
@@ -75,7 +76,7 @@ execSync("npm install --omit=dev --ignore-scripts --no-audit --no-fund", {  // 6
 });
 
 console.log("4.5/6 内置 Chromium (从缓存复制, 秒级; 无缓存则回退系统 Edge)…");
-const relWin = bundleChromium("win64").split("/").join("\\");  // 正斜杠→反斜杠(Linux构建, Windows运行)
+const relWin = (bundleChromium("win64").split("/").join("\\")) || "chrome\\__no_chromium__\\chrome.exe";  // 空则用不存在占位(防 if exist 命中包目录)
 
 console.log(`5/6 写启动器 + 配置 + 说明…`);
 const bat = [

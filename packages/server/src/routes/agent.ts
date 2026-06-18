@@ -544,6 +544,7 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       return reply
         .header("Content-Type", "application/zip")
         .header("Content-Disposition", `attachment; filename="${asciiName}"`)
+        .header("Content-Length", String(statSync(zipPath).size))  // 6-18: 让前端能显示下载进度条
         .send(createReadStream(zipPath));
     }
 

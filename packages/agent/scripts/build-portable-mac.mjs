@@ -47,7 +47,8 @@ const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
 
 function fetchNodeBin(arch, outBin) {
   const dirName = `node-${NODE_VER}-darwin-${arch}`;
-  const url = `https://nodejs.org/dist/${NODE_VER}/${dirName}.tar.gz`;
+  const NODE_MIRROR = process.env.NODE_MIRROR || "https://cdn.npmmirror.com/binaries/node"; // 6-18 国内镜像, 去掉 nodejs.org 依赖
+  const url = `${NODE_MIRROR}/${NODE_VER}/${dirName}.tar.gz`;
   const tmp = `/tmp/bm-node-${arch}`;
   execSync(
     `rm -rf "${tmp}" && mkdir -p "${tmp}" && cd "${tmp}" && curl -fsSL "${url}" -o n.tgz && tar -xzf n.tgz "${dirName}/bin/node"`,

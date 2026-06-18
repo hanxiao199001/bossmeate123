@@ -166,6 +166,7 @@ export default function SettingsPage() {
 
   // 一键下载完整客户包 zip (含预构建 dist + 启动器 + 内置配对码) — 客户解压双击即用
   const [pkgKey, setPkgKey] = useState<string | null>(null); // 哪个下载按钮在加载, 各按钮独立
+  const [pkgProgress, setPkgProgress] = useState<number | null>(null); // 下载进度 0-100(打包阶段为 null)
   const handleDownloadClientPackage = async (platform: "windows" | "mac", portable = false) => {
     const k = `${platform}${portable ? "-p" : ""}`;
     setPkgKey(k);
@@ -182,7 +183,22 @@ export default function SettingsPage() {
         toast.error(msg);
         return;
       }
-      const blob = await res.blob();
+      // 6-18: 流式读取算下载进度(包较大, Content-Length 由服务器返回)
+      const total = Number(res.headers.get("content-length") || 0);
+      let blob: Blob;
+      if (res.body && total > 0) {
+        const reader = res.body.getReader();
+        const chunks: BlobPart[] = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) { chunks.push(value); received += value.length; setPkgProgress(Math.round((received / total) * 100)); }
+        }
+        blob = new Blob(chunks);
+      } else {
+        blob = await res.blob();
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -198,6 +214,7 @@ export default function SettingsPage() {
     } catch {
       toast.error("下载失败, 请重试");
     } finally {
+      setPkgProgress(null);
       setPkgKey(null);
     }
   };
@@ -451,24 +468,6 @@ export default function SettingsPage() {
             >
               {pairingLoading ? "生成中…" : pairing ? "重新生成配对码" : "生成配对码"}
             </button>
-            <button
-              onClick={() => handleDownloadClientPackage("windows")}
-              disabled={pkgKey === "windows"}
-              className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                pkgKey === "windows" ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
-              }`}
-            >
-              {pkgKey === "windows" ? "打包中…" : "下载客户包 · Windows"}
-            </button>
-            <button
-              onClick={() => handleDownloadClientPackage("mac")}
-              disabled={pkgKey === "mac"}
-              className={`ml-2 px-5 py-2 rounded-lg text-sm font-medium text-white transition-all ${
-                pkgKey === "mac" ? "bg-gray-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
-              }`}
-            >
-              {pkgKey === "mac" ? "打包中…" : "下载客户包 · Mac"}
-            </button>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 onClick={() => handleDownloadClientPackage("windows", true)}
@@ -477,7 +476,7 @@ export default function SettingsPage() {
                   pkgKey === "windows-p" ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
                 }`}
               >
-                {pkgKey === "windows-p" ? "生成中(约1-2分)…" : "下载 · Windows(免装Node)"}
+                {pkgKey === "windows-p" ? (pkgProgress != null ? `下载中 ${pkgProgress}%` : "生成中(约1-2分)…") : "下载 · Windows(免装Node)"}
               </button>
               <button
                 onClick={() => handleDownloadClientPackage("mac", true)}
@@ -486,9 +485,17 @@ export default function SettingsPage() {
                   pkgKey === "mac-p" ? "bg-gray-400 cursor-not-allowed" : "bg-violet-600 hover:bg-violet-700 active:scale-95"
                 }`}
               >
-                {pkgKey === "mac-p" ? "生成中(约1-2分)…" : "下载 · Mac(免装Node)"}
+                {pkgKey === "mac-p" ? (pkgProgress != null ? `下载中 ${pkgProgress}%` : "生成中(约1-2分)…") : "下载 · Mac(免装Node)"}
               </button>
             </div>
+            {pkgProgress != null && (
+              <div className="mt-2 max-w-md">
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-violet-600 transition-all" style={{ width: `${pkgProgress}%` }} />
+                </div>
+                <div className="text-xs text-slate-500 mt-1">下载中 {pkgProgress}%(包较大, 请耐心等)</div>
+              </div>
+            )}
             <p className="mt-2 text-xs text-slate-500">
               「免装Node」版客户解压双击即用、无需装任何东西(推荐)。首次点击服务器要现打包, 约 1-2 分钟, 请耐心等; 之后秒下。
             </p>
