@@ -197,11 +197,20 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         ...(nickname ? { realNickname: nickname } : {}),
         profileSyncedAt: new Date().toISOString(),
       };
-      // 登录即绑定到该设备(原 PR-A16 是首次成功发布才绑, 会有多设备领单竞争; 登录即绑更准)
-      const set: Record<string, unknown> = { metadata: meta, agentDeviceId: device.id, updatedAt: new Date() };
-      if (uid) set.accountId = uid;
-      await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
-      logger.info({ accountId: id, nickname, uid, deviceId: device.id }, "agent 回填账号真实信息+绑定设备");
+      // 6-18: 拆成两步, 互不拖累 ——
+      // (1) 关键: 把账号绑到这台设备(决定发布能否路由到本机, 必须成功)。
+      await db.update(platformAccounts)
+        .set({ agentDeviceId: device.id, updatedAt: new Date() })
+        .where(eq(platformAccounts.id, id));
+      // (2) 次要: 回填真实昵称/平台号(仅影响显示; 失败不影响绑定与发布, 不再让整个接口 500)。
+      try {
+        const set: Record<string, unknown> = { metadata: meta, updatedAt: new Date() };
+        if (uid) set.accountId = uid;
+        await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
+      } catch (e) {
+        logger.warn({ accountId: id, err: e instanceof Error ? e.message : e }, "回填昵称/平台号失败(设备已绑定, 不影响发布)");
+      }
+      logger.info({ accountId: id, deviceId: device.id }, "agent 绑定设备成功");
       return { code: "OK" };
     });
 
