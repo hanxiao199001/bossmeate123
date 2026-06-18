@@ -633,10 +633,26 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     };
   });
 
-  /** DELETE /agent-admin/devices/:id — 吊销设备 (status=disabled, token 即刻失效) */
+  /** DELETE /agent-admin/devices/:id — 默认吊销(status=disabled, token 即刻失效); ?purge=true 则硬删除(从列表移除)。 */
   app.delete("/agent-admin/devices/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     if (!UUID_RE.test(id)) return reply.code(400).send({ code: "BAD_REQUEST", message: "id 非法" });
+
+    // 6-17: 硬删除(从已配对列表彻底移除, 多用于清理已吊销/废弃设备)。
+    if ((request.query as { purge?: string })?.purge === "true") {
+      // 先清外键引用: agent_publish_tasks.agent_device_id 是 NO ACTION(会挡删除), platform_accounts 是 SET NULL(也显式清)。
+      await db.update(agentPublishTasks).set({ agentDeviceId: null })
+        .where(and(eq(agentPublishTasks.agentDeviceId, id), eq(agentPublishTasks.tenantId, request.tenantId)));
+      await db.update(platformAccounts).set({ agentDeviceId: null, updatedAt: new Date() })
+        .where(and(eq(platformAccounts.agentDeviceId, id), eq(platformAccounts.tenantId, request.tenantId)));
+      const del = await db.delete(agentDevices)
+        .where(and(eq(agentDevices.id, id), eq(agentDevices.tenantId, request.tenantId)))
+        .returning({ id: agentDevices.id });
+      if (del.length === 0) return reply.code(404).send({ code: "NOT_FOUND", message: "设备不存在" });
+      logger.info({ deviceId: id }, "硬删除设备并清理引用(从列表移除)");
+      return { code: "OK", data: { id, deleted: true } };
+    }
+
     const updated = await db
       .update(agentDevices)
       .set({ status: "disabled", updatedAt: new Date() })

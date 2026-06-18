@@ -108,6 +108,7 @@ export default function SettingsPage() {
   const [pairingLoading, setPairingLoading] = useState(false);
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const loadAgentDevices = async () => {
     try {
@@ -214,6 +215,27 @@ export default function SettingsPage() {
     try {
       await api.delete(`/agent-admin/devices/${deviceId}`);
       toast.success("设备已吊销");
+      await loadAgentDevices();
+    } catch {
+      /* 错误已由 api 统一 toast */
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  // 删除: 从列表彻底移除(硬删, ?purge=true)。二次点击确认。
+  const handleDeleteDevice = async (deviceId: string) => {
+    if (deleteConfirmId !== deviceId) {
+      setDeleteConfirmId(deviceId);
+      toast.warning("再点一次「确认删除」— 从列表彻底移除该设备");
+      setTimeout(() => setDeleteConfirmId((cur) => (cur === deviceId ? null : cur)), 4000);
+      return;
+    }
+    setDeleteConfirmId(null);
+    setRevokingId(deviceId);
+    try {
+      await api.delete(`/agent-admin/devices/${deviceId}?purge=true`);
+      toast.success("设备已删除");
       await loadAgentDevices();
     } catch {
       /* 错误已由 api 统一 toast */
@@ -534,6 +556,19 @@ export default function SettingsPage() {
                           </div>
                         )}
                       </div>
+                      {revoked && (
+                        <button
+                          onClick={() => handleDeleteDevice(d.id)}
+                          disabled={revokingId === d.id}
+                          className={`shrink-0 px-3 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                            deleteConfirmId === d.id
+                              ? "border-rose-500 bg-rose-500 text-white hover:bg-rose-600"
+                              : "border-gray-200 text-gray-500 hover:bg-gray-50"
+                          } ${revokingId === d.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                        >
+                          {revokingId === d.id ? "删除中…" : deleteConfirmId === d.id ? "确认删除" : "删除"}
+                        </button>
+                      )}
                       {!revoked && (
                         <button
                           onClick={() => handleRevokeDevice(d.id)}
