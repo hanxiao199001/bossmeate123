@@ -27,6 +27,7 @@ import { logger } from "./log.js";
 import { isLoggedIn, launchAccountBrowser, openPlatformHome, scrapeAccountProfile } from "./browser.js";
 import { PLATFORM_PUSHERS } from "./pushers.js";
 import { notify } from "./notify.js";
+import { startControlServer, openUrl } from "./control-server.js";
 import { cmdInstallService, cmdServiceStatus, cmdUninstallService } from "./service.js";
 
 const AGENT_VERSION = "0.1.0";
@@ -213,7 +214,7 @@ async function cmdEnsureLogin(_args: string[]): Promise<void> {
   const api = new AgentApi(cfg.serverUrl, cfg.token);
   const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
   if (accounts.length === 0) {
-    logger.info("还没有为这台设备开通任何抖音/视频号账号 — 请联系对接人在后台为你开通(无需你操作)。开通后重开本程序会自动弹出扫码。");
+    logger.info("还没有账号 — 稍后程序会自动打开一个\"添加账号\"网页, 点上面的按钮(登录抖音/视频号)用手机扫码即可自己加号, 全程不用打字。");
     return;
   }
   const need: AgentAccount[] = [];
@@ -270,18 +271,33 @@ async function cmdStatus(args: string[]): Promise<void> {
 // 6-17: 空闲时主动给"本机还没登录"的抖音/视频号账号弹浏览器扫码 → 一台设备绑多账号, 网页加了号这台在线机器自动弹码, 无需重启/终端。
 const PROACTIVE_LOGIN_WAIT_MS = 2 * 60_000;        // 主动弹码等扫 2 分钟(比被动自愈短, 减少挡领单)
 const PROACTIVE_LOGIN_COOLDOWN_MS = 10 * 60_000;   // 弹了没扫上 → 10 分钟内不再弹同一个, 防骚扰
+
+// 共享登录锁: 防"控制台自助加号"与"挂机自动补登"对同一账号同时弹两个登录浏览器。
+const loginLocks = new Set<string>();
+async function loginOnce(api: AgentApi, account: AgentAccount, cooldown?: Map<string, number>): Promise<boolean> {
+  if (loginLocks.has(account.id)) return false;
+  loginLocks.add(account.id);
+  try {
+    const ok = await loginAccount(account, api, PROACTIVE_LOGIN_WAIT_MS);
+    if (!ok && cooldown) cooldown.set(account.id, Date.now() + PROACTIVE_LOGIN_COOLDOWN_MS);
+    return ok;
+  } finally {
+    loginLocks.delete(account.id);
+  }
+}
+
 async function proactiveLogin(api: AgentApi, cooldown: Map<string, number>): Promise<void> {
   const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
   const now = Date.now();
   for (const a of accounts) {
     if ((cooldown.get(a.id) ?? 0) > now) continue;           // 冷却中, 跳过
+    if (loginLocks.has(a.id)) continue;                       // 正在登录(可能控制台触发的), 跳过
     let hasProfile = false;
     try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
     if (hasProfile) continue;                                  // 已登录, 跳过
     logger.info(`[${platformLabel(a.platform)}] ${a.accountName}: 未登录, 弹出浏览器请扫码绑定到本机...`);
     notify("BossMate: 请扫码绑定账号", `[${platformLabel(a.platform)}] ${a.accountName} 请扫描弹出的浏览器二维码, 扫完即绑定本机`);
-    const ok = await loginAccount(a, api, PROACTIVE_LOGIN_WAIT_MS);
-    if (!ok) cooldown.set(a.id, now + PROACTIVE_LOGIN_COOLDOWN_MS); // 没扫上 → 冷却
+    await loginOnce(api, a, cooldown);
     return;                                                    // 一次只处理一个, 处理完回到轮询(发布优先)
   }
 }
@@ -443,6 +459,23 @@ async function cmdRun(): Promise<void> {
   let lastEnsureAt = 0;
   const ENSURE_INTERVAL_MS = 60_000;
   const loginCooldown = new Map<string, number>();
+
+  // 6-18 客户自助加号: 起本地控制台(仅 localhost)并自动打开。点按钮 → 建号 + 弹登录扫码(后台), 客户零打字。
+  const ctl = await startControlServer((platform) => {
+    void (async () => {
+      try {
+        const account = await api.createAccount(platform);
+        logger.info(`[控制台] 已创建${platformLabel(platform)}账号, 正在弹出登录页, 请扫码...`);
+        await loginOnce(api, account, loginCooldown);
+      } catch (e) {
+        logger.warn("[控制台] 自助加号失败:", e instanceof Error ? e.message : e);
+      }
+    })();
+  }).catch(() => null);
+  if (ctl) {
+    logger.info(`想自己加抖音/视频号? 浏览器打开 http://localhost:${ctl.port} (已自动打开, 也可双击"添加账号"启动器)`);
+    openUrl(`http://localhost:${ctl.port}`);
+  }
 
   while (!stopping) {
     let tasks: AgentTask[] = [];

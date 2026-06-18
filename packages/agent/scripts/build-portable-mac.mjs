@@ -120,29 +120,15 @@ writeFileSync(join(out, "start-agent.command"), cmd, { encoding: "utf8" });
 chmodSync(join(out, "start-agent.command"), 0o755);
 
 // 6-17: 双击即"登录新账号" — 选平台→弹浏览器扫码→自动建号绑定本机, 不用去网页建号、不碰终端。
-const loginCmd = [
+// 6-18: 双击打开本机"添加账号"控制台(两个按钮: 登录抖音/视频号), 客户点一下扫码即加好。
+// 需 start-agent.command 正在运行(它会起本地控制台并自动打开此页; 关了可用本启动器再开)。
+const addCmd = [
   "#!/bin/bash",
-  'DIR="$(cd "$(dirname "$0")" && pwd)"',
-  'cd "$DIR" || exit 1',
-  'xattr -dr com.apple.quarantine "$DIR" 2>/dev/null || true',
-  "clear",
-  'echo "=== BossMate 扫码登录账号 ==="',
-  "echo",
-  'ARCH="$(uname -m)"',
-  'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
-  'chmod +x "$NODE" 2>/dev/null || true',
-  'if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then',
-  '  echo "还没配对设备 — 请先双击 start-agent.command 完成配对, 再来登录账号。"',
-  '  echo "按回车关闭。"; read -r _; exit 1',
-  "fi",
-  '"$NODE" dist/cli.js ensure-login',
-  "echo",
-  'echo "扫码完成。要开始自动发布请双击 start-agent.command。按回车关闭。"',
-  "read -r _",
+  'open "http://localhost:17653" 2>/dev/null || true',
   "",
 ].join("\n");
-writeFileSync(join(out, "登录账号.command"), loginCmd, { encoding: "utf8" });
-chmodSync(join(out, "登录账号.command"), 0o755);
+writeFileSync(join(out, "添加账号.command"), addCmd, { encoding: "utf8" });
+chmodSync(join(out, "添加账号.command"), 0o755);
 
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\n" +
@@ -154,10 +140,10 @@ writeFileSync(join(out, "使用说明.txt"),
   "2. 双击 start-agent.command。\n" +
   "   - 若提示\"无法打开, 来自身份不明的开发者\": 右键点 start-agent.command → 选\"打开\" → 再点\"打开\"(只需一次)。\n" +
   "3. 窗口提示输入配对码时, 把对接人发你的 6 位数字敲进去回车(过期了会让你重输, 不会卡死)。\n" +
-  "4. 会自动弹出浏览器, 用手机 App(抖音/微信)扫码登录账号(没有账号会先让你选平台登录一个)。\n" +
+  "4. 启动后会自动打开一个\"添加账号\"网页, 点【登录抖音】或【登录视频号】→ 弹出登录页用手机扫码 → 这个号就加好并绑定本机了。可重复点, 加多个号。\n" +
   "5. 之后保持窗口开着、电脑别休眠, 即自动发布。停止按 Ctrl + C。\n\n" +
-  "【账号要重新扫码登录?】双击同目录的 \"登录账号.command\", 没登录的账号会自动弹出二维码, 扫一下即可(全程只扫码, 不用输入任何东西)。\n" +
-  "【账号掉线/换号了?】同样双击 \"登录账号.command\" 重新扫码; 或重开 start-agent.command 也会自动给没登录的号补扫。\n\n" +
+  "【想再加号 / 网页关了?】双击同目录的 \"添加账号.command\" 重新打开那个网页, 点按钮扫码即可(全程只扫码, 不用输入)。\n" +
+  "【账号掉线了?】不用管, 下次要发它时会自动弹出二维码让你重扫。\n\n" +
   "本版自带运行环境, 无需安装 Node.js, 用系统自带 Edge/Chrome 浏览器。\n", { encoding: "utf8" });
 
 console.log("6/6 打包 zip…");

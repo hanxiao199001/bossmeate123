@@ -110,24 +110,13 @@ const bat = [
 writeFileSync(join(out, "start-agent.bat"), bat, { encoding: "ascii" });
 
 // 6-17: 双击即"登录/添加账号"。内容全 ASCII(中文会触发 GBK 闪退, 见历史教训); 中文提示由 node 进程输出。
-const loginBat = [
+// 6-18: 双击打开本机"添加账号"控制台(需 start-agent.bat 正在运行)。内容全 ASCII(中文会触发 GBK 闪退)。
+const addBat = [
   "@echo off",
-  "setlocal enabledelayedexpansion",
-  'cd /d "%~dp0"',
-  "title BossMate Add Account",
-  'set "NODE=%~dp0node.exe"',
-  'if not exist "%USERPROFILE%\\.bossmate-agent\\config.json" goto notpaired',
-  '"%NODE%" dist\\cli.js ensure-login',
-  "echo.",
-  "echo Done. To start auto-publishing, run start-agent.bat.",
-  "pause",
-  "exit /b 0",
-  ":notpaired",
-  "echo Not paired yet. Please run start-agent.bat first to pair, then come back.",
-  "pause",
+  'start "" "http://localhost:17653"',
   "",
 ].join("\r\n");
-writeFileSync(join(out, "登录账号.bat"), loginBat, { encoding: "ascii" });
+writeFileSync(join(out, "添加账号.bat"), addBat, { encoding: "ascii" });
 
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\r\n" +
@@ -139,10 +128,10 @@ writeFileSync(join(out, "使用说明.txt"),
   "2. 双击 start-agent.bat。\r\n" +
   "   - 若弹蓝色\"Windows 已保护你的电脑\": 点\"更多信息\" → \"仍要运行\"。\r\n" +
   "3. 窗口提示输入配对码时, 把对接人发你的 6 位数字敲进去回车。\r\n" +
-  "4. 会自动弹出 Edge 浏览器, 用手机 App(抖音/微信)扫码登录账号(没有账号会先让你选平台登录一个)。\r\n" +
+  "4. 启动后会自动打开一个\"添加账号\"网页, 点【登录抖音】或【登录视频号】→ 弹出 Edge 登录页用手机扫码 → 这个号就加好并绑定本机。可重复点, 加多个号。\r\n" +
   "5. 之后保持窗口开着、电脑别休眠, 即自动发布。停止按 Ctrl+C。\r\n\r\n" +
-  "【账号要重新扫码登录?】双击同目录的 登录账号.bat, 没登录的账号会自动弹出二维码, 扫一下即可(全程只扫码, 不用输入)。\r\n" +
-  "【账号掉线/换号了?】同样双击 登录账号.bat 重新扫码; 或重开 start-agent.bat 也会自动给没登录的号补扫。\r\n\r\n" +
+  "【想再加号 / 网页关了?】双击同目录的 添加账号.bat 重新打开那个网页, 点按钮扫码即可(全程只扫码, 不用输入)。\r\n" +
+  "【账号掉线了?】不用管, 下次要发它时会自动弹出二维码让你重扫。\r\n\r\n" +
   "本版自带运行环境, 无需安装 Node.js, 用系统自带 Edge 浏览器。\r\n", { encoding: "utf8" });
 
 console.log(`6/6 打包 zip…`);
