@@ -160,10 +160,11 @@ export async function scrapeAccountProfile(page: Page, platform: string): Promis
 /** 打开平台主页, 留 3s 渲染。默认复用首个标签页; newTab=true 时新开标签页
  *  (复用半自动任务留下的浏览器时必须新开, 不能动用户待点发布的那个标签)。 */
 export async function openPlatformHome(browser: Browser, platform: string, newTab = false): Promise<Page> {
-  const pages = await browser.pages();
-  const page = newTab ? await browser.newPage() : (pages[0] ?? (await browser.newPage()));
   const home = PLATFORM_HOME[platform];
   if (!home) throw new Error(`平台 ${platform} 不支持本地浏览器登录`);
+  // 6-18: 始终新开一页导航 — Edge 启动占住的初始 about:blank 可能不是 puppeteer 实际控制的可见页,
+  // 复用它会"卡 about:blank 不跳转"(已确诊为浏览器控制问题)。新开的页一定是受控页。
+  const page = await browser.newPage();
   await page.bringToFront().catch(() => {});
   // 6-18: 跳转加固 — 重试一次; 即使超时也不硬失败(登录二维码可能已渲染); 记录最终地址便于排查"卡 about:blank"。
   let navOk = false;
@@ -177,6 +178,15 @@ export async function openPlatformHome(browser: Browser, platform: string, newTa
     }
   }
   await page.bringToFront().catch(() => {});
+  if (!newTab) {
+    // 关掉 Edge 启动残留的空白标签, 只留导航好的这页
+    for (const p of await browser.pages()) {
+      if (p !== page) {
+        const u = p.url();
+        if (u === "about:blank" || u === "") await p.close().catch(() => {});
+      }
+    }
+  }
   await new Promise((r) => setTimeout(r, 3_000));
   logger.info(`已打开 ${platform} 登录页, 当前地址: ${page.url()}`);
   return page;
