@@ -212,7 +212,13 @@ async function cmdEnsureLogin(_args: string[]): Promise<void> {
   const cfg = await requireConfig();
   await ensureDirs();
   const api = new AgentApi(cfg.serverUrl, cfg.token);
-  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  let accounts;
+  try {
+    accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+  } catch (err) {
+    await exitIfRevoked(err); // 401(吊销)→ 清配置退出
+    throw err;
+  }
   if (accounts.length === 0) {
     logger.info("还没有账号 — 稍后程序会自动打开一个\"添加账号\"网页, 点上面的按钮(登录抖音/视频号)用手机扫码即可自己加号, 全程不用打字。");
     return;
@@ -268,6 +274,16 @@ async function cmdStatus(args: string[]): Promise<void> {
 }
 
 // ===== run =====
+// 6-18: 任意 401(token 失效/设备已吊销)→ 清本机配置 + 退出, 下次双击启动器自动重新配对(免手动删 ~/.bossmate-agent)。
+async function exitIfRevoked(err: unknown): Promise<void> {
+  if (err instanceof ApiError && err.status === 401) {
+    logger.error("设备已被吊销(或 token 失效) — 已重置本机配置。请重新双击启动器即可自动重新配对(若提示配对码过期, 让对接人重发新码)。");
+    await clearConfig();
+    notify("BossMate: 设备已被吊销", "已重置本机配置, 重新双击启动器即可重新配对");
+    process.exit(1);
+  }
+}
+
 // 6-17: 空闲时主动给"本机还没登录"的抖音/视频号账号弹浏览器扫码 → 一台设备绑多账号, 网页加了号这台在线机器自动弹码, 无需重启/终端。
 const PROACTIVE_LOGIN_WAIT_MS = 2 * 60_000;        // 主动弹码等扫 2 分钟(比被动自愈短, 减少挡领单)
 const PROACTIVE_LOGIN_COOLDOWN_MS = 10 * 60_000;   // 弹了没扫上 → 10 分钟内不再弹同一个, 防骚扰
@@ -450,7 +466,8 @@ async function cmdRun(): Promise<void> {
     const pong = await api.ping();
     logger.info(`Agent v${AGENT_VERSION} 已启动: 服务器 ${cfg.serverUrl} 连通正常 (设备 ${pong.deviceId.slice(0, 8)}…)`);
   } catch (err) {
-    logger.error("服务器连不通, 请检查网络/服务器地址/token:", err instanceof Error ? err.message : err);
+    await exitIfRevoked(err); // 401(吊销)→ 清配置退出
+    logger.error("服务器连不通, 请检查网络/服务器地址:", err instanceof Error ? err.message : err);
     process.exit(1);
   }
   logger.info(`开始轮询领任务 (每 ${CLAIM_INTERVAL_MS / 1000}s, 平台: ${platforms.map(platformLabel).join("/")})。Ctrl+C 退出。`);
@@ -483,13 +500,7 @@ async function cmdRun(): Promise<void> {
       tasks = await api.claimTasks(platforms, 1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (err instanceof ApiError && err.status === 401) {
-        // 6-18: 被吊销/失效 → 自动清本机配置, 下次双击启动器即重新配对(免手动删 ~/.bossmate-agent)。
-        logger.error("设备已被吊销(或 token 失效) — 已重置本机配置, 请重新双击启动器即可自动重新配对。");
-        await clearConfig();
-        notify("BossMate: 设备已被吊销", "已重置本机配置, 重新双击启动器即可重新配对");
-        process.exit(1);
-      }
+      await exitIfRevoked(err); // 401(吊销)→ 清配置退出
       logger.warn("领任务失败 (稍后重试):", msg);
     }
 
