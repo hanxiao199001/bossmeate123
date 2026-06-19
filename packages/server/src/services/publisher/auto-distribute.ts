@@ -4,12 +4,13 @@
  * 入 bulk-distribute 队列 → 公众号草稿 (capability=draft_only 的号只建草稿, 不直接群发, 风险可控)。
  * 老板早上打开今日页看到的就是"已分好已进草稿箱", 只需抽查。
  */
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, tenants, users } from "../../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { bulkDistributeQueue, initBulkProgress } from "../bulk-distribute/queue.js";
 import { computeSmartPairs } from "./smart-assign.js";
+import { splitAlreadyPublished } from "../bulk-distribute/dedup.js";
 import { logger } from "../../config/logger.js";
 
 const BJ_OFFSET_MS = 8 * 3600_000;
@@ -65,15 +66,8 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
         logger.info({ tenantId: t.id, unmatched: unmatched.length }, "PR-W6 auto-distribute: 该租户无可配对内容");
         continue;
       }
-      // 已发过的 (content,account) 跳过
-      const tupleConds = pairs.map((p) => sql`(${p.articleId}::uuid, ${p.accountId}::uuid)`);
-      const existing = await db.execute(sql`
-        SELECT content_id, account_id FROM content_publish_log
-        WHERE status = 'success' AND (content_id, account_id) IN (${sql.join(tupleConds, sql`, `)})
-      `);
-      const done = new Set(((existing as any).rows as Array<{ content_id: string; account_id: string }>)
-        .map((r) => `${r.content_id}|${r.account_id}`));
-      const fresh = pairs.filter((p) => !done.has(`${p.articleId}|${p.accountId}`));
+      // 已发过的 (content,account) 跳过 — 与手动批量分发共用同一套去重 (splitAlreadyPublished)
+      const { fresh } = await splitAlreadyPublished(pairs.map((p) => ({ contentId: p.articleId, accountId: p.accountId })));
       if (fresh.length === 0) continue;
 
       const [u] = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, t.id)).limit(1);
@@ -86,8 +80,8 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
         const p = fresh[i]!;
         await bulkDistributeQueue.add(
           "bulk-job",
-          { batchId, contentId: p.articleId, accountId: p.accountId, tenantId: t.id, userId: u.id },
-          { delay: i * 5000, jobId: `${batchId}-${p.articleId}-${p.accountId}` }
+          { batchId, contentId: p.contentId, accountId: p.accountId, tenantId: t.id, userId: u.id },
+          { delay: i * 5000, jobId: `${batchId}-${p.contentId}-${p.accountId}` }
         );
       }
       totalQueued += fresh.length;

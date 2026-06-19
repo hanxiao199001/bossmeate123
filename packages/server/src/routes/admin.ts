@@ -18,6 +18,7 @@ import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
 import { recommendJournals } from "../services/recommendation/journal-recommender.js";
 import { selectCandidates, DISCIPLINE_ROTATION, getJournal30dCount } from "../services/recommendation/daily-cron.js";
+import { splitAlreadyPublished } from "../services/bulk-distribute/dedup.js";
 import { ALL_DISCIPLINES } from "../services/content-engine/topic-recommender.js";
 import { keywords as keywordsTable } from "../models/schema.js";
 import { inArray } from "drizzle-orm";
@@ -531,20 +532,9 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
-      // 2. 查已成功的 (cid, aid) 对 — 直接 raw sql IN tuple match
-      const tupleList = pairs.map((p) => `(${escapeUuid(p.contentId)}::uuid, ${escapeUuid(p.accountId)}::uuid)`).join(",");
-      const existingResult = await db.execute(
-        sqlRaw(`SELECT content_id, account_id FROM content_publish_log WHERE status = 'success' AND (content_id, account_id) IN (${tupleList})`)
-      );
-      const existing = new Set(
-        ((existingResult as any).rows as Array<{ content_id: string; account_id: string }>).map(
-          (r) => `${r.content_id}|${r.account_id}`
-        )
-      );
-
+      // 2. 去重 — 与自动分发共用 splitAlreadyPublished (剔除已成功发过的 content×account)
+      const { fresh: queuedPairs, skipped: skippedPairs } = await splitAlreadyPublished(pairs);
       const batchId = `bd-${nanoid(10)}`;
-      const skippedPairs = pairs.filter((p) => existing.has(`${p.contentId}|${p.accountId}`));
-      const queuedPairs = pairs.filter((p) => !existing.has(`${p.contentId}|${p.accountId}`));
 
       // 3. INSERT skipped log (ON CONFLICT update updated_at — 不破坏已有 success)
       if (skippedPairs.length > 0) {
