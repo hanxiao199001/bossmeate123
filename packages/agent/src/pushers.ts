@@ -514,40 +514,43 @@ export async function wechatVideoPushDraft({ page, videoPath, caption, title }: 
   let descFilled = false;
   for (let i = 0; i < 3 && !descFilled; i++) {
     try {
-      await editor.click();
-      await new Promise((r) => setTimeout(r, 600));
-      await page.keyboard.down(selectAllKey); await page.keyboard.press("KeyA"); await page.keyboard.up(selectAllKey);
-      await page.keyboard.press("Backspace");
-      await page.keyboard.type(caption, { delay: 30 });
-      await new Promise((r) => setTimeout(r, 1_200));
-      let got: string = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
-      descFilled = got.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
-      // 6-11 二轮: 键盘输入进不去(读回为空) → JS 原生赋值兜底(S18 短标题同款思路, 已被验证可行)
-      if (!descFilled) {
-        const jsSet = await (editor as any).evaluate((el: any, val: string) => {
-          const win = (globalThis as any).window;
-          try {
-            if (el.getAttribute && el.getAttribute("contenteditable") === "true") {
-              el.focus?.();
-              el.textContent = val;
-              el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, data: val, inputType: "insertText" }));
-              el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
-              return ((el.innerText ?? el.textContent ?? "") as string).trim().length > 0;
-            }
-            const proto = el.tagName === "TEXTAREA" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
+      // 6-19: 视频号描述是框架受控 contenteditable, 直接 type/赋值常进不去(读回空)。
+      // 改用 execCommand("insertText") — 对受控富文本编辑器最稳, 会触发框架自己的 input 处理。
+      const got1: string = await (editor as any).evaluate((el: any, val: string) => {
+        const doc = (globalThis as any).document; const win = (globalThis as any).window;
+        const ed = (el.getAttribute && el.getAttribute("contenteditable") === "true")
+          ? el : (el.querySelector?.('[contenteditable="true"]') || el);
+        try {
+          ed.focus?.();
+          if (ed.isContentEditable) {
+            const sel = win.getSelection?.();
+            const range = doc.createRange(); range.selectNodeContents(ed);
+            sel.removeAllRanges(); sel.addRange(range);
+            doc.execCommand("delete", false);
+            doc.execCommand("insertText", false, val);
+          } else {
+            const proto = ed.tagName === "TEXTAREA" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
             const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-            setter ? setter.call(el, val) : (el.value = val);
-            el.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
-            el.dispatchEvent(new win.Event("change", { bubbles: true, composed: true }));
-            return true;
-          } catch { return false; }
-        }, caption);
-        await new Promise((r) => setTimeout(r, 800));
-        got = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
-        descFilled = jsSet && got.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
-        logger.info({ jsSet, gotLen: got.length }, "视频号: JS 直写描述兜底");
+            setter ? setter.call(ed, val) : (ed.value = val);
+            ed.dispatchEvent(new win.Event("input", { bubbles: true, composed: true }));
+          }
+        } catch { /* noop */ }
+        return ((ed.innerText ?? ed.textContent ?? ed.value ?? "") as string).trim();
+      }, caption);
+      descFilled = got1.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
+      // 兜底: execCommand 没生效 → 键盘逐字打(先点焦点到编辑器)
+      if (!descFilled) {
+        await editor.click().catch(() => {});
+        await new Promise((r) => setTimeout(r, 500));
+        await page.keyboard.down(selectAllKey); await page.keyboard.press("KeyA"); await page.keyboard.up(selectAllKey);
+        await page.keyboard.press("Backspace");
+        await page.keyboard.type(caption, { delay: 25 });
+        await new Promise((r) => setTimeout(r, 1_000));
+        const got2: string = await (editor as any).evaluate((el: any) => ((el.innerText ?? el.textContent ?? el.value ?? "") as string).trim());
+        descFilled = got2.replace(/\s+/g, "").includes(caption.replace(/\s+/g, "").slice(0, 8));
+        logger.info({ method: "keyboard", gotLen: got2.length }, "视频号: 键盘兜底填描述");
       }
-      if (!descFilled) logger.warn({ attempt: i + 1, got: got.slice(0, 40) }, "视频号: 描述读回不匹配, 重试");
+      if (!descFilled) logger.warn({ attempt: i + 1, gotLen: got1.length }, "视频号: 描述读回不匹配, 重试");
     } catch (e) {
       logger.warn({ attempt: i + 1, err: e instanceof Error ? e.message : e }, "视频号: 填描述异常, 重试");
     }
