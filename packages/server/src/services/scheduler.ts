@@ -370,17 +370,21 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return cleanupResult;
     }
     case "journal-trust-reverify": {
-      // PR #107：批量 reverify 未验证 / 30 天前的期刊。
-      // 6-19: 排序改为"最久没核验优先"(lastVerifiedAt ASC NULLS FIRST), 保证没有刊被长期饿着不刷新 IF;
-      //   可信度作次序。这样 ~3 个月把全库滚一遍, IF 滚动保鲜(老韩诉求: 最久没核验的先刷)。
+      // PR #107 + 6-19: 每日去 LetPub 重核验, "最久没核验优先"(lastVerifiedAt ASC NULLS FIRST), ~3个月滚全库一遍。
+      // 两个 env 开关(新一年 JCR 发布时加速全量核对一遍, 之后恢复默认):
+      //   JOURNAL_REVERIFY_DAILY_LIMIT  每日批量(默认100; JCR新发布时可临时调高如400, 3周扫完全库, 之后调回)
+      //   JOURNAL_REVERIFY_FORCE_ALL=true  忽略30天门槛, 重核所有刊(连最近核过的2025数据也重拉2026); 扫完一轮后改回 false
       const { sql: drizzleSql, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
+      const reverifyLimit = Number(process.env.JOURNAL_REVERIFY_DAILY_LIMIT) || 100;
+      const forceAll = process.env.JOURNAL_REVERIFY_FORCE_ALL === "true";
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const candidates = await db
         .select({ id: journals.id })
         .from(journals)
-        .where(drizzleOr(drizzleIsNull(journals.lastVerifiedAt), drizzleLt(journals.lastVerifiedAt, cutoff)))
+        .where(forceAll ? undefined : drizzleOr(drizzleIsNull(journals.lastVerifiedAt), drizzleLt(journals.lastVerifiedAt, cutoff)))
         .orderBy(drizzleSql`${journals.lastVerifiedAt} ASC NULLS FIRST`, drizzleSql`${journals.confidence} ASC NULLS FIRST`)
-        .limit(100);
+        .limit(reverifyLimit);
+      logger.info({ reverifyLimit, forceAll, picked: candidates.length }, "PR#107 reverify: 本轮取刊");
       const { enrichJournal } = await import("./journal-enricher/orchestrator.js");
       let success = 0; let failed = 0;
       for (const c of candidates) {
