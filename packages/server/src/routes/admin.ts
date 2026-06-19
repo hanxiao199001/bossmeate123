@@ -496,6 +496,57 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
+   * POST /admin/auto-distribute/preview — 立即配对预览(= 把每天 07:00 自动分发现在算一遍, 不入队)。
+   * 取今日池(本租户自有当日生成 → 无则系统池) → computeSmartPairs(按账号定位+领域配对) →
+   * splitAlreadyPublished 标注已发过的。返回带 标题/账号名 的 fresh/skipped/unmatched 供前端弹窗。
+   * 确认分发由前端拿 fresh 调 /admin/bulk-distribute {pairs} (同一套去重, 幂等)。
+   */
+  app.post("/auto-distribute/preview", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const BJ = 8 * 3600_000;
+      const bj = new Date(Date.now() + BJ); bj.setUTCHours(0, 0, 0, 0);
+      const startToday = new Date(bj.getTime() - BJ);
+      const todayGenerated = (tid: string) => db.select({ id: contents.id })
+        .from(contents)
+        .where(and(eq(contents.tenantId, tid), eq(contents.type, "article"), gte(contents.createdAt, startToday), eq(contents.status, "generated")))
+        .limit(100);
+      let pool = await todayGenerated(request.tenantId);
+      let poolSource = "tenant";
+      if (pool.length === 0) { pool = await todayGenerated(SYSTEM_RECOMMENDATION_TENANT_ID); poolSource = "system"; }
+      const articleIds = pool.map((r) => r.id);
+      if (articleIds.length === 0) {
+        return { code: "OK", data: { poolSource, poolSize: 0, fresh: [], skipped: [], unmatched: [], freshCount: 0, skippedCount: 0 } };
+      }
+      const { computeSmartPairs } = await import("../services/publisher/smart-assign.js");
+      const { pairs, unmatched } = await computeSmartPairs({ tenantId: request.tenantId, articleIds });
+      const { fresh, skipped } = await splitAlreadyPublished(
+        pairs.map((p) => ({ contentId: p.articleId, accountId: p.accountId, discipline: p.discipline })),
+      );
+      // 富化: 标题(全池, 含 unmatched) + 账号名
+      const titleMap = new Map<string, string>();
+      (await db.select({ id: contents.id, title: contents.title }).from(contents).where(inArray(contents.id, articleIds)))
+        .forEach((r) => titleMap.set(r.id, r.title ?? "(无标题)"));
+      const aids = [...new Set(pairs.map((p) => p.accountId))];
+      const nameMap = new Map<string, string>();
+      if (aids.length > 0) {
+        (await db.select({ id: platformAccounts.id, accountName: platformAccounts.accountName }).from(platformAccounts).where(inArray(platformAccounts.id, aids)))
+          .forEach((r) => nameMap.set(r.id, r.accountName));
+      }
+      const enrich = (arr: Array<{ contentId: string; accountId: string; discipline: string | null }>) =>
+        arr.map((p) => ({ contentId: p.contentId, accountId: p.accountId, title: titleMap.get(p.contentId) ?? "", accountName: nameMap.get(p.accountId) ?? "(未知账号)", discipline: p.discipline ?? null }));
+      return { code: "OK", data: {
+        poolSource, poolSize: articleIds.length,
+        fresh: enrich(fresh), skipped: enrich(skipped),
+        freshCount: fresh.length, skippedCount: skipped.length,
+        unmatched: unmatched.map((u) => ({ contentId: u.articleId, title: titleMap.get(u.articleId) ?? "", reason: u.reason })),
+      } };
+    } catch (err) {
+      logger.error({ err }, "auto-distribute preview 失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "配对预览失败" });
+    }
+  });
+
+  /**
    * POST /admin/bulk-distribute
    * body: { articleIds: uuid[], accountIds: uuid[], options?: {throttleMs: 3000} }
    * 返回: { batchId, total, skipped, queued }

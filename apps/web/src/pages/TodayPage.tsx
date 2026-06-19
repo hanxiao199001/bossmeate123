@@ -130,6 +130,43 @@ export default function TodayPage() {
     }
   };
 
+  // 6-19: 立即配对预览 → 确认分发(= 把每天 07:00 自动分发现在手动跑一次, 仅公众号; 抖音/视频号走手动)
+  const isAdmin = !!user && (user.role === "owner" || user.role === "admin");
+  const [previewing, setPreviewing] = useState(false);
+  const [distributing, setDistributing] = useState(false);
+  type PreviewRow = { contentId: string; accountId: string; title: string; accountName: string; discipline: string | null };
+  const [preview, setPreview] = useState<null | {
+    poolSource: string; poolSize: number; freshCount: number; skippedCount: number;
+    fresh: PreviewRow[]; skipped: PreviewRow[]; unmatched: Array<{ title: string; reason: string }>;
+  }>(null);
+  const openPreview = async () => {
+    setPreviewing(true);
+    try {
+      const res = await api.post<{ data?: unknown }>("/admin/auto-distribute/preview", {});
+      setPreview(((res.data as { data?: unknown })?.data ?? res.data) as never);
+    } catch (e) {
+      alert("配对预览失败：" + ((e as { message?: string })?.message ?? "未知错误"));
+    } finally {
+      setPreviewing(false);
+    }
+  };
+  const confirmDistribute = async () => {
+    if (!preview || preview.fresh.length === 0) return;
+    setDistributing(true);
+    try {
+      const pairs = preview.fresh.map((p) => ({ articleId: p.contentId, accountId: p.accountId }));
+      const res = await api.post<{ data?: { queued?: number; skipped?: number } }>("/admin/bulk-distribute", { pairs });
+      const d = (res.data as { data?: { queued?: number; skipped?: number } })?.data ?? (res.data as { queued?: number; skipped?: number });
+      alert(`已入队 ${d?.queued ?? pairs.length} 个分发任务（${d?.skipped ?? 0} 重复跳过），稍后进各号草稿箱。`);
+      setPreview(null);
+      setTimeout(() => void load(), 3000);
+    } catch (e) {
+      alert("分发失败：" + ((e as { message?: string })?.message ?? "未知错误"));
+    } finally {
+      setDistributing(false);
+    }
+  };
+
   // PR-P1: 指标录入
   const [metricFor, setMetricFor] = useState<string | null>(null);
   const [mViews, setMViews] = useState("");
@@ -335,9 +372,61 @@ export default function TodayPage() {
             className="text-xs px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50">
             {genNow ? "生成中…稍后刷新" : "立即生成今日内容"}
           </button>
+          {isAdmin && (
+            <button onClick={() => void openPreview()} disabled={previewing}
+              title="按各账号的国内/国外定位+领域, 把今日已生成的文章配对分发到公众号草稿(先预览再确认; 抖音/视频号不在此, 走手动)"
+              className="text-xs px-2.5 py-1 rounded-lg border border-teal-200 text-teal-600 hover:bg-teal-50 disabled:opacity-50">
+              {previewing ? "配对中…" : "立即配对分发"}
+            </button>
+          )}
           <button onClick={() => void load()} className="text-xs text-indigo-600 hover:underline">刷新</button>
         </div>
       </div>
+
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => { if (!distributing) setPreview(null); }}>
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-bold text-gray-900">配对预览</h3>
+              <button onClick={() => setPreview(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+              今日池 {preview.poolSize} 篇（{preview.poolSource === "system" ? "系统共享池" : "本租户自有池"}） · 将分发 <b className="text-teal-600">{preview.freshCount}</b> 篇 · 已发过跳过 {preview.skippedCount} · 没配上 {preview.unmatched.length}
+            </p>
+            {preview.fresh.length > 0 ? (
+              <div className="border border-gray-100 rounded-lg divide-y mb-4">
+                {preview.fresh.map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <span className="flex-1 truncate text-gray-800">{p.title || "(无标题)"}</span>
+                    <span className="text-gray-300">→</span>
+                    <span className="text-teal-700 font-medium whitespace-nowrap">{p.accountName}</span>
+                    {p.discipline && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 whitespace-nowrap">{p.discipline}</span>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400 py-6 text-center">没有可分发的新配对（可能都已发过，或没有定位/领域匹配的号）。</div>
+            )}
+            {preview.unmatched.length > 0 && (
+              <details className="mb-4 text-xs">
+                <summary className="cursor-pointer text-amber-600">{preview.unmatched.length} 篇没配上号（点开看原因）</summary>
+                <div className="mt-2 space-y-1">
+                  {preview.unmatched.map((u, i) => (
+                    <div key={i} className="text-gray-500"><span className="text-gray-700">{u.title || "(无标题)"}</span> — {u.reason}</div>
+                  ))}
+                </div>
+              </details>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setPreview(null)} disabled={distributing} className="px-4 py-2 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">取消</button>
+              <button onClick={() => void confirmDistribute()} disabled={distributing || preview.fresh.length === 0}
+                className="px-5 py-2 text-sm rounded-lg bg-teal-600 text-white font-medium hover:bg-teal-700 disabled:opacity-50">
+                {distributing ? "分发中…" : `确认分发 ${preview.freshCount} 篇`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 花费卡 */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">
