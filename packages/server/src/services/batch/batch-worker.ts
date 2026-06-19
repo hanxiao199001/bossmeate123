@@ -17,6 +17,7 @@ import { eq, sql, and, isNull } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { batchRows, contents, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { sanitizeForCompliance } from "../compliance/content-check.js";
 import {
   initialStatusFields,
   transitionStatus,
@@ -144,7 +145,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           await db
             .update(contents)
             .set({
-              body: result.artifact.body,
+              body: sanitizeForCompliance(result.artifact.body), // 6-19 生成阶段净化违禁/绝对化词
               title: result.artifact.title ?? row.topic,
               metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(metaMerge)}::jsonb`,
               updatedAt: new Date(),

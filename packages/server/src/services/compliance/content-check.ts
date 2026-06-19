@@ -56,6 +56,35 @@ export async function checkCompliance(text: string): Promise<ComplianceResult> {
   return { blocked: hardHits.length > 0, hardHits, softHits };
 }
 
+// 6-19: 生成阶段自动净化 — 把"无歧义的"绝对化/医疗/投稿过度承诺词替换成合规说法,
+// 让生成出来的内容/文案基本不带违规词(避免发布时才拦截 → 白烧 token + 白等生成)。
+// 故意不动学术语境常见且合法的词(第一作者/国家级期刊/最佳论文奖), 那些靠 checkCompliance 软词警告人工判。
+const SANITIZE_MAP: Array<[RegExp, string]> = [
+  // 医疗红线
+  [/根治/g, "改善"],
+  [/治愈率/g, "有效率"],
+  [/包治百病|包治/g, "有助于"],
+  [/药到病除/g, "效果明显"],
+  [/100\s*%\s*有效|百分之百有效|百分百有效/g, "效果显著"],
+  [/完全无副作用|无任何副作用|绝无副作用/g, "副作用较小"],
+  // 投稿/录用过度承诺
+  [/保证录用|百分百中刊|百分之百录用|包过|保过|包录用|稳过|包中/g, "录用率较高"],
+  [/包发表|保发表|保证发表/g, "较易发表"],
+  // 赚钱类
+  [/稳赚不赔|稳赚|躺赚/g, "有收益空间"],
+  // 绝对化(无歧义)
+  [/绝无仅有/g, "较为少见"],
+  [/全球首创|全球首发|全球第一|世界第一/g, "较早"],
+  [/世界级/g, "高水平"],
+  [/极致/g, "出色"],
+];
+export function sanitizeForCompliance(text: string | null | undefined): string {
+  if (!text) return text ?? "";
+  let out = String(text);
+  for (const [re, rep] of SANITIZE_MAP) out = out.replace(re, rep);
+  return out;
+}
+
 const AI_LABEL_HTML = `<p style="color:#999;font-size:12px;margin-top:24px;">本文由 AI 辅助生成，内容仅供参考。</p>`;
 
 /** 发布时给正文追加 AI 生成标识 (config aiLabel=false 可关; 已含标识不重复加) */

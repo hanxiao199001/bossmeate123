@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { sanitizeForCompliance } from "../compliance/content-check.js";
 import { writeFile, mkdir, unlink } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable } from "node:stream";
@@ -820,15 +821,16 @@ export async function buildPushCaptions(
       platform: (accounts[0]?.platform === "wechat_video" ? "wechat_video" : "douyin") as any,
     });
     if (variants.length > 0) {
+      // 6-19: 生成阶段自动净化违禁/绝对化词, 出来即合规(不必发布时才拦截)
       return {
-        captions: variants.map((v: any) => v.fullText || v.hookTitle || fallbackTitle),
-        titles: variants.map((v: any) => v.hookTitle || fallbackTitle),
+        captions: variants.map((v: any) => sanitizeForCompliance(v.fullText || v.hookTitle || fallbackTitle)),
+        titles: variants.map((v: any) => sanitizeForCompliance(v.hookTitle || fallbackTitle)),
       };
     }
   } catch { /* 走兜底 */ }
   return {
-    captions: accounts.map(() => fallbackTitle),
-    titles: accounts.map(() => fallbackTitle),
+    captions: accounts.map(() => sanitizeForCompliance(fallbackTitle)),
+    titles: accounts.map(() => sanitizeForCompliance(fallbackTitle)),
   };
 }
 
