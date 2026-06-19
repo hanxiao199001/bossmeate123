@@ -25,6 +25,7 @@ export interface SmartAssignResult {
 interface AccountLite {
   id: string;
   disciplines: string[];
+  journalScope: string; // domestic | international | both — 账号"国内核心/国外期刊"定位
 }
 
 // 6-17 #2: 期刊名→学科 兜底推导(镜像 scripts/backfill-discipline.ts 的 inferDisciplineFromName)。
@@ -50,20 +51,44 @@ function inferDisciplineFromName(name: string): string | null {
   return null;
 }
 
-async function articleDiscipline(meta: Record<string, unknown> | null): Promise<string | null> {
-  if (!meta) return null;
-  if (typeof meta.discipline === "string" && meta.discipline) return meta.discipline;
-  const jid = typeof meta.journalId === "string" ? meta.journalId : null;
-  if (jid) {
-    try {
-      const [j] = await db.select({ discipline: journals.discipline, name: journals.name, nameEn: journals.nameEn })
-        .from(journals).where(eq(journals.id, jid)).limit(1);
-      if (j?.discipline) return j.discipline;
-      // 6-17 #2: discipline 列为空 → 按期刊名现场推导(国内刊该列大面积为空)
-      return inferDisciplineFromName(j?.nameEn || j?.name || "");
-    } catch { /* noop */ }
-  }
+type Scope = "domestic" | "international" | null;
+
+// 6-19: 把期刊判成 国内核心/国外期刊 (镜像 journal-scope.ts 的 journalScopeCondition, JS 版)。
+//   国内核心 = 有中文目录标签(catalogs 非空); 国外期刊 = 无中文标签且有 IF 或分区; 其余=未知(不限制)。
+function classifyScope(j: { catalogs: unknown; impactFactor: number | null; partition: string | null }): Scope {
+  const cats = Array.isArray(j.catalogs) ? (j.catalogs as unknown[]) : [];
+  if (cats.length > 0) return "domestic";
+  if (j.impactFactor != null || (typeof j.partition === "string" && j.partition.length > 0)) return "international";
   return null;
+}
+
+// 6-19: 一次取出文章的 学科 + 国内/国外范围。同刊缓存, 避免循环里重复查库。
+async function resolveArticle(
+  meta: Record<string, unknown> | null,
+  cache: Map<string, { discipline: string | null; scope: Scope }>,
+): Promise<{ discipline: string | null; scope: Scope }> {
+  if (!meta) return { discipline: null, scope: null };
+  const metaDisc = typeof meta.discipline === "string" && meta.discipline ? meta.discipline : null;
+  const jid = typeof meta.journalId === "string" ? meta.journalId : null;
+  if (!jid) return { discipline: metaDisc, scope: null };
+  if (cache.has(jid)) {
+    const c = cache.get(jid)!;
+    return { discipline: metaDisc ?? c.discipline, scope: c.scope };
+  }
+  let jDisc: string | null = null;
+  let scope: Scope = null;
+  try {
+    const [j] = await db.select({
+      discipline: journals.discipline, name: journals.name, nameEn: journals.nameEn,
+      catalogs: journals.catalogs, impactFactor: journals.impactFactor, partition: journals.partition,
+    }).from(journals).where(eq(journals.id, jid)).limit(1);
+    if (j) {
+      jDisc = j.discipline || inferDisciplineFromName(j.nameEn || j.name || "");
+      scope = classifyScope(j as any);
+    }
+  } catch { /* noop */ }
+  cache.set(jid, { discipline: jDisc, scope });
+  return { discipline: metaDisc ?? jDisc, scope };
 }
 
 /**
@@ -84,6 +109,7 @@ export async function computeSmartPairs(opts: {
       status: platformAccounts.status,
       discipline: platformAccounts.discipline,
       disciplines: platformAccounts.disciplines,
+      journalScope: platformAccounts.journalScope,
     })
     .from(platformAccounts)
     .where(eq(platformAccounts.tenantId, tenantId));
@@ -96,6 +122,7 @@ export async function computeSmartPairs(opts: {
       disciplines: Array.isArray(a.disciplines) && (a.disciplines as string[]).length > 0
         ? (a.disciplines as string[])
         : a.discipline ? [a.discipline] : [],
+      journalScope: (a.journalScope as string) || "both",
     }));
 
   if (accounts.length === 0) {
@@ -131,17 +158,25 @@ export async function computeSmartPairs(opts: {
   const load = new Map<string, number>(accounts.map((a) => [a.id, publishedToday.get(a.id) ?? 0]));
   const pairs: SmartPair[] = [];
   const unmatched: SmartAssignResult["unmatched"] = [];
+  const journalCache = new Map<string, { discipline: string | null; scope: Scope }>();
 
   for (const art of arts) {
-    const disc = await articleDiscipline(art.metadata as Record<string, unknown> | null);
+    const { discipline: disc, scope } = await resolveArticle(art.metadata as Record<string, unknown> | null, journalCache);
+    // 6-19: 账号"国内/国外"定位过滤 — 账号定 domestic/international 且与文章期刊范围明确冲突时排除;
+    //       账号 both 或文章范围未知 → 不限制(绝不因信息缺失误杀内容)。
+    const scopeOk = (a: AccountLite) => a.journalScope === "both" || !scope || a.journalScope === scope;
+    const pool = accounts.filter(scopeOk);
     // 领域匹配的号优先; 领域不限的号兜底
-    const matching = accounts.filter((a) => disc && a.disciplines.includes(disc));
-    const open = accounts.filter((a) => a.disciplines.length === 0);
+    const matching = pool.filter((a) => disc && a.disciplines.includes(disc));
+    const open = pool.filter((a) => a.disciplines.length === 0);
     const candidatesAll = matching.length > 0 ? matching : open;
     // PR-B1: 剔除已达每日上限的号 (今日已发+本轮已分 >= DAILY_CAP)
     const candidates = candidatesAll.filter((a) => (load.get(a.id) ?? 0) < DAILY_CAP);
     if (candidatesAll.length === 0) {
-      unmatched.push({ articleId: art.id, discipline: disc, reason: `没有领域含"${disc}"或不限领域的公众号` });
+      const why = pool.length === 0 && scope
+        ? `没有定位为"${scope === "domestic" ? "国内核心" : "国外期刊"}"或不限范围的公众号`
+        : `没有领域含"${disc}"或不限领域的公众号`;
+      unmatched.push({ articleId: art.id, discipline: disc, reason: why });
       continue;
     }
     if (candidates.length === 0) {
