@@ -82,6 +82,19 @@ export async function accountRoutes(app: FastifyInstance) {
         .where(and(...conditions))
         .orderBy(desc(platformAccounts.updatedAt));
 
+      // 6-19 惰性自愈: 早期(回填代码部署前)登录的号 — accountId 已回填但占位名"待登录·X"没改,
+      //   /profile 只在登录时跑一次不会重来。读列表时补正: 有 accountId 就用 真实昵称 或 "平台·账号号",
+      //   改响应 + 异步存库, 客户无需重新扫码。
+      for (const a of accounts) {
+        if (typeof a.accountName === "string" && a.accountName.startsWith("待登录") && a.accountId) {
+          const nick = (a.metadata as Record<string, unknown> | null)?.realNickname;
+          const platLabel = a.platform === "douyin" ? "抖音" : a.platform === "wechat_video" ? "视频号" : a.platform;
+          const realName = (typeof nick === "string" && nick) ? nick : `${platLabel}·${a.accountId}`;
+          a.accountName = String(realName).slice(0, 100);
+          db.update(platformAccounts).set({ accountName: a.accountName }).where(eq(platformAccounts.id, a.id)).catch(() => { /* 自愈失败不影响列表 */ });
+        }
+      }
+
       // 6-17 #4: 抖音/视频号发布走本地 Agent → "能不能发"取决于绑定设备是否在线, 而非服务器扫码态。
       const devs = await db
         .select({ id: agentDevices.id, status: agentDevices.status, lastSeenAt: agentDevices.lastSeenAt })
