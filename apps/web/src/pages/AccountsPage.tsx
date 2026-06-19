@@ -14,6 +14,7 @@ interface Account {
   credentials: Record<string, unknown>;
   groupName?: string;
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
+  remark?: string; // 6-19 手动备注名
   discipline?: string | null; // PR-W5 领域定位(旧单选)
   disciplines?: string[]; // PR-W5b 领域定位多选
   persona?: string | null; // PR-X1 人设画像
@@ -332,6 +333,16 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     } catch { /* 静默 */ }
   };
   const [discEditId, setDiscEditId] = useState<string | null>(null);
+  // 6-19: 手动备注名 — 扫码后自己给账号标个名字(与自动昵称并存)。
+  const [remarkEditId, setRemarkEditId] = useState<string | null>(null);
+  const [remarkDraft, setRemarkDraft] = useState("");
+  const saveRemark = async (accountId: string, value: string) => {
+    try {
+      await api.patch(`/accounts/${accountId}`, { remark: value.trim() || null });
+      setRemarkEditId(null);
+      fetchAccounts();
+    } catch { /* 静默 */ }
+  };
   const DISC_OPTIONS: Array<[string, string]> = [
     ["medicine", "医学"], ["psychology", "心理"], ["engineering", "工程"], ["economics", "经管"],
     ["biology", "生物"], ["education", "教育"], ["law", "法学"], ["agriculture", "农林"],
@@ -729,6 +740,33 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                           <div className="flex-1">
                             <div className="flex items-center gap-3 mb-2">
                               <h4 className="font-medium text-gray-900">{account.accountName}</h4>
+                              {remarkEditId === account.id ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <input
+                                    autoFocus
+                                    value={remarkDraft}
+                                    onChange={(e) => setRemarkDraft(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === "Enter") void saveRemark(account.id, remarkDraft); if (e.key === "Escape") setRemarkEditId(null); }}
+                                    maxLength={100}
+                                    placeholder="自定义备注名"
+                                    className="text-xs border border-amber-300 rounded px-2 py-0.5 w-32 focus:outline-none"
+                                  />
+                                  <button onClick={() => void saveRemark(account.id, remarkDraft)} className="text-xs text-emerald-600 hover:text-emerald-700">存</button>
+                                  <button onClick={() => setRemarkEditId(null)} className="text-xs text-gray-400 hover:text-gray-600">取消</button>
+                                </span>
+                              ) : account.remark ? (
+                                <button
+                                  onClick={() => { setRemarkEditId(account.id); setRemarkDraft(account.remark || ""); }}
+                                  className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium hover:bg-amber-200"
+                                  title="点击修改备注"
+                                >📌 {account.remark}</button>
+                              ) : (
+                                <button
+                                  onClick={() => { setRemarkEditId(account.id); setRemarkDraft(""); }}
+                                  className="text-xs text-gray-400 hover:text-amber-600"
+                                  title="给这个账号加个备注名"
+                                >＋备注</button>
+                              )}
                               {(account.metadata?.realNickname || account.accountId) && (
                                 <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full" title="扫码登录回填的真实账号">
                                   实登: {account.metadata?.realNickname || ""}{account.accountId ? ` (${account.accountId})` : ""}

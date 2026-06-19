@@ -207,4 +207,11 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE batch_rows ADD COLUMN IF NOT EXISTS account_id UUID REFERENCES platform_accounts(id) ON DELETE SET NULL;
     `,
   },
+  {
+    version: "013_pa_remark",
+    description: "6-19: 账号手动备注名 remark(扫码后自己标一个名字, 与自动抓的真实昵称/系统占位名并存, 显示优先)",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS remark varchar(100);
+    `,
+  },
 ];

@@ -777,6 +777,7 @@ export const platformAccounts = pgTable(
     // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
     capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
+    remark: varchar("remark", { length: 100 }), // 6-19 用户手动备注名(扫码后自己标, 不被自动昵称覆盖)
     // PR-A16: 账号↔设备绑定 — 该账号浏览器登录态在哪台客户机 (NULL=未绑定, 任意设备可领;
     // 设备首次成功完成该账号任务时自动绑定; 设备 ON DELETE SET NULL 自动解绑)
     agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id, { onDelete: "set null" }),
