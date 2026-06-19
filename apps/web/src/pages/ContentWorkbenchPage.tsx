@@ -137,6 +137,24 @@ export default function ContentWorkbenchPage() {
 
   useEffect(() => { loadTab(tab); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [tab]);
 
+  // 6-19 修 tab 计数 bug: 挂载时一次性拉全部 tab 计数(否则没点击的 tab 恒显示 0)。
+  useEffect(() => {
+    api.get<{ total?: number; byStatus?: Record<string, number> }>("/content/stats")
+      .then((r) => {
+        const d = (r as any).data ?? {};
+        const bs = d.byStatus ?? {};
+        setCounts((prev) => ({ ...prev, all: prev.all || d.total || 0, draft: bs.draft ?? 0, published: bs.published ?? 0 }));
+      })
+      .catch(() => {});
+    api.get("/content/recommendations?limit=20")
+      .then((r) => {
+        const items = ((r as any).data?.items ?? (r as any).data ?? []);
+        setCounts((prev) => ({ ...prev, recommend: Array.isArray(items) ? items.length : 0 }));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // selectedId 变 → 拉 preview body
   useEffect(() => {
     if (!selectedId) { setPreview(null); return; }
