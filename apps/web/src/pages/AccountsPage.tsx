@@ -322,7 +322,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     }
   };
 
-  // PR-W5b: 账号领域定位(多选) — 一键生成 exclusive 模式从该号的领域池里选题
+  // PR-W5b: 账号领域定位(多选) — 自动分发"独家配对"按此把对口学科的文章派给该号
   const handleDisciplineToggle = async (account: Account, disc: string) => {
     const cur = new Set(account.disciplines ?? (account.discipline ? [account.discipline] : []));
     cur.has(disc) ? cur.delete(disc) : cur.add(disc);

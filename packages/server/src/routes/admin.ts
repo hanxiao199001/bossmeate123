@@ -52,7 +52,6 @@ const generateAndPublishSchema = z.object({
   layoutTemplateId: z.enum(["shunshi-style", "data-card", "storytelling", "listicle", "rotate"]).optional(),
   accountIds: z.array(z.string().uuid()).default([]),
   // PR-W5: exclusive=每账号按自己领域生成专属内容(count=每账号篇数, 互不重复); broadcast=老行为
-  assignMode: z.enum(["exclusive", "broadcast"]).default("broadcast"),
 });
 
 // PR #175: 期刊筛选 query schema
@@ -198,7 +197,6 @@ export async function adminRoutes(app: FastifyInstance) {
       // 2. 逐候选选 journal + 入队
       const batchIds: string[] = [];
       const selectedKeywordIds: string[] = [];
-      const batchAccountPairs: Array<{ batchId: string; accountId: string }> = []; // PR-W5 exclusive 配对
       const journalUseCount = new Map<string, number>();
       const MAX_PER_JOURNAL_24H = 1; // PR #180: batch 内每期刊最多 1 篇
       const JOURNAL_MAX_PER_30D = 5;
@@ -278,7 +276,6 @@ export async function adminRoutes(app: FastifyInstance) {
       const { template } = body;
       const batchIds: string[] = [];
       const selectedKeywordIds: string[] = [];
-      const batchAccountPairs: Array<{ batchId: string; accountId: string }> = []; // PR-W5 exclusive 配对
 
       if (body.mode === "journal-specified" && body.journalIds.length > 0) {
         // PR #175: 精准模式 — 用户指定 journalIds, 每个 journal 选 1 个 fresh keyword
@@ -303,74 +300,6 @@ export async function adminRoutes(app: FastifyInstance) {
             selectedKeywordIds.push(kw.id);
           } catch (err) {
             logger.warn({ journalId: jid, err }, "PR #175 journal-specified 入队失败 (跳过)");
-          }
-        }
-      } else if (body.assignMode === "exclusive" && body.accountIds.length > 0) {
-        // PR-W5 独家模式: 每账号按自己的领域定位生成专属内容, 同轮关键词/期刊都不重复
-        const accts = await db
-          .select({ id: platformAccounts.id, discipline: platformAccounts.discipline, disciplines: platformAccounts.disciplines, accountName: platformAccounts.accountName })
-          .from(platformAccounts)
-          .where(and(inArray(platformAccounts.id, body.accountIds), eq(platformAccounts.tenantId, request.tenantId)));
-        if (accts.length === 0) {
-          return reply.code(400).send({ code: "NO_ACCOUNTS", message: "所选账号不存在" });
-        }
-        const dayOfWeek = new Date().getDay();
-        const rotation = DISCIPLINE_ROTATION[dayOfWeek] ?? [];
-        const usedKeywordIds = new Set<string>();
-        const usedJournalIds = new Set<string>();
-        const perAccount = Math.min(body.count, 5); // 每账号篇数, 上限 5 防误操作爆量
-
-        for (const acct of accts) {
-          // 账号有定位用定位 (PR-W5b 多选数组优先, 兼容旧单选); 没定位按日轮换兜底
-          const acctDiscs = Array.isArray(acct.disciplines) && (acct.disciplines as string[]).length > 0
-            ? (acct.disciplines as string[])
-            : acct.discipline ? [acct.discipline] : [];
-          const discs = acctDiscs.length > 0 ? acctDiscs : (rotation.length > 0 ? rotation : null);
-          // PR-W5c 防撞加固: 冷却阶梯放宽 30→14→7 天, 绝不放到 0 — 题库太薄时宁可少生成也不出近期旧题
-          let cands = await selectCandidates({ disciplines: discs, cooldownDays: 30, poolSize: perAccount * 6 });
-          for (const cd of [14, 7]) {
-            if (cands.length >= perAccount + usedKeywordIds.size) break;
-            const more = await selectCandidates({ disciplines: discs, cooldownDays: cd, poolSize: perAccount * 6 });
-            const have = new Set(cands.map((c) => c.id));
-            cands = cands.concat(more.filter((m) => !have.has(m.id)));
-          }
-          if (cands.length < perAccount) {
-            logger.warn({ accountId: acct.id, discs, available: cands.length, want: perAccount }, "PR-W5c 该领域题库薄, 本轮少生成 (7天冷却内的题不复用)");
-          }
-          let made = 0;
-          for (const kw of cands) {
-            if (made >= perAccount) break;
-            if (usedKeywordIds.has(kw.id)) continue; // 同轮不同账号不撞关键词
-            try {
-              const recs = await recommendJournals({ tenantId: request.tenantId, topic: kw.keyword, limit: 5 });
-              let journalId: string | null = null;
-              for (const r of recs) {
-                if (usedJournalIds.has(r.id)) continue; // 同轮不撞期刊
-                const use30d = await getJournal30dCount(r.id);
-                if (use30d >= 5) continue;
-                journalId = r.id;
-                break;
-              }
-              if (!journalId) journalId = recs.find((r) => !usedJournalIds.has(r.id))?.id ?? recs[0]?.id ?? null;
-              if (!journalId) continue;
-              usedJournalIds.add(journalId);
-              const result = await createBatch({
-                tenantId: request.tenantId,
-                userId: request.user.userId,
-                filename: `excl-${acct.accountName.slice(0, 12)}-${kw.keyword.slice(0, 16)}-${Date.now()}`,
-                rows: [{ rowIndex: 1, topic: kw.keyword, journalId, template, priority: 1, accountId: acct.id }],
-              });
-              batchIds.push(result.batchId);
-              batchAccountPairs.push({ batchId: result.batchId, accountId: acct.id });
-              selectedKeywordIds.push(kw.id);
-              usedKeywordIds.add(kw.id);
-              made++;
-            } catch (err) {
-              logger.warn({ accountId: acct.id, keyword: kw.keyword, err }, "PR-W5 exclusive 单篇入队失败 (跳过)");
-            }
-          }
-          if (made === 0) {
-            logger.warn({ accountId: acct.id, discipline: acct.discipline }, "PR-W5 exclusive 该账号无可用关键词, 0 篇");
           }
         }
       } else {
@@ -446,8 +375,6 @@ export async function adminRoutes(app: FastifyInstance) {
         data: {
           batchIds,
           accountIds: body.accountIds,
-          assignMode: body.assignMode,
-          batchAccountPairs, // PR-W5: exclusive 模式下 batch↔账号 配对, 前端按此精准发布
           estimatedSeconds: batchIds.length * 6,
         },
       };
