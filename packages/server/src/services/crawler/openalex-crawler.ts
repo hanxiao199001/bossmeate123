@@ -49,7 +49,9 @@ export class OpenAlexCrawler implements CrawlerAdapter {
               name: source.display_name,
               issn: source.issn?.[0],
               discipline: field.label,
-              impactFactor: source.summary_stats?.["2yr_mean_citedness"],
+              // 6-19 数据质量根因修复: OpenAlex 的 2yr_mean_citedness 是"2年平均被引", ≠ 官方 JCR 影响因子,
+              //   与期刊官网对不上。绝不当 impactFactor 写库(否则生成内容 IF 有出入); 真 IF 由 LetPub 富化补。
+              impactFactor: undefined,
               annualVolume: source.works_count,
               isOA: source.is_oa || false,
               url: source.homepage_url || `https://openalex.org/sources/${source.id?.split("/").pop()}`,
