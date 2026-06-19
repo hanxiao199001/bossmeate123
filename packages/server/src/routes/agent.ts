@@ -206,9 +206,14 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       try {
         const set: Record<string, unknown> = { metadata: meta, updatedAt: new Date() };
         if (uid) set.accountId = uid;
-        // 6-19: 占位名"待登录·X" → 改成真实名(有昵称用昵称, 没昵称用"平台·账号号")。用户自定义改过的名不覆盖。
-        if (typeof acc.accountName === "string" && acc.accountName.startsWith("待登录")) {
-          const platLabel = acc.platform === "douyin" ? "抖音" : acc.platform === "wechat_video" ? "视频号" : acc.platform;
+        // 6-19: 系统占位名 → 真实名(优先昵称, 退而"平台·账号号")。用户自定义改过的名绝不覆盖。
+        //   系统占位名 = "待登录·X" 开头, 或 已被惰性自愈成 "平台·uid"(重新扫码带回昵称时升级成昵称)。
+        const platLabel = acc.platform === "douyin" ? "抖音" : acc.platform === "wechat_video" ? "视频号" : acc.platform;
+        const curName = typeof acc.accountName === "string" ? acc.accountName : "";
+        const isSystemName = curName.startsWith("待登录")
+          || (!!acc.accountId && curName === `${platLabel}·${acc.accountId}`)
+          || (!!uid && curName === `${platLabel}·${uid}`);
+        if (isSystemName) {
           const realName = nickname || (uid ? `${platLabel}·${uid}` : null);
           if (realName) set.accountName = String(realName).slice(0, 100);
         }

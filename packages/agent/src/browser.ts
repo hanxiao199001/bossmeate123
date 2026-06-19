@@ -144,23 +144,44 @@ export async function launchAccountBrowser(accountId: string): Promise<Browser> 
  *  抓不到不报错(返回空), 纯文本正则提取, 抗 DOM 改版。 */
 export async function scrapeAccountProfile(page: Page, platform: string): Promise<{ nickname?: string; uid?: string }> {
   try {
-    const txt = (await page
+    const { txt, title } = (await page
       .evaluate(() => {
         const doc = (globalThis as any).document;
-        return doc?.body?.innerText || "";
+        return { txt: doc?.body?.innerText || "", title: doc?.title || "" };
       })
-      .catch(() => "")) as string;
-    if (!txt) return {};
+      .catch(() => ({ txt: "", title: "" }))) as { txt: string; title: string };
+    if (!txt && !title) return {};
+    const lines = txt.split(/[\n\r]+/).map((l) => l.trim()).filter(Boolean);
+    // 6-19: 布局无关地取昵称 — 找到"锚点行"(含 抖音号/视频号ID)前最近的一行短文本(排除菜单词/带冒号的)。
+    const MENU = /^(首页|主页|创作|作品|发布|登录|退出|设置|消息|通知|数据|粉丝|关注|主播|开播|创作者|内容|管理|账号|帮助|客服)/;
+    const nickNearby = (anchorIdx: number): string | undefined => {
+      for (let i = anchorIdx - 1; i >= 0 && i >= anchorIdx - 4; i--) {
+        const c = lines[i];
+        if (c && c.length >= 2 && c.length <= 24 && !/[:：]/.test(c) && !MENU.test(c)) return c;
+      }
+      return undefined;
+    };
+    const fromTitle = (): string | undefined => {
+      const t = (title || "").replace(/[-_|｜·].*$/, "").replace(/(抖音|视频号|微信|创作者?中心|创作服务平台|官方)/g, "").trim();
+      return t.length >= 2 && t.length <= 24 ? t : undefined;
+    };
     if (platform === "douyin") {
       const uid = txt.match(/抖音号[:：]\s*([0-9A-Za-z_.\-]{4,32})/)?.[1];
-      let nickname: string | undefined;
-      const m = txt.match(/([^\n\r|｜]{2,24})\s*[|｜]\s*抖音号[:：]/);
-      if (m) nickname = m[1].trim();
+      let nickname = txt.match(/([^\n\r|｜]{2,24})\s*[|｜]\s*抖音号[:：]/)?.[1]?.trim();
+      if (!nickname) {
+        const idx = lines.findIndex((l) => /抖音号[:：]/.test(l));
+        if (idx > 0) nickname = nickNearby(idx);
+      }
+      if (!nickname) nickname = fromTitle();
       return { nickname, uid };
     }
     if (platform === "wechat_video") {
       const uid = txt.match(/视频号(?:ID|账号|号)?[:：]?\s*([A-Za-z0-9_\-]{4,})/)?.[1];
-      return { uid };
+      let nickname: string | undefined;
+      const idx = lines.findIndex((l) => /视频号\s*(ID|账号)?\s*[:：]/.test(l) || /^ID[:：]/.test(l));
+      if (idx > 0) nickname = nickNearby(idx);
+      if (!nickname) nickname = fromTitle();
+      return { nickname, uid };
     }
   } catch { /* noop */ }
   return {};
