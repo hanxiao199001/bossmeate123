@@ -24,6 +24,7 @@ import { wechatRoutes } from "./routes/wechat.js";
 import { wechatCallbackRoutes } from "./routes/wechat-callback.js";
 import { douyinCallbackRoutes } from "./routes/douyin-callback.js";
 import { agentPublishRoutes, agentAdminRoutes } from "./routes/agent.js";
+import { agentReleaseRoutes } from "./routes/agent-release.js";
 import { todayRoutes } from "./routes/today.js";
 import { workWechatCallbackRoutes } from "./routes/work-wechat-callback.js";
 import { accountRoutes } from "./routes/accounts.js";
@@ -135,6 +136,7 @@ async function bootstrap() {
   await app.register(douyinCallbackRoutes, { prefix: env.API_PREFIX });
   // Agent-1 (B轨): 本地发布 Agent（公开注册, 自带 x-agent-token 鉴权, 不走用户 JWT）
   await app.register(agentPublishRoutes, { prefix: env.API_PREFIX });
+  await app.register(agentReleaseRoutes, { prefix: env.API_PREFIX });
   // B.2: 企业微信 inbound webhook（公开路径，AES + msg_signature 在路由内做）
   await app.register(workWechatCallbackRoutes, { prefix: env.API_PREFIX });
   await app.register(async (authApp) => {

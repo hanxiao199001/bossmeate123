@@ -1,3 +1,6 @@
+import { readdirSync as fsReaddir, readFileSync as fsReadFile, writeFileSync as fsWriteFile } from "node:fs";
+import { join as pathJoin } from "node:path";
+import { createHash as nodeCreateHash } from "node:crypto";
 /**
  * 打包「免装 Node 的 Windows 便携客户包」。在有网络的机器(你的 Mac)上跑:
  *   node packages/agent/scripts/build-portable-win.mjs
@@ -26,6 +29,21 @@ const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
 const CHROME_CACHE = join(agentRoot, ".chromium-cache");
 // 6-18: 精简 node_modules — 删运行时用不到的(TS源码/类型/map/文档/测试/license), 大幅减小客户包体积。
 // 只保留 .js/.json/.node 等运行时真需要的。在 Linux 服务器上用 find 执行。
+function writeDistVersion(distDir) {
+  try {
+    const walk = (d) => fsReaddir(d, { withFileTypes: true }).flatMap((e) => {
+      const fp = pathJoin(d, e.name);
+      return e.isDirectory() ? walk(fp) : [fp];
+    });
+    const files = walk(distDir).filter((f) => f.endsWith(".js")).sort();
+    const h = nodeCreateHash("sha1");
+    for (const f of files) h.update(fsReadFile(f));
+    const v = h.digest("hex").slice(0, 12);
+    fsWriteFile(pathJoin(distDir, ".version"), v);
+    console.log("   dist 版本:", v);
+  } catch (e) { console.warn("   写 dist/.version 失败(不影响):", e.message); }
+}
+
 function pruneNodeModules(nm) {
   if (!existsSync(nm)) return;
   const before = (() => { try { return execSync(`du -sm ${JSON.stringify(nm)} | cut -f1`, { encoding: "utf8" }).trim(); } catch { return "?"; } })();
@@ -72,6 +90,8 @@ console.log(`2/6 准备目录…`);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 cpSync(join(agentRoot, "dist"), join(out, "dist"), { recursive: true });
+// 6-19 自更新: 写 dist 版本号(与服务端 agent-release 同算法)。
+writeDistVersion(join(out, "dist"));
 
 console.log(`3/6 下载 Windows node.exe (${NODE_VER})…`);
 const NODE_MIRROR = process.env.NODE_MIRROR || "https://cdn.npmmirror.com/binaries/node"; // 6-18 国内镜像
@@ -119,7 +139,31 @@ const bat = [
   `set "BUNDLED_CHROME=%~dp0${relWin}"`,
   'if exist "%BUNDLED_CHROME%" set "BOSSMATE_BROWSER_PATH=%BUNDLED_CHROME%"',
   "",
-  'if exist "%USERPROFILE%\\.bossmate-agent\\config.json" goto run_section',
+  'rem 6-19 self-update: pull only the small agent code (dist); keep Chromium/Node/login',
+  'if "!SERVER_URL!"=="" goto skip_update',
+  '  set "RVER="',
+  '  for /f "usebackq delims=" %%v in (`curl -fsS --max-time 8 "!SERVER_URL!/api/v1/agent/release/version" 2^>nul`) do set "RVER=%%v"',
+  '  if "!RVER!"=="" goto skip_update',
+  '  set "LVER="',
+  '  if exist "dist\\.version" set /p LVER=<dist\\.version',
+  '  if "!RVER!"=="!LVER!" goto skip_update',
+  '  echo Updating agent code (tens of KB), your login is preserved...',
+  '  curl -fsS --max-time 60 "!SERVER_URL!/api/v1/agent/release/dist.tgz" -o "%TEMP%\\bm-dist.tgz" 2>nul',
+  '  if not exist "%TEMP%\\bm-dist.tgz" goto skip_update',
+  '  rmdir /s /q "%TEMP%\\bm-dist-new" 2>nul',
+  '  mkdir "%TEMP%\\bm-dist-new"',
+  '  tar -xzf "%TEMP%\\bm-dist.tgz" -C "%TEMP%\\bm-dist-new" 2>nul',
+  '  if exist "%TEMP%\\bm-dist-new\\dist\\cli.js" (',
+  '    rmdir /s /q dist 2>nul',
+  '    move "%TEMP%\\bm-dist-new\\dist" dist >nul',
+  '    >dist\\.version echo !RVER!',
+  '    echo Updated to latest.',
+  '  )',
+  '  rmdir /s /q "%TEMP%\\bm-dist-new" 2>nul',
+  '  del "%TEMP%\\bm-dist.tgz" 2>nul',
+  ':skip_update',
+  "",
+  'if exist "%USERPROFILE%\\\\.bossmate-agent\\\\config.json" goto run_section',
   "",
   ":pair_loop",
   '  if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://122.152.234.155 : "',

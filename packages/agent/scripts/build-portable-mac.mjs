@@ -1,3 +1,6 @@
+import { readdirSync as fsReaddir, readFileSync as fsReadFile, writeFileSync as fsWriteFile } from "node:fs";
+import { join as pathJoin } from "node:path";
+import { createHash as nodeCreateHash } from "node:crypto";
 /**
  * 打包「免装 Node 的 Mac 便携客户包」。在 Mac 上跑(有网络):
  *   node packages/agent/scripts/build-portable-mac.mjs
@@ -26,6 +29,21 @@ const CHROME_VERSION = process.env.CHROME_VERSION || "131.0.6778.204";
 const CHROME_CACHE = join(agentRoot, ".chromium-cache");
 // 6-18: 精简 node_modules — 删运行时用不到的(TS源码/类型/map/文档/测试/license), 大幅减小客户包体积。
 // 只保留 .js/.json/.node 等运行时真需要的。在 Linux 服务器上用 find 执行。
+function writeDistVersion(distDir) {
+  try {
+    const walk = (d) => fsReaddir(d, { withFileTypes: true }).flatMap((e) => {
+      const fp = pathJoin(d, e.name);
+      return e.isDirectory() ? walk(fp) : [fp];
+    });
+    const files = walk(distDir).filter((f) => f.endsWith(".js")).sort();
+    const h = nodeCreateHash("sha1");
+    for (const f of files) h.update(fsReadFile(f));
+    const v = h.digest("hex").slice(0, 12);
+    fsWriteFile(pathJoin(distDir, ".version"), v);
+    console.log("   dist 版本:", v);
+  } catch (e) { console.warn("   写 dist/.version 失败(不影响):", e.message); }
+}
+
 function pruneNodeModules(nm) {
   if (!existsSync(nm)) return;
   const before = (() => { try { return execSync(`du -sm ${JSON.stringify(nm)} | cut -f1`, { encoding: "utf8" }).trim(); } catch { return "?"; } })();
@@ -78,6 +96,8 @@ console.log("2/6 准备目录…");
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "bin"), { recursive: true });
 cpSync(join(agentRoot, "dist"), join(out, "dist"), { recursive: true });
+// 6-19 自更新: 写入 dist 版本号(与服务端 agent-release 同算法), 客户包首次启动不会空跑一次更新。
+writeDistVersion(join(out, "dist"));
 
 console.log(`3/6 下载便携 Node ${NODE_VER} (arm64 + x64)…`);
 fetchNodeBin("arm64", join(out, "bin", "node-arm64"));
@@ -133,6 +153,21 @@ const cmd = [
   "  done < <(grep -v '^[[:space:]]*#' bossmate.cfg)",
   "fi",
   '[ -z "$DEVICE_NAME" ] && DEVICE_NAME="$(hostname)"',
+  "",
+  '# 6-19 自更新: 只拉小小的 agent 代码(dist), Chromium/Node/登录态全保留 — 不必重下整包。',
+  'if [ -n "$SERVER_URL" ]; then',
+  '  RVER="$(curl -fsS --max-time 8 "$SERVER_URL/api/v1/agent/release/version" 2>/dev/null | tr -dc "0-9a-f")"',
+  '  LVER="$(cat dist/.version 2>/dev/null | tr -dc "0-9a-f")"',
+  '  if [ -n "$RVER" ] && [ "$RVER" != "$LVER" ]; then',
+  '    echo "发现新版本, 正在更新(仅几十KB, 登录态不受影响)…"',
+  '    if curl -fsS --max-time 60 "$SERVER_URL/api/v1/agent/release/dist.tgz" -o /tmp/bm-dist.tgz 2>/dev/null; then',
+  '      rm -rf /tmp/bm-dist.new && mkdir -p /tmp/bm-dist.new && tar -xzf /tmp/bm-dist.tgz -C /tmp/bm-dist.new 2>/dev/null && [ -d /tmp/bm-dist.new/dist ] && rm -rf dist && mv /tmp/bm-dist.new/dist dist && printf "%s" "$RVER" > dist/.version && echo "已更新到最新版。" || echo "(更新失败, 用当前版本继续)"',
+  '      rm -rf /tmp/bm-dist.new /tmp/bm-dist.tgz',
+  '    else',
+  '      echo "(联网检查更新失败, 用当前版本继续)"',
+  '    fi',
+  '  fi',
+  'fi',
   "",
   'if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then',
   "  while true; do",
