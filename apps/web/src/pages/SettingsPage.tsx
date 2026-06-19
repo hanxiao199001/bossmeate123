@@ -606,6 +606,12 @@ export default function SettingsPage() {
               <p className="text-sm text-gray-500">设置每天各类型内容各生成几篇、各类各做哪些学科。数字人暂不自动生成；总数=各类之和。未选学科=全学科轮转。</p>
             </div>
           </div>
+          {/* 6-19 #3: 明示当前生效哪套引擎+对应期刊去重规则(消除"答案不唯一又看不见") */}
+          <div className={`mb-4 rounded-lg px-3 py-2.5 text-xs leading-relaxed border ${Object.values(contentQuota).some((v) => (v?.count ?? 0) > 0) ? "bg-teal-50 border-teal-200 text-teal-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+            {Object.values(contentQuota).some((v) => (v?.count ?? 0) > 0)
+              ? "✅ 当前生效：按类型引擎 — 每天按下方配置出刊，同一本期刊 15 天内不重复。"
+              : "⚠️ 未配置任何篇数，当前回退「按学科轮转」旧引擎：同一本期刊 30 天内最多 5 篇。给下方任一类型填上每日篇数即切到按类型引擎。"}
+          </div>
           <div className="space-y-3">
             {([["domestic", "国内核心"], ["international", "国外期刊"], ["roundup", "多刊盘点"]] as const).map(([t, label]) => {
               const cur = contentQuota[t] || { count: 0, disciplines: [] };
