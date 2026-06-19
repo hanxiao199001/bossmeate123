@@ -372,7 +372,9 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
  *  → ④ 仅范围(最久未用) → ⑤ 去范围(仅新刊) → ⑥ 全放开(最久未用)。
  *  根因: 国内刊 discipline 大面积为空 + 小学科15天冷却耗尽, 严选会大量空名额; 兜底让每个名额都出刊。 */
 async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
-  const active = eq(journals.status, "active");
+  // 6-19 数据质量护栏: 排除 ai_fabricated(生成时 LLM 编造、IF/分区/录用率是假的)刊, 不让它们进每日生成。
+  //   只排这一类: 正经的低可信/目录刊(国内核心常 confidence 为空)仍保留, 不误杀。
+  const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
   const sc = journalScopeCondition(scope); // SQL | null
   const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
   const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
