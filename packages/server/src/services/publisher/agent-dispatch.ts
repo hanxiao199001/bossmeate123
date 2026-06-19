@@ -16,6 +16,20 @@ import { buildPushCaptions } from "./draft-push.js";
 /** 登录态在客户本机、服务器无凭证的平台 → 走本地 Agent 推草稿, 不走服务器凭证发布 */
 export const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
 
+// 6-19: video 内容的 body 有时混入 HTML 尾注(如"本文由 AI 辅助生成"声明), 直接当视频源会 404。
+// 这里只从 body 里抽出视频 URL(/storage/...或 http...的 .mp4/.mov 等), 不信任整个 body。
+function extractVideoUrl(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const s = String(body).trim();
+  const m = s.match(/(\/storage\/\S+?\.(?:mp4|mov|m4v|webm))/i)
+        || s.match(/(https?:\/\/\S+?\.(?:mp4|mov|m4v|webm))/i);
+  if (m) return m[1];
+  // 兜底: 整个 body 就是个干净的 /storage 或 http 地址(无后缀/无HTML)
+  if (/^\/storage\/\S+$/.test(s) && !/[<>\s]/.test(s)) return s;
+  if (/^https?:\/\/\S+$/.test(s) && !/[<>\s]/.test(s)) return s;
+  return null;
+}
+
 export type DispatchAccount = { id: string; accountName: string; platform: string };
 export type AgentTaskRow = typeof agentPublishTasks.$inferSelect;
 
@@ -31,8 +45,8 @@ export async function dispatchVideoToAgent(params: {
 }): Promise<AgentTaskRow[]> {
   const { content, tenantId, accounts } = params;
   if (accounts.length === 0) return [];
-  const videoSource = content.type === "video" ? content.body : null;
-  if (!videoSource) throw new Error("内容不是视频或缺少视频地址，无法派单给本地 Agent");
+  const videoSource = content.type === "video" ? extractVideoUrl(content.body) : null;
+  if (!videoSource) throw new Error("内容不是视频, 或 body 里没找到有效视频地址(/storage 或 http 的 .mp4) — 无法派单给本地 Agent");
   // 6-17 #8: 没有已配对的 active 设备就别空建任务(否则前端报"等待领取"实则石沉大海, 任务永远无人领)
   const [dev] = await db.select({ id: agentDevices.id }).from(agentDevices)
     .where(and(eq(agentDevices.tenantId, tenantId), eq(agentDevices.status, "active"))).limit(1);

@@ -149,7 +149,8 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   if (compliance.softHits.length > 0) {
     logger.warn({ contentId, softHits: compliance.softHits }, "PR-Z3 软词警告(广告法/医疗红线), 放行但建议人工复核");
   }
-  content.body = await appendAiLabel(content.body);
+  // 6-19: 只给图文追加 AI 声明; 视频内容 body 是视频URL, 追加 HTML 会污染成无效路径(Agent 下载 404)。
+  if (content.type !== "video") content.body = await appendAiLabel(content.body);
 
   // 自动提取正文第一张 http 图片作为封面（用于微信 thumb_media_id）
   let autoCoverUrl = options?.coverImageUrl;
