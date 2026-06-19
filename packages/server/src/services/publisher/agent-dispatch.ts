@@ -12,6 +12,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { agentPublishTasks, agentDevices } from "../../models/schema.js";
 import { buildPushCaptions } from "./draft-push.js";
+import { logger } from "../../config/logger.js";
 
 /** 登录态在客户本机、服务器无凭证的平台 → 走本地 Agent 推草稿, 不走服务器凭证发布 */
 export const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
@@ -52,6 +53,18 @@ export async function dispatchVideoToAgent(params: {
     .where(and(eq(agentDevices.tenantId, tenantId), eq(agentDevices.status, "active"))).limit(1);
   if (!dev) throw new Error("没有已配对的 Agent 设备 — 请先在客户电脑启动并配对 Agent，再发布抖音/视频号");
   const { captions, titles } = await buildPushCaptions(content.id, tenantId, accounts);
+  // 6-19 #1 提前排查违规: 每条文案过合规检测 —— 硬词(封号级:政治/违法)直接拦截不发; 软词(广告法绝对化/医疗红线 → 降权风险)记警告放行。
+  const { checkCompliance } = await import("../compliance/content-check.js");
+  for (let i = 0; i < accounts.length; i++) {
+    const text = `${titles[i] ?? content.title ?? ""}\n${captions[i] ?? ""}`;
+    const c = await checkCompliance(text);
+    if (c.blocked) {
+      throw new Error(`派单已拦截: 文案含封号级违禁词「${c.hardHits.join("、")}」, 请修改文案后再发(防账号被封)`);
+    }
+    if (c.softHits.length > 0) {
+      logger.warn({ accountName: accounts[i].accountName, softHits: c.softHits }, "#1 派单文案含广告法/医疗红线词 — 放行但有降权风险, 建议调整文案模板避免这些词");
+    }
+  }
   return db
     .insert(agentPublishTasks)
     .values(

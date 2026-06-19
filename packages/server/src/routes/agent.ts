@@ -178,7 +178,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       const uid = b.uid ? String(b.uid).slice(0, 100) : undefined;
       if (!nickname && !uid) return reply.code(400).send({ code: "BAD_REQUEST", message: "nickname/uid 至少一个" });
       const [acc] = await db
-        .select({ id: platformAccounts.id, accountId: platformAccounts.accountId, metadata: platformAccounts.metadata })
+        .select({ id: platformAccounts.id, accountId: platformAccounts.accountId, accountName: platformAccounts.accountName, platform: platformAccounts.platform, metadata: platformAccounts.metadata })
         .from(platformAccounts)
         .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, device.tenantId)))
         .limit(1);
@@ -206,6 +206,12 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       try {
         const set: Record<string, unknown> = { metadata: meta, updatedAt: new Date() };
         if (uid) set.accountId = uid;
+        // 6-19: 占位名"待登录·X" → 改成真实名(有昵称用昵称, 没昵称用"平台·账号号")。用户自定义改过的名不覆盖。
+        if (typeof acc.accountName === "string" && acc.accountName.startsWith("待登录")) {
+          const platLabel = acc.platform === "douyin" ? "抖音" : acc.platform === "wechat_video" ? "视频号" : acc.platform;
+          const realName = nickname || (uid ? `${platLabel}·${uid}` : null);
+          if (realName) set.accountName = String(realName).slice(0, 100);
+        }
         await db.update(platformAccounts).set(set).where(eq(platformAccounts.id, id));
       } catch (e) {
         logger.warn({ accountId: id, err: e instanceof Error ? e.message : e }, "回填昵称/平台号失败(设备已绑定, 不影响发布)");
