@@ -370,14 +370,16 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return cleanupResult;
     }
     case "journal-trust-reverify": {
-      // PR #107：批量 reverify confidence 低 / 未验证 / 30 天前的期刊（按 confidence ASC NULLS FIRST 优先）
-      const { sql: drizzleSql, asc: drizzleAsc, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
+      // PR #107：批量 reverify 未验证 / 30 天前的期刊。
+      // 6-19: 排序改为"最久没核验优先"(lastVerifiedAt ASC NULLS FIRST), 保证没有刊被长期饿着不刷新 IF;
+      //   可信度作次序。这样 ~3 个月把全库滚一遍, IF 滚动保鲜(老韩诉求: 最久没核验的先刷)。
+      const { sql: drizzleSql, isNull: drizzleIsNull, or: drizzleOr, lt: drizzleLt } = await import("drizzle-orm");
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const candidates = await db
         .select({ id: journals.id })
         .from(journals)
         .where(drizzleOr(drizzleIsNull(journals.lastVerifiedAt), drizzleLt(journals.lastVerifiedAt, cutoff)))
-        .orderBy(drizzleSql`${journals.confidence} ASC NULLS FIRST`, drizzleAsc(journals.id))
+        .orderBy(drizzleSql`${journals.lastVerifiedAt} ASC NULLS FIRST`, drizzleSql`${journals.confidence} ASC NULLS FIRST`)
         .limit(100);
       const { enrichJournal } = await import("./journal-enricher/orchestrator.js");
       let success = 0; let failed = 0;
