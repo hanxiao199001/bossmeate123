@@ -741,6 +741,22 @@ export async function adminRoutes(app: FastifyInstance) {
    * PR-X2: DVH 形象目录 — 默认4个 + 管理员扩展 (从阿里云控制台拿真实 avatarCode/voiceCode 后添加)。
    * GET 给前端主播选择器; PATCH 整体替换扩展条目 (存 SYSTEM config.automationConfig.dvhCatalog)。
    */
+  // 6-19: 手动触发"期刊库衍生选题"(验证用; 幂等去重, 重复跑只 +appearCount 不灌重)。
+  app.post("/topics/mine", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const b = (request.body as { sampleJournals?: number; topicsPerJournal?: number } | null) || {};
+      const { mineTopicsFromJournals } = await import("../services/recommendation/journal-topic-miner.js");
+      const res = await mineTopicsFromJournals({
+        sampleJournals: Math.min(Math.max(Number(b.sampleJournals) || 12, 1), 40),
+        topicsPerJournal: Math.min(Math.max(Number(b.topicsPerJournal) || 3, 1), 5),
+      });
+      return { code: "OK", data: res };
+    } catch (err) {
+      logger.error({ err }, "手动衍生选题失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: `衍生选题失败: ${err instanceof Error ? err.message : "未知"}` });
+    }
+  });
+
   // 6-19: 从阿里云拉取账号下可用形象(给前端目录管理选用; 尤其加男形象防查重)。
   app.get("/dvh-avatars", { preHandler: adminOnlyMiddleware }, async (_req, reply) => {
     try {
