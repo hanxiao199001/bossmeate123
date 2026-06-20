@@ -386,12 +386,12 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
     const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
     return j?.id ?? null;
   };
+  // 6-19 修"国外槽位漏国内刊": 兜底绝不丢 scope —— 只放宽 学科/冷却, 国内/国外定位始终保留。
+  //   国外刊池用尽时返回 null(该槽位跳过/空着), 也不退回国内刊(否则国内刊被当国外内容生成又错发到国外号)。
   return (await pick([active, sc, disc, fresh], rnd))
     ?? (await pick([active, sc, disc], lru))
     ?? (await pick([active, sc, fresh], rnd))
-    ?? (await pick([active, sc], lru))
-    ?? (await pick([active, fresh], rnd))
-    ?? (await pick([active], lru));
+    ?? (await pick([active, sc], lru));
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
