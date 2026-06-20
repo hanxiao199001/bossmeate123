@@ -103,13 +103,13 @@ export default function ContentWorkbenchPage() {
   }, [selectedIds, selectedAccountIds]);
   const isMultiSelectMode = selectedIds.size > 0;
 
-  // 拉账号 (一次) + 默认勾 isVerified
+  // 拉账号 (一次) — 6-19: 默认不勾选任何号, 由用户自己选(避免没注意就群发到全部账号)
   useEffect(() => {
     api.get<WorkbenchAccount[]>("/accounts?status=active")
       .then((r) => {
         const arr = (Array.isArray(r.data) ? r.data : []).filter((a) => a.platform);
         setAccounts(arr);
-        setSelectedAccountIds(new Set(arr.filter((a) => a.isVerified).map((a) => a.id)));
+        setSelectedAccountIds(new Set());
       })
       .catch(() => setAccounts([]));
   }, []);
