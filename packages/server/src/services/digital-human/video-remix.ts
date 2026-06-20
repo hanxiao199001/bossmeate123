@@ -73,13 +73,24 @@ function runFFmpeg(args: string[]): Promise<void> {
 }
 
 async function downloadToFile(url: string, filePath: string): Promise<void> {
+  const maxBytes = env.DVH_DOWNLOAD_MAX_MB * 1024 * 1024;
+  // DVH 视频在 LocalStorage 模式下是相对路径 /storage/...mp4, fetch 不接受相对 URL。
+  // 直接读本地磁盘(复用 storage.resolveLocalPath), 仅 http(s) 才走 fetch(OSS/远程)。
+  if (!/^https?:\/\//i.test(url)) {
+    const remotePath = url.replace(/^\/?storage\//, "");
+    const localPath = storage.resolveLocalPath?.(remotePath);
+    if (!localPath) throw new Error(`无法解析本地视频路径: ${url}`);
+    const buf = await readFile(localPath);
+    if (buf.length > maxBytes) throw new Error(`视频过大 ${(buf.length / 1048576).toFixed(0)}MB`);
+    await writeFile(filePath, buf);
+    return;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), env.DVH_DOWNLOAD_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
-    const maxBytes = env.DVH_DOWNLOAD_MAX_MB * 1024 * 1024;
     if (buf.length > maxBytes) throw new Error(`视频过大 ${(buf.length / 1048576).toFixed(0)}MB`);
     await writeFile(filePath, buf);
   } finally { clearTimeout(timer); }
