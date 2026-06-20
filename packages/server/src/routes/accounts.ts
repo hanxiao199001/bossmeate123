@@ -45,6 +45,7 @@ const updateAccountSchema = z.object({
   disciplines: z.array(z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"])).max(12).optional(), // PR-W5b 多选
   persona: z.string().max(2000).nullable().optional(), // PR-X1 人设画像
   remark: z.string().max(100).nullable().optional(), // 6-19 手动备注名
+  dvhTemplate: z.string().max(40).nullable().optional(), // 6-19 数字人形象目录key
 });
 
 const publishSchema = z.object({
@@ -275,6 +276,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.disciplines !== undefined) updateData.disciplines = body.disciplines; // PR-W5b 多选
       if (body.persona !== undefined) updateData.persona = body.persona; // PR-X1 人设
       if (body.remark !== undefined) updateData.remark = body.remark; // 6-19 备注名
+      if (body.dvhTemplate !== undefined) updateData.dvhTemplate = body.dvhTemplate; // 6-19 数字人形象
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {

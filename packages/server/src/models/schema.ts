@@ -789,6 +789,7 @@ export const platformAccounts = pgTable(
     disciplines: jsonb("disciplines").default([]).notNull(),
     // PR-X1: 人设画像 — 自由文本(语气/自称/受众/口头禅/禁忌), 生成时注入 prompt
     persona: text("persona"),
+    dvhTemplate: varchar("dvh_template", { length: 40 }), // 6-19 该账号数字人形象(目录key), 不同号不同形象防查重
     // PR-X3: 风格画像 — 喂范文后 LLM 提炼的风格描述, 生成时注入 prompt
     styleProfile: text("style_profile"),
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）

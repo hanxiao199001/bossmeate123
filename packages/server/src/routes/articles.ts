@@ -8,7 +8,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and, or } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { contents } from "../models/schema.js";
+import { contents, platformAccounts } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { triggerVideoFromArticle } from "../services/skills/auto-video-bridge.js";
 import { getProvider } from "../services/ai/provider-factory.js";
@@ -63,7 +63,7 @@ export async function articlesRoutes(app: FastifyInstance) {
   // POST /articles/:id/generate-dvh-video — 用户手动触发 article → 阿里数字人视频 (PR #140)
   app.post("/:id/generate-dvh-video", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body as { templateId?: string } | null) || {};
+    const body = (request.body as { templateId?: string; accountId?: string } | null) || {};
 
     const [article] = await db
       .select()
@@ -79,7 +79,15 @@ export async function articlesRoutes(app: FastifyInstance) {
     }
 
     const metaTemplateId = (article.metadata as { templateId?: string } | null)?.templateId;
-    const templateId = body.templateId || metaTemplateId;
+    let templateId = body.templateId || metaTemplateId;
+    // 6-19 防查重: 指定目标账号且该号绑了数字人形象 → 用账号形象(不同号不同形象)。
+    if (body.accountId) {
+      try {
+        const [acc] = await db.select({ dvhTemplate: platformAccounts.dvhTemplate }).from(platformAccounts)
+          .where(and(eq(platformAccounts.id, body.accountId), eq(platformAccounts.tenantId, request.tenantId))).limit(1);
+        if (acc?.dvhTemplate) templateId = acc.dvhTemplate;
+      } catch { /* 用默认 */ }
+    }
     // PR-X2: 改目录解析 — 支持 config 扩展的自定义形象 key
     const { resolveAvatarVoice } = await import("../services/digital-human/template-mapping.js");
     if (!templateId || !(await resolveAvatarVoice(templateId))) {

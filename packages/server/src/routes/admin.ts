@@ -73,7 +73,7 @@ const generateVideoSchema = z.object({
   source: z.enum(["from_article", "from_topic"]),
   articleId: z.string().uuid().optional(),
   topic: z.string().min(2).max(100).optional(),
-  avatarTemplate: z.enum(["A_academic", "B_marketing", "C_popular", "E_industry"]).default("A_academic"),
+  avatarTemplate: z.string().min(1).max(40).default("A_academic"), // 6-19 放开: 支持目录扩展的自定义形象key(接口用 resolveAvatarVoice 校验)
 }).refine(
   (d) => (d.source === "from_article" ? !!d.articleId : !!d.topic),
   { message: "from_article 需 articleId; from_topic 需 topic" }
@@ -741,6 +741,16 @@ export async function adminRoutes(app: FastifyInstance) {
    * PR-X2: DVH 形象目录 — 默认4个 + 管理员扩展 (从阿里云控制台拿真实 avatarCode/voiceCode 后添加)。
    * GET 给前端主播选择器; PATCH 整体替换扩展条目 (存 SYSTEM config.automationConfig.dvhCatalog)。
    */
+  // 6-19: 从阿里云拉取账号下可用形象(给前端目录管理选用; 尤其加男形象防查重)。
+  app.get("/dvh-avatars", { preHandler: adminOnlyMiddleware }, async (_req, reply) => {
+    try {
+      const { listDvhAvatars } = await import("../services/digital-human/list-avatars.js");
+      return { code: "OK", data: { avatars: await listDvhAvatars() } };
+    } catch (err) {
+      logger.error({ err }, "拉取阿里云形象失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: `拉取阿里云形象失败: ${err instanceof Error ? err.message : "未知错误"}` });
+    }
+  });
   app.get("/dvh-catalog", async () => {
     const { loadDvhCatalog } = await import("../services/digital-human/template-mapping.js");
     return { code: "OK", data: { catalog: await loadDvhCatalog() } };

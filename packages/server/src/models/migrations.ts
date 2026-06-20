@@ -208,6 +208,13 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
+    version: "014_pa_dvh_template",
+    description: "6-19: 账号绑定数字人形象 dvh_template(目录key) — 不同账号用不同形象防查重封号",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS dvh_template varchar(40);
+    `,
+  },
+  {
     version: "013_pa_remark",
     description: "6-19: 账号手动备注名 remark(扫码后自己标一个名字, 与自动抓的真实昵称/系统占位名并存, 显示优先)",
     sql: `

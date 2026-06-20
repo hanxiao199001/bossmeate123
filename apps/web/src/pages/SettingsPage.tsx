@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
+import DvhCatalogManager from "../components/settings/DvhCatalogManager";
 import ContactMetaSection from "../components/ContactMetaSection";
 import PageHeader from "../components/ui/PageHeader";
 import { toast } from "../components/Toast";
@@ -651,6 +652,8 @@ export default function SettingsPage() {
           </div>
           {cqResult && <div className={`mt-3 text-sm ${cqResult.ok ? "text-green-600" : "text-red-600"}`}>{cqResult.msg}</div>}
         </div>
+
+        <DvhCatalogManager />
 
         {/* T4-3-5: 我的模板偏好（boss_edits 累计 → 加权选副版本模板） */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">

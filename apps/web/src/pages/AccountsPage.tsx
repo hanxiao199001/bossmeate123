@@ -15,6 +15,7 @@ interface Account {
   groupName?: string;
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
   remark?: string; // 6-19 手动备注名
+  dvhTemplate?: string; // 6-19 数字人形象目录key
   discipline?: string | null; // PR-W5 领域定位(旧单选)
   disciplines?: string[]; // PR-W5b 领域定位多选
   persona?: string | null; // PR-X1 人设画像
@@ -340,6 +341,20 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     try {
       await api.patch(`/accounts/${accountId}`, { remark: value.trim() || null });
       setRemarkEditId(null);
+      fetchAccounts();
+    } catch { /* 静默 */ }
+  };
+
+  // 6-19: 数字人形象目录(给账号绑形象用) + 绑定 handler。
+  const [dvhCatalog, setDvhCatalog] = useState<Array<{ key: string; avatarLabel: string }>>([]);
+  useEffect(() => {
+    api.get<{ catalog?: Array<{ key: string; avatarLabel: string }> }>("/admin/dvh-catalog")
+      .then((r) => setDvhCatalog(((r.data as any)?.catalog ?? (r.data as any)?.data?.catalog ?? []) as Array<{ key: string; avatarLabel: string }>))
+      .catch(() => {});
+  }, []);
+  const handleDvhChange = async (accountId: string, key: string) => {
+    try {
+      await api.patch(`/accounts/${accountId}`, { dvhTemplate: key || null });
       fetchAccounts();
     } catch { /* 静默 */ }
   };
@@ -794,6 +809,17 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                 <option value="domestic">国内核心</option>
                                 <option value="international">国外期刊</option>
                               </select>
+                              {(account.platform === "douyin" || account.platform === "wechat_video") && dvhCatalog.length > 0 && (
+                                <select
+                                  value={account.dvhTemplate || ""}
+                                  onChange={(e) => handleDvhChange(account.id, e.target.value)}
+                                  title="数字人形象 — 不同账号用不同形象防查重"
+                                  className="text-xs px-2 py-0.5 rounded-full border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 focus:outline-none cursor-pointer"
+                                >
+                                  <option value="">形象:默认</option>
+                                  {dvhCatalog.map((d) => <option key={d.key} value={d.key}>形象:{d.avatarLabel}</option>)}
+                                </select>
+                              )}
                               <button
                                 onClick={() => setDiscEditId(discEditId === account.id ? null : account.id)}
                                 title="领域定位(可多选) — 一键生成时该账号只产这些领域的内容"
