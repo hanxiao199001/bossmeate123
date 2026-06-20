@@ -751,6 +751,29 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: `拉取阿里云形象失败: ${err instanceof Error ? err.message : "未知错误"}` });
     }
   });
+  // 6-19 AI 混剪 MVP: 对一条视频内容做混剪, 返回新视频URL(先验证出片; 落库变体/按账号分发为下一步)。
+  app.post("/videos/:id/remix", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const rb = (request.body as { seed?: number; cta?: string } | null) || {};
+      const [c] = await db.select({ id: contents.id, title: contents.title, body: contents.body })
+        .from(contents).where(eq(contents.id, id)).limit(1);
+      if (!c) return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+      const raw = String(c.body || "");
+      const videoUrl = /(https?:\/\/[^\s"\'<>]+\.mp4[^\s"\'<>]*)/i.exec(raw)?.[1]
+        || /(\/storage\/[^\s"\'<>]+\.mp4)/i.exec(raw)?.[1]
+        || (/\.mp4/i.test(raw) ? raw.trim() : "");
+      if (!videoUrl) return reply.code(400).send({ code: "NO_VIDEO", message: "该内容不是视频或找不到视频地址" });
+      const { remixVideo } = await import("../services/digital-human/video-remix.js");
+      const seed = Number.isFinite(rb.seed) ? Number(rb.seed) : undefined;
+      const result = await remixVideo({ videoUrl, title: c.title || "", cta: rb.cta, taskUuid: `c${String(id).slice(0, 8)}`, seed });
+      if (!result.remixed) return reply.code(502).send({ code: "REMIX_FAILED", message: "混剪失败(已回退原视频), 看服务端日志 dvh.remix.failed_fallback(多半是字体路径或2核4G超时)" });
+      return { code: "OK", data: { videoUrl: result.videoUrl, remixed: true } };
+    } catch (err) {
+      logger.error({ err }, "混剪端点失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "混剪失败" });
+    }
+  });
   app.get("/dvh-catalog", async () => {
     const { loadDvhCatalog } = await import("../services/digital-human/template-mapping.js");
     return { code: "OK", data: { catalog: await loadDvhCatalog() } };
