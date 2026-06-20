@@ -55,10 +55,13 @@ type Scope = "domestic" | "international" | null;
 
 // 6-19: 把期刊判成 国内核心/国外期刊 (镜像 journal-scope.ts 的 journalScopeCondition, JS 版)。
 //   国内核心 = 有中文目录标签(catalogs 非空); 国外期刊 = 无中文标签且有 IF 或分区; 其余=未知(不限制)。
-function classifyScope(j: { catalogs: unknown; impactFactor: number | null; partition: string | null }): Scope {
+function classifyScope(j: { catalogs: unknown; impactFactor: number | null; partition: string | null; name?: string | null }): Scope {
   const cats = Array.isArray(j.catalogs) ? (j.catalogs as unknown[]) : [];
   if (cats.length > 0) return "domestic";
   if (j.impactFactor != null || (typeof j.partition === "string" && j.partition.length > 0)) return "international";
+  // 6-19: 三无数据(无目录/无IF/无分区)的刊按刊名语言兜底 — 刊名含中文=国内中文刊(如《高校应用数学学报》),
+  //   不再被判"未知"而绕过国内/国外定位过滤。纯英文名无指标仍判未知(不强判国外, 可能是不明来源刊)。
+  if (/[\u4e00-\u9fff]/.test(String(j.name ?? ""))) return "domestic";
   return null;
 }
 
