@@ -12,6 +12,7 @@ import { recommendTopics } from "./topic-recommender.js";
 import { logger } from "../../config/logger.js";
 
 const BASE_SCORE = 45; // 衍生选题初始综合分(放中游, 与爬虫热词公平竞争)
+const POOL_CAP = Number(process.env.JOURNAL_TOPIC_POOL_CAP) || 1500; // journal_mining 选题池上限, 防无上限增长
 
 /** ③ 学科表现因子: 各学科过往内容 avg(阅读/互动代理) ÷ 全局均值, clamp 到 [0.7, 1.5]。无数据=全 1。 */
 async function categoryFactors(): Promise<Map<string, number>> {
@@ -37,8 +38,26 @@ async function categoryFactors(): Promise<Map<string, number>> {
   return map;
 }
 
+/** 封顶淘汰: 保留最多 POOL_CAP 个 active 衍生选题, 多余的归档(优先淘汰 从未被推荐+低分+最老)。
+ *  用过的(lastRecommendedAt 非空)、高分、近期的留下 → 池子有界且自动汰旧留优, 不无限增长。 */
+async function evictExcess(sysTenant: string): Promise<number> {
+  try {
+    const res = await db.execute(sql`
+      UPDATE keywords SET status = 'archived'
+      WHERE id IN (
+        SELECT id FROM keywords
+        WHERE tenant_id = ${sysTenant}::uuid AND source_platform = 'journal_mining' AND status = 'active'
+        ORDER BY (last_recommended_at IS NOT NULL) DESC, composite_score DESC, created_at DESC
+        OFFSET ${POOL_CAP}
+      )`);
+    const n = (res as any).rowCount ?? 0;
+    if (n > 0) logger.info({ archived: n, cap: POOL_CAP }, "journal-topic-miner: 超上限归档旧选题");
+    return n;
+  } catch (err) { logger.warn({ err: String(err) }, "journal-topic-miner: 淘汰失败(不阻塞)"); return 0; }
+}
+
 /** 主入口: 抽样期刊 → LLM 衍生选题 → 入 keywords(按学科表现加权)。 */
-export async function mineTopicsFromJournals(opts?: { sampleJournals?: number; topicsPerJournal?: number }): Promise<{ journals: number; inserted: number; updated: number }> {
+export async function mineTopicsFromJournals(opts?: { sampleJournals?: number; topicsPerJournal?: number }): Promise<{ journals: number; inserted: number; updated: number; archived: number }> {
   const SYS = SYSTEM_RECOMMENDATION_TENANT_ID;
   const sampleN = opts?.sampleJournals ?? 12;
   const perJournal = opts?.topicsPerJournal ?? 3;
@@ -81,6 +100,7 @@ export async function mineTopicsFromJournals(opts?: { sampleJournals?: number; t
       } catch (err) { logger.warn({ kw, err: String(err) }, "journal-topic-miner: 入库失败(跳过)"); }
     }
   }
-  logger.info({ journals: sampled.length, inserted, updated }, "journal-topic-miner: 期刊衍生选题完成");
-  return { journals: sampled.length, inserted, updated };
+  const archived = inserted > 0 ? await evictExcess(SYS) : 0;
+  logger.info({ journals: sampled.length, inserted, updated, archived }, "journal-topic-miner: 期刊衍生选题完成");
+  return { journals: sampled.length, inserted, updated, archived };
 }
