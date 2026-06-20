@@ -46,7 +46,8 @@ export type SchedulerJobType =
   | "stale-review-cleanup"     // 清理超时未审核内容（3天）
   | "login-keepalive"          // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
   | "daily-auto-distribute"    // PR-W6: 每日 07:00 BJ 推荐池按账号领域自动配对分发(草稿), 租户开关 autoDistribute
-  | "journal-gap-fill";        // PR-FW: 每日补全缺 IF/分区/录用率 的期刊(知识库自愈)
+  | "journal-gap-fill"         // PR-FW: 每日补全缺 IF/分区/录用率 的期刊(知识库自愈)
+  | "journal-topic-mining";    // 6-19: 每日从期刊库 LLM 衍生选题入库(选题库自动扩充, 按学科表现加权)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -352,6 +353,14 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       }
       logger.info({ candidates: gaps.length, ok, bad }, "PR-FW 期刊缺字段补全完成");
       return { ok, bad, candidates: gaps.length };
+    }
+
+    case "journal-topic-mining": {
+      // 6-19: 期刊库自动衍生选题(零人工)。每日抽样期刊→LLM 按学科推题→入 keywords(按学科表现加权)。
+      const { mineTopicsFromJournals } = await import("./recommendation/journal-topic-miner.js");
+      const res = await mineTopicsFromJournals();
+      logger.info(res, "6-19 journal-topic-mining cron 完成");
+      return res;
     }
 
     case "monthly-journal-refresh": {
@@ -709,6 +718,13 @@ async function registerCronJobs() {
       name: "journal-trust-reverify",
       data: { type: "journal-trust-reverify" as SchedulerJobType },
     }
+  );
+
+  // 6-19: 每日 05:30 BJ 期刊库衍生选题入库(选题库自动扩充)。错开生成/分发/爬虫。
+  await crawlerQueue.upsertJobScheduler(
+    "journal-topic-mining-schedule",
+    { pattern: "30 5 * * *", tz: "Asia/Shanghai" },
+    { name: "journal-topic-mining", data: { type: "journal-topic-mining" as SchedulerJobType } }
   );
 
   // PR #120 P5（5-14）：每月 1 号 00:00 BJ 4 行业 × 50 篇 article 自动生成
