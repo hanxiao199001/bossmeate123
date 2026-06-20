@@ -33,6 +33,7 @@ export default function DvhCatalogManager() {
   const [pulling, setPulling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [manual, setManual] = useState({ avatarCode: "", avatarLabel: "", voiceCode: "aixia" });
 
   const loadCatalog = useCallback(() => {
     api.get<{ catalog?: CatalogEntry[] }>("/admin/dvh-catalog")
@@ -65,6 +66,17 @@ export default function DvhCatalogManager() {
       templateLabel: a.name || a.code,
     }]);
     setMsg({ ok: true, text: `已加入「${a.name || a.code}」, 记得选音色后点保存` });
+  };
+
+  const addManual = () => {
+    const code = manual.avatarCode.trim();
+    const label = manual.avatarLabel.trim() || code;
+    if (!code) { setMsg({ ok: false, text: "请填形象 Code(阿里云控制台→2D资产中心复制)" }); return; }
+    if (catalog.some((c) => c.avatarCode === code)) { setMsg({ ok: false, text: "该形象已在目录里" }); return; }
+    const key = label.slice(0, 36).replace(/\s+/g, "_") + "_" + code.slice(-4);
+    setCatalog((prev) => [...prev, { key, avatarCode: code, avatarLabel: label, voiceCode: manual.voiceCode || "aixia", voiceLabel: manual.voiceCode || "aixia", templateLabel: label }]);
+    setManual({ avatarCode: "", avatarLabel: "", voiceCode: "aixia" });
+    setMsg({ ok: true, text: `已加入「${label}」, 点保存生效` });
   };
 
   const updateEntry = (key: string, patch: Partial<CatalogEntry>) =>
@@ -137,6 +149,20 @@ export default function DvhCatalogManager() {
           {saving ? "保存中…" : "保存目录"}
         </button>
         {msg && <span className={`text-sm ${msg.ok ? "text-green-600" : "text-red-600"}`}>{msg.text}</span>}
+      </div>
+
+      {/* 手动添加: 从阿里云控制台复制形象 Code 贴进来(拉取拉不到公模时用) */}
+      <div className="mt-3 border border-dashed border-gray-200 rounded-lg p-3">
+        <div className="text-xs text-gray-500 mb-2">手动添加形象 — 阿里云控制台 → 2D 数字人资产中心 → 点形象复制「形象 Code」贴这里(可加男形象)。商用前请确认该形象已授权。</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={manual.avatarCode} onChange={(e) => setManual((m) => ({ ...m, avatarCode: e.target.value }))}
+            placeholder="形象 Code, 如 CH_2d_xxxx" className="text-xs border border-gray-300 rounded px-2 py-1 w-56" />
+          <input value={manual.avatarLabel} onChange={(e) => setManual((m) => ({ ...m, avatarLabel: e.target.value }))}
+            placeholder="名字(如 男声-西装)" className="text-xs border border-gray-300 rounded px-2 py-1 w-40" />
+          <input list="dvh-voice-suggestions" value={manual.voiceCode} onChange={(e) => setManual((m) => ({ ...m, voiceCode: e.target.value }))}
+            placeholder="音色 code" className="text-xs border border-gray-300 rounded px-2 py-1 w-32" />
+          <button onClick={addManual} className="text-xs px-3 py-1 rounded bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100">加入目录</button>
+        </div>
       </div>
 
       {/* 阿里云拉取结果 */}
