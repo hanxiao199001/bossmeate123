@@ -95,6 +95,7 @@ export default function SettingsPage() {
   // PR-O: 每日内容配置(按类型)
   const [contentQuota, setContentQuota] = useState<Record<string, { count: number; disciplines: string[] }>>({});
   const [cqSaving, setCqSaving] = useState(false);
+  const [autoQuota, setAutoQuota] = useState(false); // 6-20 按账号自动配齐
   const [cqResult, setCqResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // T4-3-5: 模板偏好统计
@@ -356,8 +357,8 @@ export default function SettingsPage() {
 
   // PR-O: 加载/保存 每日内容配置(按类型)
   useEffect(() => {
-    api.get<{ contentQuota: Record<string, { count: number; disciplines: string[] }> }>("/admin/daily-content-config")
-      .then((res) => setContentQuota(res.data?.contentQuota || {}))
+    api.get<{ contentQuota: Record<string, { count: number; disciplines: string[] }>; autoQuotaFromAccounts?: boolean }>("/admin/daily-content-config")
+      .then((res) => { setContentQuota(res.data?.contentQuota || {}); setAutoQuota(res.data?.autoQuotaFromAccounts === true); })
       .catch(() => { /* 非 admin 忽略 */ });
   }, []);
   const setCqCount = (t: string, n: number) =>
@@ -371,8 +372,8 @@ export default function SettingsPage() {
   const handleSaveContentQuota = async () => {
     setCqSaving(true); setCqResult(null);
     try {
-      const res = await api.patch<{ total: number }>("/admin/daily-content-config", { contentQuota });
-      setCqResult({ ok: true, msg: `已保存, 每日共 ${res.data?.total ?? 0} 篇, 次日生效` });
+      const res = await api.patch<{ total: number }>("/admin/daily-content-config", { contentQuota, autoQuotaFromAccounts: autoQuota });
+      setCqResult({ ok: true, msg: autoQuota ? "已保存:按账号自动配齐已开启, 次日生效" : `已保存, 每日共 ${res.data?.total ?? 0} 篇, 次日生效` });
     } catch (err: any) {
       setCqResult({ ok: false, msg: err?.message || "保存失败" });
     } finally { setCqSaving(false); }
@@ -613,7 +614,13 @@ export default function SettingsPage() {
               ? "✅ 当前生效：按类型引擎 — 每天按下方配置出刊，同一本期刊 15 天内不重复。"
               : "⚠️ 未配置任何篇数，当前回退「按学科轮转」旧引擎：同一本期刊 30 天内最多 5 篇。给下方任一类型填上每日篇数即切到按类型引擎。"}
           </div>
-          <div className="space-y-3">
+          <label className="flex items-start gap-2 mb-4 cursor-pointer rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+            <input type="checkbox" checked={autoQuota} onChange={(e) => setAutoQuota(e.target.checked)} className="mt-0.5" />
+            <span className="text-xs leading-relaxed text-indigo-900">
+              <b>按账号自动配齐(推荐)</b> — 开启后忽略下方手动篇数,系统按各公众号的「国内/国外定位 + 领域」自动算出每天生成多少篇、哪些学科,保证每个账号都有对口内容。账号变多也不用手动改。
+            </span>
+          </label>
+          <div className={`space-y-3 ${autoQuota ? "opacity-40 pointer-events-none" : ""}`}>
             {([["domestic", "国内核心"], ["international", "国外期刊"], ["roundup", "多刊盘点"]] as const).map(([t, label]) => {
               const cur = contentQuota[t] || { count: 0, disciplines: [] };
               return (

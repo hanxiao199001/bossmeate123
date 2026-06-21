@@ -15,6 +15,7 @@ interface TodayContent {
   status: string;
   createdAt: string;
   hasVideo: boolean;
+  reviewReason?: string | null;
   source: string | null;
 }
 
@@ -643,6 +644,9 @@ export default function TodayPage() {
                       <div className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-gray-50 group">
                         <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${st.cls}`}>{st.label}</span>
                         <Link to={`/content/${c.id}`} className="text-sm text-gray-800 truncate flex-1 group-hover:text-indigo-600">{c.title ?? "(无标题)"}</Link>
+                        {c.status === "needs_review" && c.reviewReason && (
+                          <span className="shrink-0 max-w-[260px] truncate text-xs text-amber-600" title={c.reviewReason}>⚠ {c.reviewReason}</span>
+                        )}
                         {c.status === "needs_review" && (
                           <button
                             onClick={() => void approveContent(c.id)}

@@ -351,9 +351,45 @@ async function runTenantOwnedDailyContent(): Promise<void> {
 }
 
 /** 读 SYSTEM 租户的 contentQuota(按类型配额)。空/未配 → null。 */
+/** 6-20 账号-内容自动配齐: 从活跃公众号的 定位(国内/国外/两者)+领域 反推该生成多少国内/国外+哪些学科。
+ *  保证每个账号都有对口内容; 账号变多也不用手动算配额。轮询选学科(i%len)天然覆盖各学科。 */
+export async function computeAutoQuota(): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
+  try {
+    const { platformAccounts } = await import("../../models/schema.js");
+    const accts = await db.select({
+      journalScope: platformAccounts.journalScope,
+      disciplines: platformAccounts.disciplines,
+      discipline: platformAccounts.discipline,
+    }).from(platformAccounts).where(and(eq(platformAccounts.platform, "wechat"), eq(platformAccounts.status, "active")));
+    if (accts.length === 0) return null;
+    const discOf = (a: { disciplines: unknown; discipline: string | null }): string[] => {
+      const ds = Array.isArray(a.disciplines) && (a.disciplines as string[]).length ? (a.disciplines as string[]) : (a.discipline ? [a.discipline] : []);
+      return ds.filter(Boolean);
+    };
+    let domCount = 0, intlCount = 0;
+    const domDisc = new Set<string>(), intlDisc = new Set<string>();
+    for (const a of accts) {
+      const scope = a.journalScope || "both";
+      const ds = discOf(a);
+      if (scope === "domestic" || scope === "both") { domCount++; ds.forEach((d) => domDisc.add(d)); }
+      if (scope === "international" || scope === "both") { intlCount++; ds.forEach((d) => intlDisc.add(d)); }
+    }
+    const cap = (n: number) => Math.min(Math.max(n, 0), 30);
+    const q: Record<string, { count: number; disciplines: string[] }> = {};
+    if (domCount > 0) q.domestic = { count: cap(domCount), disciplines: [...domDisc] };
+    if (intlCount > 0) q.international = { count: cap(intlCount), disciplines: [...intlDisc] };
+    return Object.keys(q).length > 0 ? q : null;
+  } catch (err) { logger.warn({ err: String(err) }, "computeAutoQuota 失败"); return null; }
+}
+
 export async function getContentQuota(): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
   try {
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
+    // 6-20: 开了"按账号自动配齐"→ 用账号定位反推配额(忽略手动篇数); 没账号则回退手动配置。
+    if ((t?.config as { automationConfig?: { autoQuotaFromAccounts?: boolean } } | null)?.automationConfig?.autoQuotaFromAccounts === true) {
+      const aq = await computeAutoQuota();
+      if (aq) { logger.info({ quota: aq }, "6-20 用账号自动配齐配额"); return aq; }
+    }
     const raw = (t?.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)?.automationConfig?.contentQuota;
     if (raw && typeof raw === "object") {
       const clean: Record<string, { count: number; disciplines: string[] }> = {};

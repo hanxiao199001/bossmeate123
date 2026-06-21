@@ -708,11 +708,11 @@ export async function adminRoutes(app: FastifyInstance) {
    */
   app.get("/daily-content-config", { preHandler: adminOnlyMiddleware }, async () => {
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
-    const cq = (t?.config as { automationConfig?: { contentQuota?: any } } | null)?.automationConfig?.contentQuota;
-    return { code: "OK", data: { contentQuota: cq || {}, disciplines: ALL_DISCIPLINES } };
+    const ac = (t?.config as { automationConfig?: { contentQuota?: any; autoQuotaFromAccounts?: boolean } } | null)?.automationConfig;
+    return { code: "OK", data: { contentQuota: ac?.contentQuota || {}, autoQuotaFromAccounts: ac?.autoQuotaFromAccounts === true, disciplines: ALL_DISCIPLINES } };
   });
   app.patch("/daily-content-config", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
-    const body = (request.body as { contentQuota?: Record<string, { count?: unknown; disciplines?: unknown }> } | null) || {};
+    const body = (request.body as { contentQuota?: Record<string, { count?: unknown; disciplines?: unknown }>; autoQuotaFromAccounts?: boolean } | null) || {};
     const validTypes = new Set(["domestic", "international", "roundup", "topicPool"]); // PR-V1 跨行业选题池
     const validDisc = new Set<string>(ALL_DISCIPLINES.map((d) => d.code));
     const clean: Record<string, { count: number; disciplines: string[] }> = {};
@@ -729,7 +729,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
     const cfg = (t?.config as Record<string, unknown>) || {};
     const auto = (cfg.automationConfig as Record<string, unknown>) || {};
-    cfg.automationConfig = { ...auto, contentQuota: clean };
+    cfg.automationConfig = { ...auto, contentQuota: clean, ...(body.autoQuotaFromAccounts !== undefined ? { autoQuotaFromAccounts: body.autoQuotaFromAccounts === true } : {}) };
     await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
     // 设置变更 → 失效今日选题推荐缓存, 下次查看按新学科重算
     try { const { invalidateTodayRecommendations } = await import("../services/content-engine/topic-recommender.js"); await invalidateTodayRecommendations(); } catch (err) { logger.warn({ err: String(err) }, "失效今日推荐缓存失败(不影响保存)"); }

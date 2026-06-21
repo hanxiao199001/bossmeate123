@@ -120,7 +120,16 @@ export async function todayRoutes(app: FastifyInstance) {
       data: {
         date: todayDateString(),
         contents: rows.map((r) => {
-          const meta = r.metadata as { videoUrl?: string; source?: string } | null;
+          const meta = r.metadata as { videoUrl?: string; source?: string; validatorIssues?: string[]; hasWarnings?: boolean; qualityScore?: number } | null;
+          // 6-20: 待审给出质检失败原因, 让运营审核有据可依(否则只能猜)。
+          let reviewReason: string | null = null;
+          if (r.status === "needs_review") {
+            const issues = Array.isArray(meta?.validatorIssues) ? meta!.validatorIssues!.filter(Boolean) : [];
+            if (issues.length > 0) reviewReason = issues.slice(0, 3).join("；");
+            else if (meta?.hasWarnings) reviewReason = "事实/合规告警 — 核对正文数据与措辞";
+            else if (typeof meta?.qualityScore === "number") reviewReason = `质检分偏低 (${meta.qualityScore})`;
+            else reviewReason = "质检未过(多为结构/字数/重复词)";
+          }
           return {
             id: r.id,
             type: r.type,
@@ -129,6 +138,7 @@ export async function todayRoutes(app: FastifyInstance) {
             createdAt: r.createdAt,
             hasVideo: !!meta?.videoUrl,
             source: meta?.source ?? null,
+            reviewReason,
           };
         }),
         agentTasks: tasks.map((t) => ({ ...t, error: t.error ? t.error.slice(0, 160) : null })),
