@@ -3,6 +3,7 @@ import { useAuthStore } from "./hooks/useAuthStore";
 import { ToastContainer } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import ProtectedAdminRoute from "./components/ProtectedAdminRoute";
+import { roleHomePath, isBossHome } from "./utils/roleHome";
 
 // 页面
 import LoginPage from "./pages/LoginPage";
@@ -28,6 +29,16 @@ import ChatFab from "./components/chat-drawer/ChatFab";
 import ChatDrawer from "./components/chat-drawer/ChatDrawer";
 // 6-11 施工包C2-a (审计2.5): 全站统一侧边栏 — 所有可达登录后页面都包 MainLayout
 import MainLayout from "./components/layout/MainLayout";
+
+function HomeRoute() {
+  const user = useAuthStore((s) => s.user);
+  if (!isBossHome(user)) return <Navigate to={roleHomePath(user)} replace />;
+  return (
+    <MainLayout>
+      <TodayPage />
+    </MainLayout>
+  );
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -58,9 +69,7 @@ export default function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <MainLayout>
-              <TodayPage />
-            </MainLayout>
+            <HomeRoute />
           </ProtectedRoute>
         }
       />
@@ -170,11 +179,11 @@ export default function App() {
       <Route
         path="/settings"
         element={
-          <ProtectedRoute>
+          <ProtectedAdminRoute>
             <MainLayout>
               <SettingsPage />
             </MainLayout>
-          </ProtectedRoute>
+          </ProtectedAdminRoute>
         }
       />
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { api } from "../utils/api";
+import { roleHomePath } from "../utils/roleHome";
 import { useAuthStore } from "../hooks/useAuthStore";
 
 /* ───── 动画粒子背景 ───── */
@@ -81,7 +82,7 @@ export default function LoginPage() {
     try {
       const res = await api.post<{ token: string; user: { id: string; name: string; role: string }; tenant?: any }>(
         "/auth/sms/login", { phone, code });
-      if (res.data) { login(res.data.token, res.data.user as any, res.data.tenant); navigate("/"); }
+      if (res.data) { login(res.data.token, res.data.user as any, res.data.tenant); navigate(roleHomePath(res.data.user as any)); }
     } catch (err: any) {
       if (err?.code === "NO_TENANT") setError("该手机号未注册，也没有待接受的邀请。请联系公司管理员邀请你加入，或用邮箱注册公司。");
       else setError(err.message || "登录失败");
@@ -112,7 +113,7 @@ export default function LoginPage() {
           localStorage.removeItem("bossmate_remember_email");
         }
         login(res.data.token, res.data.user);
-        navigate("/");
+        navigate(roleHomePath(res.data.user));
       }
     } catch (err: any) {
       setError(err.message || "登录失败，请检查邮箱和密码");

@@ -47,7 +47,7 @@ const DATA_NAV: NavItem[] = [
 
 // 系统 — 配置与 ToB 开通
 const SYSTEM_NAV: NavItem[] = [
-  { to: "/settings", icon: IconSettings, label: "设置", matchPrefix: "/settings" },
+  { to: "/settings", icon: IconSettings, label: "设置", matchPrefix: "/settings", anyPerms: ["settings.manage"] },
   { to: "/onboarding", icon: IconUsers, label: "客户开通", matchPrefix: "/onboarding", adminOnly: true }, // 独立图标(原与今日撞Sparkles)
 ];
 

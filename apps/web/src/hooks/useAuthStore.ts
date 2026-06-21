@@ -21,6 +21,7 @@ interface AuthState {
   isAuthenticated: boolean;
 
   login: (token: string, user: User, tenant?: Tenant) => void;
+  updateUser: (patch: Partial<User>) => void;
   logout: () => void;
   setTenant: (tenant: Tenant) => void;
 }
@@ -50,6 +51,17 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: (token, user, tenant) => {
     localStorage.setItem("bossmate_auth", JSON.stringify({ token, user, tenant }));
     set({ token, user, tenant, isAuthenticated: true });
+  },
+
+  updateUser: (patch) => {
+    set((st) => {
+      const user = st.user ? { ...st.user, ...patch } : st.user;
+      try {
+        const cur = JSON.parse(localStorage.getItem("bossmate_auth") || "{}");
+        localStorage.setItem("bossmate_auth", JSON.stringify({ ...cur, user }));
+      } catch { /* ignore */ }
+      return { user };
+    });
   },
 
   logout: () => {
