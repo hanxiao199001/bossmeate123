@@ -43,10 +43,15 @@ export default function MembersManager() {
   const [invitePhone, setInvitePhone] = useState("");
   const [inviteRole, setInviteRole] = useState("content_operator");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [caps, setCaps] = useState<Record<string, number>>({ content_operator: 2, sales: 2 });
 
   const load = useCallback(() => {
     api.get<Member[]>("/tenant/members").then((r) => setMembers((r.data as any) ?? [])).catch(() => {});
-    api.get<Invite[]>("/tenant/invites").then((r) => setInvites((r.data as any) ?? [])).catch(() => {});
+    api.get<{ invites: Invite[]; caps: Record<string, number> }>("/tenant/invites").then((r) => {
+      const d = (r.data as any) ?? {};
+      setInvites(d.invites ?? (Array.isArray(d) ? d : []));
+      if (d.caps) setCaps(d.caps);
+    }).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -83,11 +88,11 @@ export default function MembersManager() {
     catch (e: any) { setMsg({ ok: false, text: e?.response?.data?.message || e?.message || "改手机号失败" }); }
   };
 
-  // 名额: 每角色 2 个(在职成员 + 待接受邀请), 与后端一致
-  const CAP = 2;
+  // 名额: 按套餐(后端返回 caps); 占用 = 在职成员 + 待接受邀请
   const usedOf = (role: string) => members.filter((m) => m.role === role && m.isActive).length + invites.filter((i) => i.role === role).length;
   const opUsed = usedOf("content_operator"), salesUsed = usedOf("sales");
-  const selFull = (inviteRole === "content_operator" ? opUsed : salesUsed) >= CAP;
+  const opCap = caps.content_operator ?? 2, salesCap = caps.sales ?? 2;
+  const selFull = inviteRole === "content_operator" ? opUsed >= opCap : salesUsed >= salesCap;
 
   const roleOptions = ASSIGNABLE;
 
@@ -98,7 +103,7 @@ export default function MembersManager() {
         <div>
           <h2 className="text-lg font-bold text-gray-900">成员管理</h2>
           <p className="text-sm text-gray-500">邀请运营/销售加入公司、分配角色。员工用手机号 + 验证码登录即自动入职，只看到对应模块。</p>
-          <p className="text-xs text-gray-400 mt-0.5">名额：运营 <b className={opUsed >= CAP ? "text-rose-500" : "text-gray-600"}>{opUsed}/{CAP}</b> · 销售 <b className={salesUsed >= CAP ? "text-rose-500" : "text-gray-600"}>{salesUsed}/{CAP}</b>（停用可释放名额）</p>
+          <p className="text-xs text-gray-400 mt-0.5">名额（按套餐）：运营 <b className={opUsed >= opCap ? "text-rose-500" : "text-gray-600"}>{opUsed}/{opCap}</b> · 销售 <b className={salesUsed >= salesCap ? "text-rose-500" : "text-gray-600"}>{salesUsed}/{salesCap}</b>（停用可释放名额）</p>
         </div>
       </div>
 

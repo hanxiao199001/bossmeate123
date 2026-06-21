@@ -126,7 +126,16 @@ export async function tenantRoutes(app: FastifyInstance) {
   // 可邀请的角色(owner 不通过邀请产生; admin 仅 owner 可授)
   const INVITABLE = new Set(["admin", "content_operator", "sales_director", "sales", "finance_viewer"]);
   // 6-20 老韩: 每公司限 2 运营 + 2 销售。名额占用 = 在职成员 + pending邀请; 停用成员不占名额(释放后可再加)。
-  const ROLE_CAP: Record<string, number> = { content_operator: 2, sales: 2 };
+  // 6-20 按套餐区分名额: trial 1+1 / basic 2+2 / pro 5+5。调价改这里即可。
+  const PLAN_ROLE_CAP: Record<string, Record<string, number>> = {
+    trial: { content_operator: 1, sales: 1 },
+    basic: { content_operator: 2, sales: 2 },
+    pro: { content_operator: 5, sales: 5 },
+  };
+  async function getTenantCaps(tenantId: string): Promise<Record<string, number>> {
+    const [t] = await db.select({ plan: tenants.plan }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+    return PLAN_ROLE_CAP[(t?.plan as string) || "basic"] ?? PLAN_ROLE_CAP.basic;
+  }
   async function roleUsage(tenantId: string, role: string, opts?: { excludeUserId?: string; excludePhone?: string }): Promise<number> {
     let mem = await db.select({ id: users.id }).from(users)
       .where(and(eq(users.tenantId, tenantId), eq(users.role, role), eq(users.isActive, true)));
@@ -148,9 +157,10 @@ export async function tenantRoutes(app: FastifyInstance) {
     }).from(tenantInvites)
       .where(and(eq(tenantInvites.tenantId, request.tenantId), eq(tenantInvites.status, "pending")))
       .orderBy(desc(tenantInvites.createdAt));
+    const caps = await getTenantCaps(request.tenantId);
     const usage: Record<string, number> = {};
-    for (const r of Object.keys(ROLE_CAP)) usage[r] = await roleUsage(request.tenantId, r);
-    return { code: "OK", data: rows, usage, caps: ROLE_CAP };
+    for (const r of Object.keys(caps)) usage[r] = await roleUsage(request.tenantId, r);
+    return { code: "OK", data: { invites: rows, usage, caps } };
   });
 
   /**
@@ -167,11 +177,12 @@ export async function tenantRoutes(app: FastifyInstance) {
       .where(and(eq(users.tenantId, request.tenantId), eq(users.phone, body.phone))).limit(1);
     if (existMember) return reply.code(409).send({ code: "ALREADY_MEMBER", message: "该手机号已是公司成员" });
 
-    // 名额上限(运营/销售各 2 个); 刷新本手机同角色 pending 不计自身
-    const cap = ROLE_CAP[body.role];
+    // 名额上限(按套餐); 刷新本手机同角色 pending 不计自身
+    const caps = await getTenantCaps(request.tenantId);
+    const cap = caps[body.role];
     if (cap !== undefined) {
       const used = await roleUsage(request.tenantId, body.role, { excludePhone: body.phone });
-      if (used >= cap) return reply.code(409).send({ code: "ROLE_QUOTA_FULL", message: `${roleLabel(body.role)}名额已满(最多 ${cap} 个), 请先停用一个再添加` });
+      if (used >= cap) return reply.code(409).send({ code: "ROLE_QUOTA_FULL", message: `${roleLabel(body.role)}名额已满(当前套餐最多 ${cap} 个), 请先停用一个或升级套餐` });
     }
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7天有效
@@ -216,10 +227,14 @@ export async function tenantRoutes(app: FastifyInstance) {
       if (owners.length <= 1) return reply.code(400).send({ code: "LAST_OWNER", message: "不能降级/停用唯一的老板账号" });
     }
 
-    // 改角色到 运营/销售 → 名额上限(排除自己)
-    if (body.role && body.role !== target.role && ROLE_CAP[body.role] !== undefined) {
-      const used = await roleUsage(request.tenantId, body.role, { excludeUserId: id });
-      if (used >= ROLE_CAP[body.role]) return reply.code(409).send({ code: "ROLE_QUOTA_FULL", message: `${roleLabel(body.role)}名额已满(最多 ${ROLE_CAP[body.role]} 个)` });
+    // 改角色到 运营/销售 → 名额上限(按套餐, 排除自己)
+    if (body.role && body.role !== target.role) {
+      const caps = await getTenantCaps(request.tenantId);
+      const cap = caps[body.role];
+      if (cap !== undefined) {
+        const used = await roleUsage(request.tenantId, body.role, { excludeUserId: id });
+        if (used >= cap) return reply.code(409).send({ code: "ROLE_QUOTA_FULL", message: `${roleLabel(body.role)}名额已满(当前套餐最多 ${cap} 个)` });
+      }
     }
     // 改登录手机号: 格式 + 全局唯一(手机号是登录标识)
     if (body.phone !== undefined) {
