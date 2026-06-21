@@ -25,15 +25,16 @@ interface Invite {
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "老板",
-  admin: "管理员",
-  content_operator: "内容运营",
-  sales_director: "销售总监",
+  admin: "老板", // 6-20 老韩: 管理员并入"老板"显示(看所有内容数据+预警)
+  content_operator: "运营",
   sales: "销售",
+  // 以下后续再开放
+  sales_director: "销售总监",
   finance_viewer: "财务查看",
   member: "成员(旧)",
 };
-// 可邀请/可改的角色(owner 不在此, 由系统注册产生)
-const ASSIGNABLE = ["content_operator", "sales", "sales_director", "finance_viewer", "admin"];
+// 6-20: 邀请/改角色只开放 运营 + 销售 两种, 其他后续再加
+const ASSIGNABLE = ["content_operator", "sales"];
 
 export default function MembersManager() {
   const myRole = useAuthStore((s) => s.user?.role);
@@ -71,8 +72,7 @@ export default function MembersManager() {
     catch (e: any) { setMsg({ ok: false, text: e?.message || "操作失败" }); }
   };
 
-  // admin 不能授予 admin(仅 owner 可)
-  const roleOptions = ASSIGNABLE.filter((r) => !(r === "admin" && myRole !== "owner"));
+  const roleOptions = ASSIGNABLE;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
@@ -116,14 +116,14 @@ export default function MembersManager() {
         <div className="text-sm font-semibold text-gray-700 mb-2">公司成员({members.length})</div>
         <div className="space-y-2">
           {members.map((m) => {
-            const isOwner = m.role === "owner";
-            const canEdit = !isOwner || myRole === "owner"; // owner 行仅 owner 可改
+            const isTop = m.role === "owner" || m.role === "admin"; // 6-20 老板(owner/admin)统一视为顶层, 徽章展示
+            const canEdit = !isTop; // 老板行不在此改角色
             return (
               <div key={m.id} className={`flex items-center gap-2 border rounded-lg px-3 py-2 text-sm ${m.isActive ? "border-gray-100" : "border-gray-100 bg-gray-50 opacity-60"}`}>
                 <span className="font-medium text-gray-800 truncate max-w-[120px]">{m.name}</span>
                 <span className="text-xs text-gray-400">{m.phone || m.email || "—"}</span>
                 <span className="ml-auto" />
-                {isOwner ? (
+                {isTop ? (
                   <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">老板</span>
                 ) : (
                   <select value={m.role} disabled={!canEdit} onChange={(e) => void changeRole(m, e.target.value)}
@@ -131,7 +131,7 @@ export default function MembersManager() {
                     {[m.role, ...roleOptions.filter((r) => r !== m.role)].map((r) => <option key={r} value={r}>{ROLE_LABELS[r] ?? r}</option>)}
                   </select>
                 )}
-                {!isOwner && (
+                {!isTop && (
                   <button onClick={() => void toggleActive(m)}
                     className={`text-xs px-2 py-1 rounded ${m.isActive ? "text-rose-600 hover:bg-rose-50" : "text-green-600 hover:bg-green-50"}`}>
                     {m.isActive ? "停用" : "启用"}
