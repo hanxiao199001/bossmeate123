@@ -72,6 +72,23 @@ export default function MembersManager() {
     catch (e: any) { setMsg({ ok: false, text: e?.message || "操作失败" }); }
   };
 
+  // 改登录手机号
+  const [editingPhoneId, setEditingPhoneId] = useState<string | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const savePhone = async (m: Member) => {
+    const phone = phoneDraft.trim();
+    if (!/^1[3-9]\d{9}$/.test(phone)) { setMsg({ ok: false, text: "手机号格式不正确" }); return; }
+    if (phone === (m.phone || "")) { setEditingPhoneId(null); return; }
+    try { await api.patch(`/tenant/members/${m.id}`, { phone }); setEditingPhoneId(null); setMsg({ ok: true, text: "手机号已更新" }); load(); }
+    catch (e: any) { setMsg({ ok: false, text: e?.response?.data?.message || e?.message || "改手机号失败" }); }
+  };
+
+  // 名额: 每角色 2 个(在职成员 + 待接受邀请), 与后端一致
+  const CAP = 2;
+  const usedOf = (role: string) => members.filter((m) => m.role === role && m.isActive).length + invites.filter((i) => i.role === role).length;
+  const opUsed = usedOf("content_operator"), salesUsed = usedOf("sales");
+  const selFull = (inviteRole === "content_operator" ? opUsed : salesUsed) >= CAP;
+
   const roleOptions = ASSIGNABLE;
 
   return (
@@ -81,6 +98,7 @@ export default function MembersManager() {
         <div>
           <h2 className="text-lg font-bold text-gray-900">成员管理</h2>
           <p className="text-sm text-gray-500">邀请运营/销售加入公司、分配角色。员工用手机号 + 验证码登录即自动入职，只看到对应模块。</p>
+          <p className="text-xs text-gray-400 mt-0.5">名额：运营 <b className={opUsed >= CAP ? "text-rose-500" : "text-gray-600"}>{opUsed}/{CAP}</b> · 销售 <b className={salesUsed >= CAP ? "text-rose-500" : "text-gray-600"}>{salesUsed}/{CAP}</b>（停用可释放名额）</p>
         </div>
       </div>
 
@@ -92,8 +110,10 @@ export default function MembersManager() {
           className="text-sm border border-gray-300 rounded px-2 py-1.5">
           {roleOptions.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
         </select>
-        <button onClick={() => void invite()}
-          className="text-sm px-4 py-1.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">邀请</button>
+        <button onClick={() => void invite()} disabled={selFull}
+          title={selFull ? "该角色名额已满，请先停用一个" : ""}
+          className="text-sm px-4 py-1.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">邀请</button>
+        {selFull && <span className="text-xs text-rose-500">{ROLE_LABELS[inviteRole]}名额已满</span>}
         {msg && <span className={`text-sm ${msg.ok ? "text-green-600" : "text-red-600"}`}>{msg.text}</span>}
       </div>
 
@@ -121,7 +141,23 @@ export default function MembersManager() {
             return (
               <div key={m.id} className={`flex items-center gap-2 border rounded-lg px-3 py-2 text-sm ${m.isActive ? "border-gray-100" : "border-gray-100 bg-gray-50 opacity-60"}`}>
                 <span className="font-medium text-gray-800 truncate max-w-[120px]">{m.name}</span>
-                <span className="text-xs text-gray-400">{m.phone || m.email || "—"}</span>
+                {editingPhoneId === m.id ? (
+                  <input
+                    autoFocus value={phoneDraft}
+                    onChange={(e) => setPhoneDraft(e.target.value)}
+                    onBlur={() => void savePhone(m)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void savePhone(m); if (e.key === "Escape") setEditingPhoneId(null); }}
+                    placeholder="手机号" maxLength={11}
+                    className="text-xs border border-indigo-300 rounded px-1.5 py-0.5 w-32"
+                  />
+                ) : isTop ? (
+                  <span className="text-xs text-gray-400">{m.phone || m.email || "—"}</span>
+                ) : (
+                  <button className="text-xs text-gray-400 hover:text-indigo-600" title="点击改登录手机号"
+                    onClick={() => { setPhoneDraft(m.phone || ""); setEditingPhoneId(m.id); }}>
+                    {m.phone || "—"} <span className="text-gray-300">✎</span>
+                  </button>
+                )}
                 <span className="ml-auto" />
                 {isTop ? (
                   <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">老板</span>
