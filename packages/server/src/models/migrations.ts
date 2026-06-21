@@ -221,4 +221,11 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS remark varchar(100);
     `,
   },
+  {
+    version: "015_journals_composite_if",
+    description: "6-20: 知网复合影响因子持久化 composite_impact_factor(国内刊影响力指标, 独立列不污染 impact_factor/hasWosData)",
+    sql: `
+      ALTER TABLE journals ADD COLUMN IF NOT EXISTS composite_impact_factor real;
+    `,
+  },
 ];

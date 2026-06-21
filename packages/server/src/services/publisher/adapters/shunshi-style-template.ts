@@ -346,6 +346,41 @@ function hasWosData(journal: JournalInfo): boolean {
   return hasJif || hasIf || hasQ;
 }
 
+// 6-20 国内刊专属凭证块: 中文核心收录做视觉主角(替代国外刊的分区徽章) + 知网复合影响因子 + CN刊号/主办/刊期。
+//   只用最可靠的目录字段(catalogs/cscdLevel/pkuCoreLevel)+ 已采集的复合IF; 无任何凭证则返回""自跳过。
+function renderDomesticCredentialBlock(journal: JournalInfo): string {
+  const j = journal as unknown as Record<string, unknown>;
+  const cat: string[] = Array.isArray(j.catalogs) ? (j.catalogs as unknown[]).map((x) => String(x)) : [];
+  const has = (k: string) => cat.includes(k) || j.catalogType === k;
+  const badges: string[] = [];
+  if (j.pkuCoreLevel || has("pku-core")) badges.push("北大核心");
+  if (has("cssci")) badges.push(typeof j.coreLevel === "string" && /扩展/.test(j.coreLevel) ? "CSSCI扩展版" : "CSSCI");
+  if (j.cscdLevel || has("cscd")) badges.push(`CSCD${/扩展/.test(String(j.cscdLevel ?? "")) ? "扩展库" : "核心库"}`);
+  if (has("cstpcd")) badges.push("科技核心");
+  const compIfRaw = typeof j.compositeIF === "number" ? j.compositeIF
+    : (typeof j.compositeImpactFactor === "number" ? j.compositeImpactFactor : null);
+  const compIf = typeof compIfRaw === "number" && compIfRaw > 0 ? compIfRaw : null;
+  if (badges.length === 0 && compIf == null) return ""; // 无凭证不渲染(自跳过)
+
+  const badgeHtml = badges.map((b) =>
+    `<span style="display:inline-block;margin:0 6px 8px 0;padding:8px 16px;background:${RED};color:#fff;border-radius:8px;font-size:15px;font-weight:bold;line-height:1.3;">${esc(b)}</span>`
+  ).join("");
+  const ifHtml = compIf != null
+    ? `<div style="margin-top:6px;"><span style="display:inline-block;padding:8px 16px;background:${BLUE};color:#fff;border-radius:8px;font-size:16px;font-weight:bold;line-height:1.3;">复合影响因子 ${esc(compIf.toFixed(3))}</span><span style="margin-left:8px;font-size:12px;color:${MUTED};">数据来源：知网</span></div>`
+    : "";
+  const info: string[] = [];
+  const cn = j.cnNumber, org = j.organizerName || (journal as { publisher?: string }).publisher;
+  if (typeof cn === "string" && cn.trim()) info.push(`CN ${esc(cn)}`);
+  if (typeof org === "string" && org.trim()) info.push(`主办：${esc(org)}`);
+  if (journal.frequency) info.push(esc(String(journal.frequency)));
+  const infoHtml = info.length ? `<p style="margin:10px 0 0 0;font-size:13px;color:${MUTED};line-height:1.6;">${info.join(" · ")}</p>` : "";
+
+  return `<section style="margin:0 0 18px 0;padding:16px;background:#FAFAFA;border-radius:8px;text-align:center;">` +
+    `<p style="margin:0 0 10px 0;font-size:13px;color:${MUTED};line-height:1.5;">期刊收录与认可</p>` +
+    badgeHtml + ifHtml + infoHtml +
+    `</section>`;
+}
+
 // ============ 区块 3: JCR 分区徽章 ============
 function renderJcrQuartileBlock(journal: JournalInfo): string {
   // 6-17: 优先用 jifSubjects 最优 zone(与下方"JCR 详细"面板同源), 消除顶部徽标 Q3 / 详细 Q2 自相矛盾。
@@ -1182,6 +1217,7 @@ export async function generateShunshiStyleHtml(
   sections.push(renderBasicInfoBlock(journal));                       //  2 ISSN/出版商
   // 6-17: 国内刊(无 WoS 信号)跳过 JCR/IF/CAR 这些 SCI 专属版块, 否则满屏占位空洞。
   const wos = hasWosData(journal);
+  if (!wos) sections.push(renderDomesticCredentialBlock(journal));    //  6-20 国内刊凭证主角(替代分区徽章)
   if (wos) sections.push(renderJcrQuartileBlock(journal));            //  3 分区
   if (wos) sections.push(renderIfHistoryChart(journal));              //  4 IF 趋势图
   if (wos) sections.push(renderImpactFactorBlock(journal));          //  5 IF

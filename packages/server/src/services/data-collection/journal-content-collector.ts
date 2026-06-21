@@ -409,7 +409,7 @@ export async function collectJournalContent(params: {
     // 触发条件：中国出版 或 DB 中有 catalogType 或 没有国际 IF 数据
     let cnNumber: string | null = (journal as any).cnNumber || null;
     let catalogs: string[] = ((journal as any).catalogs as string[]) || [];
-    let compositeIF: number | null = null;
+    let compositeIF: number | null = (journal as any).compositeImpactFactor ?? null; // 6-20: 先用已持久化值, 无则待爬
     let comprehensiveIF: number | null = null;
     let cnkiUrl: string | null = null;
     let coreSubjects: string[] = [];
@@ -500,6 +500,14 @@ export async function collectJournalContent(params: {
           coreLevel = "来源";
         }
       }
+    }
+
+    // 6-20: 复合影响因子回填 journals(知网/万方新爬到且与库里不同时), 持久化避免每次重爬+模板可读。
+    if (compositeIF && journal.id && compositeIF !== ((journal as any).compositeImpactFactor ?? null)) {
+      try {
+        await db.update(journals).set({ compositeImpactFactor: compositeIF }).where(eq(journals.id, journal.id));
+        logger.info({ journal: journal.name, compositeIF }, "6-20 复合影响因子已回填 journals");
+      } catch (err) { logger.debug({ journal: journal.name, err: String(err) }, "复合IF回填失败(不阻塞)"); }
     }
 
     // PR #203: 同档期刊对比 — 拉池内同分区(无分区时同学科)、IF 相近的 2-3 本 (全用可信字段)

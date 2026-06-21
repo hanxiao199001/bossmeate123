@@ -252,6 +252,8 @@ export const journals = pgTable(
     coreLevel: varchar("core_level", { length: 20 }), // "核心" | "扩展" | "来源"
     catalogs: jsonb("catalogs").default([]), // 所属多个目录 ["cssci","pku-core"]
     frequency: varchar("frequency", { length: 20 }), // 刊期: 月刊/双月刊/季刊
+    // 6-20: 知网复合影响因子(国内刊影响力指标)。独立列, 绝不并入 impact_factor —— 否则 hasWosData 会把国内刊误判成国外刊。
+    compositeImpactFactor: real("composite_impact_factor"),
 
     // B.4-1: 中文核心目录标签（CSCD 中国科学引文数据库 + 北大核心总览，目录类静态字段）
     // cscdLevel: "核心库" | "扩展库" | null
