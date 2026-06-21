@@ -645,8 +645,8 @@ function renderFrequencyBlock(journal: JournalInfo): string {
   if (!freq && journal.frequency) {
     freq = journal.frequency;
   }
-  // 老韩 6-15: 数据缺改占位补满(原 NULL→skip)
-  if (!freq) return renderMissingDataBlock("出版周期");
+  // 6-20: 国内刊普遍无此数据, 占位会满屏"暂无公开数据"没法发 → 缺数据整块跳过(回归 PR#136/测试期望)。
+  if (!freq) return "";
 
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">出版周期</p>` +
@@ -668,19 +668,15 @@ function renderAnnualVolumeChart(journal: JournalInfo): string {
       );
     }
   }
-  return renderP1Placeholder({
-    title: "近 10 年发文量",
-    icon: "📊",
-    message: "数据采集中",
-    submessage: "数据完善中，敬请期待",
-  });
+  // 6-20: 缺数据整块跳过, 不渲染"数据采集中"占位(国内刊普遍无, 占位即空洞)。
+  return "";
 }
 
 // ============ 区块 12: TOP 发文机构（P3 隐藏） ============
 function renderTopInstitutionsBlock(journal: JournalInfo): string {
   const raw = (journal as any).publicationStats;
   if (!isPublicationStats(raw) || !Array.isArray(raw.topInstitutions) || raw.topInstitutions.length === 0) {
-    return renderMissingDataBlock("国内 TOP 5 发文机构"); // 老韩 6-15: 占位补满(原隐藏)
+    return ""; // 6-20: 缺数据整块跳过(国内刊普遍无, 占位即空洞, 回归测试期望)
   }
   const top5 = raw.topInstitutions.slice(0, 5);
   const items = top5
@@ -1194,7 +1190,7 @@ export async function generateShunshiStyleHtml(
   sections.push(renderScopeDetailsBlock(journal));                    //  8 收稿范围
   sections.push(renderPublicationCostsBlock(journal));                //  9 版面费
   sections.push(renderFrequencyBlock(journal));                       // 10 出版频率
-  sections.push(renderAnnualVolumeChart(journal)); // 11 发文量图(老韩6-15: always渲染)
+  sections.push(renderAnnualVolumeChart(journal)); // 11 发文量图(6-20: 缺数据跳过)
   sections.push(renderTopInstitutionsBlock(journal));                 // 12 TopN 机构
   if (typesSet.has("citing-pie")) sections.push(renderCitingJournalsPie(journal)); // 13 引用来源饼
   // 老韩6-15: 录用率/版面费/审稿周期图去门控 always 渲染(各函数空数据返回"", 有数据才出图; 如 APC 存在→版面费饼真出图)
