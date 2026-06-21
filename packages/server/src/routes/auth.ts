@@ -5,8 +5,9 @@ import bcrypt from "bcrypt";
 import { nanoid } from "nanoid";
 import { eq, and } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { users, tenants } from "../models/schema.js";
+import { users, tenants, tenantInvites } from "../models/schema.js";
 import { logger } from "../config/logger.js";
+import { sendSmsCode, verifySmsCode, isValidPhone, SmsError, type SmsPurpose } from "../services/auth/sms-service.js";
 
 // 请求体校验
 const registerSchema = z.object({
@@ -107,6 +108,96 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   /**
+   * POST /auth/sms/send - 发送手机验证码(限频/防刷在 service 层)
+   */
+  app.post("/sms/send", async (request, reply) => {
+    const body = z.object({ phone: z.string(), purpose: z.enum(["login", "register", "invite"]).default("login") }).parse(request.body);
+    try {
+      const r = await sendSmsCode(body.phone, body.purpose as SmsPurpose, request.ip);
+      return reply.send({ code: "OK", data: { sent: r.sent, ...(r.devCode ? { devCode: r.devCode } : {}) } });
+    } catch (err) {
+      if (err instanceof SmsError) return reply.code(429).send({ code: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  /**
+   * POST /auth/sms/login - 手机验证码登录。
+   *   用户已存在 → 直接登录; 不存在但有 pending 邀请 → 建号绑角色入职; 都没有 → NO_TENANT 引导建公司。
+   */
+  app.post("/sms/login", async (request, reply) => {
+    const body = z.object({ phone: z.string(), code: z.string() }).parse(request.body);
+    if (!isValidPhone(body.phone)) return reply.code(400).send({ code: "INVALID_PHONE", message: "手机号格式不正确" });
+    try {
+      await verifySmsCode(body.phone, body.code, "login");
+    } catch (err) {
+      if (err instanceof SmsError) return reply.code(400).send({ code: err.code, message: err.message });
+      throw err;
+    }
+
+    let [user] = await db.select().from(users).where(eq(users.phone, body.phone)).limit(1);
+    let tenant;
+    if (user) {
+      [tenant] = await db.select().from(tenants).where(eq(tenants.id, user.tenantId)).limit(1);
+      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    } else {
+      // 无用户 → 看是否有 pending 邀请
+      const [invite] = await db.select().from(tenantInvites)
+        .where(and(eq(tenantInvites.phone, body.phone), eq(tenantInvites.status, "pending")))
+        .orderBy(tenantInvites.createdAt).limit(1);
+      if (!invite) return reply.code(404).send({ code: "NO_TENANT", message: "该手机号未注册, 也没有待接受的邀请。请创建公司或联系管理员邀请你加入。" });
+      if (new Date(invite.expiresAt) < new Date()) {
+        await db.update(tenantInvites).set({ status: "expired", updatedAt: new Date() }).where(eq(tenantInvites.id, invite.id));
+        return reply.code(410).send({ code: "INVITE_EXPIRED", message: "邀请已过期, 请联系管理员重新邀请" });
+      }
+      const [created] = await db.insert(users).values({
+        tenantId: invite.tenantId, phone: body.phone, role: invite.role, name: body.phone.slice(-4) + " 同学",
+      }).returning();
+      user = created;
+      await db.update(tenantInvites).set({ status: "accepted", acceptedAt: new Date(), updatedAt: new Date() }).where(eq(tenantInvites.id, invite.id));
+      [tenant] = await db.select().from(tenants).where(eq(tenants.id, invite.tenantId)).limit(1);
+      logger.info({ userId: user.id, tenantId: invite.tenantId, role: invite.role }, "员工经邀请加入租户");
+    }
+    if (!user || !tenant) return reply.code(500).send({ code: "SERVER_ERROR", message: "登录异常" });
+    const token = app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role });
+    return reply.send({ code: "OK", data: {
+      token,
+      user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role, permissions: permissionsForRole(user.role) },
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
+    } });
+  });
+
+  /**
+   * POST /auth/register-company - 手机号注册新公司(创建租户 + owner 主账号)。
+   */
+  app.post("/register-company", async (request, reply) => {
+    const body = z.object({ phone: z.string(), code: z.string(), name: z.string().min(1), tenantName: z.string().min(1) }).parse(request.body);
+    if (!isValidPhone(body.phone)) return reply.code(400).send({ code: "INVALID_PHONE", message: "手机号格式不正确" });
+    const [dup] = await db.select().from(users).where(eq(users.phone, body.phone)).limit(1);
+    if (dup) return reply.code(409).send({ code: "PHONE_EXISTS", message: "该手机号已注册, 请直接登录" });
+    try {
+      await verifySmsCode(body.phone, body.code, "register");
+    } catch (err) {
+      if (err instanceof SmsError) return reply.code(400).send({ code: err.code, message: err.message });
+      throw err;
+    }
+    const slug = `tenant-${nanoid(8)}`;
+    const [tenant] = await db.insert(tenants).values({ name: body.tenantName, slug }).returning();
+    if (!tenant) return reply.code(500).send({ code: "SERVER_ERROR", message: "租户创建失败" });
+    const [user] = await db.insert(users).values({
+      tenantId: tenant.id, phone: body.phone, name: body.name, role: "owner",
+    }).returning();
+    if (!user) return reply.code(500).send({ code: "SERVER_ERROR", message: "用户创建失败" });
+    const token = app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role });
+    logger.info({ userId: user.id, tenantId: tenant.id }, "手机号注册新公司成功");
+    return reply.code(201).send({ code: "OK", data: {
+      token,
+      user: { id: user.id, name: user.name, phone: user.phone, role: user.role, permissions: permissionsForRole(user.role) },
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
+    } });
+  });
+
+  /**
    * POST /auth/login - 登录
    */
   app.post("/login", async (request, reply) => {
@@ -126,7 +217,10 @@ export async function authRoutes(app: FastifyInstance) {
       });
     }
 
-    // 验证密码
+    // 验证密码(手机号注册用户无密码 → 引导走手机验证码登录)
+    if (!user.passwordHash) {
+      return reply.code(400).send({ code: "USE_SMS_LOGIN", message: "该账号未设置密码, 请用手机验证码登录" });
+    }
     const valid = await bcrypt.compare(body.password, user.passwordHash);
     if (!valid) {
       return reply.code(401).send({

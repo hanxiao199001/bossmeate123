@@ -243,4 +243,37 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
     `,
   },
+  {
+    version: "017_sms_codes_tenant_invites",
+    description: "6-20 Phase2: 手机验证码表 sms_codes(防爆破attempt/一码一用) + 员工邀请表 tenant_invites",
+    sql: `
+      CREATE TABLE IF NOT EXISTS sms_codes (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        phone varchar(20) NOT NULL,
+        code_hash text NOT NULL,
+        purpose varchar(30) NOT NULL,
+        attempt_count integer NOT NULL DEFAULT 0,
+        consumed_at timestamp,
+        ip varchar(50),
+        expires_at timestamp NOT NULL,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_sms_phone_created ON sms_codes(phone, created_at);
+      CREATE TABLE IF NOT EXISTS tenant_invites (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id uuid NOT NULL REFERENCES tenants(id),
+        phone varchar(20) NOT NULL,
+        role varchar(40) NOT NULL,
+        invited_by_user_id uuid NOT NULL REFERENCES users(id),
+        status varchar(20) NOT NULL DEFAULT 'pending',
+        expires_at timestamp NOT NULL,
+        accepted_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_invites_tenant ON tenant_invites(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_invites_phone_status ON tenant_invites(phone, status);
+      ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+    `,
+  },
 ];

@@ -51,7 +51,7 @@ export const users = pgTable(
       .notNull(),
     email: varchar("email", { length: 255 }), // 6-20: 改可空(手机号优先注册无 email)
     phone: varchar("phone", { length: 20 }),
-    passwordHash: text("password_hash").notNull(),
+    passwordHash: text("password_hash"), // 6-20: 改可空(手机号验证码登录用户无密码)
     name: varchar("name", { length: 100 }).notNull(),
     role: varchar("role", { length: 20 }).notNull().default("member"), // owner | admin | member
     avatar: text("avatar"),
@@ -64,6 +64,48 @@ export const users = pgTable(
     index("idx_users_tenant").on(table.tenantId),
     index("idx_users_email").on(table.email),
     index("idx_users_phone").on(table.phone), // 6-20: 手机号登录查找
+  ]
+);
+
+// ========== 6-20 Phase2 多租户: 手机验证码 + 员工邀请 ==========
+
+/** 手机验证码(登录/注册/邀请)。只存 hash; attemptCount 防爆破; 限频靠 createdAt 窗口查询。 */
+export const smsCodes = pgTable(
+  "sms_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    phone: varchar("phone", { length: 20 }).notNull(),
+    codeHash: text("code_hash").notNull(),
+    purpose: varchar("purpose", { length: 30 }).notNull(), // login | register | invite
+    attemptCount: integer("attempt_count").notNull().default(0), // 错误校验次数, 超限锁定
+    consumedAt: timestamp("consumed_at"), // 一码一用: 用过即置
+    ip: varchar("ip", { length: 50 }),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_sms_phone_created").on(table.phone, table.createdAt),
+  ]
+);
+
+/** 员工邀请: 老板/管理员按手机号邀请, 员工验证码登录时匹配 pending 邀请自动加入并绑角色。 */
+export const tenantInvites = pgTable(
+  "tenant_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    phone: varchar("phone", { length: 20 }).notNull(),
+    role: varchar("role", { length: 40 }).notNull(),
+    invitedByUserId: uuid("invited_by_user_id").references(() => users.id).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("pending"), // pending | accepted | expired | revoked
+    expiresAt: timestamp("expires_at").notNull(),
+    acceptedAt: timestamp("accepted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_invites_tenant").on(table.tenantId),
+    index("idx_invites_phone_status").on(table.phone, table.status),
   ]
 );
 
