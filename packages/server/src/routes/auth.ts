@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { permissionsForRole } from "../permissions/permissions.js";
 import { z } from "zod";
 import bcrypt from "bcrypt";
 import { nanoid } from "nanoid";
@@ -94,6 +95,7 @@ export async function authRoutes(app: FastifyInstance) {
           name: user.name,
           email: user.email,
           role: user.role,
+          permissions: permissionsForRole(user.role),
         },
         tenant: {
           id: tenant.id,
@@ -164,6 +166,7 @@ export async function authRoutes(app: FastifyInstance) {
           name: user.name,
           email: user.email,
           role: user.role,
+          permissions: permissionsForRole(user.role),
         },
       },
     };

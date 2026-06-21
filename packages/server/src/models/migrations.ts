@@ -228,4 +228,19 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE journals ADD COLUMN IF NOT EXISTS composite_impact_factor real;
     `,
   },
+  {
+    version: "016_tenant_kyc_user_phone",
+    description: "6-20: 多租户地基 — tenants 企业实名(营业执照/信用代码唯一/认证状态) + users.email 改可空 + users.phone 索引(手机号登录)",
+    sql: `
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS credit_code varchar(30);
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_person varchar(50);
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_license_url text;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS verified_status varchar(20) DEFAULT 'unverified';
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS verified_at timestamp;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS verified_by varchar(100);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_credit_code ON tenants(credit_code);
+      ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+    `,
+  },
 ];

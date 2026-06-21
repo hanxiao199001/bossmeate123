@@ -22,6 +22,13 @@ export const tenants = pgTable("tenants", {
   plan: varchar("plan", { length: 20 }).notNull().default("trial"), // trial | basic | pro
   status: varchar("status", { length: 20 }).notNull().default("active"), // active | suspended
   config: jsonb("config").default({}), // 租户级别配置（模型偏好、Token限额等）
+  // 6-20 企业实名(KYC): 帮客户注册时录营业执照。creditCode 唯一(防同企业重复建租户; PG 唯一约束允许多个 NULL)。
+  creditCode: varchar("credit_code", { length: 30 }).unique(), // 统一社会信用代码
+  legalPerson: varchar("legal_person", { length: 50 }), // 法人代表
+  businessLicenseUrl: text("business_license_url"), // 营业执照图 URL
+  verifiedStatus: varchar("verified_status", { length: 20 }).default("unverified"), // unverified | verified
+  verifiedAt: timestamp("verified_at"),
+  verifiedBy: varchar("verified_by", { length: 100 }), // 认证操作的平台管理员标识
   /**
    * 联系信息（shunshi-style 区块 21 等模板渲染源；admin UI 5-13 后维护）。
    * Shape: { contactName, wechatId?, workingHours?, qrCodeUrl?, email?, phone?, lastUpdatedAt? }
@@ -42,7 +49,7 @@ export const users = pgTable(
     tenantId: uuid("tenant_id")
       .references(() => tenants.id)
       .notNull(),
-    email: varchar("email", { length: 255 }).notNull(),
+    email: varchar("email", { length: 255 }), // 6-20: 改可空(手机号优先注册无 email)
     phone: varchar("phone", { length: 20 }),
     passwordHash: text("password_hash").notNull(),
     name: varchar("name", { length: 100 }).notNull(),
@@ -56,6 +63,7 @@ export const users = pgTable(
   (table) => [
     index("idx_users_tenant").on(table.tenantId),
     index("idx_users_email").on(table.email),
+    index("idx_users_phone").on(table.phone), // 6-20: 手机号登录查找
   ]
 );
 

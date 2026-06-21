@@ -6,6 +6,7 @@
  * 前端 wire 留 PR #141 (UI tile + batch 调度 + 工时对比页)。
  */
 import type { FastifyInstance } from "fastify";
+import { requirePermission } from "../middleware/permission.js";
 import { eq, and, or } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { contents, platformAccounts } from "../models/schema.js";
@@ -22,7 +23,7 @@ import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation
 
 export async function articlesRoutes(app: FastifyInstance) {
   // POST /articles/:id/generate-video — 用户手动触发 article → video script 生成
-  app.post("/:id/generate-video", async (request, reply) => {
+  app.post("/:id/generate-video", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const [article] = await db
       .select()
@@ -61,7 +62,7 @@ export async function articlesRoutes(app: FastifyInstance) {
   });
 
   // POST /articles/:id/generate-dvh-video — 用户手动触发 article → 阿里数字人视频 (PR #140)
-  app.post("/:id/generate-dvh-video", async (request, reply) => {
+  app.post("/:id/generate-dvh-video", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = (request.body as { templateId?: string; accountId?: string } | null) || {};
 

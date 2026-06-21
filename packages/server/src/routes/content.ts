@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { requirePermission } from "../middleware/permission.js";
 import { z } from "zod";
 import { eq, and, desc, sql, count, or, isNull, inArray, gte, lt } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -40,7 +41,7 @@ export async function contentRoutes(app: FastifyInstance) {
   /**
    * GET /content - 获取内容列表（支持筛选和分页）
    */
-  app.get("/", async (request, reply) => {
+  app.get("/", { preHandler: requirePermission("content.read") }, async (request, reply) => {
     try {
       const query = request.query as {
         type?: string;
@@ -143,7 +144,7 @@ export async function contentRoutes(app: FastifyInstance) {
   /**
    * POST /content/:id/pin — PR #178 toggle pinned 保护
    */
-  app.post("/:id/pin", async (request, reply) => {
+  app.post("/:id/pin", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = (request.body as { pinned?: boolean }) ?? {};
@@ -171,7 +172,7 @@ export async function contentRoutes(app: FastifyInstance) {
   /**
    * GET /content/stats - 获取内容统计（各状态数量）
    */
-  app.get("/stats", async (request, reply) => {
+  app.get("/stats", { preHandler: requirePermission("content.read") }, async (request, reply) => {
     try {
       const result = await db
         .select({
@@ -208,7 +209,7 @@ export async function contentRoutes(app: FastifyInstance) {
   /**
    * POST /content - 创建内容
    */
-  app.post("/", async (request, reply) => {
+  app.post("/", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const body = createContentSchema.parse(request.body);
 
@@ -243,7 +244,7 @@ export async function contentRoutes(app: FastifyInstance) {
    * - 副版本：productionRecord.parentId = groupRoot
    * 单版本内容（无 productionRecord 或链上无其他版本）→ siblings: []
    */
-  app.get("/:id", async (request, reply) => {
+  app.get("/:id", { preHandler: requirePermission("content.read") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
 
@@ -383,7 +384,7 @@ export async function contentRoutes(app: FastifyInstance) {
    *
    * 单版本 / 无 productionRecord 的内容返回 400 NO_VARIANT_GROUP。
    */
-  app.post("/:id/select-variant", async (request, reply) => {
+  app.post("/:id/select-variant", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
 
@@ -578,7 +579,7 @@ export async function contentRoutes(app: FastifyInstance) {
    * PATCH /content/:id - 更新内容（人工二次编辑）
    * 权限：内容创建者或 owner/admin 可编辑
    */
-  app.patch("/:id", async (request, reply) => {
+  app.patch("/:id", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = updateContentSchema.parse(request.body);
@@ -703,7 +704,7 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
   /**
    * DELETE /content/:id - 删除内容
    */
-  app.delete("/:id", async (request, reply) => {
+  app.delete("/:id", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const { syncDouyin } = request.query as { syncDouyin?: string };
@@ -745,7 +746,7 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
    * 不写库；调用 AI 在前后章节上下文里重写指定章节，返回 diff 用预览。
    * 老板预览满意后，前端再调 /apply-rewrite 落库。
    */
-  app.post("/:id/rewrite-section", async (request, reply) => {
+  app.post("/:id/rewrite-section", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const schema = z.object({

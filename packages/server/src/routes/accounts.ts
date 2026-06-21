@@ -21,6 +21,7 @@ import { startQrLogin, getQrLoginStatus, BROWSER_LOGIN_PLATFORMS, submitSmsCode,
 import { buildAuthorizeUrl, resolveDouyinAppConfig, signOauthState } from "../services/publisher/douyin-open-api.js";
 import { runLoginKeepalive, getLastKeepaliveSummary, isKeepaliveRunning } from "../services/publisher/login-keepalive.js";
 import { env } from "../config/env.js";
+import { requirePermission } from "../middleware/permission.js";
 
 const createAccountSchema = z.object({
   platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
@@ -65,7 +66,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * GET /accounts - 获取所有平台账号
    */
-  app.get("/accounts", async (request, reply) => {
+  app.get("/accounts", { preHandler: requirePermission("accounts.read") }, async (request, reply) => {
     try {
       const query = request.query as { platform?: string; group?: string };
 
@@ -142,7 +143,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * GET /accounts/platforms - 获取支持的平台列表
    */
-  app.get("/accounts/platforms", async (request, reply) => {
+  app.get("/accounts/platforms", { preHandler: requirePermission("accounts.read") }, async (request, reply) => {
     try {
       const platforms = [
         { id: "wechat", name: "微信公众号", icon: "💬", credentialFields: ["appId", "appSecret"], description: "需要AppID和AppSecret" },
@@ -163,7 +164,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * POST /accounts - 添加平台账号
    */
-  app.post("/accounts", async (request, reply) => {
+  app.post("/accounts", { preHandler: requirePermission("accounts.manage") }, async (request, reply) => {
     try {
       // PR-Z4 套餐闸: 账号数上限
       {
@@ -254,7 +255,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * PATCH /accounts/:id - 更新账号
    */
-  app.patch("/accounts/:id", async (request, reply) => {
+  app.patch("/accounts/:id", { preHandler: requirePermission("accounts.manage") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = updateAccountSchema.parse(request.body);
@@ -339,7 +340,7 @@ export async function accountRoutes(app: FastifyInstance) {
   /**
    * DELETE /accounts/:id - 删除账号
    */
-  app.delete("/accounts/:id", async (request, reply) => {
+  app.delete("/accounts/:id", { preHandler: requirePermission("accounts.manage") }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
 
@@ -552,7 +553,7 @@ export async function accountRoutes(app: FastifyInstance) {
    * PR-X3: 风格学习 — 喂 1-5 篇范文(自己的爆款或对标号文章), LLM 提炼风格画像存账号,
    * 之后该账号的独家生成都会模仿此风格 (经 batch worker → personaPrompt 注入)。
    */
-  app.post("/accounts/:id/learn-style", async (request, reply) => {
+  app.post("/accounts/:id/learn-style", { preHandler: requirePermission("accounts.manage") }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { samples?: string[] };
     const samples = (Array.isArray(body.samples) ? body.samples : [])
@@ -592,7 +593,7 @@ export async function accountRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/publish", async (request, reply) => {
+  app.post("/publish", { preHandler: requirePermission("content.publish") }, async (request, reply) => {
     try {
       const body = publishSchema.parse(request.body);
 

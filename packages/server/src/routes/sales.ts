@@ -28,6 +28,8 @@ import {
 import { db } from "../models/db.js";
 import { leads, salesMessages } from "../models/schema.js";
 import { logger } from "../config/logger.js";
+import { requireAnyPermission } from "../middleware/permission.js";
+import { hasPermission } from "../permissions/permissions.js";
 import { env } from "../config/env.js";
 
 type LeadStage =
@@ -55,7 +57,7 @@ export async function salesRoutes(app: FastifyInstance) {
   /**
    * GET /leads — 列表 + 未读数
    */
-  app.get("/leads", async (request, reply) => {
+  app.get("/leads", { preHandler: requireAnyPermission("sales.read_all", "sales.read_assigned") }, async (request, reply) => {
     try {
       const tenantId = request.tenantId;
       const query = request.query as {
@@ -74,6 +76,8 @@ export async function salesRoutes(app: FastifyInstance) {
       const offset = (page - 1) * pageSize;
 
       const conditions = [eq(leads.tenantId, tenantId)];
+      // 6-20: 无 read_all(普通销售)只看分配给自己的线索
+      if (!hasPermission(request.user.role, "sales.read_all")) conditions.push(eq(leads.assignedUserId, request.user.userId));
       if (query.stage) {
         // 5-21 P3: stage 支持逗号分隔多值 (热 tab = qualified,negotiating,need_human)
         const stages = query.stage.split(",").map((s) => s.trim()).filter(Boolean);
@@ -158,7 +162,7 @@ export async function salesRoutes(app: FastifyInstance) {
   /**
    * GET /leads/:id — 详情 + 消息 + 清零未读
    */
-  app.get<{ Params: { id: string } }>("/leads/:id", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/leads/:id", { preHandler: requireAnyPermission("sales.read_all", "sales.read_assigned") }, async (request, reply) => {
     try {
       const tenantId = request.tenantId;
       const { id } = request.params;
@@ -173,6 +177,10 @@ export async function salesRoutes(app: FastifyInstance) {
         return reply
           .status(404)
           .send({ code: "not_found", message: "线索不存在" });
+      }
+      // 6-20: 无 read_all 且非本人线索 → 拒绝(防越权看/改他人客户)
+      if (!hasPermission(request.user.role, "sales.read_all") && lead.assignedUserId !== request.user.userId) {
+        return reply.status(403).send({ code: "FORBIDDEN", message: "无权访问该客户" });
       }
 
       const messages = await db
@@ -210,6 +218,7 @@ export async function salesRoutes(app: FastifyInstance) {
    */
   app.post<{ Params: { id: string }; Body: { content: string } }>(
     "/leads/:id/messages",
+    { preHandler: requireAnyPermission("sales.write_all", "sales.write_assigned") },
     async (request, reply) => {
       try {
         const tenantId = request.tenantId;
@@ -232,6 +241,9 @@ export async function salesRoutes(app: FastifyInstance) {
           return reply
             .status(404)
             .send({ code: "not_found", message: "线索不存在" });
+        }
+        if (!hasPermission(request.user.role, "sales.read_all") && lead.assignedUserId !== request.user.userId) {
+          return reply.status(403).send({ code: "FORBIDDEN", message: "无权访问该客户" });
         }
 
         if (lead.handoverMode !== "human") {
@@ -275,6 +287,7 @@ export async function salesRoutes(app: FastifyInstance) {
    */
   app.post<{ Params: { id: string } }>(
     "/leads/:id/takeover",
+    { preHandler: requireAnyPermission("sales.write_all", "sales.write_assigned") },
     async (request, reply) => {
       try {
         const tenantId = request.tenantId;
@@ -290,6 +303,9 @@ export async function salesRoutes(app: FastifyInstance) {
           return reply
             .status(404)
             .send({ code: "not_found", message: "线索不存在" });
+        }
+        if (!hasPermission(request.user.role, "sales.read_all") && lead.assignedUserId !== request.user.userId) {
+          return reply.status(403).send({ code: "FORBIDDEN", message: "无权访问该客户" });
         }
 
         const now = new Date();
@@ -318,6 +334,7 @@ export async function salesRoutes(app: FastifyInstance) {
    */
   app.post<{ Params: { id: string } }>(
     "/leads/:id/release",
+    { preHandler: requireAnyPermission("sales.write_all", "sales.write_assigned") },
     async (request, reply) => {
       try {
         const tenantId = request.tenantId;
@@ -333,6 +350,9 @@ export async function salesRoutes(app: FastifyInstance) {
           return reply
             .status(404)
             .send({ code: "not_found", message: "线索不存在" });
+        }
+        if (!hasPermission(request.user.role, "sales.read_all") && lead.assignedUserId !== request.user.userId) {
+          return reply.status(403).send({ code: "FORBIDDEN", message: "无权访问该客户" });
         }
 
         await db
@@ -358,7 +378,7 @@ export async function salesRoutes(app: FastifyInstance) {
   /**
    * GET /stats — 顶部徽章统计
    */
-  app.get("/stats", async (request, reply) => {
+  app.get("/stats", { preHandler: requireAnyPermission("sales.read_all", "sales.read_assigned") }, async (request, reply) => {
     try {
       const tenantId = request.tenantId;
       // 5-21 P3 销售雷达: 24h (todayNew) + 30d (monthConverted) 滚动窗口避时区坑;
@@ -460,7 +480,7 @@ export async function salesRoutes(app: FastifyInstance) {
       assignedUserId?: string | null;
       profile?: Record<string, unknown>;
     };
-  }>("/leads/:id", async (request, reply) => {
+  }>("/leads/:id", { preHandler: requireAnyPermission("sales.write_all", "sales.write_assigned", "sales.assign") }, async (request, reply) => {
     try {
       const tenantId = request.tenantId;
       const { id } = request.params;
@@ -477,13 +497,22 @@ export async function salesRoutes(app: FastifyInstance) {
           .status(404)
           .send({ code: "not_found", message: "线索不存在" });
       }
+      // 6-20: 无 read_all 且非本人线索 → 拒绝(防越权看/改他人客户)
+      if (!hasPermission(request.user.role, "sales.read_all") && lead.assignedUserId !== request.user.userId) {
+        return reply.status(403).send({ code: "FORBIDDEN", message: "无权访问该客户" });
+      }
 
       const patch: Partial<typeof leads.$inferInsert> = {
         updatedAt: new Date(),
       };
       if (body.stage) patch.stage = body.stage;
-      if (body.assignedUserId !== undefined)
+      // 6-20: 改派线索(改 assignedUserId)需 sales.assign 权限, 普通销售不能把线索甩给别人
+      if (body.assignedUserId !== undefined) {
+        if (!hasPermission(request.user.role, "sales.assign")) {
+          return reply.status(403).send({ code: "FORBIDDEN", message: "无权分配/改派线索" });
+        }
         patch.assignedUserId = body.assignedUserId;
+      }
       if (body.profile !== undefined) patch.profile = body.profile;
 
       await db
