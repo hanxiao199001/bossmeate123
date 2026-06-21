@@ -96,6 +96,7 @@ export default function SettingsPage() {
   const [contentQuota, setContentQuota] = useState<Record<string, { count: number; disciplines: string[] }>>({});
   const [cqSaving, setCqSaving] = useState(false);
   const [autoQuota, setAutoQuota] = useState(false); // 6-20 按账号自动配齐
+  const [autoPreview, setAutoPreview] = useState<{ quota: Record<string, { count: number; disciplines: string[] }> | null; accounts: { name: string; scope: string; disciplines: string[]; fed: boolean }[]; gaps: string[] } | null>(null);
   const [cqResult, setCqResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // T4-3-5: 模板偏好统计
@@ -361,6 +362,11 @@ export default function SettingsPage() {
       .then((res) => { setContentQuota(res.data?.contentQuota || {}); setAutoQuota(res.data?.autoQuotaFromAccounts === true); })
       .catch(() => { /* 非 admin 忽略 */ });
   }, []);
+  useEffect(() => {
+    if (!autoQuota) { setAutoPreview(null); return; }
+    api.get<{ quota: any; accounts: any[]; gaps: string[] }>("/admin/auto-quota-preview")
+      .then((res) => setAutoPreview(res.data as any)).catch(() => setAutoPreview(null));
+  }, [autoQuota]);
   const setCqCount = (t: string, n: number) =>
     setContentQuota((p) => ({ ...p, [t]: { count: Math.max(0, Math.min(50, n)), disciplines: p[t]?.disciplines || [] } }));
   const toggleCqDisc = (t: string, code: string) =>
@@ -620,6 +626,31 @@ export default function SettingsPage() {
               <b>按账号自动配齐(推荐)</b> — 开启后忽略下方手动篇数,系统按各公众号的「国内/国外定位 + 领域」自动算出每天生成多少篇、哪些学科,保证每个账号都有对口内容。账号变多也不用手动改。
             </span>
           </label>
+          {autoQuota && autoPreview && (
+            <div className="mb-4 rounded-lg border border-indigo-100 bg-white px-3 py-2.5 text-xs">
+              <div className="font-semibold text-indigo-800 mb-1.5">按当前账号将生成:</div>
+              {autoPreview.quota && Object.keys(autoPreview.quota).length > 0 ? (
+                <ul className="space-y-0.5 text-gray-700">
+                  {Object.entries(autoPreview.quota).map(([k, v]) => (
+                    <li key={k}>· {k === "domestic" ? "国内" : k === "international" ? "国外" : k} <b>{v.count}</b> 篇{v.disciplines.length > 0 ? ` — 学科: ${v.disciplines.join("、")}` : "(全学科轮转)"}</li>
+                  ))}
+                </ul>
+              ) : <div className="text-amber-600">没有活跃公众号, 暂无法自动配齐(回退手动篇数)。</div>}
+              {autoPreview.accounts.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-gray-100">
+                  <div className="text-gray-500 mb-1">账号覆盖({autoPreview.accounts.filter((a) => a.fed).length}/{autoPreview.accounts.length} 有对口内容):</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {autoPreview.accounts.map((a) => (
+                      <span key={a.name} className={`px-2 py-0.5 rounded-full border ${a.fed ? "border-green-300 bg-green-50 text-green-700" : "border-rose-300 bg-rose-50 text-rose-600"}`}>
+                        {a.fed ? "✓" : "✗"} {a.name}<span className="text-gray-400">·{a.scope === "domestic" ? "国内" : a.scope === "international" ? "国外" : "不限"}{a.disciplines.length ? "·" + a.disciplines.join("/") : ""}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {autoPreview.gaps.length > 0 && <div className="mt-1.5 text-rose-600">⚠ 仍空缺: {autoPreview.gaps.join("、")} — 这些号定位太窄, 建议把领域放宽为"不限"。</div>}
+                </div>
+              )}
+            </div>
+          )}
           <div className={`space-y-3 ${autoQuota ? "opacity-40 pointer-events-none" : ""}`}>
             {([["domestic", "国内核心"], ["international", "国外期刊"], ["roundup", "多刊盘点"]] as const).map(([t, label]) => {
               const cur = contentQuota[t] || { count: 0, disciplines: [] };

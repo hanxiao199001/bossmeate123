@@ -17,7 +17,7 @@ import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { createBatch } from "../services/batch/batch-service.js";
 import { recommendJournals } from "../services/recommendation/journal-recommender.js";
-import { selectCandidates, DISCIPLINE_ROTATION, getJournal30dCount } from "../services/recommendation/daily-cron.js";
+import { selectCandidates, DISCIPLINE_ROTATION, getJournal30dCount, computeAutoQuota } from "../services/recommendation/daily-cron.js";
 import { splitAlreadyPublished } from "../services/bulk-distribute/dedup.js";
 import { ALL_DISCIPLINES } from "../services/content-engine/topic-recommender.js";
 import { keywords as keywordsTable } from "../models/schema.js";
@@ -706,6 +706,31 @@ export async function adminRoutes(app: FastifyInstance) {
    * PR-O: 每日内容配置(按类型) — domestic/international/roundup 各 {count, disciplines}。
    *   数字人暂不自动生成。存 SYSTEM 租户 config.automationConfig.contentQuota, daily-cron 据此分类型生成。
    */
+  // 6-20 自动配齐预览: 翻开关前看清"按当前账号会生成什么 + 哪些账号有对口内容"。
+  app.get("/auto-quota-preview", { preHandler: adminOnlyMiddleware }, async () => {
+    const quota = await computeAutoQuota();
+    const accts = await db.select({
+      name: platformAccounts.accountName,
+      platform: platformAccounts.platform,
+      journalScope: platformAccounts.journalScope,
+      disciplines: platformAccounts.disciplines,
+      discipline: platformAccounts.discipline,
+    }).from(platformAccounts).where(and(eq(platformAccounts.platform, "wechat"), eq(platformAccounts.status, "active")));
+    const discLabel = (code: string) => ALL_DISCIPLINES.find((d) => d.code === code)?.label || code;
+    const accountRows = accts.map((a) => {
+      const scope = a.journalScope || "both";
+      const ds = (Array.isArray(a.disciplines) && (a.disciplines as string[]).length ? (a.disciplines as string[]) : (a.discipline ? [a.discipline] : [])).filter(Boolean);
+      // 该号能否被喂到: quota 里有对应 scope, 且(无指定学科 或 该学科在 quota 学科池里)
+      const pools = [scope === "domestic" || scope === "both" ? "domestic" : null, scope === "international" || scope === "both" ? "international" : null].filter(Boolean) as string[];
+      const fed = pools.some((pk) => {
+        const q = quota?.[pk]; if (!q || q.count <= 0) return false;
+        return ds.length === 0 || q.disciplines.length === 0 || ds.some((d) => q.disciplines.includes(d));
+      });
+      return { name: a.name, scope, disciplines: ds.map(discLabel), fed };
+    });
+    const quotaView = quota ? Object.fromEntries(Object.entries(quota).map(([k, v]) => [k, { count: v.count, disciplines: v.disciplines.map(discLabel) }])) : null;
+    return { code: "OK", data: { quota: quotaView, accounts: accountRows, gaps: accountRows.filter((r) => !r.fed).map((r) => r.name) } };
+  });
   app.get("/daily-content-config", { preHandler: adminOnlyMiddleware }, async () => {
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
     const ac = (t?.config as { automationConfig?: { contentQuota?: any; autoQuotaFromAccounts?: boolean } } | null)?.automationConfig;
