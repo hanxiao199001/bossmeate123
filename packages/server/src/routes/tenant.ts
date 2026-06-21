@@ -128,6 +128,7 @@ export async function tenantRoutes(app: FastifyInstance) {
   // 6-20 老韩: 每公司限 2 运营 + 2 销售。名额占用 = 在职成员 + pending邀请; 停用成员不占名额(释放后可再加)。
   // 6-20 按套餐区分名额: trial 1+1 / basic 2+2 / pro 5+5。调价改这里即可。
   const PLAN_ROLE_CAP: Record<string, Record<string, number>> = {
+    free: { content_operator: 1, sales: 1 },  // 线上存量默认档, 等同 trial(最紧)
     trial: { content_operator: 1, sales: 1 },
     basic: { content_operator: 2, sales: 2 },
     pro: { content_operator: 5, sales: 5 },

@@ -46,7 +46,7 @@ async function main() {
   if (!company) errs.push("缺 --company(公司名)");
   if (!name) errs.push("缺 --name(老板姓名)");
   if (!phone || !/^1[3-9]\d{9}$/.test(phone)) errs.push("--phone 手机号格式不正确");
-  if (!["trial", "basic", "pro"].includes(plan)) errs.push("--plan 须为 trial|basic|pro");
+  if (!["free", "trial", "basic", "pro"].includes(plan)) errs.push("--plan 须为 free|trial|basic|pro");
   if (errs.length) {
     console.error("❌ 参数错误:\n  " + errs.join("\n  "));
     console.error("\n示例: pnpm provision:tenant --company \"顺仕美途\" --phone 13800138000 --name 韩老板 --credit 91110108MA01XXXX2B --legal 韩某某 --plan basic");
