@@ -27,20 +27,21 @@ interface NavItem {
   label: string;
   matchPrefix?: string;
   adminOnly?: boolean; // owner/admin 才显示
+  anyPerms?: string[]; // 6-20: 拥有其中任一权限才显示(按角色)
 }
 
 // 6-14 目录重构: 按首页"产出→处理→效果"日常闭环分三组, 心智模型与首页引导对齐。
 // 每日运营 — 日常内容生产闭环
 const DAILY_NAV: NavItem[] = [
   { to: "/", icon: IconHome, label: "今日", matchPrefix: "" }, // 6-16 首页=今日驾驶舱(合并原首页+今日待办), 精确匹配 /
-  { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench" },
-  { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar" },
-  { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts" }, // 对齐首页"去账号矩阵派发"
+  { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench", anyPerms: ["content.read"] },
+  { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar", anyPerms: ["sales.read_all", "sales.read_assigned"] },
+  { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts", anyPerms: ["accounts.read"] }, // 对齐首页"去账号矩阵派发"
 ];
 
 // 效果与数据 — 看效果 + 核心数据资产
 const DATA_NAV: NavItem[] = [
-  { to: "/cost-comparison", icon: IconBarChart, label: "效果分析", matchPrefix: "/cost-comparison" }, // 原"ROI演示", 对齐首页第3步"看效果"
+  { to: "/cost-comparison", icon: IconBarChart, label: "效果分析", matchPrefix: "/cost-comparison", anyPerms: ["analytics.read"] }, // 原"ROI演示"
   { to: "/admin/journals/audit", icon: IconFileText, label: "期刊审计", matchPrefix: "/admin/journals/audit", adminOnly: true }, // 核心数据资产, 从admin底部提上来
 ];
 
@@ -81,10 +82,15 @@ export default function Sidebar() {
   const logout = useAuthStore((s) => s.logout);
   const role = user?.role;
   const isAdmin = role === "owner" || role === "admin";
-  // 统一过滤: adminOnly 项非管理员隐藏; 销售雷达受 feature flag 控制(藏而不删)
+  const perms = user?.permissions ?? [];
+  // 6-20: owner 旧 token 可能没带 permissions → 视为全权, 避免老登录态被清空菜单
+  const allowAll = perms.length === 0 && isAdmin;
+  const hasAny = (req?: string[]) => !req || req.length === 0 || allowAll || req.some((p) => perms.includes(p));
+  // 统一过滤: adminOnly 项非管理员隐藏; anyPerms 按角色权限; 销售雷达受 feature flag 控制(藏而不删)
   const visible = (items: NavItem[]) =>
     items.filter((i) => {
       if (i.adminOnly && !isAdmin) return false;
+      if (!hasAny(i.anyPerms)) return false;
       if (i.to === "/sales-radar" && !SALES_RADAR_ENABLED) return false;
       return true;
     });

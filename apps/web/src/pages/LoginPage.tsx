@@ -46,6 +46,11 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<"email" | "phone">("email");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [sending, setSending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
 
@@ -55,8 +60,37 @@ export default function LoginPage() {
     if (saved) setEmail(saved);
   }, []);
 
+  async function sendCode() {
+    setError("");
+    if (!/^1[3-9]\d{9}$/.test(phone)) { setError("请输入正确的手机号"); return; }
+    setSending(true);
+    try {
+      const res = await api.post<{ sent: boolean; devCode?: string }>("/auth/sms/send", { phone, purpose: "login" });
+      if (res.data?.devCode) { setCode(res.data.devCode); setError(""); } // dev 模式回填, 方便联调
+      let t = 60; setCooldown(t);
+      const timer = setInterval(() => { t -= 1; setCooldown(t); if (t <= 0) clearInterval(timer); }, 1000);
+    } catch (err: any) {
+      setError(err.message || "验证码发送失败");
+    } finally { setSending(false); }
+  }
+
+  async function handlePhoneLogin() {
+    setError("");
+    if (!/^1[3-9]\d{9}$/.test(phone) || !code) { setError("请填写手机号和验证码"); return; }
+    setLoading(true);
+    try {
+      const res = await api.post<{ token: string; user: { id: string; name: string; role: string }; tenant?: any }>(
+        "/auth/sms/login", { phone, code });
+      if (res.data) { login(res.data.token, res.data.user as any, res.data.tenant); navigate("/"); }
+    } catch (err: any) {
+      if (err?.code === "NO_TENANT") setError("该手机号未注册，也没有待接受的邀请。请联系公司管理员邀请你加入，或用邮箱注册公司。");
+      else setError(err.message || "登录失败");
+    } finally { setLoading(false); }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (mode === "phone") { void handlePhoneLogin(); return; }
     setError("");
     if (!email.trim() || !password) {
       setError("请填写邮箱和密码");
@@ -110,6 +144,34 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            {/* 6-20 登录方式切换 */}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setMode("email")} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === "email" ? "bg-indigo-500 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}>邮箱登录</button>
+              <button type="button" onClick={() => setMode("phone")} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === "phone" ? "bg-indigo-500 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}>手机号登录</button>
+            </div>
+
+            {mode === "phone" && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">手机号</label>
+                  <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="11 位手机号"
+                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 outline-none transition-all" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">验证码</label>
+                  <div className="flex gap-2">
+                    <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="6 位验证码"
+                      className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 outline-none transition-all" />
+                    <button type="button" onClick={() => void sendCode()} disabled={sending || cooldown > 0}
+                      className="px-4 rounded-xl bg-white/10 text-slate-200 text-sm whitespace-nowrap hover:bg-white/20 disabled:opacity-50 transition-all">
+                      {cooldown > 0 ? `${cooldown}s` : (sending ? "发送中" : "获取验证码")}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {mode === "email" && (<>
             {/* 邮箱 */}
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">邮箱</label>
@@ -163,6 +225,7 @@ export default function LoginPage() {
                 忘记密码？
               </button>
             </div>
+            </>)}
 
             {/* 错误提示 */}
             {error && (
