@@ -80,3 +80,9 @@ bossmate-agent-Mac-便携.zip
 # 6-18: Agent 内置 Chromium 共享缓存(prepare-chromium.mjs 预下, 体积大, 不提交)
 packages/agent/.chromium-cache/
 packages/agent/dist-portable-*/
+
+# 6-20: 防误提 — 爬虫产物/Python缓存/日报, 避免 git add -A 一锅端
+__pycache__/
+*.pyc
+.daily-reports/
+packages/server/scripts/raw-*
