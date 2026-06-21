@@ -410,14 +410,8 @@ function renderJcrQuartileBlock(journal: JournalInfo): string {
 function renderIfHistoryChart(journal: JournalInfo): string {
   // PR B.10：读 ifHistoryRaw（V12 raw from DB / LetPub V7 包装），不读 ifHistory（V7 LetPub array）
   const raw = (journal as any).ifHistoryRaw;
-  if (!isIfHistory(raw)) {
-    return renderP1Placeholder({
-      title: "近 10 年影响因子",
-      icon: "📈",
-      message: "数据采集中",
-      submessage: "数据完善中，敬请期待",
-    });
-  }
+  // 6-21: 缺数据整块跳过, 不再吐"数据采集中"占位(补 ca8e91b/PR#136 漏掉的此 caller, 国内刊普遍无 IF 历史 → 占位即空洞)。
+  if (!isIfHistory(raw)) return "";
   // shape 容忍：data 项可能 { year, if } 或 { year, value }
   const series = raw.data
     .map((d) => ({ year: d.year, if: typeof d.if === "number" ? d.if : (d.value ?? NaN) }))

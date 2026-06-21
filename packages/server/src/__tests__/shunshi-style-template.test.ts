@@ -95,7 +95,7 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).toContain("最新影响因子");
 
     // JCR detailed panel (block 7) — P3 隐藏（jcr_full NULL）→ 不出现
-    expect(html).not.toContain("WoS Level");
+    expect(html).not.toContain("WoS 等级");
 
     // Frequency (block 10)
     expect(html).toContain("出版周期");
@@ -108,8 +108,9 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).toContain("综合点评");
     expect(html).toContain("录用率较高且审稿快");
 
-    // Submission advice (block 17)
-    expect(html).toContain("投稿建议");
+    // Submission advice (block 17) — 6-21: 派生块 renderSubmissionAdviceBlock 已废弃, 改 AI 驱动(ai.submissionAdvice)。
+    //   baseAi 未提供 submissionAdvice → 此处不应出现; AI 驱动渲染另由 PR#146 describe 覆盖。
+    expect(html).not.toContain("投稿建议");
 
     // Advantages + cautions (block 18 + 19)
     expect(html).toContain("✅ 优势");
@@ -190,14 +191,14 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
       },
     };
     const html = await generateShunshiStyleHtml(jWithJcr, baseAi, undefined);
-    expect(html).toContain("WoS Level");
+    expect(html).toContain("WoS 等级");
     expect(html).toContain("SCIE");
-    expect(html).toContain("ONCOLOGY");
-    expect(html).toContain("Top Journal");
+    expect(html).toContain("肿瘤学"); // 6-21: jifSubjects 学科名英→中翻译(PR#198), ONCOLOGY→肿瘤学
+    expect(html).toContain("是否顶刊");
 
     // NULL 时整段隐藏（P3）
     const htmlNull = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
-    expect(htmlNull).not.toContain("WoS Level");
+    expect(htmlNull).not.toContain("WoS 等级");
     expect(htmlNull).not.toMatch(/JCR\s*详细/);
   });
 
@@ -209,8 +210,8 @@ describe("generateShunshiStyleHtml — 23 sections", () => {
     expect(html).toContain("CSCD");
     expect(html).toContain("核心库");
     expect(html).toContain("北大核心");
-    // 没给 jcrFull，所以 WoS Level 行不渲染
-    expect(html).not.toContain("WoS Level");
+    // 没给 jcrFull，所以 WoS 等级 行不渲染
+    expect(html).not.toContain("WoS 等级");
   });
 
   it("hides JCR panel when both jcrFull and CSCD/PKU empty (P3)", async () => {
@@ -432,13 +433,16 @@ describe("PR #146: render*Block NULL → 整块 skip (placeholder 残留修复)"
     expect(html).toContain("月刊");
   });
 
-  it("区块17 renderSubmissionAdviceBlock: ar+rc 都 null → 整块 skip", async () => {
-    const html = await generateShunshiStyleHtml({ ...baseJournal, acceptanceRate: null, reviewCycle: null }, baseAi, undefined);
+  // 6-21: 区块17 派生块 renderSubmissionAdviceBlock 已废弃(审稿周期重复 + 矛盾源), 改 AI 驱动 renderAiSubmissionAdvice(ai.submissionAdvice)。
+  //   不再依赖 ar/rc; 改测 AI 内容有无。
+  it("区块17 投稿建议: ai 无 submissionAdvice → 不渲染", async () => {
+    const html = await generateShunshiStyleHtml(baseJournal, baseAi, undefined);
     expect(html).not.toContain("投稿建议");
   });
 
-  it("区块17: ar 有值 rc=null → 仍渲染（核心区块不因单字段缺失消失）", async () => {
-    const html = await generateShunshiStyleHtml({ ...baseJournal, acceptanceRate: 0.3, reviewCycle: null }, baseAi, undefined);
+  it("区块17 投稿建议: ai 有 submissionAdvice → 渲染 💡 投稿建议", async () => {
+    const aiWithAdvice = { ...baseAi, submissionAdvice: "<p>建议尽早投稿，注意格式规范与选题契合度。</p>" };
+    const html = await generateShunshiStyleHtml(baseJournal, aiWithAdvice, undefined);
     expect(html).toContain("投稿建议");
   });
 
