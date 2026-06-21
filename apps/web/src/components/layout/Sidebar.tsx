@@ -4,9 +4,10 @@
  * 分组标签替代分割线 / 底部头像用户区。导航数据与路由逻辑不动。
  * TODO: 移动响应式 (< 768px 折叠成 hamburger), 本 demo Mac only 暂不做。
  */
-import type { ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuthStore } from "../../hooks/useAuthStore";
+import { api } from "../../utils/api";
 import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
 import {
   IconHome,
@@ -80,6 +81,18 @@ export default function Sidebar() {
   const { pathname } = useLocation();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const updateUser = useAuthStore((s) => s.updateUser);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const saveName = async () => {
+    const name = nameDraft.trim();
+    if (!name || name === user?.name) { setEditingName(false); return; }
+    setSavingName(true);
+    try { await api.patch("/tenant/profile", { name }); updateUser({ name }); setEditingName(false); }
+    catch { /* 静默, 保留编辑态 */ }
+    finally { setSavingName(false); }
+  };
   const role = user?.role;
   const isAdmin = role === "owner" || role === "admin";
   const perms = user?.permissions ?? [];
@@ -151,9 +164,26 @@ export default function Sidebar() {
         <div className="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-medium flex items-center justify-center shrink-0">
           {(user?.name || "—").slice(0, 1)}
         </div>
-        <div className="text-xs text-slate-300 font-medium truncate flex-1" title={user?.name}>
-          {user?.name || "—"}
-        </div>
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={() => void saveName()}
+            onKeyDown={(e) => { if (e.key === "Enter") void saveName(); if (e.key === "Escape") setEditingName(false); }}
+            disabled={savingName}
+            maxLength={50}
+            className="flex-1 min-w-0 text-xs bg-white/10 text-white rounded px-1.5 py-1 outline-none border border-indigo-500/50"
+          />
+        ) : (
+          <button
+            className="text-xs text-slate-300 font-medium truncate flex-1 text-left hover:text-white"
+            title="点击改名"
+            onClick={() => { setNameDraft(user?.name || ""); setEditingName(true); }}
+          >
+            {user?.name || "—"} <span className="text-slate-600">✎</span>
+          </button>
+        )}
         <button
           onClick={logout}
           className="text-slate-500 hover:text-rose-400 transition-colors shrink-0 p-1"

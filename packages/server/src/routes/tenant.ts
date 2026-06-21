@@ -93,6 +93,16 @@ export async function tenantRoutes(app: FastifyInstance) {
   /**
    * GET /tenant/members - 获取租户成员列表
    */
+  /**
+   * PATCH /tenant/profile - 改自己的资料(姓名)。任何登录用户都能改自己, 无需特殊权限。
+   */
+  app.patch("/profile", async (request, reply) => {
+    const body = z.object({ name: z.string().trim().min(1, "姓名不能为空").max(50) }).parse(request.body);
+    await db.update(users).set({ name: body.name, updatedAt: new Date() }).where(eq(users.id, request.user.userId));
+    logger.info({ userId: request.user.userId, name: body.name }, "用户改名");
+    return { code: "OK", data: { name: body.name } };
+  });
+
   app.get("/members", { preHandler: requirePermission("members.manage") }, async (request) => {
     const members = await db
       .select({
