@@ -163,7 +163,29 @@ export async function computeSmartPairs(opts: {
   const unmatched: SmartAssignResult["unmatched"] = [];
   const journalCache = new Map<string, { discipline: string | null; scope: Scope }>();
 
+  // 6-22 账号驱动·保底定向: 文章若已绑定某号(metadata.exclusiveAccountId)→ 直派该号(在其当日上限内),
+  //   不进按学科重配、也不被空号兜底抢走。解决"锁定领域专号分配不到内容"。
+  const acctIdSet = new Set(accounts.map((a) => a.id));
+  const boundArticleIds = new Set<string>();
+  const restArts: typeof arts = [];
   for (const art of arts) {
+    const ex = (art.metadata as Record<string, any> | null)?.exclusiveAccountId as string | undefined;
+    if (ex && acctIdSet.has(ex)) {
+      const { discipline: disc } = await resolveArticle(art.metadata as Record<string, unknown> | null, journalCache);
+      if ((load.get(ex) ?? 0) < DAILY_CAP) {
+        pairs.push({ articleId: art.id, accountId: ex, discipline: disc });
+        load.set(ex, (load.get(ex) ?? 0) + 1);
+        boundArticleIds.add(art.id);
+      } else {
+        unmatched.push({ articleId: art.id, discipline: disc, reason: `已绑定的号今日已达发布上限(${DAILY_CAP}篇/天)` });
+        boundArticleIds.add(art.id); // 仍算"已定向", 不让别号兜底抢走
+      }
+    } else {
+      restArts.push(art);
+    }
+  }
+
+  for (const art of restArts) {
     const { discipline: disc, scope } = await resolveArticle(art.metadata as Record<string, unknown> | null, journalCache);
     // 6-19: 账号"国内/国外"定位过滤 — 账号定 domestic/international 且与文章期刊范围明确冲突时排除;
     //       账号 both 或文章范围未知 → 不限制(绝不因信息缺失误杀内容)。
@@ -197,7 +219,7 @@ export async function computeSmartPairs(opts: {
   //   放宽学科匹配(范围仍严格)。解决窄定位号(如 国外·教育)当天无对口学科文章时长期空置。
   //   只动用本会无人认领的剩余文章 → 纯增益: 不浪费内容, 也不让号空着。
   const assignedIds = new Set(pairs.map((p) => p.articleId));
-  const leftover = arts.filter((a) => !assignedIds.has(a.id));
+  const leftover = arts.filter((a) => !assignedIds.has(a.id) && !boundArticleIds.has(a.id));
   if (leftover.length > 0) {
     let filled = 0;
     for (const acc of accounts) {

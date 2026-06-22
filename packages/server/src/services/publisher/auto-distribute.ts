@@ -4,7 +4,7 @@
  * 入 bulk-distribute 队列 → 公众号草稿 (capability=draft_only 的号只建草稿, 不直接群发, 风险可控)。
  * 老板早上打开今日页看到的就是"已分好已进草稿箱", 只需抽查。
  */
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, tenants, users } from "../../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
@@ -51,7 +51,7 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
     try {
       // PR-Z1 多租户隔离: 租户有自己当日生成的池就用自己的 (客户间不发同样的文章); 没有才用系统共享池
       const own = await db
-        .select({ id: contents.id })
+        .select({ id: contents.id, ex: sql<string | null>`${contents.metadata}->>'exclusiveAccountId'` })
         .from(contents)
         .where(and(
           eq(contents.tenantId, t.id),
@@ -60,7 +60,13 @@ export async function runDailyAutoDistribute(): Promise<{ tenantsProcessed: numb
           eq(contents.status, "generated"), // PR-U2 只自动分发质检通过的
         ))
         .limit(100);
-      const useIds = own.length > 0 ? own.map((o) => o.id) : poolIds;
+      // 6-22: 拆"账号驱动保底定向(带 exclusiveAccountId)"与"租户自有池(PR-Z1)"。
+      //   PR-Z1 隔离不变: 是否走自有池仍由"无绑定的自有内容"决定(避免客户间撞文);
+      //   但锁定领域号的定向文章 永远 并入分发集, 不让它把整租户切到"只发这几篇"而饿死其它号。
+      const boundOwnIds = own.filter((o) => o.ex).map((o) => o.id);
+      const realOwnIds = own.filter((o) => !o.ex).map((o) => o.id);
+      const generalPool = realOwnIds.length > 0 ? realOwnIds : poolIds;
+      const useIds = [...new Set([...generalPool, ...boundOwnIds])];
       const { pairs, unmatched } = await computeSmartPairs({ tenantId: t.id, articleIds: useIds });
       if (pairs.length === 0) {
         logger.info({ tenantId: t.id, unmatched: unmatched.length }, "PR-W6 auto-distribute: 该租户无可配对内容");

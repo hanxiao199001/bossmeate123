@@ -96,8 +96,15 @@ export function startBatchWorker(): Worker<BatchRowJob> {
 
       try {
         // PR-X1: 行绑定了账号(独家模式) → 注入该账号的人设/风格画像
+        // 6-22: 并把绑定写进 content.metadata.exclusiveAccountId, 让分发直派该号(不被同领域别号抢走)。
         let personaPrompt = "";
-        if ((row as { accountId?: string | null }).accountId) {
+        const boundAccountId = (row as { accountId?: string | null }).accountId || null;
+        if (boundAccountId) {
+          try {
+            await db.update(contents)
+              .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify({ exclusiveAccountId: boundAccountId })}::jsonb`, updatedAt: new Date() })
+              .where(eq(contents.id, content.id));
+          } catch { /* 绑定写入失败不影响生成 */ }
           try {
             const { platformAccounts } = await import("../../models/schema.js");
             const [acct] = await db

@@ -147,6 +147,10 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   const startedAt = new Date().toISOString();
   logger.info({ size: RECOMMENDATION_BATCH_SIZE }, "PR #130 daily-recommendation cron 开始");
 
+  // 6-22: 锁定单一领域的公众号 — 每天各保底定向生成一篇它领域的内容(账号驱动, 防"分配不到")。不阻塞主流程。
+  try { await runLockedDomainAccountDaily(); }
+  catch (err) { logger.error({ err: err instanceof Error ? err.message : err }, "6-22 锁定领域号保底生成异常(不影响主流程)"); }
+
   // PR-O3: 配了"按类型"配额 → 走新引擎(多刊盘点+国内/国外单篇); 否则回退旧"按学科"路径。
   const contentQuota = await getContentQuota();
   if (contentQuota) {
@@ -322,6 +326,22 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 
 // ============ PR-O3: 每日内容生成(按类型) ============
 const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics"];
+
+// 6-22: 相邻领域(本领域当天无可用刊时, 借相邻领域一篇兜底)。保守映射, 只借学科相近的。
+const ADJACENT_DISCIPLINES: Record<string, string[]> = {
+  medicine: ["biology", "psychology"],
+  biology: ["medicine", "chemistry", "agriculture"],
+  psychology: ["medicine", "education"],
+  chemistry: ["biology", "physics", "environment"],
+  physics: ["engineering", "chemistry"],
+  engineering: ["computer", "physics"],
+  computer: ["engineering"],
+  economics: ["law"],
+  law: ["economics"],
+  education: ["psychology"],
+  environment: ["biology", "agriculture"],
+  agriculture: ["biology", "environment"],
+};
 const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
 
 /** PR-Z1: 给每个配了自己 contentQuota 的租户生成自有内容池 */
@@ -428,6 +448,115 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
     ?? (await pick([active, sc, disc], lru))
     ?? (await pick([active, sc, fresh], rnd))
     ?? (await pick([active, sc], lru));
+}
+
+/**
+ * 6-22: 锁定领域号"保底定向生成"专用选刊 —— 严格保留 scope+discipline, 只在 allowStale 时放宽冷却。
+ *   与 pickScopedFreshJournal 区别: 后者枯竭时会放宽"学科";这里绝不放宽学科(医学号只能拿医学刊),
+ *   学科枯竭交由调用方"借相邻领域"处理。
+ */
+async function pickFreshJournalStrict(tenantId: string, scope: string, discipline: string, allowStale: boolean): Promise<string | null> {
+  const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
+  const sc = journalScopeCondition(scope);
+  const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
+  const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
+  const lru = sql`(SELECT max(ju.used_at) FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId}) ASC NULLS FIRST`;
+  const rnd = sql`random()`;
+  const pick = async (conds: Array<unknown>, order: unknown): Promise<string | null> => {
+    const cs = conds.filter(Boolean) as Parameters<typeof and>;
+    const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
+    return j?.id ?? null;
+  };
+  return (await pick([active, sc, disc, fresh], rnd))
+    ?? (allowStale ? await pick([active, sc, disc], lru) : null);
+}
+
+export interface LockedAccountDailyResult {
+  generated: number;
+  skipped: number;
+  details: Array<{ accountId: string; discipline: string; usedDiscipline?: string; journalId?: string; fallback?: string; status: "generated" | "skipped" }>;
+}
+
+/**
+ * 6-22 账号驱动·保底定向生成: 对"锁定单一领域"的启用公众号(如 医学SCI专号), 每天各产一篇它领域的内容,
+ *   直接绑定该号(metadata.exclusiveAccountId, 分发时认绑定直派, 不被同领域别的号抢走)。
+ * 选刊三级兜底: ①本领域+严格 15 天冷却 → ②本领域+放宽冷却 → ③借相邻领域 → 都没有则跳过+告警。
+ * 只处理锁定单一领域的号; 不限领域(多选/无选)的号仍走原池子轮转+smart-assign。
+ */
+export async function runLockedDomainAccountDaily(): Promise<LockedAccountDailyResult> {
+  const { platformAccounts, users } = await import("../../models/schema.js");
+  const accts = await db
+    .select({
+      id: platformAccounts.id, tenantId: platformAccounts.tenantId, status: platformAccounts.status,
+      disciplines: platformAccounts.disciplines, discipline: platformAccounts.discipline, journalScope: platformAccounts.journalScope,
+    })
+    .from(platformAccounts)
+    .where(eq(platformAccounts.platform, "wechat"));
+  // 锁定单一领域 = disciplines 恰好 1 个 (或老单选字段 discipline 有值且 disciplines 空)
+  const locked = accts.filter((a) => {
+    if (a.status !== "active") return false;
+    const ds = Array.isArray(a.disciplines) ? (a.disciplines as string[]) : [];
+    if (ds.length === 1) return true;
+    if (ds.length === 0 && a.discipline) return true;
+    return false;
+  });
+  const result: LockedAccountDailyResult = { generated: 0, skipped: 0, details: [] };
+  if (locked.length === 0) { logger.info("6-22 无锁定单一领域的公众号, 保底定向生成跳过"); return result; }
+
+  const tenantUser = new Map<string, string>();
+  const getUser = async (tid: string): Promise<string | null> => {
+    if (tenantUser.has(tid)) return tenantUser.get(tid)!;
+    if (tid === SYSTEM_RECOMMENDATION_TENANT_ID) { tenantUser.set(tid, SYSTEM_RECOMMENDATION_USER_ID); return SYSTEM_RECOMMENDATION_USER_ID; }
+    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, tid)).limit(1);
+    if (u) { tenantUser.set(tid, u.id); return u.id; }
+    return null;
+  };
+
+  for (const a of locked) {
+    const ds = Array.isArray(a.disciplines) ? (a.disciplines as string[]) : [];
+    const disc = ds.length === 1 ? ds[0]! : a.discipline!;
+    // both 也按"国际(SCI)"走 —— 专号客户要的就是国际期刊; 仅明确 domestic 才走国内核心。
+    const scope = a.journalScope === "domestic" ? "domestic" : "international";
+    const userId = await getUser(a.tenantId);
+    if (!userId) {
+      logger.warn({ accountId: a.id, tenantId: a.tenantId }, "6-22 该号租户无用户, 跳过保底生成");
+      result.skipped++; result.details.push({ accountId: a.id, discipline: disc, status: "skipped" }); continue;
+    }
+
+    let journalId: string | null = null, usedDisc = disc, fallback: string | undefined;
+    journalId = await pickFreshJournalStrict(a.tenantId, scope, disc, false);               // ① 本领域 + 严格冷却
+    if (!journalId) { journalId = await pickFreshJournalStrict(a.tenantId, scope, disc, true); if (journalId) fallback = "放宽冷却"; } // ② 放宽冷却
+    if (!journalId) {                                                                          // ③ 借相邻领域
+      for (const adj of (ADJACENT_DISCIPLINES[disc] ?? [])) {
+        journalId = await pickFreshJournalStrict(a.tenantId, scope, adj, true);
+        if (journalId) { usedDisc = adj; fallback = `借相邻领域(${adj})`; break; }
+      }
+    }
+    if (!journalId) {                                                                          // ④ 跳过 + 告警
+      logger.warn({ accountId: a.id, discipline: disc, scope }, "⚠️ 6-22 锁定领域号当天本领域+相邻领域均无可用刊, 跳过(请补刊或检查冷却)");
+      result.skipped++; result.details.push({ accountId: a.id, discipline: disc, status: "skipped" }); continue;
+    }
+
+    try {
+      const cands = await selectCandidates({ disciplines: [usedDisc], cooldownDays: 0, poolSize: 5 });
+      const topic = cands[0]?.keyword ?? usedDisc;
+      await createBatch({
+        tenantId: a.tenantId, userId,
+        filename: `locked-${disc}-${a.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}`,
+        rows: [{ rowIndex: 1, topic, journalId, template: "A", priority: 3, accountId: a.id }],
+      });
+      await db.insert(journalUsage).values({ tenantId: a.tenantId, journalId });
+      if (cands[0]) await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, cands[0].id));
+      result.generated++;
+      result.details.push({ accountId: a.id, discipline: disc, usedDiscipline: usedDisc, journalId, fallback, status: "generated" });
+      logger.info({ accountId: a.id, discipline: disc, usedDisc, journalId, fallback: fallback ?? "本领域" }, "6-22 锁定领域号保底定向生成已入队");
+    } catch (err) {
+      logger.warn({ accountId: a.id, err: err instanceof Error ? err.message : err }, "6-22 锁定领域号保底生成失败(跳过)");
+      result.skipped++; result.details.push({ accountId: a.id, discipline: disc, status: "skipped" });
+    }
+  }
+  logger.info({ generated: result.generated, skipped: result.skipped, total: locked.length }, "6-22 锁定领域公众号保底定向生成完成");
+  return result;
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
