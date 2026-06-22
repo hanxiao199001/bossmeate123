@@ -30,7 +30,7 @@ export interface BulkItemResult {
   accountId: string;
   accountName: string;
   platform: string;
-  status: "pending" | "success" | "failed" | "skipped";
+  status: "pending" | "success" | "failed" | "skipped" | "dispatched";
   error?: string;
 }
 
@@ -41,6 +41,7 @@ export interface BulkProgress {
   success: number;
   failed: number;
   skipped: number;
+  dispatched: number; // 6-22: 已派单(抖音/视频号给本地客户端, 待真发布)
   startedAt: number;
   finishedAt?: number;
   lastFailed?: { contentId: string; accountId: string; error: string };
@@ -60,6 +61,7 @@ export function initBulkProgress(batchId: string, total: number, skipped: number
     success: 0,
     failed: 0,
     skipped,
+    dispatched: 0,
     startedAt: Date.now(),
     items,
     subscribers: new Set(),
@@ -74,19 +76,21 @@ export function getBulkProgress(batchId: string): BulkProgress | undefined {
 
 export function updateBulkProgress(
   batchId: string,
-  delta: { success?: boolean; failed?: boolean; skipped?: boolean; contentId?: string; accountId?: string; error?: string; lastFailed?: BulkProgress["lastFailed"] }
+  delta: { success?: boolean; failed?: boolean; skipped?: boolean; dispatched?: boolean; contentId?: string; accountId?: string; error?: string; lastFailed?: BulkProgress["lastFailed"] }
 ): void {
   const p = progressMap.get(batchId);
   if (!p) return;
   if (delta.success) { p.success++; p.completed++; }
   if (delta.failed) { p.failed++; p.completed++; }
   if (delta.skipped) { p.skipped++; p.completed++; }
+  if (delta.dispatched) { p.dispatched++; p.completed++; }
   if (delta.lastFailed) p.lastFailed = delta.lastFailed;
   // 6-22: 更新对应账号明细
   if (delta.contentId && delta.accountId) {
     const it = p.items.find((x) => x.contentId === delta.contentId && x.accountId === delta.accountId);
     if (it) {
       if (delta.success) it.status = "success";
+      else if (delta.dispatched) it.status = "dispatched";
       else if (delta.failed) { it.status = "failed"; it.error = delta.error ?? delta.lastFailed?.error; }
       else if (delta.skipped) it.status = "skipped";
     }

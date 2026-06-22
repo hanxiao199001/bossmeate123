@@ -1082,6 +1082,7 @@ function serializeProgress(p: BulkProgress) {
     success: p.success,
     failed: p.failed,
     skipped: p.skipped,
+    dispatched: p.dispatched,
     lastFailed: p.lastFailed,
     items: p.items,
   };

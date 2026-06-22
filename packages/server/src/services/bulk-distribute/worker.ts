@@ -35,7 +35,7 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
       const { batchId, contentId, accountId, tenantId, userId } = job.data;
       logger.debug({ batchId, contentId, accountId }, "PR #161 bulk-distribute job pickup");
 
-      let status: "success" | "failed" = "failed";
+      let status: "success" | "failed" | "dispatched" = "failed";
       let mediaId: string | null = null;
       let errorMessage: string | null = null;
 
@@ -50,7 +50,10 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
           overrideReason: "bulk-distribute admin-trusted",
         });
         const r = results[0];
-        if (r?.success) {
+        if (r?.success && r?.dispatched) {
+          // 6-22: 抖音/视频号只是派单给本地客户端, 还没真发 → 记"已派单", 不冒充成功
+          status = "dispatched";
+        } else if (r?.success) {
           status = "success";
           mediaId = r.mediaId ?? null;
         } else {
@@ -74,6 +77,8 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
       // 更新 progress (含每账号明细; SSE 订阅者会收到事件)
       if (status === "success") {
         updateBulkProgress(batchId, { success: true, contentId, accountId });
+      } else if (status === "dispatched") {
+        updateBulkProgress(batchId, { dispatched: true, contentId, accountId });
       } else {
         updateBulkProgress(batchId, {
           failed: true,

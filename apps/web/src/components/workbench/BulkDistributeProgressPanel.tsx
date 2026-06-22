@@ -12,7 +12,7 @@ interface ItemResult {
   accountId: string;
   accountName: string;
   platform: string;
-  status: "pending" | "success" | "failed" | "skipped";
+  status: "pending" | "success" | "failed" | "skipped" | "dispatched";
   error?: string;
 }
 
@@ -23,6 +23,7 @@ interface ProgressData {
   success: number;
   failed: number;
   skipped: number;
+  dispatched?: number;
   lastFailed?: { contentId: string; accountId: string; error: string };
   items?: ItemResult[];
 }
@@ -46,6 +47,7 @@ const PLATFORM_LABEL: Record<string, string> = {
 const STATUS_META: Record<string, { label: string; badge: string; row: string }> = {
   success: { label: "成功", badge: "bg-green-100 text-green-700", row: "bg-green-50" },
   failed:  { label: "失败", badge: "bg-red-100 text-red-700", row: "bg-red-50" },
+  dispatched: { label: "已派单", badge: "bg-amber-100 text-amber-700", row: "bg-amber-50" },
   skipped: { label: "跳过", badge: "bg-gray-200 text-gray-600", row: "bg-gray-50" },
   pending: { label: "进行中", badge: "bg-blue-100 text-blue-700", row: "bg-blue-50" },
 };
@@ -107,6 +109,7 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
   const success = progress?.success ?? 0;
   const failed = progress?.failed ?? 0;
   const skipped = progress?.skipped ?? 0;
+  const dispatched = progress?.dispatched ?? 0;
   const items = progress?.items ?? [];
 
   return (
@@ -133,20 +136,30 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="px-2 py-2 bg-green-50 rounded-lg">
+        <div className="grid grid-cols-4 gap-2 text-center">
+          <div className="px-1 py-2 bg-green-50 rounded-lg">
             <div className="text-lg font-bold text-green-600">{success}</div>
             <div className="text-[11px] text-gray-500">成功</div>
           </div>
-          <div className="px-2 py-2 bg-red-50 rounded-lg">
+          <div className="px-1 py-2 bg-amber-50 rounded-lg">
+            <div className="text-lg font-bold text-amber-600">{dispatched}</div>
+            <div className="text-[11px] text-gray-500">已派单</div>
+          </div>
+          <div className="px-1 py-2 bg-red-50 rounded-lg">
             <div className="text-lg font-bold text-red-600">{failed}</div>
             <div className="text-[11px] text-gray-500">失败</div>
           </div>
-          <div className="px-2 py-2 bg-gray-50 rounded-lg">
+          <div className="px-1 py-2 bg-gray-50 rounded-lg">
             <div className="text-lg font-bold text-gray-600">{skipped}</div>
             <div className="text-[11px] text-gray-500">已跳过</div>
           </div>
         </div>
+
+        {dispatched > 0 && (
+          <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-[12px] text-amber-800 leading-relaxed">
+            ⚠️ <b>已派单 ≠ 已发布</b>：抖音/视频号是派给客户电脑上的发布客户端，需该账号<b>已在客户电脑登录</b>且客户端在线领取后才会真正发布。请确认对应账号已扫码登录。
+          </div>
+        )}
 
         {items.length > 0 && (
           <div>

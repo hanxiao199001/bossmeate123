@@ -51,6 +51,8 @@ export interface PublishResult {
   success: boolean;
   /** 发布模式: full=自动群发 / draft_only=仅建草稿需人工发送 / undefined=适配器未区分 */
   mode?: "full" | "draft_only";
+  /** 6-22: true=仅"派单"给本地客户端(抖音/视频号), 还没真发布 — 上层须区分展示为"已派单·待发布", 不能当成功 */
+  dispatched?: boolean;
   publishId?: string;
   mediaId?: string;
   url?: string;
@@ -233,8 +235,9 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
         accountName: a.accountName,
         platform: a.platform,
         success: has.has(a.id),
+        dispatched: has.has(a.id), // 6-22: 仅派单成功, 非真发布
         mode: "draft_only" as const,
-        message: "已派单给本地 Agent，等待领取上传到草稿箱（需 Agent 已配对并在线）",
+        message: "已派单·待发布：需该账号已在客户电脑登录、且客户端在线领取后才会真正发布",
       }));
     } catch (err) {
       const error = err instanceof Error ? err.message : "派单失败";
