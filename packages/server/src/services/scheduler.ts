@@ -397,7 +397,7 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       const { enrichJournal } = await import("./journal-enricher/orchestrator.js");
       let success = 0; let failed = 0;
       for (const c of candidates) {
-        try { await enrichJournal(c.id, {}); success++; }
+        try { await enrichJournal(c.id, { includeWebsiteScope: true }); success++; }
         catch (err) { logger.warn({ id: c.id, err }, "PR#107 cron reverify 失败（跳过）"); failed++; }
       }
       logger.info({ candidates: candidates.length, success, failed }, "PR#107 cron: 期刊治理 reverify 完成");

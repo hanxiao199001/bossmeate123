@@ -159,6 +159,8 @@ export interface EnrichmentResult {
 }
 
 export interface EnrichOptions {
+  /** 6-21: 抓期刊官网(Jina)→LLM 抽收稿范围。仅 reverify/refresh cron 开启, 避开生成热路径 */
+  includeWebsiteScope?: boolean;
   /** 跳过 LetPub（调试用） */
   skipLetpub?: boolean;
   /** 跳过 DOAJ（调试用） */

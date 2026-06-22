@@ -23,6 +23,7 @@
  */
 
 import { db } from "../../models/db.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { journals, journalEnrichmentLog } from "../../models/schema.js";
 import { eq } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
@@ -310,6 +311,38 @@ export async function enrichJournal(
     } catch (err) {
       errors["website"] = err instanceof Error ? err.message : String(err);
       logger.warn({ journalId, err: errors["website"] }, "website extractor failed");
+    }
+  }
+
+  // 6-21 官网收稿范围: Jina Reader 抓官网(绕数据中心IP被CF屏蔽) → 复用 LLM extractor 抽 scope。
+  //   仅 reverify/refresh cron 显式开启(includeWebsiteScope), 避开每日生成热路径; 已有 scopeDetails 则不重抓。
+  const siteUrl = (updates.website as string | undefined) || journal.website;
+  if (options?.includeWebsiteScope && siteUrl && !journal.scopeDetails) {
+    try {
+      const { fetchCleanPage } = await import("./fetchers/shared/jina-web-fetcher.js");
+      const md = await fetchCleanPage(siteUrl);
+      if (md) {
+        const { extractScopeDetails } = await import("./extractors/scope-details-extractor.js");
+        const shape = await extractScopeDetails({
+          websiteHtml: md,
+          journalName: journal.name,
+          tenantId: journal.tenantId ?? SYSTEM_RECOMMENDATION_TENANT_ID,
+        });
+        if (shape) {
+          updates.scopeDetails = shape as unknown as JournalUpdate["scopeDetails"];
+          const desc = Array.isArray(shape.categories) && shape.categories.length
+            ? shape.categories.map((c) => c.title).filter(Boolean).join("、")
+            : (shape.submissionNote || null);
+          if (desc) updates.scopeDescription = desc;
+          successFields.push("scope_details_site");
+          realProvenance.scopeDetails = "journal_site";
+          logger.info({ journalId, journal: journal.name }, "6-21 官网收稿范围已抓取入库(Jina)");
+        }
+      }
+    } catch (err) {
+      failedFields.push("scope_details_site");
+      errors["scope_details_site"] = err instanceof Error ? err.message : String(err);
+      logger.warn({ journalId, err: errors["scope_details_site"] }, "官网scope抽取失败(不阻塞)");
     }
   }
 
