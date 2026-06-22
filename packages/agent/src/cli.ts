@@ -229,9 +229,9 @@ async function cmdEnsureLogin(_args: string[]): Promise<void> {
     try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
     if (!hasProfile) need.push(a);
   }
-  if (need.length === 0) { logger.info("所有账号本机均已登录, 无需扫码, 直接开始领任务。"); return; }
-  logger.info(`有 ${need.length} 个账号还没在本机登录, 逐个弹出浏览器扫码(已登录的已跳过)...`);
-  for (const a of need) await loginAccount(a, api);
+  if (need.length === 0) { logger.info("所有账号本机均已登录。"); return; }
+  // 6-22: 不再启动就逐个弹扫码窗口(很乱)。改为打开"添加发布账号"网页, 客户在页面里点对应账号的【登录】扫码。
+  logger.info(`有 ${need.length} 个账号还没在本机登录 — 启动后会自动打开"添加发布账号"网页, 在页面里点对应账号的【登录】扫码即可。`);
 }
 
 // ===== status =====
@@ -302,21 +302,7 @@ async function loginOnce(api: AgentApi, account: AgentAccount, cooldown?: Map<st
   }
 }
 
-async function proactiveLogin(api: AgentApi, cooldown: Map<string, number>): Promise<void> {
-  const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
-  const now = Date.now();
-  for (const a of accounts) {
-    if ((cooldown.get(a.id) ?? 0) > now) continue;           // 冷却中, 跳过
-    if (loginLocks.has(a.id)) continue;                       // 正在登录(可能控制台触发的), 跳过
-    let hasProfile = false;
-    try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
-    if (hasProfile) continue;                                  // 已登录, 跳过
-    logger.info(`[${platformLabel(a.platform)}] ${a.accountName}: 未登录, 弹出浏览器请扫码绑定到本机...`);
-    notify("BossMate: 请扫码绑定账号", `[${platformLabel(a.platform)}] ${a.accountName} 请扫描弹出的浏览器二维码, 扫完即绑定本机`);
-    await loginOnce(api, a, cooldown);
-    return;                                                    // 一次只处理一个, 处理完回到轮询(发布优先)
-  }
-}
+// 6-22: proactiveLogin(空闲自动弹码)已下线 — 改为"添加发布账号"网页里客户点【登录】触发。
 
 function warnLoginExpired(task: AgentTask): void {
   const label = platformLabel(task.platform);
@@ -472,22 +458,51 @@ async function cmdRun(): Promise<void> {
   }
   logger.info(`开始轮询领任务 (每 ${CLAIM_INTERVAL_MS / 1000}s, 平台: ${platforms.map(platformLabel).join("/")})。Ctrl+C 退出。`);
 
-  // 6-17: 主动补登节流 + 每账号冷却(网页新增账号后, 这台在线设备自动弹码绑定)
-  let lastEnsureAt = 0;
-  const ENSURE_INTERVAL_MS = 60_000;
+  // 6-22: 改为页面驱动登录(loginCooldown 仍用于控制台触发的登录去抖)。不再启动/空闲自动弹码。
   const loginCooldown = new Map<string, number>();
 
-  // 6-18 客户自助加号: 起本地控制台(仅 localhost)并自动打开。点按钮 → 建号 + 弹登录扫码(后台), 客户零打字。
-  const ctl = await startControlServer((platform) => {
-    void (async () => {
+  // 6-22 客户自助加号/登录: 起本地控制台(仅 localhost)并自动打开。页面列出本机待登录的已有账号,
+  //   点某个号的【登录】→ 弹该号扫码; 也可点"新增"加全新号。启动不再自动弹一堆扫码窗口。
+  const ctl = await startControlServer({
+    listPending: async () => {
       try {
-        const account = await api.createAccount(platform);
-        logger.info(`[控制台] 已创建${platformLabel(platform)}账号, 正在弹出登录页, 请扫码...`);
-        await loginOnce(api, account, loginCooldown);
+        const accounts = (await api.listAccounts()).filter((a) => PLATFORM_PUSHERS[a.platform]);
+        const pending: { id: string; platform: string; accountName: string }[] = [];
+        for (const a of accounts) {
+          let hasProfile = false;
+          try { hasProfile = (await stat(profileDir(a.id))).isDirectory(); } catch { /* 无档案 */ }
+          if (!hasProfile) pending.push({ id: a.id, platform: a.platform, accountName: a.accountName });
+        }
+        return pending;
       } catch (e) {
-        logger.warn("[控制台] 自助加号失败:", e instanceof Error ? e.message : e);
+        await exitIfRevoked(e);
+        logger.warn("[控制台] 读取账号失败:", e instanceof Error ? e.message : e);
+        return [];
       }
-    })();
+    },
+    onLogin: (accountId) => {
+      void (async () => {
+        try {
+          const acc = (await api.listAccounts()).find((a) => a.id === accountId);
+          if (!acc) { logger.warn("[控制台] 登录: 账号不存在", accountId); return; }
+          logger.info(`[控制台] 正在弹出 [${platformLabel(acc.platform)}] ${acc.accountName} 登录页, 请扫码...`);
+          await loginOnce(api, acc, loginCooldown);
+        } catch (e) {
+          logger.warn("[控制台] 登录失败:", e instanceof Error ? e.message : e);
+        }
+      })();
+    },
+    onAdd: (platform) => {
+      void (async () => {
+        try {
+          const account = await api.createAccount(platform);
+          logger.info(`[控制台] 已创建${platformLabel(platform)}账号, 正在弹出登录页, 请扫码...`);
+          await loginOnce(api, account, loginCooldown);
+        } catch (e) {
+          logger.warn("[控制台] 新增账号失败:", e instanceof Error ? e.message : e);
+        }
+      })();
+    },
   }).catch(() => null);
   if (ctl) {
     logger.info(`想自己加抖音/视频号? 浏览器打开 http://localhost:${ctl.port} (已自动打开, 也可双击"添加账号"启动器)`);
@@ -505,11 +520,7 @@ async function cmdRun(): Promise<void> {
     }
 
     if (tasks.length === 0) {
-      // 空闲: 周期性给未登录账号主动弹码(一次一个, 带冷却), 实现"一台设备绑多账号"零终端
-      if (Date.now() - lastEnsureAt > ENSURE_INTERVAL_MS) {
-        lastEnsureAt = Date.now();
-        await proactiveLogin(api, loginCooldown).catch((e) => logger.warn("自动补登检查失败:", e instanceof Error ? e.message : e));
-      }
+      // 空闲: 不再自动弹码。要给账号补登录, 客户在"添加发布账号"网页里点【登录】即可。
       await sleep(CLAIM_INTERVAL_MS);
       continue;
     }

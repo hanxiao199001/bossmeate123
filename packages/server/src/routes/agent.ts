@@ -583,7 +583,7 @@ export async function agentAdminRoutes(app: FastifyInstance) {
     }
     // 启动器(按系统) + 说明
     const launchers = platform === "windows" ? ["start-agent.bat", "清理旧客户端.bat"]
-      : platform === "mac" ? ["start-agent.command"]
+      : platform === "mac" ? ["start-agent.command", "清理旧客户端.command"]
       : ["start-agent.command", "start-agent.bat", "清理旧客户端.bat"];
     for (const f of [...launchers, "使用说明.txt"]) {
       const abs = join(agentDir, "launcher", f);
