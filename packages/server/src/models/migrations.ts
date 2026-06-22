@@ -276,4 +276,99 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
     `,
   },
+  {
+    version: "018_fk_on_delete",
+    description: "6-20 数据完整性: 给69个外键补 ON DELETE — 租户/内容/子表 CASCADE, 共享journals及弱引用(线索来源/账单/设备) SET NULL; notNull用户外键留RESTRICT(不硬删用户)。临时PL/pgSQL按表+列定位约束, 不依赖约束名, 幂等。",
+    sql: `
+      -- 临时助手: 按(表,列)定位单列外键约束(不依赖约束名), drop 后带 ON DELETE 重建。幂等。
+      CREATE OR REPLACE FUNCTION _bm_set_fk(p_table text, p_col text, p_ref text, p_action text) RETURNS void AS $FN$
+      DECLARE cname text;
+      BEGIN
+        SELECT con.conname INTO cname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = con.conkey[1]
+        WHERE con.contype = 'f' AND rel.relname = p_table AND att.attname = p_col
+          AND array_length(con.conkey, 1) = 1
+        LIMIT 1;
+        IF cname IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', p_table, cname);
+        END IF;
+        EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %I(id) ON DELETE %s',
+                       p_table, left(p_table || '_' || p_col || '_fkey', 63), p_col, p_ref, p_action);
+      END;
+      $FN$ LANGUAGE plpgsql;
+
+SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('tenant_invites','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('conversations','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('messages','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('messages','conversation_id','conversations','CASCADE');
+      SELECT _bm_set_fk('contents','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('contents','conversation_id','conversations','SET NULL');
+      SELECT _bm_set_fk('token_logs','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('keywords','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('journals','tenant_id','tenants','SET NULL');
+      SELECT _bm_set_fk('competitors','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('distribution_records','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('distribution_records','content_id','contents','CASCADE');
+      SELECT _bm_set_fk('knowledge_entries','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('wechat_configs','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('dedup_msgs','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('work_wechat_configs','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('hard_guard_whitelist','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('tenant_feature_flags','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('keyword_history','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('industry_keywords','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('style_analyses','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('learned_templates','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('tenant_ip_profiles','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('production_records','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('production_records','content_id','contents','CASCADE');
+      SELECT _bm_set_fk('content_metrics','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('content_metrics','content_id','contents','CASCADE');
+      SELECT _bm_set_fk('content_metrics','distribution_id','distribution_records','SET NULL');
+      SELECT _bm_set_fk('column_calendars','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('column_calendars','content_id','contents','SET NULL');
+      SELECT _bm_set_fk('tasks','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('tasks','conversation_id','conversations','SET NULL');
+      SELECT _bm_set_fk('task_logs','task_id','tasks','CASCADE');
+      SELECT _bm_set_fk('platform_accounts','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('platform_accounts','agent_device_id','agent_devices','SET NULL');
+      SELECT _bm_set_fk('content_templates','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('daily_recommendations','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('daily_content_plans','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('agent_logs','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('boss_edits','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('boss_edits','content_id','contents','CASCADE');
+      SELECT _bm_set_fk('daily_reports','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('peer_content_crawls','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('leads','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('leads','source_content_id','contents','SET NULL');
+      SELECT _bm_set_fk('leads','assigned_user_id','users','SET NULL');
+      SELECT _bm_set_fk('leads','taken_over_by','users','SET NULL');
+      SELECT _bm_set_fk('sales_messages','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('sales_messages','lead_id','leads','CASCADE');
+      SELECT _bm_set_fk('tenant_preferences','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('batches','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('batch_rows','batch_id','batches','CASCADE');
+      SELECT _bm_set_fk('batch_rows','account_id','platform_accounts','SET NULL');
+      SELECT _bm_set_fk('batch_rows','article_id','contents','SET NULL');
+      SELECT _bm_set_fk('journal_enrichment_log','journal_id','journals','CASCADE');
+      SELECT _bm_set_fk('content_publish_log','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('content_publish_log','account_id','platform_accounts','CASCADE');
+      SELECT _bm_set_fk('content_publish_log','initiated_user_id','users','SET NULL');
+      SELECT _bm_set_fk('journal_usage','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('journal_usage','journal_id','journals','CASCADE');
+      SELECT _bm_set_fk('journal_usage','content_id','contents','SET NULL');
+      SELECT _bm_set_fk('cost_ledger','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('cost_ledger','content_id','contents','SET NULL');
+      SELECT _bm_set_fk('agent_devices','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('agent_publish_tasks','tenant_id','tenants','CASCADE');
+      SELECT _bm_set_fk('agent_publish_tasks','content_id','contents','CASCADE');
+      SELECT _bm_set_fk('agent_publish_tasks','account_id','platform_accounts','CASCADE');
+      SELECT _bm_set_fk('agent_publish_tasks','agent_device_id','agent_devices','SET NULL');
+      DROP FUNCTION _bm_set_fk(text, text, text, text);
+    `,
+  },
 ];

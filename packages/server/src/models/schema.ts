@@ -47,7 +47,7 @@ export const users = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     email: varchar("email", { length: 255 }), // 6-20: 改可空(手机号优先注册无 email)
     phone: varchar("phone", { length: 20 }),
@@ -93,7 +93,7 @@ export const tenantInvites = pgTable(
   "tenant_invites",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     phone: varchar("phone", { length: 20 }).notNull(),
     role: varchar("role", { length: 40 }).notNull(),
     invitedByUserId: uuid("invited_by_user_id").references(() => users.id).notNull(),
@@ -115,7 +115,7 @@ export const conversations = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     userId: uuid("user_id")
       .references(() => users.id)
@@ -139,10 +139,10 @@ export const messages = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     conversationId: uuid("conversation_id")
-      .references(() => conversations.id)
+      .references(() => conversations.id, { onDelete: "cascade" })
       .notNull(),
     role: varchar("role", { length: 20 }).notNull(), // user | assistant | system
     content: text("content").notNull(),
@@ -163,12 +163,12 @@ export const contents = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     userId: uuid("user_id")
       .references(() => users.id)
       .notNull(),
-    conversationId: uuid("conversation_id").references(() => conversations.id),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
     type: varchar("type", { length: 20 }).notNull(), // article | video_script | reply
     title: varchar("title", { length: 300 }),
     body: text("body"), // 正文内容（Markdown）
@@ -203,7 +203,7 @@ export const tokenLogs = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     userId: uuid("user_id")
       .references(() => users.id)
@@ -227,7 +227,7 @@ export const keywords = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     keyword: varchar("keyword", { length: 200 }).notNull(),
     sourcePlatform: varchar("source_platform", { length: 50 }).notNull(), // wechat | baidu | zhihu | douyin | xiaohongshu | weibo | baijiahao | toutiao
@@ -260,7 +260,7 @@ export const journals = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     // PR B.12：tenant_id NULL = 全局共享 reference data（46 enriched 期刊，所有 tenant 共享）；
     // 非 NULL = 该 tenant 的自定义期刊。collector 用 OR(isNull, eq) 同时拉两类。
-    tenantId: uuid("tenant_id").references(() => tenants.id),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
     name: varchar("name", { length: 300 }).notNull(), // 期刊名称
     nameEn: varchar("name_en", { length: 300 }), // 英文名
     issn: varchar("issn", { length: 20 }),
@@ -387,7 +387,7 @@ export const competitors = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     accountId: varchar("account_id", { length: 200 }).notNull(), // 竞品账号标识
     accountName: varchar("account_name", { length: 200 }), // 账号名称
@@ -417,10 +417,10 @@ export const distributionRecords = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     contentId: uuid("content_id")
-      .references(() => contents.id),
+      .references(() => contents.id, { onDelete: "cascade" }),
     platform: varchar("platform", { length: 50 }).notNull(), // wechat | video | douyin | xiaohongshu | zhihu | weibo | baijiahao | toutiao
     accountName: varchar("account_name", { length: 200 }),
     publishedTitle: varchar("published_title", { length: 500 }),
@@ -447,7 +447,7 @@ export const knowledgeEntries = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     category: varchar("category", { length: 50 }).notNull(), // journal | sop | customer | competitor
     title: varchar("title", { length: 300 }),
@@ -468,7 +468,7 @@ export const knowledgeEntries = pgTable(
 export const wechatConfigs = pgTable("wechat_configs", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id")
-    .references(() => tenants.id)
+    .references(() => tenants.id, { onDelete: "cascade" })
     .notNull()
     .unique(),
   appId: varchar("app_id", { length: 100 }).notNull(),
@@ -486,7 +486,7 @@ export const wechatConfigs = pgTable("wechat_configs", {
 
 // B.1: 公众号 webhook 幂等表 — (tenant_id, msg_id) 复合主键，TTL 7 day（cron 清理 — B.5 内）
 export const dedupMsgs = pgTable("dedup_msgs", {
-  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
   msgId: varchar("msg_id", { length: 100 }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
@@ -497,7 +497,7 @@ export const dedupMsgs = pgTable("dedup_msgs", {
 // B.2: 企业微信配置表 — encodingAESKey 用现有 credentialsKey 加密机制存（参考 wechatConfigs.appSecret）
 export const workWechatConfigs = pgTable("work_wechat_configs", {
   id: uuid("id").primaryKey().defaultRandom(),
-  tenantId: uuid("tenant_id").references(() => tenants.id).notNull().unique(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull().unique(),
   corpId: varchar("corp_id", { length: 100 }).notNull(),
   agentId: varchar("agent_id", { length: 50 }).notNull(),
   token: varchar("token", { length: 100 }).notNull(),
@@ -509,14 +509,14 @@ export const workWechatConfigs = pgTable("work_wechat_configs", {
 // B.3: hard guard 白名单 — 命中 pattern 则跳过 4 类硬规则（让正常 LLM 路径走）
 export const hardGuardWhitelist = pgTable("hard_guard_whitelist", {
   id: uuid("id").primaryKey().defaultRandom(),
-  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
   pattern: text("pattern").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // B.5: tenant 级 feature flag — 新租户默认 false（白名单制，合规护城河）
 export const tenantFeatureFlags = pgTable("tenant_feature_flags", {
-  tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
   flagName: varchar("flag_name", { length: 60 }).notNull(),
   enabled: boolean("enabled").notNull().default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -530,7 +530,7 @@ export const keywordHistory = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     keyword: varchar("keyword", { length: 200 }).notNull(),
     snapshotDate: date("snapshot_date").notNull(), // 快照日期
@@ -560,7 +560,7 @@ export const industryKeywords = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     word: varchar("word", { length: 200 }).notNull(), // 关键词
     level: varchar("level", { length: 20 }).notNull(), // primary | secondary | context
@@ -592,7 +592,7 @@ export const styleAnalyses = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     accountName: varchar("account_name", { length: 200 }).notNull(),
     source: varchar("source", { length: 20 }).notNull(), // self | peer
@@ -616,7 +616,7 @@ export const learnedTemplates = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     name: varchar("name", { length: 100 }).notNull(),
     desc: text("description"),
@@ -646,7 +646,7 @@ export const tenantIpProfiles = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     brandName: varchar("brand_name", { length: 200 }).notNull(),
     industry: varchar("industry", { length: 100 }).notNull(),
@@ -674,9 +674,9 @@ export const productionRecords = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
-    contentId: uuid("content_id").references(() => contents.id), // 关联原始内容
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }), // 关联原始内容
     parentId: uuid("parent_id"),                          // 衍生来源（自引用，原始稿为 null）
     format: varchar("format", { length: 50 }).notNull(),  // 形式：long_article | short_video | poster | thread | ...
     platform: varchar("platform", { length: 50 }),        // 目标平台
@@ -705,10 +705,10 @@ export const contentMetrics = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
-    contentId: uuid("content_id").references(() => contents.id),
-    distributionId: uuid("distribution_id").references(() => distributionRecords.id),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }),
+    distributionId: uuid("distribution_id").references(() => distributionRecords.id, { onDelete: "set null" }),
     platform: varchar("platform", { length: 50 }).notNull(),
     snapshotDate: date("snapshot_date").notNull(),         // 数据快照日期
     views: integer("views").default(0),
@@ -738,7 +738,7 @@ export const columnCalendars = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     columnName: varchar("column_name", { length: 200 }).notNull(),  // 栏目名称
     frequency: varchar("frequency", { length: 50 }).notNull(),      // daily | weekly | biweekly | monthly
@@ -748,7 +748,7 @@ export const columnCalendars = pgTable(
     scheduledDate: date("scheduled_date"),                 // 计划发布日期
     assignee: varchar("assignee", { length: 100 }),        // 负责人
     status: varchar("status", { length: 20 }).notNull().default("planned"), // planned | in_progress | ready | published | cancelled
-    contentId: uuid("content_id").references(() => contents.id), // 关联已生产内容
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "set null" }), // 关联已生产内容
     notes: text("notes"),
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -767,9 +767,9 @@ export const tasks = pgTable(
   "tasks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     userId: uuid("user_id").references(() => users.id).notNull(),
-    conversationId: uuid("conversation_id").references(() => conversations.id),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
     type: varchar("type", { length: 50 }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("pending"),
     progress: integer("progress").default(0),
@@ -813,7 +813,7 @@ export const platformAccounts = pgTable(
   "platform_accounts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     platform: varchar("platform", { length: 50 }).notNull(), // wechat | baijiahao | toutiao | zhihu | xiaohongshu
     accountName: varchar("account_name", { length: 200 }).notNull(), // 账号名称/昵称
     accountId: varchar("account_id", { length: 200 }), // 平台方的账号ID
@@ -877,7 +877,7 @@ export const contentTemplates = pgTable("content_templates", {
   chartConfig: jsonb("chart_config").notNull(),
   cssTheme: jsonb("css_theme").notNull(),
   imageStrategy: jsonb("image_strategy").notNull(),
-  tenantId: uuid("tenant_id").references(() => tenants.id),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
   isDefault: boolean("is_default").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -889,7 +889,7 @@ export const dailyRecommendations = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
-      .references(() => tenants.id)
+      .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
     date: date("date").notNull(),
     recommendations: jsonb("recommendations").default([]).notNull(),
@@ -907,7 +907,7 @@ export const dailyContentPlans = pgTable(
   "daily_content_plans",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     date: varchar("date", { length: 10 }).notNull(),
     tasks: jsonb("tasks").notNull().default([]),
     totalArticles: integer("total_articles").default(0),
@@ -926,7 +926,7 @@ export const agentLogs = pgTable(
   "agent_logs",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     agentName: varchar("agent_name", { length: 50 }).notNull(),
     action: varchar("action", { length: 100 }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("running"),
@@ -947,8 +947,8 @@ export const bossEdits = pgTable(
   "boss_edits",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
-    contentId: uuid("content_id").references(() => contents.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(),
     action: varchar("action", { length: 20 }).notNull(),
     originalTitle: text("original_title"),
     editedTitle: text("edited_title"),
@@ -969,7 +969,7 @@ export const dailyReports = pgTable(
   "daily_reports",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     date: varchar("date", { length: 10 }).notNull(),
     report: jsonb("report").notNull(),
     aiSummary: text("ai_summary"),
@@ -985,7 +985,7 @@ export const peerContentCrawls = pgTable(
   "peer_content_crawls",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     competitorId: varchar("competitor_id", { length: 100 }).notNull(),
     platform: varchar("platform", { length: 30 }).notNull(),
     originalUrl: text("original_url").notNull(),
@@ -1009,7 +1009,7 @@ export const leads = pgTable(
   "leads",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     /** 来源渠道: comment_wechat | comment_zhihu | dm | wechat_work | manual ... */
     channel: varchar("channel", { length: 50 }).notNull(),
     /** 渠道方原始ID（用于去重） */
@@ -1021,19 +1021,19 @@ export const leads = pgTable(
     phone: varchar("phone", { length: 50 }),
     email: varchar("email", { length: 200 }),
     /** 触达内容 */
-    sourceContentId: uuid("source_content_id").references(() => contents.id),
+    sourceContentId: uuid("source_content_id").references(() => contents.id, { onDelete: "set null" }),
     /** 客户画像 JSON (学科/学历/意向期刊等) */
     profile: jsonb("profile").default({}),
     /** 销售阶段: new | contacted | qualified | negotiating | won | lost | need_human */
     stage: varchar("stage", { length: 30 }).notNull().default("new"),
     /** 意向分 0-100 */
     intentScore: integer("intent_score").default(0),
-    assignedUserId: uuid("assigned_user_id").references(() => users.id),
+    assignedUserId: uuid("assigned_user_id").references(() => users.id, { onDelete: "set null" }),
     lastMessageAt: timestamp("last_message_at"),
     /** 对话模式：ai | human */
     handoverMode: varchar("handover_mode", { length: 10 }).notNull().default("ai"),
     /** 真人接管者的 userId */
-    takenOverBy: uuid("taken_over_by").references(() => users.id),
+    takenOverBy: uuid("taken_over_by").references(() => users.id, { onDelete: "set null" }),
     /** 接管时间戳 */
     takenOverAt: timestamp("taken_over_at"),
     /** 销售最后一次查看该 lead 的时间（用于计算未读数） */
@@ -1057,8 +1057,8 @@ export const salesMessages = pgTable(
   "sales_messages",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
-    leadId: uuid("lead_id").references(() => leads.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
     /** inbound (客户发来) | outbound (AI/人工回复) */
     direction: varchar("direction", { length: 10 }).notNull(),
     /** text | image | card | link */
@@ -1086,7 +1086,7 @@ export const salesMessages = pgTable(
 export const tenantPreferences = pgTable(
   "tenant_preferences",
   {
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     preferenceKey: varchar("preference_key", { length: 60 }).notNull(),
     preferenceValue: text("preference_value").notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -1104,7 +1104,7 @@ export const batches = pgTable(
   "batches",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     userId: uuid("user_id").references(() => users.id).notNull(),
     filename: varchar("filename", { length: 200 }),
     total: integer("total").notNull().default(0),
@@ -1125,7 +1125,7 @@ export const batchRows = pgTable(
   "batch_rows",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    batchId: uuid("batch_id").references(() => batches.id).notNull(),
+    batchId: uuid("batch_id").references(() => batches.id, { onDelete: "cascade" }).notNull(),
     rowIndex: integer("row_index").notNull(), // csv 第几行（从 1 开始）
     topic: text("topic").notNull(),
     journalId: uuid("journal_id"), // 选填，缺则 AI 自动推荐
@@ -1135,7 +1135,7 @@ export const batchRows = pgTable(
     priority: integer("priority").default(3), // 1-5（决定队列顺序）
     // status: pending | generating | generated | failed
     status: varchar("status", { length: 20 }).notNull().default("pending"),
-    articleId: uuid("article_id").references(() => contents.id), // 创建后 FK
+    articleId: uuid("article_id").references(() => contents.id, { onDelete: "set null" }), // 创建后 FK
     errorMessage: text("error_message"),
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1169,7 +1169,7 @@ export const journalEnrichmentLog = pgTable(
   "journal_enrichment_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    journalId: uuid("journal_id").references(() => journals.id).notNull(),
+    journalId: uuid("journal_id").references(() => journals.id, { onDelete: "cascade" }).notNull(),
     source: varchar("source", { length: 20 }).notNull(), // letpub | crossref | doaj | scimago | openalex | wanfang | fenqubiao
     status: varchar("status", { length: 20 }).notNull(), // success | failed | timeout | skipped
     fieldsWritten: jsonb("fields_written"),
@@ -1193,14 +1193,14 @@ export const contentPublishLog = pgTable(
   "content_publish_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     contentId: uuid("content_id").notNull(),
-    accountId: uuid("account_id").references(() => platformAccounts.id).notNull(),
+    accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
     status: varchar("status", { length: 20 }).notNull(), // success | failed | skipped
     mediaId: varchar("media_id", { length: 200 }),
     errorMessage: varchar("error_message", { length: 500 }),
     initiatedBy: varchar("initiated_by", { length: 20 }),
-    initiatedUserId: uuid("initiated_user_id").references(() => users.id),
+    initiatedUserId: uuid("initiated_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1217,9 +1217,9 @@ export const journalUsage = pgTable(
   "journal_usage",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
-    journalId: uuid("journal_id").references(() => journals.id).notNull(),
-    contentId: uuid("content_id").references(() => contents.id),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    journalId: uuid("journal_id").references(() => journals.id, { onDelete: "cascade" }).notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "set null" }),
     usedAt: timestamp("used_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -1254,7 +1254,7 @@ export const agentDevices = pgTable(
   "agent_devices",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     name: varchar("name", { length: 100 }).notNull(), // "老韩的MacBook"
     tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(), // sha256(token) hex
     status: varchar("status", { length: 20 }).notNull().default("active"), // active | disabled
@@ -1274,9 +1274,9 @@ export const agentPublishTasks = pgTable(
   "agent_publish_tasks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: uuid("tenant_id").references(() => tenants.id).notNull(),
-    contentId: uuid("content_id").references(() => contents.id).notNull(),
-    accountId: uuid("account_id").references(() => platformAccounts.id).notNull(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(),
+    accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
     platform: varchar("platform", { length: 20 }).notNull(), // douyin | wechat_video
     accountName: varchar("account_name", { length: 200 }),
     videoSource: text("video_source").notNull(), // /storage/相对路径 或 http(s) url
@@ -1284,7 +1284,7 @@ export const agentPublishTasks = pgTable(
     title: varchar("title", { length: 200 }),
     // pending | claimed | success | failed | login_expired | canceled
     status: varchar("status", { length: 20 }).notNull().default("pending"),
-    agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id),
+    agentDeviceId: uuid("agent_device_id").references(() => agentDevices.id, { onDelete: "set null" }),
     error: text("error"),
     attempts: integer("attempts").notNull().default(0),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
