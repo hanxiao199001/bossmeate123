@@ -8,7 +8,7 @@
  * 调用方：VideoProducer Agent / chat 路由
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { assetManager } from "./asset-manager.js";
 import type { SceneAsset, JournalAssetInput } from "./asset-manager.js";
 import { ttsService } from "./tts-service.js";
@@ -83,7 +83,7 @@ export async function produceVideo(
           citingJournalsTop10: journals.citingJournalsTop10,
         })
         .from(journals)
-        .where(and(eq(journals.id, input.journalId), eq(journals.tenantId, tenantId)))
+        .where(and(eq(journals.id, input.journalId), or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)))) // 6-22: 期刊是全局reference data(tenant_id NULL), 不能按租户过滤掉
         .limit(1);
       if (row) {
         journal = {
@@ -143,13 +143,15 @@ export async function produceVideo(
     }
   }
 
-  // 3. Pexels 兜底（优先级 3） — 仅当期刊封面缺失时才抓关键词素材
+  // 3. 6-22 数据驱动主干: 通用图库(Pexels)改 opt-in(VIDEO_ENABLE_STOCK_PHOTOS=1 才用),
+  //    默认关 —— 期刊科普靠 封面/信息卡/数据图表, 不依赖跨境且不对路的通用照片。
+  const STOCK_ON = process.env.VIDEO_ENABLE_STOCK_PHOTOS === "1";
   const allKeywords = Array.from(
     new Set(scenes.flatMap((s) => s.visualKeywords).filter(Boolean))
   );
-  const pexelsAssets = journalCover
-    ? []
-    : await assetManager.fetchAssets(tenantId, allKeywords);
+  const pexelsAssets = (STOCK_ON && !journalCover)
+    ? await assetManager.fetchAssets(tenantId, allKeywords)
+    : [];
   const assetMap = new Map(pexelsAssets.map((a) => [a.keyword, a]));
 
   // 构建卡片数据（供 V2 卡片生成器使用）
@@ -170,22 +172,29 @@ export async function produceVideo(
     publisher: (journal as any).publisher ?? null,
   } : null;
 
+  // 6-22 数据驱动: 缺 sceneType 的幕给个默认(首opening/末cta/中间topic), 让每幕都能出信息卡, 不掉到图库。
+  const DEFAULT_SCENE_TYPES: SceneType[] = ["topic", "data", "review", "tips"];
+  const sceneTypeFor = (idx: number): SceneType =>
+    idx === 0 ? "opening" : idx === scenes.length - 1 ? "cta" : DEFAULT_SCENE_TYPES[(idx - 1) % DEFAULT_SCENE_TYPES.length]!;
+
   // 4. 逐场景生成 TTS + 组装 composer scene
   const composerScenes: ComposerScene[] = [];
   let missing = 0;
-  for (const s of scenes) {
+  for (let sceneIdx = 0; sceneIdx < scenes.length; sceneIdx++) {
+    const s = scenes[sceneIdx]!;
+    const effectiveType: SceneType | undefined = s.sceneType ?? (cardData ? sceneTypeFor(sceneIdx) : undefined);
     const tts = await ttsService.synthesize(tenantId, s.voiceoverText);
 
-    // V2: sceneType 存在时生成信息卡底图
+    // V2: 有期刊数据就出信息卡底图(数据驱动主干); effectiveType 已为缺类型的幕补了默认
     let imageUrl: string | null = null;
-    if (s.sceneType && cardData) {
+    if (effectiveType && cardData) {
       try {
-        const cardBuf = await generateCard(s.sceneType, cardData);
-        const cardPath = `assets/${tenantId}/cards/${s.sceneType}-${Date.now()}.png`;
+        const cardBuf = await generateCard(effectiveType, cardData);
+        const cardPath = `assets/${tenantId}/cards/${effectiveType}-${Date.now()}.png`;
         imageUrl = await storage.upload(cardBuf, cardPath, "image/png");
-        logger.info({ sceneType: s.sceneType, cardPath }, "V2 信息卡生成完成");
+        logger.info({ sceneType: effectiveType, cardPath }, "V2 信息卡生成完成");
       } catch (err) {
-        logger.warn({ err: err instanceof Error ? err.message : err, sceneType: s.sceneType }, "信息卡生成失败，回退到封面/Pexels");
+        logger.warn({ err: err instanceof Error ? err.message : err, sceneType: effectiveType }, "信息卡生成失败，回退到封面/图库");
       }
     }
 
@@ -196,8 +205,8 @@ export async function produceVideo(
         const hitKw = s.visualKeywords.find((k) => assetMap.has(k));
         asset = hitKw ? assetMap.get(hitKw) : undefined;
       }
-      if (!asset) {
-        // 兜底2：用旁白前 15 字再搜一次 Pexels
+      if (!asset && STOCK_ON) {
+        // 兜底2(仅 opt-in)：用旁白前 15 字再搜一次图库
         const fallbackKw = s.voiceoverText.slice(0, 15) || `scene-${composerScenes.length}`;
         const [fallbackAsset] = await assetManager.fetchAssets(tenantId, [fallbackKw]);
         asset = fallbackAsset;
@@ -218,7 +227,7 @@ export async function produceVideo(
     }
 
     // #58.1: data 场景 + chart 数据齐 → chart PNG 覆盖 V2 卡片；任何失败 → 保持原 imageUrl
-    if (s.sceneType === "data" && s.chartType && journal) {
+    if (effectiveType === "data" && s.chartType && journal) {
       const cd = pickChartData(journal, s.chartType);
       if (cd) try {
         const buf = await renderChartFrame({ type: s.chartType, data: cd });
@@ -234,8 +243,8 @@ export async function produceVideo(
       voiceoverSource: tts.url,
       durationMs: s.durationMs ?? tts.durationMs,
       subtitle: s.subtitle,
-      journalInfo: s.sceneType ? undefined : journalInfoCard,
-      sceneType: s.sceneType,
+      journalInfo: effectiveType ? undefined : journalInfoCard,
+      sceneType: effectiveType,
     });
   }
 

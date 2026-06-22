@@ -11,7 +11,9 @@
     "db:migrate": "tsx src/models/migrate.ts",
     "db:seed": "tsx src/models/seed.ts",
     "ingest:cscd-pku": "tsx src/scripts/ingest-cscd-pku.ts",
-    "provision:tenant": "tsx src/scripts/provision-tenant.ts"
+    "provision:tenant": "tsx src/scripts/provision-tenant.ts",
+    "sample:card": "tsx src/scripts/sample-card-video.ts",
+    "sample:dvh": "tsx src/scripts/sample-dvh-video.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",
