@@ -87,6 +87,7 @@ if exist "%USERPROFILE%\.bossmate-agent\config.json" goto run_section
 
 
 :pair_loop
+rem ===== pair (no config, or after revoke cleared config) =====
 
 if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://122.152.234.155 : "
 
@@ -120,6 +121,8 @@ echo Paired. A browser will open, scan the QR with your phone app.
 :run_section
 node dist\cli.js ensure-login
 
+if not exist "%USERPROFILE%\.bossmate-agent\config.json" goto revoked
+
 echo.
 
 echo Running. Keep this window open and do not let the computer sleep. Press Ctrl+C to stop.
@@ -128,9 +131,25 @@ echo.
 
 node dist\cli.js run
 
+if not exist "%USERPROFILE%\.bossmate-agent\config.json" goto revoked
+
 echo.
 
 echo Agent stopped.
 
 pause
+
+exit /b 0
+
+:revoked
+rem 6-21: when device revoked/unpaired, Agent clears local config; detect that and re-pair (avoid stuck on revoked)
+echo.
+
+echo This device was revoked or unpaired. Re-pairing with a new code...
+
+echo.
+
+set "PAIR_CODE="
+
+goto pair_loop
 

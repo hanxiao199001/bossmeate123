@@ -36,7 +36,7 @@ if [ ! -d "node_modules" ]; then
   echo
 fi
 
-if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
+do_pair() {
   while true; do
     [ -z "$SERVER_URL" ] && read -r -p "服务器地址 (如 http://122.152.234.155): " SERVER_URL
     [ -z "$PAIR_CODE" ] && read -r -p "配对码 (6 位, 网页生成): " PAIR_CODE
@@ -52,12 +52,24 @@ if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
   echo
   echo "配对成功! 接下来扫码登录平台账号: 会弹出浏览器, 请用对应账号的手机 App 扫码。"
   echo
-fi
+}
 
-echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"
-echo
-node dist/cli.js ensure-login || true
-caffeinate -i node dist/cli.js run
+# 6-21: 主循环 — 设备被吊销时 Agent 会自动清掉本机配置(config.json), 这里检测到后自动重新配对
+#   (用本包配对码; 已用过/过期则提示换新码), 不再卡在"已吊销"。Ctrl+C 正常停止则直接退出, 不会重配。
+while true; do
+  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then do_pair; fi
+  node dist/cli.js ensure-login || true
+  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
+    echo; echo "本设备已被吊销/解绑, 正在重新配对…"; echo; PAIR_CODE=""; continue
+  fi
+  echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"
+  echo
+  caffeinate -i node dist/cli.js run
+  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
+    echo; echo "本设备已被吊销/解绑, 正在重新配对…"; echo; PAIR_CODE=""; continue
+  fi
+  break
+done
 echo
 echo "Agent 已停止。按回车键关闭窗口。"
 read -r _
