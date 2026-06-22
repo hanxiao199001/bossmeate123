@@ -25,7 +25,7 @@ import { inArray } from "drizzle-orm";
 import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.js";
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "../services/digital-human/template-mapping.js";
 import { isRealMode } from "../services/digital-human/client.js";
-import { bulkDistributeQueue, initBulkProgress, getBulkProgress, type BulkProgress } from "../services/bulk-distribute/queue.js";
+import { bulkDistributeQueue, initBulkProgress, getBulkProgress, type BulkProgress, type BulkItemResult } from "../services/bulk-distribute/queue.js";
 import { contentPublishLog } from "../models/schema.js";
 import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
@@ -600,8 +600,22 @@ export async function adminRoutes(app: FastifyInstance) {
         );
       }
 
-      // 4. init progress + 入 queue
-      initBulkProgress(batchId, pairs.length, skippedPairs.length);
+      // 4. 构建每账号明细(账号名+平台) → init progress + 入 queue
+      const accIds = [...new Set(pairs.map((p) => p.accountId))];
+      const accRows = accIds.length
+        ? await db.select({ id: platformAccounts.id, accountName: platformAccounts.accountName, platform: platformAccounts.platform })
+            .from(platformAccounts).where(inArray(platformAccounts.id, accIds))
+        : [];
+      const accMap = new Map(accRows.map((a) => [a.id, a]));
+      const skippedSet = new Set(skippedPairs.map((p) => `${p.contentId}::${p.accountId}`));
+      const items: BulkItemResult[] = pairs.map((p) => ({
+        contentId: p.contentId,
+        accountId: p.accountId,
+        accountName: accMap.get(p.accountId)?.accountName ?? "(未知账号)",
+        platform: accMap.get(p.accountId)?.platform ?? "",
+        status: skippedSet.has(`${p.contentId}::${p.accountId}`) ? "skipped" : "pending",
+      }));
+      initBulkProgress(batchId, pairs.length, skippedPairs.length, items);
       const throttleMs = body.options?.throttleMs ?? 3000;
       for (let i = 0; i < queuedPairs.length; i++) {
         const p = queuedPairs[i]!;
@@ -1069,6 +1083,7 @@ function serializeProgress(p: BulkProgress) {
     failed: p.failed,
     skipped: p.skipped,
     lastFailed: p.lastFailed,
+    items: p.items,
   };
 }
 

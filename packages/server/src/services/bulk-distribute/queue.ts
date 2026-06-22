@@ -24,6 +24,16 @@ export const bulkDistributeQueueEvents = new QueueEvents("bulk-distribute", {
 export const BULK_DISTRIBUTE_CONCURRENCY = 3;
 
 /** ProgressTracker — in-memory 短生命周期 (server restart 后 frontend 重连无 progress) */
+/** 6-22: 每个 (内容×账号) 对的发布结果, 供前端逐个账号展示成功/失败/跳过 */
+export interface BulkItemResult {
+  contentId: string;
+  accountId: string;
+  accountName: string;
+  platform: string;
+  status: "pending" | "success" | "failed" | "skipped";
+  error?: string;
+}
+
 export interface BulkProgress {
   batchId: string;
   total: number;
@@ -34,13 +44,15 @@ export interface BulkProgress {
   startedAt: number;
   finishedAt?: number;
   lastFailed?: { contentId: string; accountId: string; error: string };
+  /** 6-22: 每对账号的明细结果(init 时全量种入, worker 逐个更新状态) */
+  items: BulkItemResult[];
   /** SSE 订阅回调列表 */
   subscribers: Set<(p: BulkProgress) => void>;
 }
 
 const progressMap = new Map<string, BulkProgress>();
 
-export function initBulkProgress(batchId: string, total: number, skipped: number): BulkProgress {
+export function initBulkProgress(batchId: string, total: number, skipped: number, items: BulkItemResult[] = []): BulkProgress {
   const p: BulkProgress = {
     batchId,
     total,
@@ -49,6 +61,7 @@ export function initBulkProgress(batchId: string, total: number, skipped: number
     failed: 0,
     skipped,
     startedAt: Date.now(),
+    items,
     subscribers: new Set(),
   };
   progressMap.set(batchId, p);
@@ -61,7 +74,7 @@ export function getBulkProgress(batchId: string): BulkProgress | undefined {
 
 export function updateBulkProgress(
   batchId: string,
-  delta: { success?: boolean; failed?: boolean; skipped?: boolean; lastFailed?: BulkProgress["lastFailed"] }
+  delta: { success?: boolean; failed?: boolean; skipped?: boolean; contentId?: string; accountId?: string; error?: string; lastFailed?: BulkProgress["lastFailed"] }
 ): void {
   const p = progressMap.get(batchId);
   if (!p) return;
@@ -69,6 +82,15 @@ export function updateBulkProgress(
   if (delta.failed) { p.failed++; p.completed++; }
   if (delta.skipped) { p.skipped++; p.completed++; }
   if (delta.lastFailed) p.lastFailed = delta.lastFailed;
+  // 6-22: 更新对应账号明细
+  if (delta.contentId && delta.accountId) {
+    const it = p.items.find((x) => x.contentId === delta.contentId && x.accountId === delta.accountId);
+    if (it) {
+      if (delta.success) it.status = "success";
+      else if (delta.failed) { it.status = "failed"; it.error = delta.error ?? delta.lastFailed?.error; }
+      else if (delta.skipped) it.status = "skipped";
+    }
+  }
   if (p.completed >= p.total && !p.finishedAt) p.finishedAt = Date.now();
   // 通知 SSE subscribers
   for (const cb of p.subscribers) {

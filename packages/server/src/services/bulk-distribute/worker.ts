@@ -71,12 +71,15 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
               updated_at = NOW()
       `);
 
-      // 更新 progress (SSE 订阅者会收到事件)
+      // 更新 progress (含每账号明细; SSE 订阅者会收到事件)
       if (status === "success") {
-        updateBulkProgress(batchId, { success: true });
+        updateBulkProgress(batchId, { success: true, contentId, accountId });
       } else {
         updateBulkProgress(batchId, {
           failed: true,
+          contentId,
+          accountId,
+          error: errorMessage ?? "unknown",
           lastFailed: { contentId, accountId, error: errorMessage ?? "unknown" },
         });
       }

@@ -7,6 +7,15 @@
 import { useEffect, useState, useRef } from "react";
 import { api } from "../../utils/api";
 
+interface ItemResult {
+  contentId: string;
+  accountId: string;
+  accountName: string;
+  platform: string;
+  status: "pending" | "success" | "failed" | "skipped";
+  error?: string;
+}
+
 interface ProgressData {
   batchId: string;
   total: number;
@@ -15,6 +24,7 @@ interface ProgressData {
   failed: number;
   skipped: number;
   lastFailed?: { contentId: string; accountId: string; error: string };
+  items?: ItemResult[];
 }
 
 interface DoneData {
@@ -30,11 +40,21 @@ export interface BulkDistributeProgressPanelProps {
   onClose: () => void;
 }
 
+const PLATFORM_LABEL: Record<string, string> = {
+  douyin: "抖音", wechat_video: "视频号", wechat: "公众号", baijiahao: "百家号", toutiao: "头条", zhihu: "知乎", xiaohongshu: "小红书",
+};
+const STATUS_META: Record<string, { label: string; badge: string; row: string }> = {
+  success: { label: "成功", badge: "bg-green-100 text-green-700", row: "bg-green-50" },
+  failed:  { label: "失败", badge: "bg-red-100 text-red-700", row: "bg-red-50" },
+  skipped: { label: "跳过", badge: "bg-gray-200 text-gray-600", row: "bg-gray-50" },
+  pending: { label: "进行中", badge: "bg-blue-100 text-blue-700", row: "bg-blue-50" },
+};
+
 export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDistributeProgressPanelProps) {
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const [done, setDone] = useState<DoneData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showFailedList, setShowFailedList] = useState(false);
+  const [showFailedList, setShowFailedList] = useState(true);
   const failuresRef = useRef<Array<{ contentId: string; accountId: string; error: string }>>([]);
 
   useEffect(() => {
@@ -87,6 +107,7 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
   const success = progress?.success ?? 0;
   const failed = progress?.failed ?? 0;
   const skipped = progress?.skipped ?? 0;
+  const items = progress?.items ?? [];
 
   return (
     <div className="fixed bottom-4 right-4 z-50 w-96 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">
@@ -127,21 +148,30 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
           </div>
         </div>
 
-        {failuresRef.current.length > 0 && (
+        {items.length > 0 && (
           <div>
             <button
               onClick={() => setShowFailedList(!showFailedList)}
-              className="text-xs text-red-600 hover:underline"
+              className="text-xs text-gray-600 hover:underline"
             >
-              {showFailedList ? "▼" : "▶"} 失败详情 ({failuresRef.current.length})
+              {showFailedList ? "▼" : "▶"} 各账号明细 ({items.length})
             </button>
             {showFailedList && (
-              <ul className="mt-2 max-h-32 overflow-y-auto text-[11px] space-y-1 bg-red-50 rounded p-2">
-                {failuresRef.current.map((f, i) => (
-                  <li key={i} className="text-red-700">
-                    <span className="font-mono">{f.contentId.slice(0, 8)}.../{f.accountId.slice(0, 8)}...</span> — {f.error}
-                  </li>
-                ))}
+              <ul className="mt-2 max-h-48 overflow-y-auto text-xs space-y-1">
+                {items.map((it, i) => {
+                  const meta = STATUS_META[it.status];
+                  return (
+                    <li key={i} className={`flex items-center gap-2 px-2 py-1.5 rounded ${meta.row}`}>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${meta.badge}`}>{meta.label}</span>
+                      <span className="flex-1 min-w-0 truncate text-gray-800">
+                        {PLATFORM_LABEL[it.platform] ?? it.platform} · {it.accountName}
+                      </span>
+                      {it.status === "failed" && it.error && (
+                        <span className="text-red-600 truncate max-w-[120px]" title={it.error}>{it.error}</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
