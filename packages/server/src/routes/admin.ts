@@ -26,6 +26,7 @@ import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.
 import { TEMPLATE_AVATAR_VOICE_MAP, type TemplateId } from "../services/digital-human/template-mapping.js";
 import { isRealMode } from "../services/digital-human/client.js";
 import { bulkDistributeQueue, initBulkProgress, getBulkProgress, type BulkProgress, type BulkItemResult } from "../services/bulk-distribute/queue.js";
+import { computePublishDelays } from "../services/publisher/publish-pacing.js";
 import { contentPublishLog } from "../models/schema.js";
 import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
@@ -616,18 +617,22 @@ export async function adminRoutes(app: FastifyInstance) {
         status: skippedSet.has(`${p.contentId}::${p.accountId}`) ? "skipped" : "pending",
       }));
       initBulkProgress(batchId, pairs.length, skippedPairs.length, items);
-      const throttleMs = body.options?.throttleMs ?? 3000;
+      // 6-22 错峰限频: 抖音/视频号派单做成"加大间隔+随机抖动+按号隔离+打散窗口"(降风控/防短信墙);
+      //   公众号等服务器凭证平台仍走小节流。手动传 throttleMs 仅作用于非 agent 平台的兜底。
+      const delays = computePublishDelays(
+        queuedPairs.map((p) => ({ accountId: p.accountId, platform: accMap.get(p.accountId)?.platform ?? "" })),
+      );
       for (let i = 0; i < queuedPairs.length; i++) {
         const p = queuedPairs[i]!;
         await bulkDistributeQueue.add(
           "bulk-job",
           { batchId, contentId: p.contentId, accountId: p.accountId, tenantId: request.tenantId, userId: request.user.userId },
-          { delay: i * throttleMs, jobId: `${batchId}-${p.contentId}-${p.accountId}` }
+          { delay: delays[i] ?? 0, jobId: `${batchId}-${p.contentId}-${p.accountId}` }
         );
       }
 
       logger.info(
-        { batchId, total: pairs.length, skipped: skippedPairs.length, queued: queuedPairs.length, throttleMs, userId: request.user.userId },
+        { batchId, total: pairs.length, skipped: skippedPairs.length, queued: queuedPairs.length, paced: true, userId: request.user.userId },
         "PR #161 bulk-distribute 入队"
       );
 
