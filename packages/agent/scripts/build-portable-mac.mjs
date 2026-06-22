@@ -213,6 +213,25 @@ const addCmd = [
 writeFileSync(join(out, "添加账号.command"), addCmd, { encoding: "utf8" });
 chmodSync(join(out, "添加账号.command"), 0o755);
 
+// 6-22: 清理旧客户端(设备吊销卡死一键重置) — mac 等价: 停 agent + 删本机旧配置(仅删 ~/.bossmate-agent 这个具体目录, 低风险)。
+const cleanupCmd = [
+  "#!/bin/bash",
+  'echo "==================================================="',
+  'echo "   BossMate Agent - Reset / Cleanup"',
+  'echo "   Use once if device pairing is stuck (revoked)."',
+  'echo "==================================================="',
+  'echo "Stopping any running agent..."',
+  'pkill -f "bossmate-agent" 2>/dev/null || true',
+  'echo "Removing old config..."',
+  'rm -rf "$HOME/.bossmate-agent"',
+  'echo "Done. Old config removed."',
+  'echo "Next: get a FRESH 6-digit code, run start-agent.command, enter it, scan QR."',
+  'read -n 1 -s -r -p "Press any key to close..."',
+  "",
+].join("\n");
+writeFileSync(join(out, "清理旧客户端.command"), cleanupCmd, { encoding: "utf8" });
+chmodSync(join(out, "清理旧客户端.command"), 0o755);
+
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\n" +
   `SERVER_URL=${SERVER_URL}\nPAIR_CODE=\nDEVICE_NAME=\n`, { encoding: "utf8" });

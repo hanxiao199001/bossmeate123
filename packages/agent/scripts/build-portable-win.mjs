@@ -204,6 +204,10 @@ const addBat = [
 ].join("\r\n");
 writeFileSync(join(out, "添加账号.bat"), addBat, { encoding: "ascii" });
 
+// 6-22: 清理旧客户端(设备吊销卡死一键重置, commit 33f5f66) — 拷 launcher 源(内容全英文 ASCII), 归一化 CRLF。
+const cleanupBat = readFileSync(join(agentRoot, "launcher", "清理旧客户端.bat"), "utf8").replace(/\r?\n/g, "\r\n");
+writeFileSync(join(out, "清理旧客户端.bat"), cleanupBat, { encoding: "ascii" });
+
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\r\n" +
   `SERVER_URL=${SERVER_URL}\r\nPAIR_CODE=\r\nDEVICE_NAME=\r\n`, { encoding: "utf8" });
