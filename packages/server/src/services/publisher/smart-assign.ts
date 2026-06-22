@@ -193,6 +193,29 @@ export async function computeSmartPairs(opts: {
     pairs.push({ articleId: art.id, accountId: picked.id, discipline: disc });
   }
 
+  // 6-21 空号兜底: 主配对(按学科)后, 仍"今日空着"的号(已发+本轮分配 < 上限), 用同范围的"未分配剩余文章"兜底,
+  //   放宽学科匹配(范围仍严格)。解决窄定位号(如 国外·教育)当天无对口学科文章时长期空置。
+  //   只动用本会无人认领的剩余文章 → 纯增益: 不浪费内容, 也不让号空着。
+  const assignedIds = new Set(pairs.map((p) => p.articleId));
+  const leftover = arts.filter((a) => !assignedIds.has(a.id));
+  if (leftover.length > 0) {
+    let filled = 0;
+    for (const acc of accounts) {
+      if ((load.get(acc.id) ?? 0) >= DAILY_CAP) continue; // 今日非空, 跳过
+      for (let i = 0; i < leftover.length; i++) {
+        const { discipline: disc, scope } = await resolveArticle(leftover[i]!.metadata as Record<string, unknown> | null, journalCache);
+        const scopeOk = acc.journalScope === "both" || !scope || acc.journalScope === scope;
+        if (!scopeOk) continue;
+        pairs.push({ articleId: leftover[i]!.id, accountId: acc.id, discipline: disc });
+        load.set(acc.id, (load.get(acc.id) ?? 0) + 1);
+        leftover.splice(i, 1);
+        filled++;
+        break;
+      }
+    }
+    if (filled > 0) logger.info({ tenantId, filled }, "6-21 空号兜底: 同范围剩余文章已补给空号(放宽学科)");
+  }
+
   logger.info({ tenantId, articles: arts.length, paired: pairs.length, unmatched: unmatched.length }, "PR-W6 smart-assign 配对完成");
   return { pairs, unmatched };
 }
