@@ -124,8 +124,16 @@ const envSchema = z.object({
   OSS_SECRET_KEY: z.string().optional(),
 
   // TTS 配音
-  TTS_PROVIDER: z.enum(["aliyun", "azure"]).default("aliyun"),
+  //   siliconflow = SiliconFlow 托管 CosyVoice2(自然中文/商用安全/国内可达/按量付费), 6-22 接入。
+  TTS_PROVIDER: z.enum(["aliyun", "azure", "siliconflow"]).default("aliyun"),
   TTS_API_KEY: z.string().optional(),
+  // SiliconFlow CosyVoice2(OpenAI 兼容 /audio/speech)
+  SILICONFLOW_API_KEY: z.string().optional(),
+  SILICONFLOW_BASE_URL: z.string().default("https://api.siliconflow.cn/v1"),
+  TTS_SILICONFLOW_MODEL: z.string().default("FunAudioLLM/CosyVoice2-0.5B"),
+  // 音色: alex/benjamin/charles/david(男) anna/bella/claire/diana(女), 均多语种含中文。默认 diana(女声)。
+  TTS_SILICONFLOW_VOICE: z.string().default("FunAudioLLM/CosyVoice2-0.5B:diana"),
+  TTS_SILICONFLOW_SPEED: z.coerce.number().default(1),
   /**
    * 阿里云 NLS 音色 ID。default 'siqi'（亲和女声，自然不机械）。
    * 历史 default 是 'xiaoyun'（早期童音，机械感重）。

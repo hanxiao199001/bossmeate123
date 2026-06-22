@@ -113,6 +113,13 @@ export class TTSService {
         logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 TTS 合成失败，降级静音");
         audio = this.silentMp3(estimateDurationMs(text));
       }
+    } else if (this.provider === "siliconflow" && env.SILICONFLOW_API_KEY) {
+      try {
+        audio = await this.synthesizeSiliconFlow(text, opts?.voice, fmt);
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err }, "SiliconFlow(CosyVoice2) TTS 合成失败，降级静音");
+        audio = this.silentMp3(estimateDurationMs(text));
+      }
     } else if (this.provider === "azure" && env.TTS_API_KEY) {
       audio = await this.synthesizeAzure(text, voice, fmt);
     } else {
@@ -233,6 +240,46 @@ export class TTSService {
       throw new Error(`Azure TTS ${resp.status}: ${await resp.text()}`);
     }
     return Buffer.from(await resp.arrayBuffer());
+  }
+
+  // --- SiliconFlow CosyVoice2 (OpenAI 兼容 /audio/speech), 6-22 ---
+  //   自然中文 + Apache-2.0 可商用 + 国内可达。返回音频字节流, 长文本分段拼接。
+  private async synthesizeSiliconFlow(
+    text: string,
+    voiceOverride: string | undefined,
+    fmt: "mp3" | "wav"
+  ): Promise<Buffer> {
+    const key = env.SILICONFLOW_API_KEY;
+    if (!key) throw new Error("SILICONFLOW_API_KEY 未配置");
+    const model = env.TTS_SILICONFLOW_MODEL;
+    // voice: 仅当传入是 SiliconFlow 格式(含 ':')才用; 否则用配置默认 —— 防误传阿里云音色(如 'siqi')。
+    const voice = voiceOverride && voiceOverride.includes(":") ? voiceOverride : env.TTS_SILICONFLOW_VOICE;
+    const endpoint = `${env.SILICONFLOW_BASE_URL.replace(/\/$/, "")}/audio/speech`;
+    // CosyVoice2 无 300 字硬限, 但长文本仍分段拼接更稳。
+    const chunks = this.splitText(text, 800);
+    const buffers: Buffer[] = [];
+    for (const chunk of chunks) {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          input: chunk,
+          voice,
+          response_format: fmt === "wav" ? "wav" : "mp3",
+          sample_rate: 44100,
+          speed: env.TTS_SILICONFLOW_SPEED,
+          gain: 0,
+          stream: false,
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        throw new Error(`SiliconFlow TTS ${resp.status}: ${errText.slice(0, 200)}`);
+      }
+      buffers.push(Buffer.from(await resp.arrayBuffer()));
+    }
+    return Buffer.concat(buffers);
   }
 
   private splitText(text: string, maxLen: number): string[] {
