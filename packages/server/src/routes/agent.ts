@@ -582,9 +582,9 @@ export async function agentAdminRoutes(app: FastifyInstance) {
       entries.push({ name: `dist/${rel.split(sep).join("/")}`, data: readFileSync(abs) });
     }
     // 启动器(按系统) + 说明
-    const launchers = platform === "windows" ? ["start-agent.bat"]
+    const launchers = platform === "windows" ? ["start-agent.bat", "清理旧客户端.bat"]
       : platform === "mac" ? ["start-agent.command"]
-      : ["start-agent.command", "start-agent.bat"];
+      : ["start-agent.command", "start-agent.bat", "清理旧客户端.bat"];
     for (const f of [...launchers, "使用说明.txt"]) {
       const abs = join(agentDir, "launcher", f);
       if (existsSync(abs)) entries.push({ name: f, data: readFileSync(abs), mode: f.endsWith(".command") ? 0o100755 : 0o100644 });
