@@ -176,7 +176,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
       const b = (request.body ?? {}) as { nickname?: string; uid?: string };
       const nickname = b.nickname ? String(b.nickname).slice(0, 100) : undefined;
       const uid = b.uid ? String(b.uid).slice(0, 100) : undefined;
-      if (!nickname && !uid) return reply.code(400).send({ code: "BAD_REQUEST", message: "nickname/uid 至少一个" });
+      // 6-22: 空 nickname/uid 也允许 — 登录成功即便没抓到昵称, 也要标登录态+绑设备(网页徽章才会变"已登录")。
       const [acc] = await db
         .select({ id: platformAccounts.id, accountId: platformAccounts.accountId, accountName: platformAccounts.accountName, platform: platformAccounts.platform, metadata: platformAccounts.metadata })
         .from(platformAccounts)
@@ -197,10 +197,11 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         ...(nickname ? { realNickname: nickname } : {}),
         profileSyncedAt: new Date().toISOString(),
       };
-      // 6-18: 拆成两步, 互不拖累 ——
-      // (1) 关键: 把账号绑到这台设备(决定发布能否路由到本机, 必须成功)。
+      // 6-18/6-22: 拆成两步, 互不拖累 ——
+      // (1) 关键: 绑设备 + 标登录态。Agent 本地登录态服务器测不到, 这里据"Agent 回报登录成功"权威置 logged_in,
+      //     网页徽章(读 login_status)才会变"已登录"。保活巡检会跳过 agentDeviceId 非空的账号, 不再误判过期。
       await db.update(platformAccounts)
-        .set({ agentDeviceId: device.id, updatedAt: new Date() })
+        .set({ agentDeviceId: device.id, loginStatus: "logged_in", loginAt: new Date(), updatedAt: new Date() })
         .where(eq(platformAccounts.id, id));
       // (2) 次要: 回填真实昵称/平台号(仅影响显示; 失败不影响绑定与发布, 不再让整个接口 500)。
       try {
@@ -405,7 +406,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
      * POST /agent/tasks/:id/result {status, error?} — 结果回报。
      * success → content_publish_log upsert status="draft" initiatedBy="agent"
      *   (与 draft-push 一致: 人工在平台后台确认发布后, 前端勾"已发"再覆盖成 success)。
-     * login_expired 只标任务 — Agent 登录态在客户本机, 不动服务器侧 login_status。
+     * 6-22: login_expired 标任务 + 把该账号 login_status 置 expired(徽章变红); success → 绑设备 + 标 logged_in。
      */
     authed.post("/agent/tasks/:id/result", async (request, reply) => {
       const device = request.agentDevice!;
@@ -436,6 +437,14 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         await db
           .update(platformAccounts)
           .set({ agentDeviceId: device.id, updatedAt: new Date() })
+          .where(and(eq(platformAccounts.id, task.accountId), eq(platformAccounts.tenantId, device.tenantId)));
+      }
+
+      // 6-22: Agent 实测登录失效 → 把该账号网页徽章标"过期"(读 login_status), 与现实一致。
+      if (body.status === "login_expired") {
+        await db
+          .update(platformAccounts)
+          .set({ loginStatus: "expired", updatedAt: new Date() })
           .where(and(eq(platformAccounts.id, task.accountId), eq(platformAccounts.tenantId, device.tenantId)));
       }
 

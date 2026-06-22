@@ -24,7 +24,7 @@ import {
 } from "./config.js";
 import { AgentApi, ApiError, type AgentAccount, type AgentTask } from "./api.js";
 import { logger } from "./log.js";
-import { isLoggedIn, launchAccountBrowser, openPlatformHome, scrapeAccountProfile } from "./browser.js";
+import { isLoggedIn, waitForLoggedIn, launchAccountBrowser, openPlatformHome, scrapeAccountProfile } from "./browser.js";
 import { PLATFORM_PUSHERS } from "./pushers.js";
 import { notify } from "./notify.js";
 import { startControlServer, openUrl } from "./control-server.js";
@@ -93,12 +93,15 @@ async function reportProfile(page: Page, account: AgentAccount, api?: AgentApi):
   if (!api) return;
   try {
     const prof = await scrapeAccountProfile(page, account.platform);
+    // 6-22: 无论是否抓到昵称都回报 → 服务器据此把该账号标 logged_in + 绑本设备(网页徽章才会变"已登录")。
+    await api.reportAccountProfile(account.id, prof);
     if (prof.uid || prof.nickname) {
-      await api.reportAccountProfile(account.id, prof);
       logger.info(`[${platformLabel(account.platform)}] 账号信息已回填: ${prof.nickname ?? ""}${prof.uid ? " (" + prof.uid + ")" : ""}`);
+    } else {
+      logger.info(`[${platformLabel(account.platform)}] 已标记登录态(未抓到昵称, 不影响发布)`);
     }
   } catch (err) {
-    logger.warn(`账号信息回填失败(忽略): ${err instanceof Error ? err.message : err}`);
+    logger.warn(`账号登录态回写失败(忽略): ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -109,7 +112,7 @@ async function loginAccount(account: AgentAccount, api?: AgentApi, waitMs: numbe
   try {
     browser = await launchAccountBrowser(account.id);
     const page = await openPlatformHome(browser, account.platform);
-    if (await isLoggedIn(page, account.platform)) {
+    if (await waitForLoggedIn(page, account.platform, 6_000)) {
       logger.info(`[${label}] ${account.accountName}: 本地已是登录态, 无需重新扫码`);
       await reportProfile(page, account, api);
       return true;
@@ -263,7 +266,7 @@ async function cmdStatus(args: string[]): Promise<void> {
     try {
       browser = await launchAccountBrowser(a.id);
       const page = await openPlatformHome(browser, a.platform);
-      const logged = await isLoggedIn(page, a.platform);
+      const logged = await waitForLoggedIn(page, a.platform, 12_000);
       console.log(`  ${logged ? "●" : "✗"} ${label} — ${logged ? "登录有效" : "登录态失效, 请重新 login"}`);
     } catch (err) {
       console.log(`  ? ${label} — 检测失败: ${err instanceof Error ? err.message : err}`);
@@ -366,7 +369,7 @@ async function runTask(api: AgentApi, task: AgentTask): Promise<void> {
       page = await openPlatformHome(browser!, task.platform);
     }
 
-    if (!(await isLoggedIn(page!, task.platform))) {
+    if (!(await waitForLoggedIn(page!, task.platform))) {
       // 6-17: 客户不碰终端 — 浏览器已开、二维码就在页面上, 通知客户扫码, 扫上了本任务自动继续发布。
       notify("BossMate: 请扫码登录", `[${label}] ${task.accountName} 登录已过期 — 请扫描刚弹出的浏览器里的二维码, 扫完会自动继续发布`);
       logger.warn(`[${label}] ${task.accountName} 登录失效, 已打开扫码页, 等待扫码 (最长 ${LOGIN_WAIT_MS / 60_000} 分钟)...`);

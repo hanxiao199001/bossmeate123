@@ -242,3 +242,18 @@ export async function isLoggedIn(page: Page, platform: string): Promise<boolean>
   }
   return false;
 }
+
+/**
+ * 6-22: 登录态"宽限轮询"。打开平台主页后, 视频号要等根域名 JS 跳到 /platform、抖音要等创作者中心 SPA 渲染,
+ *   常 >3s。单次 isLoggedIn 会把"刚登录"的号误判成未登录/过期(老韩实测"刚登录就全部过期"的真因)。
+ *   这里每 2s 复检一次, 命中即返回 true, 超时才判 false。不重新导航(等当前页 settle)。
+ */
+export async function waitForLoggedIn(page: Page, platform: string, timeoutMs = 18_000): Promise<boolean> {
+  if (await isLoggedIn(page, platform)) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    if (await isLoggedIn(page, platform)) return true;
+  }
+  return false;
+}

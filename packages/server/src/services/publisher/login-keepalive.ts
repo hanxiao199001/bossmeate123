@@ -12,7 +12,7 @@
  * 节奏: 全局串行 + 账号间 8~20s 随机间隔(与推草稿同纪律: 列表爬/enrich/保活绝不并发浏览器)。
  * 触发: scheduler cron 每日 05:00(避开 03:30 备份/07:00 爬虫) + POST /accounts/keepalive 手动。
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
@@ -169,6 +169,9 @@ export async function runLoginKeepalive(tenantId?: string): Promise<KeepaliveSum
     const conds = [
       inArray(platformAccounts.platform, Object.keys(BROWSER_LOGIN_PLATFORMS)),
       eq(platformAccounts.loginStatus, "logged_in"),
+      // 6-22: 跳过"客户端 Agent 管理"的账号(agentDeviceId 非空)。它们登录态在客户本机,
+      //   服务器拿不到 cookie, 用服务器侧 profile 去测必然失败 → 会把刚登录的号误标"过期"。
+      isNull(platformAccounts.agentDeviceId),
     ];
     if (tenantId) conds.push(eq(platformAccounts.tenantId, tenantId));
     const accounts = await db
