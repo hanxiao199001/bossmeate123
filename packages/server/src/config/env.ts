@@ -124,8 +124,8 @@ const envSchema = z.object({
   OSS_SECRET_KEY: z.string().optional(),
 
   // TTS 配音
-  //   siliconflow = SiliconFlow 托管 CosyVoice2(自然中文/商用安全/国内可达/按量付费), 6-22 接入。
-  TTS_PROVIDER: z.enum(["aliyun", "azure", "siliconflow"]).default("aliyun"),
+  //   siliconflow = SiliconFlow 托管 CosyVoice2; dashscope = 阿里云百炼 qwen-tts(复用 QWEN_API_KEY, 同一账号好核算成本)。6-22 接入。
+  TTS_PROVIDER: z.enum(["aliyun", "azure", "siliconflow", "dashscope"]).default("aliyun"),
   TTS_API_KEY: z.string().optional(),
   // SiliconFlow CosyVoice2(OpenAI 兼容 /audio/speech)
   SILICONFLOW_API_KEY: z.string().optional(),
@@ -134,6 +134,10 @@ const envSchema = z.object({
   // 音色: alex/benjamin/charles/david(男) anna/bella/claire/diana(女), 均多语种含中文。默认 diana(女声)。
   TTS_SILICONFLOW_VOICE: z.string().default("FunAudioLLM/CosyVoice2-0.5B:diana"),
   TTS_SILICONFLOW_SPEED: z.coerce.number().default(1),
+  // 阿里云百炼 qwen-tts(自然中文): 复用 QWEN_API_KEY, 一套阿里云账号统一计费/核算成本。
+  //   音色: Cherry(女,活泼)/Serena(女,沉稳)/Ethan(男)/Chelsie 等; 模型 qwen-tts / qwen-tts-latest。
+  TTS_DASHSCOPE_MODEL: z.string().default("qwen-tts"),
+  TTS_DASHSCOPE_VOICE: z.string().default("Cherry"),
   /**
    * 阿里云 NLS 音色 ID。default 'siqi'（亲和女声，自然不机械）。
    * 历史 default 是 'xiaoyun'（早期童音，机械感重）。

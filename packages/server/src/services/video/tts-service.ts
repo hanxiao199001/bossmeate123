@@ -96,7 +96,7 @@ export class TTSService {
     text: string,
     opts?: { voice?: string; format?: "mp3" | "wav" }
   ): Promise<TTSResult> {
-    const fmt = opts?.format ?? "mp3";
+    let fmt = opts?.format ?? "mp3";
     const voice = opts?.voice ?? this.voice;
 
     await rateLimiter.acquireOrWait("aliyun-tts");
@@ -118,6 +118,14 @@ export class TTSService {
         audio = await this.synthesizeSiliconFlow(text, opts?.voice, fmt);
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "SiliconFlow(CosyVoice2) TTS 合成失败，降级静音");
+        audio = this.silentMp3(estimateDurationMs(text));
+      }
+    } else if (this.provider === "dashscope" && env.QWEN_API_KEY) {
+      try {
+        audio = await this.synthesizeDashscope(text, opts?.voice);
+        fmt = "wav"; // qwen-tts 输出 wav
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 qwen-tts 合成失败，降级静音");
         audio = this.silentMp3(estimateDurationMs(text));
       }
     } else if (this.provider === "azure" && env.TTS_API_KEY) {
@@ -280,6 +288,39 @@ export class TTSService {
       buffers.push(Buffer.from(await resp.arrayBuffer()));
     }
     return Buffer.concat(buffers);
+  }
+
+  // --- 阿里云百炼 qwen-tts (复用 QWEN_API_KEY, 一套阿里云账号好核算成本), 6-22 ---
+  //   POST .../multimodal-generation/generation → output.audio.url(临时URL)→ 下载 wav 字节。
+  //   场景旁白多为单句短文本, 一次合成即可(不分段, 避免 wav 拼接产生多 RIFF 头)。
+  private async synthesizeDashscope(text: string, voiceOverride: string | undefined): Promise<Buffer> {
+    const key = env.QWEN_API_KEY;
+    if (!key) throw new Error("QWEN_API_KEY 未配置(阿里云百炼 qwen-tts 复用它)");
+    const model = env.TTS_DASHSCOPE_MODEL;
+    // 音色: qwen-tts 音色是首字母大写单词(Cherry/Ethan…); 仅当 override 像这种格式才用, 否则用配置默认 —— 防误传阿里云 NLS 音色(如 'siqi')。
+    const voice = voiceOverride && /^[A-Z][A-Za-z]+$/.test(voiceOverride) ? voiceOverride : env.TTS_DASHSCOPE_VOICE;
+    const resp = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, input: { text, voice, language_type: "Chinese" } }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      throw new Error(`阿里云 qwen-tts ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = (await resp.json()) as {
+      output?: { audio?: { url?: string; data?: string } };
+      code?: string; message?: string;
+    };
+    const audioUrl = data.output?.audio?.url;
+    if (!audioUrl) {
+      const b64 = data.output?.audio?.data;
+      if (b64) return Buffer.from(b64, "base64"); // 个别情况直接给 base64
+      throw new Error(`阿里云 qwen-tts 无音频返回: ${data.code ?? ""} ${data.message ?? JSON.stringify(data).slice(0, 200)}`);
+    }
+    const audioResp = await fetch(audioUrl);
+    if (!audioResp.ok) throw new Error(`下载 qwen-tts 音频失败 ${audioResp.status}`);
+    return Buffer.from(await audioResp.arrayBuffer());
   }
 
   private splitText(text: string, maxLen: number): string[] {
