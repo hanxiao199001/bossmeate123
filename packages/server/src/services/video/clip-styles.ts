@@ -17,7 +17,7 @@ export interface ClipStylePreset {
 }
 
 export const CLIP_STYLES: Record<ClipStyleKey, ClipStylePreset> = {
-  academic:  { key: "academic",  label: "学术严谨稳重", ttsSpeed: 1.08, sceneDurationMs: 5500, bgmTag: "calm",      desc: "沉稳清晰、信息卡/数据图为主，适合医学/国外SCI/严肃学术号" },
+  academic:  { key: "academic",  label: "学术严谨稳重", ttsSpeed: 1.20, sceneDurationMs: 5500, bgmTag: "calm",      desc: "沉稳清晰、信息卡/数据图为主，适合医学/国外SCI/严肃学术号" },
   popsci:    { key: "popsci",    label: "科普轻快卡点", ttsSpeed: 1.28, sceneDurationMs: 3500, bgmTag: "upbeat",    desc: "快节奏、口语化，适合泛科普号" },
   marketing: { key: "marketing", label: "营销转化",     ttsSpeed: 1.20, sceneDurationMs: 4000, bgmTag: "energetic", desc: "钩子前置、强CTA，适合引流号" },
   data:      { key: "data",      label: "数据流",       ttsSpeed: 1.10, sceneDurationMs: 5000, bgmTag: "calm",      desc: "图表/数字为主、中速" },

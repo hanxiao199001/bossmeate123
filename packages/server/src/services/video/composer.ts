@@ -158,14 +158,20 @@ export class VideoComposer {
         sceneType?: string;
       }> = [];
 
+      const SCENE_TAIL_MS = 450;  // 6-22 配音读完后留 0.45s 再切下一幕(防"没读完就跳")
+      const SCENE_MIN_MS = 1800;  // 单幕下限
       for (let i = 0; i < req.scenes.length; i++) {
         const s = req.scenes[i];
         const img = await this.materialize(s.imageSource, workDir, `img${i}`);
         const voice = await this.materialize(s.voiceoverSource, workDir, `voice${i}`);
+        // 6-22 关键修复: 每幕时长 ≥ 实测配音时长 + 尾留, 否则会把整句话截断("没读完就跳/节奏对不上")。
+        const probed = await this.runFfprobe(voice);
+        const voiceMs = probed.durationSec ? Math.round(probed.durationSec * 1000) : 0;
+        const durationMs = Math.max(s.durationMs || 0, voiceMs + SCENE_TAIL_MS, SCENE_MIN_MS);
         preparedScenes.push({
           image: img,
           voice,
-          durationMs: s.durationMs,
+          durationMs,
           subtitle: s.subtitle,
           journalInfo: s.journalInfo,
           sceneType: s.sceneType,
@@ -198,7 +204,6 @@ export class VideoComposer {
           "-pix_fmt", "yuv420p",
           "-r", String(fps),
           "-c:a", "aac",
-          "-shortest",
           out,
         ];
         await this.runFfmpeg(args);
@@ -639,6 +644,26 @@ function formatAcceptance(rate: number | null | undefined): string | null {
  * V2 卡片场景字幕 filter（字幕显示在底部 caption 区域）
  * 卡片底图已包含信息，只需叠加旁白文字
  */
+/** 6-22 字幕按宽度拆行(中文约13字/行, 最多3行), 防一长串溢出画面。返回已转义的各行。 */
+function wrapSubtitleLines(raw: string, perLine = 13, maxLines = 3): string[] {
+  const clean = escapeDrawtext(raw);
+  const chars = [...clean];
+  const lines: string[] = [];
+  let cur = "";
+  const PUNCT = /[，。！？、；：,.!?;]/;
+  for (let i = 0; i < chars.length; i++) {
+    cur += chars[i];
+    const atPunct = PUNCT.test(chars[i]!);
+    if (cur.length >= perLine || (atPunct && cur.length >= perLine - 4)) {
+      lines.push(cur);
+      cur = "";
+      if (lines.length >= maxLines) break;
+    }
+  }
+  if (cur && lines.length < maxLines) lines.push(cur);
+  return lines.filter(Boolean);
+}
+
 export function buildCardSubtitleFilter(
   subtitle: string | undefined,
   fontPath: string | null,
@@ -646,11 +671,20 @@ export function buildCardSubtitleFilter(
   resH: number,
 ): string {
   if (!subtitle) return "";
-  const text = escapeDrawtext(subtitle).slice(0, 50);
-  if (!text) return "";
+  const lines = wrapSubtitleLines(subtitle, 13, 3);
+  if (lines.length === 0) return "";
   const fontArg = fontPath ? `:fontfile=${fontPath.replace(/:/g, "\\:")}` : "";
-  const y = Math.round(resH * 0.82);
-  return `drawtext=text='${text}':fontsize=42:fontcolor=white:bordercolor=black:borderw=3:x=(w-text_w)/2:y=${y}${fontArg}`;
+  const fontSize = 42;
+  const lineH = Math.round(fontSize * 1.35); // 行高
+  // 多行字幕底部对齐 0.84h, 逐行向上堆叠; 每行单独 drawtext(规避 filtergraph 换行解析问题), 各自居中。
+  const bottomY = Math.round(resH * 0.84);
+  const topY = bottomY - (lines.length - 1) * lineH;
+  return lines
+    .map((ln, idx) => {
+      const y = topY + idx * lineH;
+      return `drawtext=text='${ln}':fontsize=${fontSize}:fontcolor=white:bordercolor=black:borderw=3:x=(w-text_w)/2:y=${y}${fontArg}`;
+    })
+    .join(",");
 }
 
 /**
