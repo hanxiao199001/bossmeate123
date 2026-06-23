@@ -191,12 +191,26 @@ const cmd = [
   'echo "检查账号登录状态… 有没登录的会弹出浏览器扫码(已登录的会跳过)。"',
   '"$NODE" dist/cli.js ensure-login || true',
   "echo",
-  'echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"',
-  "echo",
-  'caffeinate -i "$NODE" dist/cli.js run',
-  "echo",
-  'echo "Agent 已停止。按回车键关闭窗口。"',
-  "read -r _",
+  '# 6-23: 转后台常驻(launchd: 开机自启+崩溃自动拉起), 用包内 node(process.execPath), 关窗口也不停。',
+  'echo "正在设置为后台常驻运行(关掉本窗口也不会停、开机自动启动)…"',
+  'if "$NODE" dist/cli.js install-service; then',
+  '  sleep 2',
+  '  open "http://localhost:17653" 2>/dev/null || true',
+  '  echo',
+  '  echo "✅ 已转后台常驻运行 —— 现在可以关闭本窗口了, 程序会一直在后台跑。"',
+  '  echo "   · 加账号: 用刚弹出的「添加账号」网页(或双击「添加账号.command」)。"',
+  '  echo "   · 想停掉后台: 双击「停止常驻.command」。"',
+  '  echo',
+  '  echo "按回车键关闭窗口。"',
+  '  read -r _',
+  "else",
+  '  echo',
+  '  echo "⚠️ 常驻服务安装失败, 退回前台运行(请保持本窗口开着、电脑别休眠, Ctrl+C 停止)。"',
+  '  caffeinate -i "$NODE" dist/cli.js run',
+  '  echo',
+  '  echo "Agent 已停止。按回车键关闭窗口。"',
+  '  read -r _',
+  "fi",
   "",
 ].join("\n");
 writeFileSync(join(out, "start-agent.command"), cmd, { encoding: "utf8" });
@@ -213,14 +227,18 @@ const addCmd = [
 writeFileSync(join(out, "添加账号.command"), addCmd, { encoding: "utf8" });
 chmodSync(join(out, "添加账号.command"), 0o755);
 
-// 6-22: 清理旧客户端(设备吊销卡死一键重置) — mac 等价: 停 agent + 删本机旧配置(仅删 ~/.bossmate-agent 这个具体目录, 低风险)。
+// 6-22/6-23: 清理旧客户端(设备吊销卡死一键重置) — mac: 先卸常驻服务 + 停 agent + 删本机旧配置(仅删 ~/.bossmate-agent, 低风险)。
 const cleanupCmd = [
   "#!/bin/bash",
+  'DIR="$(cd "$(dirname "$0")" && pwd)"; cd "$DIR"',
+  'ARCH="$(uname -m)"',
+  'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
   'echo "==================================================="',
   'echo "   BossMate Agent - Reset / Cleanup"',
   'echo "   Use once if device pairing is stuck (revoked)."',
   'echo "==================================================="',
-  'echo "Stopping any running agent..."',
+  'echo "Stopping background service & agent..."',
+  '[ -x "$NODE" ] && "$NODE" dist/cli.js uninstall-service 2>/dev/null || true',
   'pkill -f "bossmate-agent" 2>/dev/null || true',
   'echo "Removing old config..."',
   'rm -rf "$HOME/.bossmate-agent"',
@@ -231,6 +249,27 @@ const cleanupCmd = [
 ].join("\n");
 writeFileSync(join(out, "清理旧客户端.command"), cleanupCmd, { encoding: "utf8" });
 chmodSync(join(out, "清理旧客户端.command"), 0o755);
+
+// 6-23: 停止常驻后台服务(launchd 卸载; 登录/账号保留)。用包内 node。
+const stopCmd = [
+  "#!/bin/bash",
+  'DIR="$(cd "$(dirname "$0")" && pwd)"; cd "$DIR"',
+  'ARCH="$(uname -m)"',
+  'if [ "$ARCH" = "arm64" ]; then NODE="$DIR/bin/node-arm64"; else NODE="$DIR/bin/node-x64"; fi',
+  'echo "==================================================="',
+  'echo "   BossMate Agent - 停止常驻后台服务"',
+  'echo "==================================================="',
+  'echo "停止后台发布服务并关闭开机自启。登录/账号都保留。"',
+  'echo "想重新开始: 双击 start-agent.command。"',
+  "echo",
+  '"$NODE" dist/cli.js uninstall-service',
+  "echo",
+  'echo "已停止。按回车键关闭窗口。"',
+  "read -r _",
+  "",
+].join("\n");
+writeFileSync(join(out, "停止常驻.command"), stopCmd, { encoding: "utf8" });
+chmodSync(join(out, "停止常驻.command"), 0o755);
 
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\n" +

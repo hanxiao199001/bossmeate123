@@ -185,12 +185,28 @@ const bat = [
   "echo Checking account login... a browser opens for any not-yet-logged-in account.",
   '"%NODE%" dist\\cli.js ensure-login',
   "echo.",
-  "echo Running. Keep this window open and do not let the computer sleep. Press Ctrl+C to stop.",
+  "rem 6-23: 转常驻后台服务(schtasks 计划任务: 登录自启+看门狗拉起), 用包内 node(process.execPath)。",
+  "echo Setting up background service (auto-start on login, survives window close)...",
+  '"%NODE%" dist\\cli.js install-service',
+  "if errorlevel 1 (",
+  "  echo.",
+  "  echo Could not install background service (may need Administrator). Falling back to foreground.",
+  "  echo Keep this window open and do not let the computer sleep. Press Ctrl+C to stop.",
+  '  "%NODE%" dist\\cli.js run',
+  "  echo.",
+  "  echo Agent stopped.",
+  "  pause",
+  "  exit /b 0",
+  ")",
+  "timeout /t 2 >nul",
+  'start "" "http://localhost:17653"',
   "echo.",
-  '"%NODE%" dist\\cli.js run',
+  "echo [OK] Running in background now. You can CLOSE this window.",
+  '  echo   - Add accounts: use the "Add Publishing Account" page that just opened.',
+  '  echo   - To stop background service: double-click "stop-agent.bat".',
   "echo.",
-  "echo Agent stopped.",
   "pause",
+  "exit /b 0",
   "",
 ].join("\r\n");
 writeFileSync(join(out, "start-agent.bat"), bat, { encoding: "ascii" });
@@ -207,6 +223,28 @@ writeFileSync(join(out, "添加账号.bat"), addBat, { encoding: "ascii" });
 // 6-22: 清理旧客户端(设备吊销卡死一键重置, commit 33f5f66) — 拷 launcher 源(内容全英文 ASCII), 归一化 CRLF。
 const cleanupBat = readFileSync(join(agentRoot, "launcher", "清理旧客户端.bat"), "utf8").replace(/\r?\n/g, "\r\n");
 writeFileSync(join(out, "清理旧客户端.bat"), cleanupBat, { encoding: "ascii" });
+
+// 6-23: 停止常驻后台服务 — 卸载 schtasks 计划任务(登录/账号保留)。用包内 node。ASCII.
+const stopBat = [
+  "@echo off",
+  "chcp 65001 >nul",
+  'cd /d "%~dp0"',
+  "title BossMate Agent - Stop",
+  "echo ===================================================",
+  "echo     BossMate Agent - Stop Background Service",
+  "echo ===================================================",
+  "echo.",
+  "echo This stops the background publisher service and disables auto-start.",
+  "echo Your logins/accounts are kept. To start again, double-click start-agent.bat.",
+  "echo.",
+  'set "NODE=%~dp0node.exe"',
+  '"%NODE%" dist\\cli.js uninstall-service',
+  "echo.",
+  "echo Done. Press any key to close.",
+  "pause >nul",
+  "",
+].join("\r\n");
+writeFileSync(join(out, "stop-agent.bat"), stopBat, { encoding: "ascii" });
 
 writeFileSync(join(out, "bossmate.cfg"),
   "# 服务器地址已填好; 双击后按提示输入网页生成的6位配对码\r\n" +
