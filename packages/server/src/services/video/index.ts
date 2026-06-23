@@ -261,6 +261,8 @@ export async function produceVideo(
     tenantId,
     scenes: composerScenes,
     bgmTag: clipPreset?.bgmTag,
+    // 6-22 运动感(Ken Burns); VIDEO_KENBURNS=0 可全局关
+    motionZoom: process.env.VIDEO_KENBURNS === "0" ? undefined : clipPreset?.motionZoom,
   });
 
   return {

@@ -127,6 +127,7 @@ export interface ComposeRequest {
   scenes: ComposerScene[];
   bgmPath?: string;
   bgmTag?: string;
+  motionZoom?: number;
   resolution?: string;  // 默认 env.VIDEO_RESOLUTION
   fps?: number;
 }
@@ -186,12 +187,21 @@ export class VideoComposer {
         const durSec = (s.durationMs / 1000).toFixed(3);
 
         // 缩放 + 裁剪到目标分辨率
-        const scaleCrop = `scale=${resW}:${resH}:force_original_aspect_ratio=increase,crop=${resW}:${resH}`;
-        // V2 卡片场景：只叠字幕；普通场景：叠期刊信息卡
+        const baseCrop = `scale=${resW}:${resH}:force_original_aspect_ratio=increase,crop=${resW}:${resH}`;
+        // 6-22 Ken Burns 运动感: 缓慢推近(去"PPT感")。按风格强度; req.motionZoom<=1 或未传则不动。
+        let visual = baseCrop;
+        const mz = req.motionZoom ?? 0;
+        if (mz > 1.001) {
+          const frames = Math.max(1, Math.round((s.durationMs / 1000) * fps));
+          const inc = ((mz - 1) / frames).toFixed(6);
+          const upW = Math.round(resW * 1.12), upH = Math.round(resH * 1.12);
+          visual = `${baseCrop},scale=${upW}:${upH},zoompan=z='min(zoom+${inc},${mz})':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${resW}x${resH}:fps=${fps}`;
+        }
+        // V2 卡片场景：只叠字幕；普通场景：叠期刊信息卡(字幕在运动层之上, 不随之缩放)
         const overlayFilter = s.sceneType
           ? buildCardSubtitleFilter(s.subtitle, fontPath, resW, resH)
           : buildJournalCardFilter(s.journalInfo, s.subtitle, fontPath, resW, resH);
-        const vf = overlayFilter ? `${scaleCrop},${overlayFilter}` : scaleCrop;
+        const vf = overlayFilter ? `${visual},${overlayFilter}` : visual;
 
         const args = [
           "-y",
