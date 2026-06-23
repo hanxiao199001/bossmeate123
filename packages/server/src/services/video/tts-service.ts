@@ -14,7 +14,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
 
 // P2: 阿里云密钥跨命名兜底 — DVH 用 ALIYUN_ACCESS_KEY_*, TTS 历史用 ALIYUN_AK_*, 等价, 配任一对即可。
@@ -102,6 +102,7 @@ export class TTSService {
     await rateLimiter.acquireOrWait("aliyun-tts");
 
     let audio: Buffer;
+    let fellSilent = false;
     const hasAliyunCreds =
       ALIYUN_AK_ID && ALIYUN_AK_SECRET && env.ALIYUN_NLS_APPKEY;
     const hasStaticToken = env.TTS_API_KEY && env.ALIYUN_NLS_APPKEY;
@@ -111,14 +112,14 @@ export class TTSService {
         audio = await this.synthesizeAliyun(text, voice, fmt);
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 TTS 合成失败，降级静音");
-        audio = this.silentMp3(estimateDurationMs(text));
+        audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
       }
     } else if (this.provider === "siliconflow" && env.SILICONFLOW_API_KEY) {
       try {
         audio = await this.synthesizeSiliconFlow(text, opts?.voice, fmt);
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "SiliconFlow(CosyVoice2) TTS 合成失败，降级静音");
-        audio = this.silentMp3(estimateDurationMs(text));
+        audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
       }
     } else if (this.provider === "dashscope" && env.QWEN_API_KEY) {
       try {
@@ -126,13 +127,13 @@ export class TTSService {
         fmt = "wav"; // qwen-tts 输出 wav
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 qwen-tts 合成失败，降级静音");
-        audio = this.silentMp3(estimateDurationMs(text));
+        audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
       }
     } else if (this.provider === "azure" && env.TTS_API_KEY) {
       audio = await this.synthesizeAzure(text, voice, fmt);
     } else {
       logger.warn("TTS 凭证未配置，生成占位静音音频");
-      audio = this.silentMp3(estimateDurationMs(text));
+      audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
     }
 
     // 6-22 语速: 按剪辑风格(opts.speed)或全局 TTS_SPEED 用 ffmpeg atempo 提速(保音调)。失败则保留原音频。
@@ -141,7 +142,13 @@ export class TTSService {
       audio = this.applyTempo(audio, fmt, speed) ?? audio;
     }
 
-    const remotePath = `tts/${tenantId}/${Date.now()}.${fmt}`;
+    // 6-23 修配音重复: 路径加随机后缀, 杜绝同毫秒覆盖。并打诊断日志(md5/是否降级静音), 一眼定位"两幕同音"根因。
+    const md5 = createHash("md5").update(audio).digest("hex").slice(0, 10);
+    const remotePath = `tts/${tenantId}/${Date.now()}-${randomUUID().slice(0, 8)}.${fmt}`;
+    logger.info(
+      { provider: this.provider, fellSilent, textLen: text.length, textHead: text.slice(0, 16), bytes: audio.length, md5 },
+      "TTS 合成诊断",
+    );
     const url = await storage.upload(
       audio,
       remotePath,
