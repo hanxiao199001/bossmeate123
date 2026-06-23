@@ -54,22 +54,30 @@ do_pair() {
   echo
 }
 
-# 6-21: 主循环 — 设备被吊销时 Agent 会自动清掉本机配置(config.json), 这里检测到后自动重新配对
-#   (用本包配对码; 已用过/过期则提示换新码), 不再卡在"已吊销"。Ctrl+C 正常停止则直接退出, 不会重配。
-while true; do
-  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then do_pair; fi
-  node dist/cli.js ensure-login || true
-  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
-    echo; echo "本设备已被吊销/解绑, 正在重新配对…"; echo; PAIR_CODE=""; continue
-  fi
-  echo "开始挂机自动发布。请保持本窗口开着、电脑不要休眠。停止请按 Ctrl + C。"
+# 6-22: 配对(仅首次或被吊销后)→ 装常驻后台服务 → 关窗口也不停。
+#   设备被吊销时 Agent 自动清掉本机 config.json; 这里检测到就重新配对(用本包配对码, 过期则换新码)。
+if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then do_pair; fi
+node dist/cli.js ensure-login || true
+if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
+  echo; echo "本设备已被吊销/解绑, 请用新配对码重新配对…"; echo; PAIR_CODE=""; do_pair
+fi
+
+# 装常驻服务(launchd): 后台运行 + 开机自启 + 崩溃自动拉起, 关窗口也不会停。
+echo "正在设置为后台常驻运行(关掉本窗口也不会停、开机自动启动)…"
+echo
+if node dist/cli.js install-service; then
+  sleep 2
+  open "http://localhost:17653" 2>/dev/null || true
+  echo
+  echo "✅ 已转后台常驻运行 —— 现在可以关闭本窗口了, 程序会一直在后台跑。"
+  echo "   · 加号:  在弹出的「添加发布账号」网页里, 点对应账号的【登录】扫码。"
+  echo "   · 被吊销/要重置: 再次双击本启动器即可。"
+  echo "   · 想停掉后台: 双击「停止常驻.command」。"
+else
+  echo "⚠️ 常驻服务安装失败, 退回前台运行(请保持本窗口开着、电脑别休眠)。"
   echo
   caffeinate -i node dist/cli.js run
-  if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then
-    echo; echo "本设备已被吊销/解绑, 正在重新配对…"; echo; PAIR_CODE=""; continue
-  fi
-  break
-done
+fi
 echo
-echo "Agent 已停止。按回车键关闭窗口。"
+echo "按回车键关闭本窗口(后台服务不受影响)。"
 read -r _

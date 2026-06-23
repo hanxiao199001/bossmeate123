@@ -10,6 +10,7 @@ echo This removes the OLD (revoked) agent config so you can
 echo pair again with a FRESH code from the web.
 echo.
 echo Step 1/2: stopping any running agent...
+node dist\cli.js uninstall-service >nul 2>nul
 taskkill /F /IM node.exe >nul 2>nul
 echo Step 2/2: removing old config...
 if exist "%USERPROFILE%\.bossmate-agent" (

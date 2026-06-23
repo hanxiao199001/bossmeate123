@@ -125,17 +125,51 @@ if not exist "%USERPROFILE%\.bossmate-agent\config.json" goto revoked
 
 echo.
 
-echo Running. Keep this window open and do not let the computer sleep. Press Ctrl+C to stop.
+echo Setting up background service (auto-start on login, survives window close)...
+
+node dist\cli.js install-service
+
+if errorlevel 1 (
+
+  echo.
+
+  echo Could not install background service - it may need Administrator.
+
+  echo Falling back to foreground mode - keep this window open.
+
+  echo Tip: right-click the launcher and "Run as administrator" for always-on mode.
+
+  echo.
+
+  node dist\cli.js run
+
+  if not exist "%USERPROFILE%\.bossmate-agent\config.json" goto revoked
+
+  echo.
+
+  echo Agent stopped.
+
+  pause
+
+  exit /b 0
+
+)
+
+timeout /t 2 >nul
+
+start "" "http://localhost:17653"
 
 echo.
 
-node dist\cli.js run
+echo [OK] Running in background now. You can CLOSE this window.
 
-if not exist "%USERPROFILE%\.bossmate-agent\config.json" goto revoked
+echo   - Add accounts: use the "Add Publishing Account" page that just opened.
+
+echo   - After revoke or to reset: double-click this launcher again.
+
+echo   - To stop background service: double-click "stop-agent.bat".
 
 echo.
-
-echo Agent stopped.
 
 pause
 

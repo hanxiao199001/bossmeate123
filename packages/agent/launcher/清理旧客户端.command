@@ -13,7 +13,9 @@ echo "新配对码重新配对。不影响服务器上的任何数据。"
 echo
 
 echo "第 1/2 步: 停止正在运行的 Agent…"
-# 仅杀 BossMate Agent 自己(按 cli.js 进程匹配), 不动你电脑上其它 Node 程序
+# 先卸载常驻服务(否则 launchd 会把它自动拉起, 清理无效)
+node dist/cli.js uninstall-service >/dev/null 2>&1
+# 再杀 BossMate Agent 自己(按 cli.js 进程匹配), 不动你电脑上其它 Node 程序
 pkill -f "dist/cli.js" >/dev/null 2>&1
 sleep 1
 
