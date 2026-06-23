@@ -1,0 +1,10 @@
+{
+  "draftsFolder": "/Users/你/Movies/JianyingPro/User Data/Projects/com.lveditor.draft",
+  "name": "bossmate-sample",
+  "width": 1080, "height": 1920, "fps": 30,
+  "audio": "/绝对路径/voice.mp3",
+  "scenes": [
+    { "image": "/绝对路径/scene1.png", "durationSec": 5, "subtitle": "投稿还在纠结这本期刊值不值得冲" },
+    { "image": "/绝对路径/scene2.png", "durationSec": 5, "subtitle": "影响因子和分区先看清楚" }
+  ]
+}
