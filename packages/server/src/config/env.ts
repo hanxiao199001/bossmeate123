@@ -138,6 +138,8 @@ const envSchema = z.object({
   //   音色: Cherry(女,活泼)/Serena(女,沉稳)/Ethan(男)/Chelsie 等; 模型 qwen-tts / qwen-tts-latest。
   TTS_DASHSCOPE_MODEL: z.string().default("qwen-tts"),
   TTS_DASHSCOPE_VOICE: z.string().default("Cherry"),
+  // 6-22 语速: 合成后用 ffmpeg atempo 提速(保音调), 通用于所有 provider。1=原速; 科普建议 1.15~1.25。
+  TTS_SPEED: z.coerce.number().default(1.15),
   /**
    * 阿里云 NLS 音色 ID。default 'siqi'（亲和女声，自然不机械）。
    * 历史 default 是 'xiaoyun'（早期童音，机械感重）。
@@ -168,6 +170,8 @@ const envSchema = z.object({
    * composer.ts:resolveBgmPath 已加 fallback 链，即使本字段失败也会兜底。
    */
   BGM_DEFAULT_PATH: z.string().default("data/bgm/default.mp3"),
+  // 6-22 BGM 曲库目录: 放多个 .mp3, 每条视频随机选一首(增加变化/不同账号不同感觉)。空则回退单文件。
+  BGM_DIR: z.string().default("data/bgm"),
 
   // 素材图库
   PEXELS_API_KEY: z.string().optional(),

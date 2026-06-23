@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { writeFile, readFile, mkdtemp, rm, stat, access } from "node:fs/promises";
+import { writeFile, readFile, mkdtemp, rm, stat, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -36,21 +36,39 @@ async function tryResolve(p: string | undefined | null): Promise<string | null> 
  * 全部找不到 → 返回 null（无 BGM，不阻塞合成）
  */
 async function resolveBgmPath(explicitPath: string | undefined | null): Promise<string | null> {
-  const candidates = [
-    explicitPath,
-    env.BGM_DEFAULT_PATH,
-    "/home/projects/bossmate/data/bgm/default.mp3",
-    "data/bgm/default.mp3",
-    "../../data/bgm/default.mp3",
-  ];
-  for (const c of candidates) {
+  // 显式入参优先
+  if (explicitPath) {
+    const r = await tryResolve(explicitPath);
+    if (r) { logger.info({ bgmPath: r }, "BGM 用显式入参"); return r; }
+  }
+  // 6-22 曲库目录随机选: BGM_DIR 下任意 .mp3/.m4a/.wav, 每条视频随机一首(增变化/不同账号不同感觉)。
+  for (const dir of [env.BGM_DIR, "/home/projects/bossmate/data/bgm", "data/bgm", "../../data/bgm"]) {
+    const dirAbs = await tryResolveDir(dir);
+    if (!dirAbs) continue;
+    try {
+      const tracks = (await readdir(dirAbs))
+        .filter((f) => /\.(mp3|m4a|wav)$/i.test(f) && !/^\./.test(f))
+        .map((f) => path.join(dirAbs, f));
+      if (tracks.length > 0) {
+        const pick = tracks[Math.floor(Math.random() * tracks.length)]!;
+        logger.info({ bgmPath: pick, pool: tracks.length, dir: dirAbs }, "BGM 从曲库随机选一首");
+        return pick;
+      }
+    } catch { /* 读目录失败, 继续 */ }
+  }
+  // 回退: 单文件 default.mp3
+  for (const c of [env.BGM_DEFAULT_PATH, "/home/projects/bossmate/data/bgm/default.mp3", "data/bgm/default.mp3", "../../data/bgm/default.mp3"]) {
     const resolved = await tryResolve(c);
-    if (resolved) {
-      logger.info({ bgmPath: resolved, sourceCandidate: c }, "BGM 路径已解析");
-      return resolved;
-    }
+    if (resolved) { logger.info({ bgmPath: resolved, sourceCandidate: c }, "BGM 用单文件回退"); return resolved; }
   }
   return null;
+}
+
+/** 目录存在性解析: 返回绝对路径或 null */
+async function tryResolveDir(p: string | undefined | null): Promise<string | null> {
+  if (!p) return null;
+  const abs = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+  try { const st = await stat(abs); return st.isDirectory() ? abs : null; } catch { return null; }
 }
 
 /** 解析中文可渲染字体路径，顺序：env → Linux Noto/WQY → macOS 本机 */

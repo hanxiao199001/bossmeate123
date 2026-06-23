@@ -135,6 +135,12 @@ export class TTSService {
       audio = this.silentMp3(estimateDurationMs(text));
     }
 
+    // 6-22 语速: 按 TTS_SPEED 用 ffmpeg atempo 提速(保音调), 通用于所有 provider。失败则保留原音频。
+    const speed = env.TTS_SPEED;
+    if (speed && Math.abs(speed - 1) > 0.01 && speed >= 0.5 && speed <= 2.0) {
+      audio = this.applyTempo(audio, fmt, speed) ?? audio;
+    }
+
     const remotePath = `tts/${tenantId}/${Date.now()}.${fmt}`;
     const url = await storage.upload(
       audio,
@@ -337,6 +343,19 @@ export class TTSService {
     }
     if (buf) chunks.push(buf);
     return chunks.length ? chunks : [text];
+  }
+
+  /** 6-22 用 ffmpeg atempo 调语速(保音调)。从 stdin 读音频, stdout 出同格式; 失败返回 null(调用方保留原音频)。 */
+  private applyTempo(audio: Buffer, fmt: "mp3" | "wav", speed: number): Buffer | null {
+    try {
+      const out = fmt === "mp3"
+        ? `ffmpeg -y -i pipe:0 -filter:a atempo=${speed.toFixed(3)} -c:a libmp3lame -b:a 96k -f mp3 pipe:1`
+        : `ffmpeg -y -i pipe:0 -filter:a atempo=${speed.toFixed(3)} -f wav pipe:1`;
+      return Buffer.from(execSync(out, { input: audio, maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, speed }, "atempo 调速失败, 保留原速音频");
+      return null;
+    }
   }
 
   /** 生成真正的静音 MP3（用 FFmpeg anullsrc，确保后续 FFmpeg 合成能解析） */
