@@ -221,7 +221,11 @@ const addBat = [
 writeFileSync(join(out, "添加账号.bat"), addBat, { encoding: "ascii" });
 
 // 6-22: 清理旧客户端(设备吊销卡死一键重置, commit 33f5f66) — 拷 launcher 源(内容全英文 ASCII), 归一化 CRLF。
-const cleanupBat = readFileSync(join(agentRoot, "launcher", "清理旧客户端.bat"), "utf8").replace(/\r?\n/g, "\r\n");
+// 6-23: 便携包无系统 node, 把脚本里 `node dist\cli.js` 换成包内 node + 绝对路径(%~dp0),
+//   否则 uninstall-service 静默失败 → schtasks 计划任务残留 → 看门狗 5min 又把 agent 拉起来。
+const cleanupBat = readFileSync(join(agentRoot, "launcher", "清理旧客户端.bat"), "utf8")
+  .replace(/\r?\n/g, "\r\n")
+  .replace(/node dist\\cli\.js/g, '"%~dp0node.exe" "%~dp0dist\\cli.js"');
 writeFileSync(join(out, "清理旧客户端.bat"), cleanupBat, { encoding: "ascii" });
 
 // 6-23: 停止常驻后台服务 — 卸载 schtasks 计划任务(登录/账号保留)。用包内 node。ASCII.
