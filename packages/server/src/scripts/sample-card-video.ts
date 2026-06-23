@@ -11,9 +11,10 @@
  */
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db, closePool } from "../models/db.js";
-import { journals } from "../models/schema.js";
+import { journals, platformAccounts } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { produceVideo } from "../services/video/index.js";
+import { pickClipStyle, isClipStyleKey, CLIP_STYLES } from "../services/video/clip-styles.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -22,10 +23,38 @@ function arg(name: string): string | undefined {
 
 async function main() {
   const jid = arg("journal");
+  const acctId = arg("account");
+  const styleArg = arg("style");
+
+  // --account: 加载账号 → 自动匹配剪辑风格 + 按其领域选刊(模拟"给这个号出片")
+  let clipKey: string | undefined = isClipStyleKey(styleArg) ? styleArg : undefined;
+  let acctDiscipline: string | undefined;
+  if (acctId) {
+    // 灵活匹配: 内部id(uuid) / 平台号(accountId) / 账号名(accountName 模糊)
+    const [acct] = await db.select().from(platformAccounts)
+      .where(sql`(${platformAccounts.id}::text = ${acctId} OR ${platformAccounts.accountId} = ${acctId} OR ${platformAccounts.accountName} ILIKE ${"%" + acctId + "%"})`)
+      .limit(1);
+    if (!acct) { console.error(`❌ 没找到账号 ${acctId}(可传 内部id / 平台号 / 账号名)`); process.exitCode = 1; return; }
+    const ds = Array.isArray(acct.disciplines) ? (acct.disciplines as string[]) : [];
+    acctDiscipline = ds[0] ?? (acct.discipline ?? undefined);
+    if (!clipKey) {
+      const preset = pickClipStyle(acct as any);
+      clipKey = preset.key;
+      console.log(`\n📐 账号《${acct.accountName}》自动匹配剪辑风格 → 「${preset.label}」(${preset.key})`);
+      console.log(`   语速 ${preset.ttsSpeed}x · 每幕 ${preset.sceneDurationMs / 1000}s · BGM ${preset.bgmTag} · ${preset.desc}`);
+    }
+  }
+  if (clipKey) {
+    const p = CLIP_STYLES[clipKey as keyof typeof CLIP_STYLES];
+    if (p && !acctId) console.log(`\n📐 指定剪辑风格 → 「${p.label}」(语速 ${p.ttsSpeed}x · 每幕 ${p.sceneDurationMs / 1000}s · BGM ${p.bgmTag})`);
+  }
+
+  // 选刊: 指定 → 账号领域 → 随机有IF
+  const discCond = acctDiscipline ? sql`AND ${journals.discipline} ILIKE ${"%" + acctDiscipline + "%"}` : sql``;
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
     : await db.select().from(journals)
-        .where(and(eq(journals.status, "active"), isNotNull(journals.impactFactor)))
+        .where(and(eq(journals.status, "active"), isNotNull(journals.impactFactor), discCond as any))
         .orderBy(sql`random()`).limit(1);
   if (!j) { console.error("❌ 没找到可用期刊(库里没有 IF 非空的 active 刊?)"); process.exitCode = 1; return; }
 
@@ -47,7 +76,7 @@ async function main() {
   ].map((s) => ({ ...s, subtitle: s.voiceoverText }));
 
   console.log("⏳ 正在合成(配图+TTS配音+ffmpeg)... 约 1-3 分钟\n");
-  const r = await produceVideo({ tenantId: SYSTEM_RECOMMENDATION_TENANT_ID, title: `《${name}》投稿避坑`, journalId: j.id, scenes });
+  const r = await produceVideo({ tenantId: SYSTEM_RECOMMENDATION_TENANT_ID, title: `《${name}》投稿避坑`, journalId: j.id, scenes, clipStyleKey: clipKey as any });
 
   console.log("\n✅ 图文卡片样片已生成");
   console.log(`   地址: ${r.url}`);

@@ -371,4 +371,9 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       DROP FUNCTION _bm_set_fk(text, text, text, text);
     `,
   },
+  {
+    version: "019_account_clip_style",
+    description: "6-22 剪辑风格: platform_accounts 加 clip_style(academic/popsci/marketing/data; 空=按领域/范围/人设自动匹配)。",
+    sql: `ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS clip_style VARCHAR(20);`,
+  },
 ];

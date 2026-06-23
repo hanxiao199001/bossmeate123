@@ -94,7 +94,7 @@ export class TTSService {
   async synthesize(
     tenantId: string,
     text: string,
-    opts?: { voice?: string; format?: "mp3" | "wav" }
+    opts?: { voice?: string; format?: "mp3" | "wav"; speed?: number }
   ): Promise<TTSResult> {
     let fmt = opts?.format ?? "mp3";
     const voice = opts?.voice ?? this.voice;
@@ -135,8 +135,8 @@ export class TTSService {
       audio = this.silentMp3(estimateDurationMs(text));
     }
 
-    // 6-22 语速: 按 TTS_SPEED 用 ffmpeg atempo 提速(保音调), 通用于所有 provider。失败则保留原音频。
-    const speed = env.TTS_SPEED;
+    // 6-22 语速: 按剪辑风格(opts.speed)或全局 TTS_SPEED 用 ffmpeg atempo 提速(保音调)。失败则保留原音频。
+    const speed = opts?.speed ?? env.TTS_SPEED;
     if (speed && Math.abs(speed - 1) > 0.01 && speed >= 0.5 && speed <= 2.0) {
       audio = this.applyTempo(audio, fmt, speed) ?? audio;
     }

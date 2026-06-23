@@ -16,6 +16,7 @@ import { videoComposer } from "./composer.js";
 import type { ComposeResult, ComposerScene, JournalInfoCard } from "./composer.js";
 import { renderChartFrame, type ChartType } from "./chart-renderer.js";
 import { generateCard } from "./html-renderer.js";
+import { CLIP_STYLES, isClipStyleKey, type ClipStyleKey } from "./clip-styles.js";
 import type { SceneType, JournalCardData } from "./html-renderer.js";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
@@ -41,6 +42,8 @@ export interface ProduceVideoInput {
   journalId?: string;
   /** 直接传入期刊数据（优先级高于 journalId，避免重复查库） */
   journal?: JournalAssetInput & JournalInfoCard & JournalCardData;
+  /** 6-22 剪辑风格预设 key(academic/popsci/marketing/data); 影响语速/每幕时长/BGM风格 */
+  clipStyleKey?: ClipStyleKey;
 }
 
 export interface ProduceVideoResult extends ComposeResult {
@@ -52,6 +55,8 @@ export async function produceVideo(
   input: ProduceVideoInput
 ): Promise<ProduceVideoResult> {
   const { tenantId, scenes } = input;
+  // 6-22 剪辑风格: 影响语速/每幕时长/BGM子目录
+  const clipPreset = isClipStyleKey(input.clipStyleKey) ? CLIP_STYLES[input.clipStyleKey] : undefined;
 
   // 1. 载入期刊数据（如果有）
   let journal: (JournalAssetInput & JournalInfoCard & JournalCardData) | undefined = input.journal;
@@ -183,7 +188,7 @@ export async function produceVideo(
   for (let sceneIdx = 0; sceneIdx < scenes.length; sceneIdx++) {
     const s = scenes[sceneIdx]!;
     const effectiveType: SceneType | undefined = s.sceneType ?? (cardData ? sceneTypeFor(sceneIdx) : undefined);
-    const tts = await ttsService.synthesize(tenantId, s.voiceoverText);
+    const tts = await ttsService.synthesize(tenantId, s.voiceoverText, clipPreset ? { speed: clipPreset.ttsSpeed } : undefined);
 
     // V2: 有期刊数据就出信息卡底图(数据驱动主干); effectiveType 已为缺类型的幕补了默认
     let imageUrl: string | null = null;
@@ -241,7 +246,7 @@ export async function produceVideo(
     composerScenes.push({
       imageSource: imageUrl,
       voiceoverSource: tts.url,
-      durationMs: s.durationMs ?? tts.durationMs,
+      durationMs: s.durationMs ?? clipPreset?.sceneDurationMs ?? tts.durationMs,
       subtitle: s.subtitle,
       journalInfo: effectiveType ? undefined : journalInfoCard,
       sceneType: effectiveType,
@@ -255,6 +260,7 @@ export async function produceVideo(
   const result = await videoComposer.compose({
     tenantId,
     scenes: composerScenes,
+    bgmTag: clipPreset?.bgmTag,
   });
 
   return {

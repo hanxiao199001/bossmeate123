@@ -844,6 +844,8 @@ export const platformAccounts = pgTable(
     dvhTemplate: varchar("dvh_template", { length: 40 }), // 6-19 该账号数字人形象(目录key), 不同号不同形象防查重
     // PR-X3: 风格画像 — 喂范文后 LLM 提炼的风格描述, 生成时注入 prompt
     styleProfile: text("style_profile"),
+    // 6-22 剪辑风格预设: academic/popsci/marketing/data。空=系统按领域/范围/人设自动匹配。
+    clipStyle: varchar("clip_style", { length: 20 }),
     // PR Q.2: 该账号绑定的模板（NULL = 用全局默认 shunshi-default）
     templateId: uuid("template_id").references((): any => contentTemplates.id),
     metadata: jsonb("metadata").default({}), // 扩展信息

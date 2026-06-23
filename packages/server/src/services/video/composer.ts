@@ -35,14 +35,18 @@ async function tryResolve(p: string | undefined | null): Promise<string | null> 
  *   5. ../../data/bgm/default.mp3（cwd=packages/server 时 → 项目根）
  * 全部找不到 → 返回 null（无 BGM，不阻塞合成）
  */
-async function resolveBgmPath(explicitPath: string | undefined | null): Promise<string | null> {
+async function resolveBgmPath(explicitPath: string | undefined | null, bgmTag?: string | null): Promise<string | null> {
   // 显式入参优先
   if (explicitPath) {
     const r = await tryResolve(explicitPath);
     if (r) { logger.info({ bgmPath: r }, "BGM 用显式入参"); return r; }
   }
-  // 6-22 曲库目录随机选: BGM_DIR 下任意 .mp3/.m4a/.wav, 每条视频随机一首(增变化/不同账号不同感觉)。
-  for (const dir of [env.BGM_DIR, "/home/projects/bossmate/data/bgm", "data/bgm", "../../data/bgm"]) {
+  // 6-22 曲库目录随机选: 优先按剪辑风格的子目录(<dir>/<bgmTag>/), 没有则用根目录。每条随机一首。
+  const baseDirs = [env.BGM_DIR, "/home/projects/bossmate/data/bgm", "data/bgm", "../../data/bgm"];
+  const dirsToTry = bgmTag
+    ? [...baseDirs.map((d) => d ? `${d}/${bgmTag}` : d), ...baseDirs]  // 先风格子目录, 再根目录兜底
+    : baseDirs;
+  for (const dir of dirsToTry) {
     const dirAbs = await tryResolveDir(dir);
     if (!dirAbs) continue;
     try {
@@ -122,6 +126,7 @@ export interface ComposeRequest {
   tenantId: string;
   scenes: ComposerScene[];
   bgmPath?: string;
+  bgmTag?: string;
   resolution?: string;  // 默认 env.VIDEO_RESOLUTION
   fps?: number;
 }
@@ -224,7 +229,7 @@ export class VideoComposer {
 
       // 4. 叠加 BGM（可选）
       const finalPath = path.join(workDir, "final.mp4");
-      const bgm = await resolveBgmPath(req.bgmPath);
+      const bgm = await resolveBgmPath(req.bgmPath, req.bgmTag);
       if (bgm) {
         await this.runFfmpeg([
           "-y",
@@ -444,7 +449,7 @@ export class VideoComposer {
 
       // ── Step 4: 混合 BGM ──
       const finalPath = path.join(workDir, "final.mp4");
-      const bgm = await resolveBgmPath(req.bgmPath);
+      const bgm = await resolveBgmPath(req.bgmPath, req.bgmTag);
       if (!bgm) logger.warn({ bgmPath: req.bgmPath }, "BGM 文件不存在或未配置，跳过背景音乐");
       if (bgm) {
         await this.runFfmpeg([
@@ -591,6 +596,7 @@ export interface SlideshowRequest {
   tenantId: string;
   scenes: SlideshowScene[];
   bgmPath?: string;
+  bgmTag?: string;
   resolution?: string;
   fps?: number;
   transition?: "fade" | "dissolve" | "none";
