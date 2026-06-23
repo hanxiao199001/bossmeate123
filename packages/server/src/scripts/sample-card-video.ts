@@ -49,12 +49,14 @@ async function main() {
     if (p && !acctId) console.log(`\n📐 指定剪辑风格 → 「${p.label}」(语速 ${p.ttsSpeed}x · 每幕 ${p.sceneDurationMs / 1000}s · BGM ${p.bgmTag})`);
   }
 
-  // 选刊: 指定 → 账号领域 → 随机有IF
-  const discCond = acctDiscipline ? sql`AND ${journals.discipline} ILIKE ${"%" + acctDiscipline + "%"}` : sql``;
+  // 选刊: 指定 → 账号领域 → 随机有IF。6-23 修: 原 discCond 用裸 "AND ..."/空 sql`` 塞进 and() →
+  //   空时生成 "... and )" 语法错(42601), 非空时 "and AND" 双 AND。改为按条件数组拼接(空就不加)。
+  const conds = [eq(journals.status, "active"), isNotNull(journals.impactFactor)];
+  if (acctDiscipline) conds.push(sql`${journals.discipline} ILIKE ${"%" + acctDiscipline + "%"}`);
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
     : await db.select().from(journals)
-        .where(and(eq(journals.status, "active"), isNotNull(journals.impactFactor), discCond as any))
+        .where(and(...conds))
         .orderBy(sql`random()`).limit(1);
   if (!j) { console.error("❌ 没找到可用期刊(库里没有 IF 非空的 active 刊?)"); process.exitCode = 1; return; }
 
