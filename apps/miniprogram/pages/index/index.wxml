@@ -1,0 +1,60 @@
+<view class="container">
+
+  <!-- 搜索框 -->
+  <view class="search-bar">
+    <input class="search-input" placeholder="期刊名 / 英文名 / ISSN" value="{{keyword}}" bindinput="onKeyword" confirm-type="search" bindconfirm="onSearch" />
+    <button class="search-btn btn-primary" bindtap="onSearch">搜索</button>
+  </view>
+
+  <!-- 筛选 -->
+  <view class="filters card">
+    <view class="filter-row">
+      <picker class="filter-item" range="{{disciplineOptions}}" range-key="label" value="{{disciplineIndex}}" bindchange="onDiscipline">
+        <view class="picker">学科：{{disciplineOptions[disciplineIndex].label}}</view>
+      </picker>
+      <picker class="filter-item" range="{{partitionOptions}}" value="{{partitionIndex}}" bindchange="onPartition">
+        <view class="picker">分区：{{partitionOptions[partitionIndex]}}</view>
+      </picker>
+    </view>
+    <view class="filter-row">
+      <picker class="filter-item" range="{{sortOptions}}" range-key="label" value="{{sortIndex}}" bindchange="onSort">
+        <view class="picker">排序：{{sortOptions[sortIndex].label}}</view>
+      </picker>
+      <view class="filter-item if-range">
+        <input class="if-input" type="digit" placeholder="IF最小" value="{{ifMin}}" bindinput="onIfMin" />
+        <text class="dash">-</text>
+        <input class="if-input" type="digit" placeholder="最大" value="{{ifMax}}" bindinput="onIfMax" />
+      </view>
+    </view>
+    <view class="reset-line" bindtap="reset">重置筛选</view>
+  </view>
+
+  <!-- 结果统计 -->
+  <view wx:if="{{loaded && total > 0}}" class="result-count muted">共 {{total}} 本期刊</view>
+
+  <!-- 列表 -->
+  <view wx:for="{{list}}" wx:key="id" class="card journal" bindtap="goDetail" data-id="{{item.id}}">
+    <view class="j-title">
+      <text class="j-name">{{item.name}}</text>
+    </view>
+    <view wx:if="{{item.nameEn}}" class="j-en muted">{{item.nameEn}}</view>
+    <view class="j-tags">
+      <text wx:if="{{item._discipline}}" class="tag tag-blue">{{item._discipline}}</text>
+      <text wx:if="{{item.partition}}" class="tag tag-gray">{{item.partition}}</text>
+      <text wx:if="{{item.casPartition}}" class="tag tag-gray">{{item.casPartition}}</text>
+      <text wx:if="{{item.isWarningList}}" class="tag tag-red">预警</text>
+      <text wx:else class="tag tag-green">非预警</text>
+    </view>
+    <view class="j-metrics">
+      <text class="metric">IF <text class="bold">{{item._if}}</text></text>
+      <text class="metric">录用率 <text class="bold">{{item._rate}}</text></text>
+      <text wx:if="{{item.letpubViews}}" class="metric">热度 {{item.letpubViews}}</text>
+    </view>
+  </view>
+
+  <!-- 状态提示 -->
+  <view wx:if="{{loading}}" class="hint">加载中…</view>
+  <view wx:elif="{{loaded && total === 0}}" class="hint">没有匹配的期刊，换个条件试试</view>
+  <view wx:elif="{{noMore && total > 0}}" class="hint">没有更多了</view>
+
+</view>

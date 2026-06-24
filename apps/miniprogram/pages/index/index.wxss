@@ -1,0 +1,72 @@
+.search-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+.search-input {
+  flex: 1;
+  height: 76rpx;
+  background: #fff;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+}
+.search-btn {
+  width: 140rpx;
+  height: 76rpx;
+  line-height: 76rpx;
+  margin-left: 16rpx;
+  padding: 0;
+  font-size: 28rpx;
+}
+
+.filters { padding: 20rpx 24rpx; }
+.filter-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16rpx;
+}
+.filter-item {
+  flex: 1;
+}
+.filter-item:first-child { margin-right: 16rpx; }
+.picker {
+  background: #f5f6f8;
+  border-radius: 10rpx;
+  padding: 16rpx 20rpx;
+  font-size: 26rpx;
+  color: #1d2129;
+}
+.if-range {
+  display: flex;
+  align-items: center;
+  background: #f5f6f8;
+  border-radius: 10rpx;
+  padding: 6rpx 16rpx;
+}
+.if-input {
+  flex: 1;
+  text-align: center;
+  font-size: 26rpx;
+}
+.dash { color: #8a8f99; padding: 0 6rpx; }
+.reset-line {
+  text-align: right;
+  color: #1f6feb;
+  font-size: 24rpx;
+  margin-top: 4rpx;
+}
+
+.result-count { margin: 8rpx 4rpx 16rpx; }
+
+.journal { padding: 24rpx; }
+.j-name { font-size: 30rpx; font-weight: 600; }
+.j-en { font-size: 24rpx; margin-top: 6rpx; }
+.j-tags { margin: 16rpx 0 12rpx; }
+.j-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 24rpx;
+  color: #4e5969;
+}
+.metric { margin-right: 28rpx; }

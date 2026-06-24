@@ -182,6 +182,10 @@ const envSchema = z.object({
   WECHAT_WORK_TOKEN: z.string().optional(),
   WECHAT_WORK_AES_KEY: z.string().optional(),
 
+  // 期刊检索小程序：wx.login + getPhoneNumber 登录所需（小程序后台「开发管理-开发设置」）
+  WECHAT_MINI_APPID: z.string().optional(),
+  WECHAT_MINI_SECRET: z.string().optional(),
+
   // B.1: 公众号入站 webhook 校验 token（公众号管理后台「开发-基本配置」 token）
   WECHAT_VERIFY_TOKEN: z.string().default("ai_butler_token_2026"),
 

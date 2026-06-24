@@ -1,0 +1,34 @@
+<view class="container">
+
+  <view class="card">
+    <view class="tip muted">粘贴你的论文摘要，AI 帮你推荐 5 本最对口的期刊</view>
+    <textarea class="ta" placeholder="在此粘贴论文摘要（中/英文均可，至少 50 字）" value="{{abstract}}" bindinput="onAbstract" maxlength="3000" auto-height />
+    <view class="ta-foot">
+      <text class="muted">{{len}}/3000</text>
+      <text wx:if="{{abstract}}" class="clear-btn" bindtap="clear">清空</text>
+    </view>
+  </view>
+
+  <button class="btn-primary match-btn" bindtap="onMatch" loading="{{loading}}" disabled="{{loading}}">
+    {{loading ? 'AI 匹配中…' : '智能匹配'}}
+  </button>
+
+  <view wx:if="{{searched && matches.length > 0}}" class="result-title bold">推荐期刊（{{matches.length}}）</view>
+
+  <view wx:for="{{matches}}" wx:key="name" class="card match-item">
+    <view class="m-head">
+      <text class="m-rank">{{index + 1}}</text>
+      <text class="m-name">{{item.name}}</text>
+    </view>
+    <view class="m-tags">
+      <text wx:if="{{item.discipline}}" class="tag tag-blue">{{item.discipline}}</text>
+      <text wx:if="{{item.partition}}" class="tag tag-orange">{{item.partition}}</text>
+      <text wx:if="{{item.impactFactor}}" class="tag tag-gray">IF {{item._if}}</text>
+    </view>
+    <view class="m-reason">{{item.reason}}</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="hint">AI 正在分析摘要…</view>
+  <view wx:elif="{{searched && matches.length === 0}}" class="hint">没拿到推荐，请稍后重试</view>
+
+</view>

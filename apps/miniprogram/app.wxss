@@ -1,0 +1,58 @@
+/* 全局样式 */
+page {
+  background: #f5f6f8;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", Helvetica, sans-serif;
+  color: #1d2129;
+  font-size: 28rpx;
+}
+
+.container {
+  padding: 24rpx;
+}
+
+/* 通用卡片 */
+.card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.04);
+}
+
+/* 主按钮 */
+.btn-primary {
+  background: #1f6feb;
+  color: #fff;
+  border-radius: 12rpx;
+  font-size: 30rpx;
+  font-weight: 500;
+}
+.btn-primary[disabled] {
+  background: #a9c4f5;
+  color: #fff;
+}
+
+/* 标签 */
+.tag {
+  display: inline-block;
+  padding: 4rpx 14rpx;
+  border-radius: 8rpx;
+  font-size: 22rpx;
+  margin-right: 12rpx;
+}
+.tag-blue { background: #e8f1ff; color: #1f6feb; }
+.tag-green { background: #e7f7ec; color: #15a04a; }
+.tag-orange { background: #fff3e6; color: #e8821a; }
+.tag-red { background: #ffeceb; color: #e54a3f; }
+.tag-gray { background: #f0f1f3; color: #6b7280; }
+
+/* 空状态 / 加载 */
+.hint {
+  text-align: center;
+  color: #8a8f99;
+  font-size: 26rpx;
+  padding: 60rpx 0;
+}
+
+.muted { color: #8a8f99; }
+.bold { font-weight: 600; }

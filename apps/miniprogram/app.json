@@ -1,0 +1,33 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/match/match",
+    "pages/detail/detail",
+    "pages/login/login"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#1f6feb",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "期刊检索",
+    "backgroundColor": "#f5f6f8",
+    "enablePullDownRefresh": false
+  },
+  "tabBar": {
+    "color": "#8a8f99",
+    "selectedColor": "#1f6feb",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "检索"
+      },
+      {
+        "pagePath": "pages/match/match",
+        "text": "智能匹配"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,89 @@
+<view class="container">
+
+  <view wx:if="{{loading}}" class="hint">加载中…</view>
+  <view wx:elif="{{error}}" class="hint">{{error}}</view>
+
+  <block wx:elif="{{journal}}">
+    <!-- 头部 -->
+    <view class="card head">
+      <view class="h-name">{{journal.name}}</view>
+      <view wx:if="{{journal.nameEn}}" class="h-en muted">{{journal.nameEn}}</view>
+      <view class="h-tags">
+        <text wx:if="{{journal._discipline}}" class="tag tag-blue">{{journal._discipline}}</text>
+        <text wx:if="{{journal.partition}}" class="tag tag-gray">{{journal.partition}}</text>
+        <text wx:if="{{journal.isWarningList}}" class="tag tag-red">中科院预警</text>
+        <text wx:else class="tag tag-green">非预警</text>
+      </view>
+    </view>
+
+    <!-- 核心指标 -->
+    <view class="card">
+      <view class="sec-title bold">核心指标</view>
+      <view class="grid">
+        <view class="cell">
+          <view class="cell-num">{{journal._if}}</view>
+          <view class="cell-label muted">影响因子</view>
+        </view>
+        <view class="cell">
+          <view class="cell-num">{{journal._rate}}</view>
+          <view class="cell-label muted">录用率</view>
+        </view>
+        <view class="cell">
+          <view class="cell-num">{{journal.letpubViews || '—'}}</view>
+          <view class="cell-label muted">热度</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 详细信息 -->
+    <view class="card">
+      <view class="sec-title bold">期刊信息</view>
+      <view wx:if="{{journal.issn}}" class="row" bindtap="copyIssn">
+        <text class="k muted">ISSN</text>
+        <text class="v">{{journal.issn}} <text class="copy">复制</text></text>
+      </view>
+      <view wx:if="{{journal.cnNumber}}" class="row">
+        <text class="k muted">CN 刊号</text><text class="v">{{journal.cnNumber}}</text>
+      </view>
+      <view wx:if="{{journal.publisher}}" class="row">
+        <text class="k muted">出版社</text><text class="v">{{journal.publisher}}</text>
+      </view>
+      <view wx:if="{{journal.country}}" class="row">
+        <text class="k muted">出版国家</text><text class="v">{{journal.country}}</text>
+      </view>
+      <view wx:if="{{journal.casPartition}}" class="row">
+        <text class="k muted">中科院分区</text><text class="v">{{journal.casPartition}}</text>
+      </view>
+      <view wx:if="{{journal.coreLevel}}" class="row">
+        <text class="k muted">核心等级</text><text class="v">{{journal.coreLevel}}</text>
+      </view>
+      <view wx:if="{{journal.reviewCycle}}" class="row">
+        <text class="k muted">审稿周期</text><text class="v">{{journal.reviewCycle}}</text>
+      </view>
+      <view wx:if="{{journal.acceptanceDifficulty}}" class="row">
+        <text class="k muted">投稿难度</text><text class="v">{{journal.acceptanceDifficulty}}</text>
+      </view>
+      <view wx:if="{{journal.frequency}}" class="row">
+        <text class="k muted">刊期</text><text class="v">{{journal.frequency}}</text>
+      </view>
+      <view wx:if="{{journal.apcFee}}" class="row">
+        <text class="k muted">版面费</text><text class="v">${{journal.apcFee}}</text>
+      </view>
+      <view wx:if="{{journal.foundingYear}}" class="row">
+        <text class="k muted">创刊年份</text><text class="v">{{journal.foundingYear}}</text>
+      </view>
+      <view wx:if="{{journal.warningYear}}" class="row">
+        <text class="k muted">预警年份</text><text class="v tag-red-text">{{journal.warningYear}}</text>
+      </view>
+    </view>
+
+    <!-- 收稿范围 -->
+    <view wx:if="{{journal.scopeDescription}}" class="card">
+      <view class="sec-title bold">收稿范围</view>
+      <view class="scope">{{journal.scopeDescription}}</view>
+    </view>
+
+    <button wx:if="{{journal.website}}" class="btn-primary site-btn" bindtap="openWebsite">复制官网链接</button>
+  </block>
+
+</view>

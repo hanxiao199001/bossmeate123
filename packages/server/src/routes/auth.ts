@@ -8,6 +8,7 @@ import { db } from "../models/db.js";
 import { users, tenants, tenantInvites } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { sendSmsCode, verifySmsCode, isValidPhone, SmsError, type SmsPurpose } from "../services/auth/sms-service.js";
+import { code2Session, getPhoneNumberByCode, decryptPhone, miniConfigured } from "../services/wechat/miniprogram.js";
 
 // 请求体校验
 const registerSchema = z.object({
@@ -160,6 +161,91 @@ export async function authRoutes(app: FastifyInstance) {
     }
     if (!user || !tenant) return reply.code(500).send({ code: "SERVER_ERROR", message: "登录异常" });
     const token = app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role });
+    return reply.send({ code: "OK", data: {
+      token,
+      user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role, permissions: permissionsForRole(user.role) },
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
+    } });
+  });
+
+  /**
+   * POST /auth/wx-login - 微信小程序一键登录
+   *
+   * body: { code, phoneCode?, encryptedData?, iv? }
+   *   code           wx.login() 返回的 js_code
+   *   phoneCode      新版基础库 getPhoneNumber 返回的 code（推荐）
+   *   encryptedData+iv  旧版基础库返回的加密手机号
+   *
+   * 取到手机号后，复用与 /auth/sms/login 一致的「找用户 / 接受邀请」逻辑签发 JWT。
+   * 需配置 WECHAT_MINI_APPID / WECHAT_MINI_SECRET。
+   */
+  app.post("/wx-login", async (request, reply) => {
+    if (!miniConfigured()) {
+      return reply.code(503).send({ code: "WX_NOT_CONFIGURED", message: "服务端未配置小程序 AppID/Secret" });
+    }
+    const body = z.object({
+      code: z.string().min(1, "缺少 code"),
+      phoneCode: z.string().optional(),
+      encryptedData: z.string().optional(),
+      iv: z.string().optional(),
+    }).parse(request.body);
+
+    // 1) code → openid + session_key
+    let session;
+    try {
+      session = await code2Session(body.code);
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "[wx-login.code2session.failed]");
+      return reply.code(400).send({ code: "WX_CODE_INVALID", message: "微信登录态校验失败，请重试" });
+    }
+
+    // 2) 取手机号（优先新版 phoneCode，回退旧版解密）
+    let phone;
+    try {
+      if (body.phoneCode) {
+        phone = await getPhoneNumberByCode(body.phoneCode);
+      } else if (body.encryptedData && body.iv) {
+        phone = decryptPhone(body.encryptedData, body.iv, session.session_key);
+      } else {
+        return reply.code(400).send({ code: "NO_PHONE", message: "缺少手机号授权" });
+      }
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "[wx-login.phone.failed]");
+      return reply.code(400).send({ code: "PHONE_FAILED", message: "获取手机号失败，请重试" });
+    }
+    if (!isValidPhone(phone)) {
+      return reply.code(400).send({ code: "INVALID_PHONE", message: "手机号格式不正确" });
+    }
+
+    // 3) 复用 sms/login 的找用户 / 接受邀请逻辑
+    let [user] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+    let tenant;
+    if (user) {
+      [tenant] = await db.select().from(tenants).where(eq(tenants.id, user.tenantId)).limit(1);
+      await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+    } else {
+      const [invite] = await db.select().from(tenantInvites)
+        .where(and(eq(tenantInvites.phone, phone), eq(tenantInvites.status, "pending")))
+        .orderBy(tenantInvites.createdAt).limit(1);
+      if (!invite) {
+        return reply.code(404).send({ code: "NO_TENANT", message: "该手机号未注册，也没有待接受的邀请。请联系管理员邀请你加入。" });
+      }
+      if (new Date(invite.expiresAt) < new Date()) {
+        await db.update(tenantInvites).set({ status: "expired", updatedAt: new Date() }).where(eq(tenantInvites.id, invite.id));
+        return reply.code(410).send({ code: "INVITE_EXPIRED", message: "邀请已过期，请联系管理员重新邀请" });
+      }
+      const [created] = await db.insert(users).values({
+        tenantId: invite.tenantId, phone, role: invite.role, name: phone.slice(-4) + " 同学",
+      }).returning();
+      user = created;
+      await db.update(tenantInvites).set({ status: "accepted", acceptedAt: new Date(), updatedAt: new Date() }).where(eq(tenantInvites.id, invite.id));
+      [tenant] = await db.select().from(tenants).where(eq(tenants.id, invite.tenantId)).limit(1);
+      logger.info({ userId: user.id, tenantId: invite.tenantId }, "小程序经邀请加入租户");
+    }
+    if (!user || !tenant) return reply.code(500).send({ code: "SERVER_ERROR", message: "登录异常" });
+
+    const token = app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role });
+    logger.info({ userId: user.id }, "小程序登录成功");
     return reply.send({ code: "OK", data: {
       token,
       user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role, permissions: permissionsForRole(user.role) },

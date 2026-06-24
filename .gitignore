@@ -86,3 +86,4 @@ __pycache__/
 *.pyc
 .daily-reports/
 packages/server/scripts/raw-*
+project.private.config.json

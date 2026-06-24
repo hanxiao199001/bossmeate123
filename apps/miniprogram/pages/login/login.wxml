@@ -1,0 +1,17 @@
+<view class="login">
+  <view class="logo">期</view>
+  <view class="title">BossMate 期刊检索</view>
+  <view class="sub muted">登录后即可检索期刊库、查看影响因子与分区</view>
+
+  <button
+    class="btn-primary wx-btn"
+    open-type="getPhoneNumber"
+    bindgetphonenumber="onGetPhoneNumber"
+    loading="{{loading}}"
+    disabled="{{loading}}"
+  >微信一键登录</button>
+
+  <view class="alt" bindtap="goMatch">先体验「智能匹配」（免登录）</view>
+
+  <view class="agreement muted">登录即代表同意《用户协议》与《隐私政策》</view>
+</view>
