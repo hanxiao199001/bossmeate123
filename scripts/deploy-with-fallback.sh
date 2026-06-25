@@ -73,10 +73,12 @@ EOF
 fi
 
 # Step 3: install + build + restart（heredoc + set pipefail，严格错误传播）
-# 直连路径还需 git pull；bundle 路径已 ff-merged，跳过
+# 6-25 修(Step3 pull 卡死): 直连路径不再 `git pull`——它会再联网 fetch 一遍, 跨境 github 抽风时
+#   卡死/超时(exit 124), 而 bundle 兜底只管 Step1 的 fetch、兜不到这个 pull。Step1 已 fetch(FETCH_HEAD
+#   就绪), 这里改本地 `git merge --ff-only FETCH_HEAD` —— 纯本地、不联网、不可能卡。bundle 路径已 ff-merged 跳过。
 PULL_BLOCK=""
 if [ "$DEPLOY_PATH" = "direct" ]; then
-  PULL_BLOCK="timeout 30 git pull --ff-only origin $BRANCH 2>&1 | tail -3"
+  PULL_BLOCK="git merge --ff-only FETCH_HEAD 2>&1 | tail -3"
 fi
 ssh "${SSH_OPTS[@]}" "$SERVER" bash <<EOF
 set -euo pipefail
