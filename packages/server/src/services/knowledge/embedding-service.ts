@@ -17,8 +17,8 @@ const MODEL_DIMENSIONS: Record<string, number> = {
 /** 统一维度（取当前后端的原生维度，无匹配时默认 1024） */
 let EMBEDDING_DIMENSION = 1024;
 
-/** 单次批量上限 */
-const MAX_BATCH_SIZE = 16;
+/** 单次批量上限。6-25: DashScope text-embedding-v3 硬限 10/批(>10 报 400 → 退化 hash 向量, RAG 失效), 故设 10(也在 DeepSeek/OpenAI 限内)。 */
+const MAX_BATCH_SIZE = 10;
 
 // 支持的 embedding 后端
 interface EmbeddingBackend {
