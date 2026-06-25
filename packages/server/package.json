@@ -14,7 +14,8 @@
     "provision:tenant": "tsx src/scripts/provision-tenant.ts",
     "sample:card": "tsx src/scripts/sample-card-video.ts",
     "sample:dvh": "tsx src/scripts/sample-dvh-video.ts",
-    "set:style": "tsx src/scripts/set-account-style.ts"
+    "set:style": "tsx src/scripts/set-account-style.ts",
+    "sample:titles": "tsx src/scripts/sample-titles.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",
