@@ -16,7 +16,8 @@
     "sample:dvh": "tsx src/scripts/sample-dvh-video.ts",
     "set:style": "tsx src/scripts/set-account-style.ts",
     "sample:titles": "tsx src/scripts/sample-titles.ts",
-    "ingest:wechat": "tsx src/scripts/ingest-wechat-corpus.ts"
+    "ingest:wechat": "tsx src/scripts/ingest-wechat-corpus.ts",
+    "sample:article": "tsx src/scripts/sample-article.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",
