@@ -158,6 +158,42 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               updatedAt: new Date(),
             })
             .where(eq(contents.id, content.id));
+
+          // 6-25 标题DNA: 有期刊时, 用"该号风格的标题生成器"覆盖标题(更像该号写的)。失败保留原标题, 不阻塞。TITLE_GEN_ENABLED=0 可关。
+          if (process.env.TITLE_GEN_ENABLED !== "0" && row.journalId) {
+            try {
+              const { generateTitles } = await import("../content-engine/title-generator.js");
+              const { journals, platformAccounts } = await import("../../models/schema.js");
+              const [jr] = await db.select({
+                name: journals.name, nameEn: journals.nameEn, publisher: journals.publisher,
+                casPartition: journals.casPartitionNew, jcrSubjects: journals.jcrSubjects,
+                impactFactor: journals.impactFactor, reviewCycle: journals.reviewCycle,
+                acceptanceRate: journals.acceptanceRate, selfCitationRate: journals.selfCitationRate, discipline: journals.discipline,
+              }).from(journals).where(eq(journals.id, row.journalId)).limit(1);
+              let styleProfile: string | undefined;
+              if (boundAccountId) {
+                const [acct] = await db.select({ s: platformAccounts.styleProfile }).from(platformAccounts).where(eq(platformAccounts.id, boundAccountId)).limit(1);
+                styleProfile = acct?.s ?? undefined;
+              }
+              if (jr) {
+                const titles = await generateTitles({
+                  tenantId, userId, styleProfile, count: 3,
+                  journal: {
+                    name: jr.name, nameEn: jr.nameEn, publisher: jr.publisher,
+                    casPartition: jr.casPartition, jcrPartition: jr.jcrSubjects,
+                    impactFactor: jr.impactFactor, reviewCycle: jr.reviewCycle,
+                    acceptanceRate: jr.acceptanceRate, selfCitationRate: jr.selfCitationRate, discipline: jr.discipline,
+                  },
+                });
+                if (titles[0]) {
+                  await db.update(contents).set({ title: titles[0], updatedAt: new Date() }).where(eq(contents.id, content.id));
+                  logger.info({ contentId: content.id, title: titles[0] }, "6-25 标题DNA已覆盖标题");
+                }
+              }
+            } catch (e) {
+              logger.warn({ contentId: content.id, err: e instanceof Error ? e.message : e }, "标题DNA生成失败, 保留原标题");
+            }
+          }
         }
 
         // 5. PR-U2 质检前置: 质检明确未过 → needs_review(待审, 不进可发); 否则 generated
