@@ -38,10 +38,12 @@ async function main() {
     if (u) userId = u.id;
   }
 
-  const discCond = disc ? sql`AND ${journals.discipline} ILIKE ${"%" + disc + "%"}` : sql``;
+  // 6-26 修: 原 discCond 用裸 "AND ..."/空 sql`` 塞进 and() → 空时 "and )" 语法错(42601)、有值双 AND。改条件数组拼接(同 sample-card/titles)。
+  const conds = [eq(journals.status, "active"), isNotNull(journals.impactFactor)];
+  if (disc) conds.push(sql`${journals.discipline} ILIKE ${"%" + disc + "%"}`);
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
-    : await db.select().from(journals).where(and(eq(journals.status, "active"), isNotNull(journals.impactFactor), discCond as any)).orderBy(sql`random()`).limit(1);
+    : await db.select().from(journals).where(and(...conds)).orderBy(sql`random()`).limit(1);
   if (!j) { console.error("❌ 没找到可用期刊"); process.exitCode = 1; return; }
 
   if (!topic) {
