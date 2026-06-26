@@ -56,11 +56,12 @@ async function main() {
   const skillContext = { tenantId, user: { userId, role: "owner" }, metadata: { journalId: j.id, ...(personaPrompt ? { personaPrompt } : {}) } };
 
   const result = await Promise.race([
-    (article as any).handle(topic, [], skillContext) as Promise<{ artifact?: { body?: string; title?: string } }>,
+    (article as any).handle(topic, [], skillContext) as Promise<{ artifact?: { body?: string; title?: string; metadata?: { videoScript?: string } } }>,
     new Promise<never>((_, rej) => setTimeout(() => rej(new Error("生成超时180秒")), 180_000)),
   ]);
   let title = result.artifact?.title ?? topic;
   const body = result.artifact?.body ?? "(无正文)";
+  const videoScript = result.artifact?.metadata?.videoScript;
 
   // 标题DNA覆盖(与生产 batch-worker 一致)
   try {
@@ -78,8 +79,16 @@ async function main() {
   console.log(title);
   console.log("══════════════ 正文 ══════════════");
   console.log(body.replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim());
+  console.log("════════════ 数字人口播稿 ════════════");
+  if (videoScript && videoScript.trim()) {
+    const vs = videoScript.trim();
+    console.log(vs);
+    console.log(`\n[口播稿 ${vs.length} 字 ≈ ${Math.round(vs.length / 4)} 秒 ≈ ${(Math.round(vs.length / 4) * 0.165).toFixed(1)} 元 DVH 合成费]`);
+  } else {
+    console.log("(本篇未生成 videoScript — 检查 prompt 或 LLM 输出)");
+  }
   console.log("══════════════════════════════════");
-  console.log("\n👉 把上面整篇贴给 Claude 打分(对照《内容质量评分标准》)。\n");
+  console.log("\n👉 把【标题+正文】和【口播稿】分别贴给 Claude 打分。口播稿读顺了再跑 pnpm sample:dvh --yes 渲染数字人(花钱)。\n");
 }
 main().then(async () => { await closePool(); process.exit(process.exitCode ?? 0); })
   .catch(async (e) => { console.error("生成异常:", e instanceof Error ? e.message : e); await closePool(); process.exit(1); });
