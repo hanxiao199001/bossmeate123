@@ -52,6 +52,15 @@ async function main() {
   }
   console.log(`\n📝 生成中… 期刊《${j.name ?? j.nameEn}》(IF=${j.impactFactor ?? "—"})  选题: ${topic}  (最多180秒)\n`);
 
+  // 🔎 第三管探针(6-26): 直接查 content_format, 确认"写法参考"有没有真命中 — 暴露类目/租户错配, 别再静默
+  try {
+    const { retrieveForArticle } = await import("../services/knowledge/rag-retriever.js");
+    const probe = await retrieveForArticle({ tenantId, topic: topic!, keywords: disc ? [disc] : [] });
+    const cf = probe.sources.find((x) => x.category === "content_format");
+    console.log(`\n🔎 RAG探针: 写法参考(content_format) 命中 ${cf?.count ?? 0} 篇 | 全子库: ${probe.sources.map((x) => `${x.category}:${x.count}`).join(", ") || "全空"}`);
+    if (!cf) console.log("   ⚠️ 写法参考 0 命中 → 第三管没生效! 排查: ①语料是否按 --account 灌进该号tenant ②ingest 类目是否 content_format ③重灌: pnpm ingest:wechat --account \"" + acctName + "\"");
+  } catch (e) { console.log("🔎 RAG探针失败:", e instanceof Error ? e.message : e); }
+
   const article = SkillRegistry.get("article");
   if (!article) { console.error("❌ ArticleSkill 未注册(检查 LLM provider/key)"); process.exitCode = 1; return; }
   const personaPrompt = buildPersonaSuffix(persona, styleProfile);

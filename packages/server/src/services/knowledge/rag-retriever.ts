@@ -36,7 +36,7 @@ export async function retrieveForArticle(params: {
   const { tenantId, topic, audience, tone, keywords } = params;
 
   // 并行检索多个子库（V2: 提高术语/领域知识 limit，提高 minScore）
-  const [terms, redlines, audiences, styles, insights, domainKnowledge] = await Promise.all([
+  const [terms, redlines, audiences, styles, insights, domainKnowledge, writingRefs] = await Promise.all([
     // 术语库：limit 提升到 5（对质量影响最大）
     safeSearch(tenantId, topic, "term", 5),
     // 红线库：保持 3 条（精准即可）
@@ -49,6 +49,8 @@ export async function retrieveForArticle(params: {
     safeSearch(tenantId, topic, "insight", 3),
     // 领域知识：limit 提升到 5（对质量影响最大）
     safeSearch(tenantId, topic, "domain_knowledge", 5),
+    // 管③ 写法参考：公众号历史同类文章（6-26 修类目错配 — 此前 retriever 漏查 content_format，灌进库的语料从未被检索 = 第三管失效）
+    safeSearch(tenantId, topic, "content_format", 3),
   ]);
 
   // 如果有关键词，额外检索关键词库
@@ -96,6 +98,17 @@ export async function retrieveForArticle(params: {
     sources.push({ category: "domain_knowledge", count: domainKnowledge.length });
   } else {
     emptyLibs.push("领域知识库");
+  }
+
+  // 管③ 写法参考（公众号历史文章）— 只学句式/结构/语气/钩子，数据仍以期刊库为准
+  if (writingRefs.length > 0) {
+    sections.push(
+      "【写法参考 — 你的历史同类文章节选（模仿其句式/结构/语气/开头钩子，🚫 数据以期刊库为准，严禁照抄旧文里的 IF/分区/录用率/审稿周期等任何数字）】\n"
+      + sortByScore(writingRefs).map((t) => `· 《${t.title}》\n${t.content.slice(0, 600)}`).join("\n\n")
+    );
+    sources.push({ category: "content_format", count: writingRefs.length });
+  } else {
+    emptyLibs.push("写法参考库(content_format)");
   }
 
   if (keywordHits.length > 0) {
