@@ -50,7 +50,9 @@ const EMPHASIS_DESC: Record<string, string> = {
 
 export async function loadTemplate(templateId: string): Promise<typeof contentTemplates.$inferSelect | null> {
   try {
-    const [row] = await db.select().from(contentTemplates).where(eq(contentTemplates.id, templateId)).limit(1);
+    // 6-26 修: templateId 是逻辑键(如 shunshi-style), 不是 uuid。原按 .id(uuid列)查 → 报 "invalid input syntax for type uuid"。
+    //   改按 .name(逻辑键列)查。注: registry id(data-card/storytelling/listicle) 与 DB name(popular-science/marketing-conversion/industry-vertical) 命名错配, 仅 shunshi-style 对得上, 其余返回 null(优雅, 待统一命名)。
+    const [row] = await db.select().from(contentTemplates).where(eq(contentTemplates.name, templateId)).limit(1);
     return row ?? null;
   } catch (err) {
     logger.warn({ templateId, err: err instanceof Error ? err.message : err }, "Q.3 loadTemplate failed");
