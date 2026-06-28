@@ -86,7 +86,9 @@ function deriveAdvantages(journal: JournalInfo, aiContent: AIGeneratedContent): 
       fb.push(`审稿周期 ${journal.reviewCycle}，进度可控`);
     }
     if (journal.casPartition || journal.partition) {
-      fb.push(`属于 ${journal.casPartition || journal.partition} 区，学界认可度有保障`);
+      // 6-26 修双"区": 库里分区值多为"医学1区"(已含区), 再补" 区"→"医学1区 区". 已含区/Q档则不补。
+      const _pv = (journal.casPartition || journal.partition)!;
+      fb.push(`属于 ${/区/.test(_pv) || /^Q[1-4]/i.test(_pv) ? _pv : _pv + " 区"}，学界认可度有保障`);
     }
     if (journal.impactFactor) {
       fb.push(`IF ${journal.impactFactor}，影响因子稳定`);

@@ -61,7 +61,9 @@ function deriveSubmissionTips(recommendation: string, journal: JournalInfo): str
       fb.push(`审稿周期 ${journal.reviewCycle}，注意时间规划`);
     }
     if (journal.casPartition || journal.partition) {
-      fb.push(`属于 ${journal.casPartition || journal.partition} 区，匹配自己研究层次`);
+      // 6-26 修双"区"(同 listicle)
+      const _pv = (journal.casPartition || journal.partition)!;
+      fb.push(`属于 ${/区/.test(_pv) || /^Q[1-4]/i.test(_pv) ? _pv : _pv + " 区"}，匹配自己研究层次`);
     }
     fb.push("严格按目标期刊的格式规范排版，避免格式退稿");
     while (tips.length < 3 && fb.length > 0) {
@@ -90,7 +92,7 @@ function renderStoryIntro(journal: JournalInfo, aiContent: AIGeneratedContent): 
   const journalName = esc(journal.nameEn || journal.name);
   const ifText = journal.impactFactor ? `IF ${journal.impactFactor}` : "高影响力";
   const partition = journal.casPartition || journal.partition;
-  const partitionText = partition ? `${esc(partition)} 区期刊` : "权威期刊";
+  const partitionText = partition ? `${esc(partition)}${/区/.test(partition) || /^Q[1-4]/i.test(partition) ? "" : " 区"}期刊` : "权威期刊";
 
   // 用 scopeDescription 作为故事背景（如有），fallback 为合成开场
   // 先 plain() 剥掉 AI 夹带的 HTML, 再 esc, 避免裸标签
