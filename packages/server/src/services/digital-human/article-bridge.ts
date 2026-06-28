@@ -29,6 +29,22 @@ export interface DvhBridgeOptions {
 }
 
 /**
+ * 6-26 音频驱动修: 阿里云要去公网拉音频/字幕, 但本地存储后端返回相对路径 /storage/...
+ *   → 拼成公网绝对 URL。OSS 后端已返回绝对 http(s) 则原样返回。
+ *   未配 DVH_PUBLIC_BASE 又是相对路径时抛错 —— 在 submit 之前抛, 避免提交不可达资源 = 白扣费产生孤儿任务。
+ */
+function toPublicUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  const base = process.env.DVH_PUBLIC_BASE?.replace(/\/+$/, "");
+  if (!base) {
+    throw new Error(
+      "DVH_AUDIO_DRIVEN 需要公网可达的音频/字幕 URL, 但本地存储返回相对路径。请设 DVH_PUBLIC_BASE=https://你的域名 (实测 https://boss-mate.cn), 或改用 OSS 存储。",
+    );
+  }
+  return base + (url.startsWith("/") ? url : "/" + url);
+}
+
+/**
  * 抽取朗读文本.
  * PR #241 (5-23): 优先 article.metadata.videoScript (AI 专为视频写的脚本, 100-150 字钩子+数据+CTA).
  *   没有 fallback 到 title + body 前 80 字 (V1 简陋兜底).
@@ -79,8 +95,10 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
     if (audioDriven) {
       // 合成音频(走配置的 TTS_PROVIDER, 建议 siliconflow/CosyVoice2 或 dashscope/qwen-tts; 要 wav)
       const tts = await ttsService.synthesize(tenantId, text, { format: "wav" });
+      // 阿里云需公网HTTPS拉音频; 本地存储返回相对/storage/路径 → 转公网绝对; 不可达则在此抛(submit前, 不白扣费)
+      const audioUrl = toPublicUrl(tts.url);
       const submit = await submitDvhAudioTask({
-        audioUrl: tts.url, templateId, tenantId, title,
+        audioUrl, templateId, tenantId, title,
         sampleRate: process.env.DVH_AUDIO_SAMPLE_RATE ? parseInt(process.env.DVH_AUDIO_SAMPLE_RATE, 10) : undefined,
       });
       taskUuid = submit.taskUuid;
@@ -90,7 +108,10 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
       // 音频驱动 DVH 不返回字幕 → 用口播稿文字 + 视频时长自生成 SRT
       try {
         const srt = buildSrtFromText(text, durationMs || tts.durationMs);
-        if (srt) subtitlesUrl = await storage.upload(Buffer.from(srt, "utf-8"), `tts/${tenantId}/dvhsub-${taskUuid}.srt`, "application/x-subrip");
+        if (srt) {
+          const srtRel = await storage.upload(Buffer.from(srt, "utf-8"), `tts/${tenantId}/dvhsub-${taskUuid}.srt`, "application/x-subrip");
+          subtitlesUrl = toPublicUrl(srtRel); // postprocess 会HTTP下载 SRT, 须公网可达
+        }
       } catch (e) {
         logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.audio.srt_gen_failed");
       }
