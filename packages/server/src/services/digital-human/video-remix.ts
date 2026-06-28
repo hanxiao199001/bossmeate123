@@ -7,7 +7,7 @@
  * ffmpeg 管线已在沙盒 4.4.2 验证通过。中文字幕需 CJK 字体(服务器装了 fonts-noto-cjk)。
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { storage } from "../storage/index.js";
@@ -43,6 +43,17 @@ function rng(seed: number) {
   };
 }
 const escFf = (s: string) => s.replace(/'/g, "").replace(/[\\:]/g, " ").slice(0, 40);
+
+/** 6-26 混剪 BGM: 从 DVH_BGM_DIR 按 seed 随机选一曲(老韩放曲到该目录); 无目录/无曲则跳过(不阻塞)。 */
+async function resolveBgm(seed: number): Promise<string | undefined> {
+  const dir = process.env.DVH_BGM_DIR || process.env.BGM_DIR;
+  if (!dir) return undefined;
+  try {
+    const files = (await readdir(dir)).filter((f) => /\.(mp3|m4a|aac|wav)$/i.test(f));
+    if (files.length === 0) return undefined;
+    return join(dir, files[Math.abs(seed) % files.length]!);
+  } catch { return undefined; }
+}
 
 async function probe(file: string): Promise<{ w: number; h: number; dur: number }> {
   return new Promise((resolve, reject) => {
@@ -128,20 +139,26 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     await writeFile(titleTxt, escFf(title || ""));
     await writeFile(ctaTxt, escFf(cta || "关注我，投稿少踩坑"));
 
+    const bgmPath = await resolveBgm(seed);
+    // 6-26 加重: 片头/CTA 字号放大(w/16→w/12, w/17→w/13)更抓人; 有 BGM 则全片叠(音量压低)。
+    const audioFc = bgmPath
+      ? `[0:a]adelay=${delayMs}|${delayMs}[amain];[3:a]volume=0.16[bg];[amain][bg]amix=inputs=2:duration=longest:dropout_transition=500[aout]`
+      : `[0:a]adelay=${delayMs}|${delayMs},apad[aout]`;
     const fc =
       `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
-      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 16)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
-      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 17)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
+      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 12)}:line_spacing=12:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
+      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 13)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
       `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
       `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
-      `[0:a]adelay=${delayMs}|${delayMs},apad[aa]`;
+      audioFc;
 
     const args = [
       "-y", "-i", inMp4,
       "-f", "lavfi", "-t", introDur.toFixed(2), "-i", `color=c=${introCol}:s=${w}x${h}:r=25`,
       "-f", "lavfi", "-t", outroDur.toFixed(2), "-i", `color=c=${outroCol}:s=${w}x${h}:r=25`,
+      ...(bgmPath ? ["-stream_loop", "-1", "-i", bgmPath] : []),  // input #3 = BGM(循环)
       "-filter_complex", fc,
-      "-map", "[vv]", "-map", "[aa]", "-t", total.toFixed(2),
+      "-map", "[vv]", "-map", "[aout]", "-t", total.toFixed(2),
       "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac",
       "-movflags", "+faststart", outMp4,
     ];

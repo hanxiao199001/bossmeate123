@@ -8,7 +8,10 @@ import { contents } from "../../models/schema.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import { logger } from "../../config/logger.js";
 import { isRealMode } from "./client.js";
-import { submitDvhTask } from "./submit-task.js";
+import { submitDvhTask, submitDvhAudioTask } from "./submit-task.js";
+import { buildSrtFromText } from "./subtitle-from-text.js";
+import { ttsService } from "../video/tts-service.js";
+import { storage } from "../storage/index.js";
 import { queryDvhTaskUntilDone } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
@@ -69,11 +72,36 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
     throw new Error(`BUDGET_EXCEEDED: ${gate.reason}`);
   }
   try {
-    const submit = await submitDvhTask({ text, templateId, tenantId, title });
-    taskUuid = submit.taskUuid;
-    const query = await queryDvhTaskUntilDone(taskUuid);
-    rawVideoUrl = query.videoUrl;   // ★ 付费产物到手 — 此后不可丢
-    durationMs = query.durationMs;
+    // 6-26 音频驱动开关: DVH_AUDIO_DRIVEN=1 → 我们自己合成更自然的音频(CosyVoice2/qwen-tts)驱动数字人
+    //   对口型, 替代内置音色(AI 味重)。默认关, 走原文字驱动, 不动现有生产。
+    const audioDriven = process.env.DVH_AUDIO_DRIVEN === "1";
+    let subtitlesUrl = "";
+    if (audioDriven) {
+      // 合成音频(走配置的 TTS_PROVIDER, 建议 siliconflow/CosyVoice2 或 dashscope/qwen-tts; 要 wav)
+      const tts = await ttsService.synthesize(tenantId, text, { format: "wav" });
+      const submit = await submitDvhAudioTask({
+        audioUrl: tts.url, templateId, tenantId, title,
+        sampleRate: process.env.DVH_AUDIO_SAMPLE_RATE ? parseInt(process.env.DVH_AUDIO_SAMPLE_RATE, 10) : undefined,
+      });
+      taskUuid = submit.taskUuid;
+      const query = await queryDvhTaskUntilDone(taskUuid);
+      rawVideoUrl = query.videoUrl;   // ★ 付费产物到手
+      durationMs = query.durationMs;
+      // 音频驱动 DVH 不返回字幕 → 用口播稿文字 + 视频时长自生成 SRT
+      try {
+        const srt = buildSrtFromText(text, durationMs || tts.durationMs);
+        if (srt) subtitlesUrl = await storage.upload(Buffer.from(srt, "utf-8"), `tts/${tenantId}/dvhsub-${taskUuid}.srt`, "application/x-subrip");
+      } catch (e) {
+        logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.audio.srt_gen_failed");
+      }
+    } else {
+      const submit = await submitDvhTask({ text, templateId, tenantId, title });
+      taskUuid = submit.taskUuid;
+      const query = await queryDvhTaskUntilDone(taskUuid);
+      rawVideoUrl = query.videoUrl;   // ★ 付费产物到手 — 此后不可丢
+      durationMs = query.durationMs;
+      subtitlesUrl = query.subtitlesUrl ?? "";
+    }
     // PR-W1 成本台账: 拿到付费产物即记账 (0.165元/秒)。fire-and-forget, 不影响主流程。
     void recordCost({
       tenantId, kind: "dvh",
@@ -84,7 +112,7 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
     // PR #252: ffmpeg burn-in 自定义字幕. postprocess 内部已 fallback 原 videoUrl, 正常不抛.
     const pp = await postprocessVideoWithSubtitle({
       videoUrl: rawVideoUrl,
-      subtitlesUrl: query.subtitlesUrl ?? "",
+      subtitlesUrl,
       taskUuid,
     });
     return { videoUrl: pp.videoUrl, rawVideoUrl, taskUuid, durationMs, postprocessed: pp.postprocessed, realMode: true };

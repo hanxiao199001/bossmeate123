@@ -86,3 +86,58 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
   );
   return { taskUuid, submitMs, requestId: resp.body?.requestId };
 }
+
+
+/**
+ * 6-26 音频驱动: 用我们自己合成的更自然音频(CosyVoice2/qwen-tts)驱动数字人对口型,
+ *   替代 submitTextTo2D 的内置音色(AI 味重)。音频 URL 走顶层 url 字段。
+ *   注意: 音频驱动 DVH 不返回字幕 SRT, 字幕由 buildSrtFromText 自生成后 burn-in。
+ */
+export async function submitDvhAudioTask(opts: {
+  audioUrl: string; templateId: TemplateId | string; tenantId: string; title?: string; sampleRate?: number;
+}): Promise<DvhSubmitResult> {
+  const dvhTenantId = process.env.DVH_TENANT_ID;
+  const appId = process.env.DVH_APP_ID;
+  if (!dvhTenantId) throw new Error("DVH_TENANT_ID 缺失");
+  if (!appId) throw new Error("DVH_APP_ID 缺失");
+  const mapping = await resolveAvatarVoice(String(opts.templateId));
+  if (!mapping) throw new Error(`DVH templateId 不存在: ${opts.templateId}`);
+
+  const client = createDvhClient();
+  const backgroundImageUrl = mapping.backgroundUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
+  const safeTitle = ((opts.title || `BossMate DVH ${opts.templateId}`) as string).slice(0, 60);
+  const req = new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequest({
+    tenantId: parseInt(dvhTenantId, 10),
+    app: new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequestApp({ appId }),
+    title: safeTitle,
+    url: opts.audioUrl, // 顶层 url = 音频 URL(须 HTTPS 公网可达)
+    avatarInfo: new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequestAvatarInfo({ code: mapping.avatarCode }),
+    audioInfo: new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequestAudioInfo({
+      // 阿里云对采样率有要求(常见 16000), 首次渲染若报音频格式错就调这里(env DVH_AUDIO_SAMPLE_RATE)
+      sampleRate: opts.sampleRate ?? 16000,
+    }),
+    videoInfo: new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequestVideoInfo({
+      isAlpha: false,
+      ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+    }),
+  });
+
+  const startedAt = Date.now();
+  const resp = await client.submitAudioTo2DAvatarVideoTaskWithOptions(req, new $Util.RuntimeOptions({}));
+  const submitMs = Date.now() - startedAt;
+
+  if (resp.body?.success === false) {
+    const e = new Error(`DVH audio submit failed: ${resp.body.code} ${resp.body.message}`) as Error & { code?: string; requestId?: string };
+    e.code = resp.body.code;
+    e.requestId = resp.body.requestId;
+    throw e;
+  }
+  const taskUuid = resp.body?.data?.taskUuid;
+  if (!taskUuid) throw new Error(`DVH audio submit no taskUuid: ${JSON.stringify(resp.body)}`);
+
+  logger.info(
+    { taskUuid, submitMs, mode: "audio-driven", templateId: opts.templateId, avatarLabel: mapping.avatarLabel, tenantId: opts.tenantId },
+    "dvh.submit.audio.ok",
+  );
+  return { taskUuid, submitMs, requestId: resp.body?.requestId };
+}
