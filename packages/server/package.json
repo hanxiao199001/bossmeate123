@@ -18,7 +18,8 @@
     "sample:titles": "tsx src/scripts/sample-titles.ts",
     "ingest:wechat": "tsx src/scripts/ingest-wechat-corpus.ts",
     "sample:article": "tsx src/scripts/sample-article.ts",
-    "rag:check": "tsx src/scripts/rag-check.ts"
+    "rag:check": "tsx src/scripts/rag-check.ts",
+    "clone:voice": "tsx src/scripts/clone-voice.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",
