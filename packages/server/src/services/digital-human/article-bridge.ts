@@ -95,8 +95,8 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
     if (audioDriven) {
       // 合成音频(走配置的 TTS_PROVIDER, 建议 siliconflow/CosyVoice2 或 dashscope/qwen-tts; 要 wav)
       const tts = await ttsService.synthesize(tenantId, text, { format: "wav" });
-      // 阿里云需公网HTTPS拉音频; 本地存储返回相对/storage/路径 → 转公网绝对; 不可达则在此抛(submit前, 不白扣费)
-      const audioUrl = toPublicUrl(tts.url);
+      // 阿里云需HTTPS拉音频。OSS私有桶→签名URL(限时有效、不公开); 本地→相对路径转公网base。submit前算好, 不可达直接抛(不白扣费)
+      const audioUrl = toPublicUrl(await storage.getSignedUrl(tts.remotePath, 7200));
       const submit = await submitDvhAudioTask({
         audioUrl, templateId, tenantId, title,
         sampleRate: process.env.DVH_AUDIO_SAMPLE_RATE ? parseInt(process.env.DVH_AUDIO_SAMPLE_RATE, 10) : undefined,
@@ -109,8 +109,9 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
       try {
         const srt = buildSrtFromText(text, durationMs || tts.durationMs);
         if (srt) {
-          const srtRel = await storage.upload(Buffer.from(srt, "utf-8"), `tts/${tenantId}/dvhsub-${taskUuid}.srt`, "application/x-subrip");
-          subtitlesUrl = toPublicUrl(srtRel); // postprocess 会HTTP下载 SRT, 须公网可达
+          const srtRemote = `tts/${tenantId}/dvhsub-${taskUuid}.srt`;
+          await storage.upload(Buffer.from(srt, "utf-8"), srtRemote, "application/x-subrip");
+          subtitlesUrl = toPublicUrl(await storage.getSignedUrl(srtRemote, 7200)); // 私有桶签名URL; postprocess 会HTTP下载SRT
         }
       } catch (e) {
         logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.audio.srt_gen_failed");
