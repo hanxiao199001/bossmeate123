@@ -84,7 +84,7 @@ const envSchema = z.object({
   // DVH 数字人字幕 + 语速 (PR-E 配置化: 改 .env 重启 pm2 即可生效, 不用改码部署; 仅影响新生成视频)
   DVH_SPEECH_RATE: z.coerce.number().default(50),                       // 阿里云 -500~500, 0=1.0x, 50≈1.1x
   DVH_SUBTITLE_FONT_NAME: z.string().default("Noto Sans CJK SC"),       // 中文字体
-  DVH_SUBTITLE_FONT_SIZE: z.coerce.number().default(60),                // 字号 (原硬编码 42, 嫌小提到 60; 还小继续调大)
+  DVH_SUBTITLE_FONT_SIZE: z.coerce.number().default(36),                // 字号 (6-26: 竖屏60太大→36; env 可调 DVH_SUBTITLE_FONT_SIZE)
   DVH_SUBTITLE_PRIMARY_COLOUR: z.string().default("&H00FFFFFF&"),       // 字色 ASS &HAABBGGRR& (白)
   DVH_SUBTITLE_OUTLINE_COLOUR: z.string().default("&H00000000&"),       // 描边色 (黑)
   DVH_SUBTITLE_OUTLINE: z.coerce.number().default(2),                   // 描边宽度

@@ -146,8 +146,8 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
       : `[0:a]adelay=${delayMs}|${delayMs},apad[aout]`;
     const fc =
       `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
-      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 18)}:line_spacing=10:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
-      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 20)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
+      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 24)}:line_spacing=8:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
+      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 26)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
       `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
       `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
       audioFc;
