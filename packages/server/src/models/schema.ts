@@ -842,6 +842,7 @@ export const platformAccounts = pgTable(
     // PR-X1: 人设画像 — 自由文本(语气/自称/受众/口头禅/禁忌), 生成时注入 prompt
     persona: text("persona"),
     dvhTemplate: varchar("dvh_template", { length: 40 }), // 6-19 该账号数字人形象(目录key), 不同号不同形象防查重
+    clonedVoiceId: varchar("cloned_voice_id", { length: 120 }), // 6-26 该账号克隆音色 voice_id(百炼); 空=用全局/预置音色
     // PR-X3: 风格画像 — 喂范文后 LLM 提炼的风格描述, 生成时注入 prompt
     styleProfile: text("style_profile"),
     // 6-22 剪辑风格预设: academic/popsci/marketing/data。空=系统按领域/范围/人设自动匹配。

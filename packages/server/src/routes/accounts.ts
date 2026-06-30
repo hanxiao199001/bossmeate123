@@ -593,6 +593,49 @@ export async function accountRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * 6-26 声音克隆(自助): 前端录音 → base64 → 百炼建音色 → voice_id 存到账号 → 合成试听。
+   *   之后该账号的数字人/卡片视频用它自己的声音(经合成层 voiceOverride 注入)。
+   *   bodyLimit 放大到 15MB(录音 base64 会超默认 1MB)。
+   */
+  app.post("/accounts/:id/clone-voice", { preHandler: requirePermission("accounts.manage"), bodyLimit: 15 * 1024 * 1024 }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { audioBase64?: string; name?: string };
+    const audio = typeof body.audioBase64 === "string" ? body.audioBase64.trim() : "";
+    if (audio.length < 100) return reply.code(400).send({ code: "BAD_AUDIO", message: "缺少录音(audioBase64)" });
+
+    const [acct] = await db
+      .select({ id: platformAccounts.id, accountName: platformAccounts.accountName })
+      .from(platformAccounts)
+      .where(and(eq(platformAccounts.id, id), eq(platformAccounts.tenantId, request.tenantId)))
+      .limit(1);
+    if (!acct) return reply.code(404).send({ code: "NOT_FOUND", message: "账号不存在" });
+
+    try {
+      const { createClonedVoice, synthesizeWithClonedVoice, convertToWav24kMono } = await import("../services/voice/clone-service.js");
+      const { storage } = await import("../services/storage/index.js");
+      // 浏览器录音(webm/opus)→ ffmpeg 转 wav 24k mono(百炼要 WAV/MP3/M4A)
+      const rawB64 = audio.startsWith("data:") ? audio.slice(audio.indexOf(",") + 1) : audio;
+      const wav = await convertToWav24kMono(Buffer.from(rawB64, "base64"));
+      const dataUri = `data:audio/wav;base64,${wav.toString("base64")}`;
+      const { voice } = await createClonedVoice({ audioBase64DataUri: dataUri, name: body.name || acct.accountName || "voice" });
+
+      // 合成一句试听(不阻塞: 失败也算克隆成功)
+      let previewUrl: string | undefined;
+      try {
+        const buf = await synthesizeWithClonedVoice(voice, "大家好，这是用我自己的声音克隆出来的播报，听听效果怎么样。");
+        previewUrl = await storage.upload(buf, `voice-clone/${request.tenantId}/${id}-${Date.now()}.mp3`, "audio/mpeg");
+      } catch (e) { logger.warn({ err: e instanceof Error ? e.message : e, accountId: id }, "克隆试听合成失败(不阻塞)"); }
+
+      await db.update(platformAccounts).set({ clonedVoiceId: voice, updatedAt: new Date() }).where(eq(platformAccounts.id, id));
+      logger.info({ accountId: id, voice }, "6-26 声音克隆已保存到账号");
+      return { code: "OK", data: { voice, previewUrl } };
+    } catch (err) {
+      logger.error({ err: err instanceof Error ? err.message : err, accountId: id }, "声音克隆失败");
+      return reply.code(500).send({ code: "CLONE_FAILED", message: err instanceof Error ? err.message : "克隆失败" });
+    }
+  });
+
   app.post("/publish", { preHandler: requirePermission("content.publish") }, async (request, reply) => {
     try {
       const body = publishSchema.parse(request.body);

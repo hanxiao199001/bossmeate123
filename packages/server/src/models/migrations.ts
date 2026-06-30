@@ -376,4 +376,9 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
     description: "6-22 剪辑风格: platform_accounts 加 clip_style(academic/popsci/marketing/data; 空=按领域/范围/人设自动匹配)。",
     sql: `ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS clip_style VARCHAR(20);`,
   },
+  {
+    version: "020_account_cloned_voice",
+    description: "6-26 声音克隆: platform_accounts 加 cloned_voice_id(百炼Qwen-TTS声音复刻voice_id; 空=用全局/预置音色)。",
+    sql: `ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS cloned_voice_id VARCHAR(120);`,
+  },
 ];

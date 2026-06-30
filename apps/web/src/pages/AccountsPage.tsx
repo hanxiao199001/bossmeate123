@@ -3,6 +3,7 @@ import { toast } from "../components/Toast";
 import { api } from "../utils/api";
 import { PLATFORM_META } from "../utils/i18n";
 import PageHeader from "../components/ui/PageHeader";
+import VoiceCloneRecorder from "../components/settings/VoiceCloneRecorder";
 
 // ===== 类型定义 =====
 interface Account {
@@ -16,6 +17,7 @@ interface Account {
   journalScope?: string; // PR-K 期刊定位 domestic/international/both
   remark?: string; // 6-19 手动备注名
   dvhTemplate?: string; // 6-19 数字人形象目录key
+  clonedVoiceId?: string | null; // 6-26 该账号克隆音色
   discipline?: string | null; // PR-W5 领域定位(旧单选)
   disciplines?: string[]; // PR-W5b 领域定位多选
   persona?: string | null; // PR-X1 人设画像
@@ -837,6 +839,9 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                               >
                                 {account.persona || account.styleProfile ? "人设·风格 ✓" : "人设·风格 ▾"}
                               </button>
+                              {(account.platform === "douyin" || account.platform === "wechat_video") && (
+                                <VoiceCloneRecorder accountId={account.id} cloned={!!account.clonedVoiceId} />
+                              )}
                             </div>
                             {discEditId === account.id && (
                               <div className="flex flex-wrap gap-1.5 my-1.5">
