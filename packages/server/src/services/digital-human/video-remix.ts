@@ -42,7 +42,7 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const escFf = (s: string) => s.replace(/'/g, "").replace(/[\\:]/g, " ").slice(0, 40);
+const escFf = (s: string) => s.replace(/'/g, "").replace(/[\\:]/g, " ").slice(0, 26);
 
 /** 6-26 混剪 BGM: 从 DVH_BGM_DIR 按 seed 随机选一曲(老韩放曲到该目录); 无目录/无曲则跳过(不阻塞)。 */
 async function resolveBgm(seed: number): Promise<string | undefined> {
@@ -146,8 +146,8 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
       : `[0:a]adelay=${delayMs}|${delayMs},apad[aout]`;
     const fc =
       `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
-      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 12)}:line_spacing=12:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
-      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 13)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
+      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 18)}:line_spacing=10:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
+      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 20)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
       `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
       `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
       audioFc;
