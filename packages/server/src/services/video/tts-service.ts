@@ -309,13 +309,18 @@ export class TTSService {
   private async synthesizeDashscope(text: string, voiceOverride: string | undefined): Promise<Buffer> {
     const key = env.QWEN_API_KEY;
     if (!key) throw new Error("QWEN_API_KEY 未配置(阿里云百炼 qwen-tts 复用它)");
-    const model = env.TTS_DASHSCOPE_MODEL;
-    // 音色: qwen-tts 音色是首字母大写单词(Cherry/Ethan…); 仅当 override 像这种格式才用, 否则用配置默认 —— 防误传阿里云 NLS 音色(如 'siqi')。
-    const voice = voiceOverride && /^[A-Z][A-Za-z]+$/.test(voiceOverride) ? voiceOverride : env.TTS_DASHSCOPE_VOICE;
+    // 6-26 克隆音色: voiceOverride 是克隆 voice_id(含 '-vc-' 或 cosyvoice- 前缀) 或全局 env QWEN_TTS_CLONE_VOICE
+    //   → 走 VC 模型合成(老韩/客户本人声音); 否则走原 qwen-tts 预置音色(Cherry/Ethan…)。
+    const cloneVoice = (voiceOverride && /-vc-|^cosyvoice-/i.test(voiceOverride)) ? voiceOverride : (process.env.QWEN_TTS_CLONE_VOICE || "");
+    const useClone = !!cloneVoice;
+    const model = useClone ? (process.env.QWEN_VC_MODEL || "qwen3-tts-vc-2026-01-22") : env.TTS_DASHSCOPE_MODEL;
+    // 音色: qwen-tts 预置音色是首字母大写单词(Cherry/Ethan…); 仅当 override 像这种格式才用, 否则用配置默认 —— 防误传阿里云 NLS 音色(如 'siqi')。
+    const presetVoice = voiceOverride && /^[A-Z][A-Za-z]+$/.test(voiceOverride) ? voiceOverride : env.TTS_DASHSCOPE_VOICE;
+    const input = useClone ? { text, voice: cloneVoice } : { text, voice: presetVoice, language_type: "Chinese" };
     const resp = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: { text, voice, language_type: "Chinese" } }),
+      body: JSON.stringify({ model, input }),
     });
     if (!resp.ok) {
       const errText = await resp.text().catch(() => "");
