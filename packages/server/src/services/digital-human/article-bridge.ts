@@ -26,6 +26,7 @@ export interface DvhBridgeOptions {
   templateId: TemplateId | string; // PR-X2: 目录扩展后支持自定义 key
   conversationId?: string | null;
   journalId?: string;
+  clonedVoiceId?: string; // 6-26 该账号克隆音色(传给TTS当本人声音)
 }
 
 /**
@@ -72,7 +73,7 @@ interface ProducedVideo {
   realMode: boolean;
 }
 
-async function produceVideo(text: string, title: string, templateId: TemplateId | string, tenantId: string): Promise<ProducedVideo> {
+async function produceVideo(text: string, title: string, templateId: TemplateId | string, tenantId: string, clonedVoiceId?: string): Promise<ProducedVideo> {
   if (!isRealMode()) {
     const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
     return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false };
@@ -94,7 +95,7 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
     let subtitlesUrl = "";
     if (audioDriven) {
       // 合成音频(走配置的 TTS_PROVIDER, 建议 siliconflow/CosyVoice2 或 dashscope/qwen-tts; 要 wav)
-      const tts = await ttsService.synthesize(tenantId, text, { format: "wav" });
+      const tts = await ttsService.synthesize(tenantId, text, { format: "wav", ...(clonedVoiceId ? { voice: clonedVoiceId } : {}) });
       // 阿里云需HTTPS拉音频。OSS私有桶→签名URL(限时有效、不公开); 本地→相对路径转公网base。submit前算好, 不可达直接抛(不白扣费)
       const audioUrl = toPublicUrl(await storage.getSignedUrl(tts.remotePath, 7200));
       const submit = await submitDvhAudioTask({
@@ -169,7 +170,7 @@ async function produceVideo(text: string, title: string, templateId: TemplateId 
 const inFlightDvh = new Set<string>();
 
 export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<void> {
-  const { db, tenantId, userId, articleContentId, templateId, conversationId, journalId } = opts;
+  const { db, tenantId, userId, articleContentId, templateId, conversationId, journalId, clonedVoiceId } = opts;
   const inflightKey = `${tenantId}:${articleContentId}`;
   if (inFlightDvh.has(inflightKey)) {
     logger.info({ articleContentId }, "dvh.bridge.in_flight_skip");
@@ -196,7 +197,7 @@ export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<voi
     // PR #241: extractNarration 改签 — 传 article 让其内部判断 metadata.videoScript 优先
     const narration = extractNarration(article);
     const mapping = (await resolveAvatarVoice(String(templateId))) ?? { avatarCode: "", avatarLabel: "", voiceCode: "", voiceLabel: "", templateLabel: String(templateId) };
-    const produced = await produceVideo(narration, title, templateId, tenantId);
+    const produced = await produceVideo(narration, title, templateId, tenantId, clonedVoiceId);
 
     const videoMetadata = {
       videoUrl: produced.videoUrl,

@@ -81,12 +81,14 @@ export async function articlesRoutes(app: FastifyInstance) {
 
     const metaTemplateId = (article.metadata as { templateId?: string } | null)?.templateId;
     let templateId = body.templateId || metaTemplateId;
+    let clonedVoiceId: string | undefined; // 6-26 该账号克隆音色
     // 6-19 防查重: 指定目标账号且该号绑了数字人形象 → 用账号形象(不同号不同形象)。
     if (body.accountId) {
       try {
-        const [acc] = await db.select({ dvhTemplate: platformAccounts.dvhTemplate }).from(platformAccounts)
+        const [acc] = await db.select({ dvhTemplate: platformAccounts.dvhTemplate, clonedVoiceId: platformAccounts.clonedVoiceId }).from(platformAccounts)
           .where(and(eq(platformAccounts.id, body.accountId), eq(platformAccounts.tenantId, request.tenantId))).limit(1);
         if (acc?.dvhTemplate) templateId = acc.dvhTemplate;
+        if (acc?.clonedVoiceId) clonedVoiceId = acc.clonedVoiceId; // 6-26 用该号自己的声音
       } catch { /* 用默认 */ }
     }
     // PR-X2: 改目录解析 — 支持 config 扩展的自定义形象 key
@@ -134,6 +136,7 @@ export async function articlesRoutes(app: FastifyInstance) {
       templateId: templateId as TemplateId,
       conversationId: article.conversationId ?? null,
       journalId: (article.metadata as { journalId?: string } | null)?.journalId,
+      clonedVoiceId, // 6-26 该号克隆音色 → DVH 用本人声音
     });
     logger.info(
       { articleId: id, templateId, realMode: isRealMode() },
