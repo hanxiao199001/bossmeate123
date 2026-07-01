@@ -34,7 +34,7 @@ export default function DvhCatalogManager() {
   const [pulling, setPulling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [manual, setManual] = useState({ avatarCode: "", avatarLabel: "", voiceCode: "aixia" });
+  const [manual, setManual] = useState({ avatarCode: "", avatarLabel: "", voiceCode: "aixia", preview: "" });
 
   const loadCatalog = useCallback(() => {
     api.get<{ catalog?: CatalogEntry[] }>("/admin/dvh-catalog")
@@ -76,8 +76,9 @@ export default function DvhCatalogManager() {
     if (!code) { setMsg({ ok: false, text: "请填形象 Code(阿里云控制台→2D资产中心复制)" }); return; }
     if (catalog.some((c) => c.avatarCode === code)) { setMsg({ ok: false, text: "该形象已在目录里" }); return; }
     const key = label.slice(0, 36).replace(/\s+/g, "_") + "_" + code.slice(-4);
-    setCatalog((prev) => [...prev, { key, avatarCode: code, avatarLabel: label, voiceCode: manual.voiceCode || "aixia", voiceLabel: manual.voiceCode || "aixia", templateLabel: label }]);
-    setManual({ avatarCode: "", avatarLabel: "", voiceCode: "aixia" });
+    const pv = manual.preview.trim();
+    setCatalog((prev) => [...prev, { key, avatarCode: code, avatarLabel: label, voiceCode: manual.voiceCode || "aixia", voiceLabel: manual.voiceCode || "aixia", templateLabel: label, ...(pv ? { preview: pv } : {}) }]);
+    setManual({ avatarCode: "", avatarLabel: "", voiceCode: "aixia", preview: "" });
     setMsg({ ok: true, text: `已加入「${label}」, 点保存生效` });
   };
 
@@ -160,14 +161,17 @@ export default function DvhCatalogManager() {
 
       {/* 手动添加: 从阿里云控制台复制形象 Code 贴进来(拉取拉不到公模时用) */}
       <div className="mt-3 border border-dashed border-gray-200 rounded-lg p-3">
-        <div className="text-xs text-gray-500 mb-2">手动添加形象 — 阿里云控制台 → 2D 数字人资产中心 → 点形象复制「形象 Code」贴这里(可加男形象)。商用前请确认该形象已授权。</div>
+        <div className="text-xs text-gray-500 mb-2">手动添加形象 — 阿里云控制台 → 2D 数字人资产中心 → 点形象复制「形象 Code」贴这里(可加男形象)。<b>预览图 URL</b> 在同一页右键形象缩略图「复制图片地址」得到,填了就能在系统里看到形象长啥样。商用前请确认该形象已授权。</div>
         <div className="flex flex-wrap items-center gap-2">
+          {manual.preview.trim() && <img src={manual.preview.trim()} alt="预览" className="w-10 h-10 rounded object-cover border border-gray-200" />}
           <input value={manual.avatarCode} onChange={(e) => setManual((m) => ({ ...m, avatarCode: e.target.value }))}
             placeholder="形象 Code, 如 CH_2d_xxxx" className="text-xs border border-gray-300 rounded px-2 py-1 w-56" />
           <input value={manual.avatarLabel} onChange={(e) => setManual((m) => ({ ...m, avatarLabel: e.target.value }))}
             placeholder="名字(如 男声-西装)" className="text-xs border border-gray-300 rounded px-2 py-1 w-40" />
           <input list="dvh-voice-suggestions" value={manual.voiceCode} onChange={(e) => setManual((m) => ({ ...m, voiceCode: e.target.value }))}
             placeholder="音色 code" className="text-xs border border-gray-300 rounded px-2 py-1 w-32" />
+          <input value={manual.preview} onChange={(e) => setManual((m) => ({ ...m, preview: e.target.value }))}
+            placeholder="预览图 URL(可选)" className="text-xs border border-gray-300 rounded px-2 py-1 w-56" />
           <button onClick={addManual} className="text-xs px-3 py-1 rounded bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100">加入目录</button>
         </div>
       </div>
