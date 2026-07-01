@@ -348,10 +348,10 @@ const handleScopeChange = async (accountId: string, scope: string) => {
   };
 
   // 6-19: 数字人形象目录(给账号绑形象用) + 绑定 handler。
-  const [dvhCatalog, setDvhCatalog] = useState<Array<{ key: string; avatarLabel: string }>>([]);
+  const [dvhCatalog, setDvhCatalog] = useState<Array<{ key: string; avatarLabel: string; preview?: string }>>([]);
   useEffect(() => {
-    api.get<{ catalog?: Array<{ key: string; avatarLabel: string }> }>("/admin/dvh-catalog")
-      .then((r) => setDvhCatalog(((r.data as any)?.catalog ?? (r.data as any)?.data?.catalog ?? []) as Array<{ key: string; avatarLabel: string }>))
+    api.get<{ catalog?: Array<{ key: string; avatarLabel: string; preview?: string }> }>("/admin/dvh-catalog")
+      .then((r) => setDvhCatalog(((r.data as any)?.catalog ?? (r.data as any)?.data?.catalog ?? []) as Array<{ key: string; avatarLabel: string; preview?: string }>))
       .catch(() => {});
   }, []);
   const handleDvhChange = async (accountId: string, key: string) => {
@@ -811,7 +811,10 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                 <option value="domestic">国内核心</option>
                                 <option value="international">国外期刊</option>
                               </select>
-                              {(account.platform === "douyin" || account.platform === "wechat_video") && dvhCatalog.length > 0 && (
+                              {(account.platform === "douyin" || account.platform === "wechat_video") && dvhCatalog.length > 0 && (() => {
+                                const boundPreview = dvhCatalog.find((d) => d.key === account.dvhTemplate)?.preview;
+                                return (<>
+                                {boundPreview && <img src={boundPreview} alt="形象" title="当前数字人形象" className="w-6 h-6 rounded object-cover border border-fuchsia-200" />}
                                 <select
                                   value={account.dvhTemplate || ""}
                                   onChange={(e) => handleDvhChange(account.id, e.target.value)}
@@ -821,7 +824,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                   <option value="">形象:默认</option>
                                   {dvhCatalog.map((d) => <option key={d.key} value={d.key}>形象:{d.avatarLabel}</option>)}
                                 </select>
-                              )}
+                                </>);
+                              })()}
                               <button
                                 onClick={() => setDiscEditId(discEditId === account.id ? null : account.id)}
                                 title="领域定位(可多选) — 一键生成时该账号只产这些领域的内容"

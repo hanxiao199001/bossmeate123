@@ -854,6 +854,7 @@ export async function adminRoutes(app: FastifyInstance) {
         voiceLabel: String(e.voiceLabel || e.voiceCode).slice(0, 60),
         templateLabel: String(e.templateLabel || e.key).slice(0, 60),
         ...(typeof e.backgroundUrl === "string" && e.backgroundUrl ? { backgroundUrl: e.backgroundUrl.slice(0, 500) } : {}),
+        ...(typeof e.preview === "string" && e.preview ? { preview: e.preview.slice(0, 500) } : {}), // 6-26 形象预览图
       }));
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
     const cfg = (t?.config as Record<string, unknown>) || {};

@@ -17,6 +17,7 @@ interface CatalogEntry {
   voiceLabel: string;
   templateLabel: string;
   backgroundUrl?: string;
+  preview?: string; // 6-26 形象预览图
 }
 interface CloudAvatar {
   code: string;
@@ -64,6 +65,7 @@ export default function DvhCatalogManager() {
       voiceCode: "aixia",
       voiceLabel: "艾夏-亲和女声",
       templateLabel: a.name || a.code,
+      preview: a.preview, // 6-26 存预览图
     }]);
     setMsg({ ok: true, text: `已加入「${a.name || a.code}」, 记得选音色后点保存` });
   };
@@ -112,6 +114,11 @@ export default function DvhCatalogManager() {
             const isDefault = DEFAULT_KEYS.includes(c.key);
             return (
               <div key={c.key} className="flex items-center gap-2 border border-gray-100 rounded-lg px-3 py-2 text-sm">
+                {c.preview ? (
+                  <img src={c.preview} alt={c.avatarLabel} className="w-9 h-9 rounded object-cover bg-gray-50 flex-shrink-0" />
+                ) : (
+                  <div className="w-9 h-9 rounded bg-gray-100 flex items-center justify-center text-base flex-shrink-0">🧑‍🎤</div>
+                )}
                 <span className="font-medium text-gray-800 truncate max-w-[180px]" title={c.avatarCode}>{c.avatarLabel}</span>
                 {isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">内置</span>}
                 <span className="text-gray-400 ml-auto text-xs">音色</span>
