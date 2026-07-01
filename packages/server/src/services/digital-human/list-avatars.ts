@@ -23,6 +23,8 @@ export async function listDvhAvatars(): Promise<DvhAvatarItem[]> {
   let pageNo = 1;
   for (let guard = 0; guard < 20; guard++) {
     const req = new $avatar20220130.QueryAvatarListRequest({
+      // 6-26: 阿里云 QueryAvatarList 要求 ModelType 必填(2D/3D)。BossMate 用 2D 数字人; env 可调。
+      modelType: process.env.DVH_AVATAR_MODEL_TYPE || "2D",
       pageNo,
       pageSize: 50,
       ...(tid != null && Number.isFinite(tid) ? { tenantId: tid } : {}),
