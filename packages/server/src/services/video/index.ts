@@ -44,6 +44,7 @@ export interface ProduceVideoInput {
   journal?: JournalAssetInput & JournalInfoCard & JournalCardData;
   /** 6-22 剪辑风格预设 key(academic/popsci/marketing/data); 影响语速/每幕时长/BGM风格 */
   clipStyleKey?: ClipStyleKey;
+  clonedVoiceId?: string; // 6-26 该账号克隆音色(有则卡片视频用本人声音)
 }
 
 export interface ProduceVideoResult extends ComposeResult {
@@ -188,7 +189,7 @@ export async function produceVideo(
   for (let sceneIdx = 0; sceneIdx < scenes.length; sceneIdx++) {
     const s = scenes[sceneIdx]!;
     const effectiveType: SceneType | undefined = s.sceneType ?? (cardData ? sceneTypeFor(sceneIdx) : undefined);
-    const tts = await ttsService.synthesize(tenantId, s.voiceoverText, clipPreset ? { speed: clipPreset.ttsSpeed } : undefined);
+    const tts = await ttsService.synthesize(tenantId, s.voiceoverText, { ...(clipPreset ? { speed: clipPreset.ttsSpeed } : {}), ...(input.clonedVoiceId ? { voice: input.clonedVoiceId } : {}) });
 
     // V2: 有期刊数据就出信息卡底图(数据驱动主干); effectiveType 已为缺类型的幕补了默认
     let imageUrl: string | null = null;

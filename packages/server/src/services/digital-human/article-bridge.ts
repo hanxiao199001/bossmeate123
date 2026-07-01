@@ -4,7 +4,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import type { db as dbType } from "../../models/db.js";
-import { contents } from "../../models/schema.js";
+import { contents, platformAccounts } from "../../models/schema.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import { logger } from "../../config/logger.js";
 import { isRealMode } from "./client.js";
@@ -197,7 +197,18 @@ export async function triggerDvhFromArticle(opts: DvhBridgeOptions): Promise<voi
     // PR #241: extractNarration 改签 — 传 article 让其内部判断 metadata.videoScript 优先
     const narration = extractNarration(article);
     const mapping = (await resolveAvatarVoice(String(templateId))) ?? { avatarCode: "", avatarLabel: "", voiceCode: "", voiceLabel: "", templateLabel: String(templateId) };
-    const produced = await produceVideo(narration, title, templateId, tenantId, clonedVoiceId);
+    // 6-26 按账号用本人克隆音色: 未显式传则从文章绑定的 exclusiveAccountId 反查(覆盖批量自动路径)
+    let voiceForDvh = clonedVoiceId;
+    if (!voiceForDvh) {
+      const exAcc = (article.metadata as { exclusiveAccountId?: string } | null)?.exclusiveAccountId;
+      if (exAcc) {
+        try {
+          const [acc] = await db.select({ v: platformAccounts.clonedVoiceId }).from(platformAccounts).where(eq(platformAccounts.id, exAcc)).limit(1);
+          if (acc?.v) voiceForDvh = acc.v;
+        } catch { /* 用默认 */ }
+      }
+    }
+    const produced = await produceVideo(narration, title, templateId, tenantId, voiceForDvh);
 
     const videoMetadata = {
       videoUrl: produced.videoUrl,
