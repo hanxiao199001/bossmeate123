@@ -502,6 +502,59 @@ export const workWechatConfigs = pgTable("work_wechat_configs", {
   agentId: varchar("agent_id", { length: 50 }).notNull(),
   token: varchar("token", { length: 100 }).notNull(),
   encodingAesKeyEnc: text("encoding_aes_key_enc").notNull(), // 密文存储（credentialsKey AES）
+  kfSecretEnc: text("kf_secret_enc"), // B-kf: 微信客服 Secret（gettoken 用），同 encodingAesKey 走 credentialsKey 加密
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// ============ B-kf: 企微「微信客服」AI 客服 ============
+
+// kf/sync_msg 游标 — 每 (tenant, open_kfid) 一条；断点续拉，避免全量重放
+export const kfSyncCursors = pgTable("kf_sync_cursors", {
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  openKfid: varchar("open_kfid", { length: 64 }).notNull(),
+  cursor: text("cursor").notNull().default(""),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.openKfid] }),
+]);
+
+// kf 会话 — (tenant, open_kfid, external_userid) 唯一；mode=manual 时 AI 静默只落库
+export const kfConversations = pgTable("kf_conversations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  openKfid: varchar("open_kfid", { length: 64 }).notNull(),
+  externalUserid: varchar("external_userid", { length: 64 }).notNull(),
+  mode: varchar("mode", { length: 10 }).notNull().default("auto"), // auto | manual
+  lastMsgAt: timestamp("last_msg_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("idx_kf_conv_uniq").on(table.tenantId, table.openKfid, table.externalUserid),
+]);
+
+// kf 消息 — wx_msgid 唯一兜底防重（sync_msg 可能与游标重叠重放）
+export const kfMessages = pgTable("kf_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  conversationId: uuid("conversation_id").references(() => kfConversations.id, { onDelete: "cascade" }).notNull(),
+  direction: varchar("direction", { length: 5 }).notNull(), // in | out
+  msgType: varchar("msg_type", { length: 20 }).notNull().default("text"),
+  content: text("content").notNull().default(""),
+  aiIntent: varchar("ai_intent", { length: 30 }), // journal_query | service_faq | chitchat | handoff
+  aiAction: varchar("ai_action", { length: 20 }), // answered | transferred | skipped | manual
+  wxMsgid: varchar("wx_msgid", { length: 100 }).unique(), // 微信侧 msgid；出站消息为空
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("idx_kf_msg_conv").on(table.conversationId, table.createdAt),
+]);
+
+// kf FAQ — 租户维护的服务问答，responder 全量(≤30)塞 prompt
+export const kfFaqs = pgTable("kf_faqs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  sort: integer("sort").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

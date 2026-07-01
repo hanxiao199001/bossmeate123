@@ -23,6 +23,7 @@ import TryPage from "./pages/TryPage";
 import CostComparisonPage from "./pages/CostComparisonPage";
 import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
 import SalesRadarPage from "./pages/SalesRadarPage";
+import KfServicePage from "./pages/KfServicePage"; // 7-2 B-kf 企微微信客服管理页
 // 5-21 P3 全局 chat 抽屉 (mount 在登录后所有 protected 页可见)
 import { useState } from "react";
 import ChatFab from "./components/chat-drawer/ChatFab";
@@ -149,6 +150,18 @@ export default function App() {
               <ContentDetailPage />
             </MainLayout>
           </ProtectedRoute>
+        }
+      />
+
+      {/* 7-2 B-kf: 企微微信客服 AI 客服 (admin only) */}
+      <Route
+        path="/kf-service"
+        element={
+          <ProtectedAdminRoute>
+            <MainLayout>
+              <KfServicePage />
+            </MainLayout>
+          </ProtectedAdminRoute>
         }
       />
 

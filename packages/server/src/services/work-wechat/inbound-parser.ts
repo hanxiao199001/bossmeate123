@@ -25,6 +25,9 @@ export interface ParsedWorkMsg {
   toUser: string;
   createTime: number;
   content?: string;
+  // B-kf：MsgType=event/Event=kf_msg_or_event 时携带，喂给 kf/sync_msg
+  kfToken?: string;
+  openKfId?: string;
 }
 
 const xmlParser = new XMLParser({ ignoreAttributes: true, parseTagValue: false, trimValues: true });
@@ -39,8 +42,14 @@ export function parseWorkXml(rawXml: string): ParsedWorkMsg {
   const fromUser = String(xml.FromUserName ?? "");
   const toUser = String(xml.ToUserName ?? "");
   const createTime = Number(xml.CreateTime ?? 0);
-  if (!msgType || !fromUser || !toUser) throw new Error(`work XML 缺字段: type=${msgType} from=${fromUser} to=${toUser}`);
-  return { msgType, event, msgId, fromUser, toUser, createTime, content: xml.Content ? String(xml.Content) : undefined };
+  // B-kf：kf_msg_or_event 事件 XML 只有 ToUserName/Token/OpenKfId，没有 FromUserName —— event 类放宽 from 校验
+  if (!msgType || !toUser || (!fromUser && msgType !== "event")) throw new Error(`work XML 缺字段: type=${msgType} from=${fromUser} to=${toUser}`);
+  return {
+    msgType, event, msgId, fromUser, toUser, createTime,
+    content: xml.Content ? String(xml.Content) : undefined,
+    kfToken: xml.Token ? String(xml.Token) : undefined,
+    openKfId: xml.OpenKfId ? String(xml.OpenKfId) : undefined,
+  };
 }
 
 /** 仅 text 消息（含 external_contact / kf_msg event 包裹的 text）转 InboundMessage；其余返 null。 */

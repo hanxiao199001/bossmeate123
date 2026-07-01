@@ -183,6 +183,9 @@ async function bootstrap() {
     // PR #161 admin-only (workbench v2 手动生成 + bulk-distribute)
     const { adminRoutes } = await import("./routes/admin.js");
     await protectedApp.register(adminRoutes, { prefix: `${env.API_PREFIX}/admin` });
+    // B-kf: 企微微信客服 AI 客服管理端（配置/会话/FAQ, admin only）
+    const { workWechatKfRoutes } = await import("./routes/work-wechat-kf.js");
+    await protectedApp.register(workWechatKfRoutes, { prefix: `${env.API_PREFIX}/admin` });
     await protectedApp.register(topicRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(workflowRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });

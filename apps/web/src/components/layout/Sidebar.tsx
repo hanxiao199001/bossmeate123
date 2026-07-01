@@ -18,6 +18,7 @@ import {
   IconBarChart,
   IconFileText,
   IconUsers,
+  IconMessageCircle,
   IconLogOut,
   type IconProps,
 } from "../ui/Icons";
@@ -37,6 +38,7 @@ const DAILY_NAV: NavItem[] = [
   { to: "/", icon: IconHome, label: "今日", matchPrefix: "" }, // 6-16 首页=今日驾驶舱(合并原首页+今日待办), 精确匹配 /
   { to: "/workbench", icon: IconPenSquare, label: "内容工坊", matchPrefix: "/workbench", anyPerms: ["content.read"] },
   { to: "/sales-radar", icon: IconRadar, label: "销售雷达", matchPrefix: "/sales-radar", anyPerms: ["sales.read_all", "sales.read_assigned"] },
+  { to: "/kf-service", icon: IconMessageCircle, label: "AI 客服", matchPrefix: "/kf-service", adminOnly: true }, // 7-2 B-kf 企微微信客服
   { to: "/accounts", icon: IconSmartphone, label: "账号矩阵", matchPrefix: "/accounts", anyPerms: ["accounts.read"] }, // 对齐首页"去账号矩阵派发"
 ];
 

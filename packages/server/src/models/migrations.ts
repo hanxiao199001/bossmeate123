@@ -381,4 +381,55 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
     description: "6-26 声音克隆: platform_accounts 加 cloned_voice_id(百炼Qwen-TTS声音复刻voice_id; 空=用全局/预置音色)。",
     sql: `ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS cloned_voice_id VARCHAR(120);`,
   },
+  {
+    version: "021_work_wechat_kf",
+    description: "7-2 企微微信客服 AI 客服: work_wechat_configs 加 kf_secret_enc + kf_sync_cursors 游标表 + kf_conversations/kf_messages 会话消息 + kf_faqs FAQ 库",
+    sql: `
+      ALTER TABLE work_wechat_configs ADD COLUMN IF NOT EXISTS kf_secret_enc TEXT;
+
+      CREATE TABLE IF NOT EXISTS kf_sync_cursors (
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        open_kfid VARCHAR(64) NOT NULL,
+        cursor TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id, open_kfid)
+      );
+
+      CREATE TABLE IF NOT EXISTS kf_conversations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        open_kfid VARCHAR(64) NOT NULL,
+        external_userid VARCHAR(64) NOT NULL,
+        mode VARCHAR(10) NOT NULL DEFAULT 'auto',
+        last_msg_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_kf_conv_uniq ON kf_conversations (tenant_id, open_kfid, external_userid);
+
+      CREATE TABLE IF NOT EXISTS kf_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        conversation_id UUID NOT NULL REFERENCES kf_conversations(id) ON DELETE CASCADE,
+        direction VARCHAR(5) NOT NULL,
+        msg_type VARCHAR(20) NOT NULL DEFAULT 'text',
+        content TEXT NOT NULL DEFAULT '',
+        ai_intent VARCHAR(30),
+        ai_action VARCHAR(20),
+        wx_msgid VARCHAR(100) UNIQUE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_kf_msg_conv ON kf_messages (conversation_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS kf_faqs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_kf_faqs_tenant ON kf_faqs (tenant_id, enabled, sort);
+    `,
+  },
 ];

@@ -19,6 +19,7 @@ import { workWechatConfigs, dedupMsgs } from "../models/schema.js";
 import { leadCollector } from "../services/sales/lead-collector.js";
 import { computeMsgSignature, decrypt } from "../services/work-wechat/crypto.js";
 import { parseWorkXml, buildWorkInboundMessage } from "../services/work-wechat/inbound-parser.js";
+import { handleKfMsgEvent } from "../services/work-wechat/kf-responder.js";
 import { decryptCredentials } from "../utils/crypto.js";
 
 const envelopeParser = new XMLParser({ ignoreAttributes: true, parseTagValue: false, trimValues: true });
@@ -100,6 +101,14 @@ export async function workWechatCallbackRoutes(app: FastifyInstance) {
     let parsed;
     try { parsed = parseWorkXml(plain); }
     catch (err) { logger.warn({ err: err instanceof Error ? err.message : err }, "work-wechat XML parse failed"); return reply.code(200).send(""); }
+
+    // 第 3.5 道：B-kf 微信客服事件（kf_msg_or_event）→ fire-and-forget 拉消息喂 AI 应答，立即 200
+    // 事件本体不带消息内容，必须回头调 kf/sync_msg 拉；失败只记日志，保持"失败一律 200"
+    if (parsed.msgType === "event" && parsed.event?.startsWith("kf_msg")) {
+      void handleKfMsgEvent(parsed.kfToken, parsed.openKfId).catch((err) =>
+        logger.error({ err: err instanceof Error ? err.message : err, openKfId: parsed.openKfId }, "kf 事件处理失败"));
+      return reply.code(200).send("");
+    }
 
     // 第 4 道：消息白名单（仅 text 入库；image/event 等 ack 200 不入库）
     if (parsed.msgType !== "text") {
