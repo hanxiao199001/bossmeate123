@@ -91,14 +91,21 @@ async function main() {
 
   // ② 关键字段缺失率
   // 注: is_warning_list 是 NOT NULL default false, 缺失恒 0 — 无法区分"未知"和"否", 改报 true 数量供参考
-  const missingRates = {
-    impact_factor: active.filter((r) => r.impactFactor == null).length,
-    cas_partition: active.filter((r) => !r.casPartition).length,
-    partition: active.filter((r) => !r.partition).length,
-    acceptance_rate: active.filter((r) => r.acceptanceRate == null).length,
-    review_cycle: active.filter((r) => !r.reviewCycle).length,
-    if_history: active.filter((r) => r.ifHistory == null).length,
-  };
+  // 7-02: 缺失率按国际/国内分栏 — 名字含中文=国内刊(country字段100%空, 用名字CJK判)。国内刊IF/分区缺失是正常(非SCI), 真要补的是国际刊的缺口。
+  const isDomestic = (r: { name: string | null }) => /[一-鿿]/.test(r.name ?? "");
+  const calcMissing = (rows: typeof active) => ({
+    impact_factor: rows.filter((r) => r.impactFactor == null).length,
+    cas_partition: rows.filter((r) => !r.casPartition).length,
+    partition: rows.filter((r) => !r.partition).length,
+    acceptance_rate: rows.filter((r) => r.acceptanceRate == null).length,
+    review_cycle: rows.filter((r) => !r.reviewCycle).length,
+    if_history: rows.filter((r) => r.ifHistory == null).length,
+  });
+  const intlRows = active.filter((r) => !isDomestic(r));
+  const domesticRows = active.filter(isDomestic);
+  const missingRates = calcMissing(active);
+  const missingRatesIntl = calcMissing(intlRows);
+  const missingRatesDomestic = calcMissing(domesticRows);
   const warningListTrue = active.filter((r) => r.isWarningList).length;
 
   // ③ 冲突检测 + 每刊问题归集
@@ -172,6 +179,10 @@ async function main() {
     staleOver30d,
     needAttention: neverVerified + staleOver30d, // NULL 或 >30 天
     missingCounts: missingRates,
+    missingCountsIntl: missingRatesIntl,
+    missingCountsDomestic: missingRatesDomestic,
+    intlCount: intlRows.length,
+    domesticCount: domesticRows.length,
     warningListTrue,
     conflicts: { ifDeviationOver20pct: cIfDeviation, casPartitionFormat: cCasFormat, compositeIfSuspect: cCompositeSuspect },
     journalsWithIssues: perJournal.length,
@@ -192,10 +203,14 @@ async function main() {
   md.push(`- ai_fabricated: **${aiFabricated}**`);
   md.push(`- last_verified_at 为 NULL: **${neverVerified}** (${pct(neverVerified, nActive)})`);
   md.push(`- last_verified_at > 30 天: **${staleOver30d}** (${pct(staleOver30d, nActive)})`);
-  md.push(`\n## 关键字段缺失率 (active)\n`);
-  md.push(`| 字段 | 缺失数 | 缺失率 |\n|---|---|---|`);
-  for (const [k, v] of Object.entries(missingRates)) md.push(`| ${k} | ${v} | ${pct(v, nActive)} |`);
-  md.push(`| is_warning_list | (NOT NULL 列, 缺失恒0; true=${warningListTrue}) | - |`);
+  const nIntl = intlRows.length, nDom = domesticRows.length;
+  md.push(`\n## 关键字段缺失率 (active, 国际/国内分栏)\n`);
+  md.push(`> 国际刊(英文名) ${nIntl} 本 | 国内刊(中文名) ${nDom} 本。国内刊 IF/分区缺失属正常(非 SCI 无此指标); 真要补的是国际刊缺口。\n`);
+  md.push(`| 字段 | 国际缺失 | 国际缺失率 | 国内缺失 | 国内缺失率 |\n|---|---|---|---|---|`);
+  for (const k of Object.keys(missingRates) as Array<keyof typeof missingRates>) {
+    md.push(`| ${k} | ${missingRatesIntl[k]} | ${pct(missingRatesIntl[k], nIntl)} | ${missingRatesDomestic[k]} | ${pct(missingRatesDomestic[k], nDom)} |`);
+  }
+  md.push(`| is_warning_list | (NOT NULL 列, 缺失恒0; true=${warningListTrue}) | - | - | - |`);
   md.push(`\n## 冲突检测\n`);
   md.push(`- IF 与 if_history 最新年偏差 >20%: **${cIfDeviation}**`);
   md.push(`- cas_partition 格式异常 (不含"区"): **${cCasFormat}**`);
@@ -215,7 +230,8 @@ async function main() {
     console.log(`confidence: NULL=${buckets["NULL"]}  0-40=${buckets["0-40"]}  40-60=${buckets["40-60"]}  60-80=${buckets["60-80"]}  80-100=${buckets["80-100"]}`);
     console.log(`data_source:`, Object.entries(dataSourceDist).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  "));
     console.log(`ai_fabricated=${aiFabricated}  从未验证=${neverVerified}  验证>30天=${staleOver30d}`);
-    console.log(`缺失率:`, Object.entries(missingRates).map(([k, v]) => `${k}=${pct(v, nActive)}`).join("  "));
+    console.log(`缺失率[国际${nIntl}本]:`, Object.entries(missingRatesIntl).map(([k, v]) => `${k}=${pct(v, nIntl)}`).join("  "));
+    console.log(`缺失率[国内${nDom}本]:`, Object.entries(missingRatesDomestic).map(([k, v]) => `${k}=${pct(v, nDom)}`).join("  "));
     console.log(`冲突: IF偏差>20%=${cIfDeviation}  cas格式异常=${cCasFormat}  复合IF嫌疑=${cCompositeSuspect}`);
     console.log(`\n📄 报告已写: ${outPath} (top50 最脏清单在报告里)`);
   }

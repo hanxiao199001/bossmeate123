@@ -82,6 +82,9 @@ async function main() {
       conds.push(or(isNull(journals.confidence), lt(journals.confidence, 60))!);
     }
     if (neverVerified) conds.push(isNull(journals.lastVerifiedAt));
+    // 7-02: 国际/国内筛选 — 名字含中文=国内刊(country字段100%空, 用名字CJK判)。国际刊LetPub才有料; 国内刊配 ENRICH_SKIP_LETPUB=true 探万方。
+    if (flag("intl")) conds.push(sql`${journals.name} !~ '[一-龥]'`);
+    if (flag("domestic")) conds.push(sql`${journals.name} ~ '[一-龥]'`);
     where = and(...conds);
   }
 
