@@ -196,12 +196,51 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           }
         }
 
+        // 4.5 P0四件套(7-03): ④压缩→③去AI腔→①六维质检+定向重写闭环。
+        // 为什么接在这里而不是 ArticleSkill.handle 内: handle 被 180s 硬超时包裹,
+        // 四件套的 2-4 次 LLM 调用会把正常生成挤爆超时; 放在超时圈外, 生成成功后再提质。
+        // 铁律: 流水线任何失败只 warn, 文章按现状继续走, 绝不让提质把生产打挂。
+        let sixDimPassedGate: boolean | null = null;
+        try {
+          const { runArticleQualityPasses, qualityPipelineMeta } = await import("../content-engine/quality-pipeline.js");
+          const [cur] = await db
+            .select({ body: contents.body, title: contents.title })
+            .from(contents)
+            .where(eq(contents.id, content.id))
+            .limit(1);
+          if (cur?.body) {
+            const qp = await runArticleQualityPasses({
+              tenantId,
+              userId,
+              title: cur.title ?? row.topic,
+              body: cur.body,
+            });
+            const meta = qualityPipelineMeta(qp);
+            await db
+              .update(contents)
+              .set({
+                ...(qp.changed ? { body: qp.body } : {}),
+                metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(meta)}::jsonb`,
+                updatedAt: new Date(),
+              })
+              .where(eq(contents.id, content.id));
+            sixDimPassedGate = qp.qualityLoop.passed;
+            logger.info(
+              { contentId: content.id, sixDimTotal: qp.qualityLoop.finalTotal, rounds: qp.qualityLoop.rounds, passed: qp.qualityLoop.passed, llmCalls: qp.llmCalls },
+              "P0四件套: batch 路径提质完成"
+            );
+          }
+        } catch (e) {
+          logger.warn({ contentId: content.id, err: e instanceof Error ? e.message : e }, "P0四件套流水线失败(非阻塞), 文章按现状入库");
+        }
+
         // 5. PR-U2 质检前置: 质检明确未过 → needs_review(待审, 不进可发); 否则 generated
         const artMetaForGate = (result.artifact as { metadata?: Record<string, unknown> } | undefined)?.metadata || {};
         const qPassed = artMetaForGate.qualityPassed;
         const qScore = typeof artMetaForGate.qualityScore === "number" ? artMetaForGate.qualityScore : undefined;
         // PR-U2(调) 只在质检明确判不通过时转待审; 尊重原质检结论, 不再用分数二次卡(过严会误伤)
-        const failed = qPassed === false;
+        // P0①: 六维质检(重写循环后)仍未过 → 同样转 needs_review, 低分文章人工可在管理端看到, 不阻塞生产
+        const failed = qPassed === false || sixDimPassedGate === false;
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
           await db.update(contents)

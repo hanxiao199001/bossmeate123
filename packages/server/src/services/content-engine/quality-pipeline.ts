@@ -1,0 +1,350 @@
+/**
+ * P0四件套编排器：生成全文之后、入库之前的质量流水线（独立模块，多条生成路径共用）
+ *
+ *   ④压缩去水分 → ③AI腔检测+段落级清洗 → ①老韩六维质检 → 未过→定向重写循环（重写段落再过③）
+ *
+ * 接线方（都调 runArticleQualityPasses）：
+ *   - services/batch/batch-worker.ts     —— 批量生产主路径（daily-cron domestic/international → createBatch → 这里）
+ *   - services/content-engine/article-pipeline.ts —— runArticlePipeline 路由路径
+ *   - services/recommendation/daily-cron.ts topicPool —— generateByFormat 路径
+ *   - scripts/sample-article.ts          —— 验收样片（打印六维明细）
+ *
+ * 铁律：任何 pass 的 LLM 失败 → 用当前文本继续/跳过该 pass，绝不 throw、绝不阻塞生成。
+ * 成本封顶：正常路径 ≤3 次新增 LLM 调用；重写循环每轮 ≤4 次、最多 ARTICLE_QUALITY_REWRITE_MAX（默认2）轮。
+ */
+import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
+import { chat } from "../ai/chat-service.js";
+import { condenseArticle } from "./condense.js";
+import {
+  detectCliches,
+  removeCliches,
+  extractProseSegments,
+  replaceSegments,
+  looksLikeHtml,
+} from "./decliche.js";
+import {
+  sixDimQualityCheck,
+  SIX_DIM_LABELS,
+  type SixDimKey,
+  type SixDimResult,
+} from "./quality-check-v2.js";
+import { splitByH2, rewriteSectionInBody, spliceSection } from "./section-rewrite.js";
+
+// ============ 类型 ============
+
+export interface QualityLoopMeta {
+  /** 实际跑了几轮定向重写 */
+  rounds: number;
+  /** 最终六维分（key→0-10） */
+  finalScores: Record<string, number> | null;
+  finalTotal: number | null;
+  passed: boolean | null;
+  /** 循环未生效的原因（disabled/degraded/no_sections 等） */
+  skippedReason?: string;
+}
+
+export interface QualityPipelineResult {
+  body: string;
+  /** body 是否被任何 pass 改过 */
+  changed: boolean;
+  condense: { applied: boolean; reason?: string; ratio?: number };
+  decliche: { hits: number; rewritten: boolean };
+  sixDim: SixDimResult | null;
+  qualityLoop: QualityLoopMeta;
+  /** 本次流水线实际发出的 LLM 调用数（成本审计用） */
+  llmCalls: number;
+}
+
+// ============ 主入口 ============
+
+export async function runArticleQualityPasses(params: {
+  tenantId: string;
+  userId?: string;
+  title: string;
+  body: string;
+}): Promise<QualityPipelineResult> {
+  const { tenantId, userId, title } = params;
+  let body = params.body || "";
+  const originalBody = body;
+  let llmCalls = 0;
+
+  // ---- ④ 压缩去水分（env ARTICLE_CONDENSE，内部自带短文/模板HTML/比例护栏） ----
+  let condenseMeta: QualityPipelineResult["condense"] = { applied: false, reason: "skipped" };
+  try {
+    const c = await condenseArticle(body, {
+      tenantId,
+      userId,
+      targetRatio: env.ARTICLE_CONDENSE_RATIO,
+    });
+    body = c.body;
+    llmCalls += c.llmCalls;
+    condenseMeta = { applied: c.applied, reason: c.reason, ratio: c.ratio };
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "P0④ condense pass 异常，跳过");
+  }
+
+  // ---- ③ AI 腔检测 + 段落级清洗（env ARTICLE_DECLICHE） ----
+  let declicheMeta: QualityPipelineResult["decliche"] = { hits: 0, rewritten: false };
+  if (env.ARTICLE_DECLICHE !== "false") {
+    try {
+      const d = await removeCliches(body, { tenantId, userId });
+      body = d.text;
+      llmCalls += d.llmCalls;
+      declicheMeta = { hits: d.hits.length, rewritten: d.rewritten };
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "P0③ decliche pass 异常，跳过");
+    }
+  }
+
+  // ---- ① 六维质检 + 定向重写闭环（env ARTICLE_SIXDIM_QC） ----
+  let sixDim: SixDimResult | null = null;
+  const loop: QualityLoopMeta = { rounds: 0, finalScores: null, finalTotal: null, passed: null };
+
+  if (env.ARTICLE_SIXDIM_QC === "false") {
+    loop.skippedReason = "disabled";
+  } else {
+    sixDim = await sixDimQualityCheck({ tenantId, title, body });
+    llmCalls += 1;
+
+    const maxRounds = Math.max(0, env.ARTICLE_QUALITY_REWRITE_MAX);
+    if (sixDim.degraded) {
+      // 评分服务本身降级 → 分数不可信，重写只会瞎改，直接跳过循环
+      loop.skippedReason = "degraded";
+    } else {
+      while (!sixDim.passed && loop.rounds < maxRounds) {
+        const roundNo = loop.rounds + 1;
+        try {
+          const { newBody, rewrote, calls } = await targetedRewriteRound({
+            tenantId,
+            userId,
+            body,
+            sixDim,
+            roundNo,
+          });
+          llmCalls += calls;
+          if (!rewrote) {
+            // 重写落不了地（无章节可定位/LLM 全挂）→ 按现状收尾，别空转烧钱
+            loop.skippedReason = loop.skippedReason ?? "rewrite_not_applicable";
+            break;
+          }
+          body = newBody;
+          // 重新六维质检（重写后的效果要用同一把尺子验证）
+          sixDim = await sixDimQualityCheck({ tenantId, title, body });
+          llmCalls += 1;
+          loop.rounds = roundNo;
+          if (sixDim.degraded) break;
+        } catch (err) {
+          logger.warn({ err: err instanceof Error ? err.message : err, round: roundNo }, "P0① 重写循环异常，按现状收尾");
+          break;
+        }
+      }
+    }
+
+    loop.finalScores = Object.fromEntries(
+      (Object.keys(sixDim.dims) as SixDimKey[]).map((k) => [k, sixDim!.dims[k].score])
+    );
+    loop.finalTotal = sixDim.totalScore;
+    loop.passed = sixDim.passed;
+  }
+
+  const result: QualityPipelineResult = {
+    body,
+    changed: body !== originalBody,
+    condense: condenseMeta,
+    decliche: declicheMeta,
+    sixDim,
+    qualityLoop: loop,
+    llmCalls,
+  };
+
+  logger.info(
+    {
+      condensed: condenseMeta.applied,
+      clicheHits: declicheMeta.hits,
+      sixDimTotal: sixDim?.totalScore ?? null,
+      sixDimPassed: sixDim?.passed ?? null,
+      rewriteRounds: loop.rounds,
+      llmCalls,
+    },
+    "P0四件套流水线完成"
+  );
+  return result;
+}
+
+// ============ 定向重写（单轮） ============
+
+/**
+ * 取分数最低的 ≤2 个维度，对其 weakestSection 做定向重写：
+ * - markdown（有 `## ` 章节）：复用 section-rewrite 的 rewriteSectionInBody，逐节精修
+ * - 模板 HTML（无 `## `）：把正文段落（<p>/<li>）打包一次 LLM 调用做"问题定向修改"，
+ *   数据卡/图表/样式块物理隔离不送 LLM，排版不可能被改坏
+ * 重写后的文本再过一遍 ③ 禁词清洗（detect 免费，有命中才多 1 次调用）。
+ */
+async function targetedRewriteRound(params: {
+  tenantId: string;
+  userId?: string;
+  body: string;
+  sixDim: SixDimResult;
+  roundNo: number;
+}): Promise<{ newBody: string; rewrote: boolean; calls: number }> {
+  const { tenantId, userId, sixDim, roundNo } = params;
+  let body = params.body;
+  let calls = 0;
+  let rewrote = false;
+
+  // 分数最低的 ≤2 个未达标维度
+  const lowDims = (Object.keys(sixDim.dims) as SixDimKey[])
+    .filter((k) => sixDim.dims[k].score < 8)
+    .sort((a, b) => sixDim.dims[a].score - sixDim.dims[b].score)
+    .slice(0, 2);
+  if (lowDims.length === 0) return { newBody: body, rewrote: false, calls: 0 };
+
+  const isMarkdownSections = !looksLikeHtml(body) && splitByH2(body).length > 0;
+
+  if (isMarkdownSections) {
+    // markdown：逐维度定向重写其 weakestSection（复用老板精修同款逻辑）
+    const rewrittenSections = new Set<string>();
+    for (const k of lowDims) {
+      const d = sixDim.dims[k];
+      const sectionKey = d.weakestSection || "全文";
+      if (rewrittenSections.has(sectionKey)) continue; // 两个维度指向同一节时只重写一次
+      const instruction = `【${SIX_DIM_LABELS[k]}】维度只得 ${d.score}/10 分。修改要求：${d.fixHint || "提升该维度质量"}。信息与数据保持真实，不得编造。`;
+      try {
+        const core = await rewriteSectionInBody({
+          body,
+          sectionHeading: sectionKey,
+          instruction,
+        });
+        calls += 1;
+        if (core.rewrittenBody) {
+          body = spliceSection(body, core.target, core.rewrittenHeading, core.rewrittenBody);
+          rewrittenSections.add(sectionKey);
+          rewrote = true;
+          logger.info({ round: roundNo, dim: k, section: core.target.headingText }, "P0① 定向重写章节完成");
+        }
+      } catch (err) {
+        // 单节失败不影响其它维度的重写（section_not_found / LLM 挂 都只跳过）
+        logger.warn(
+          { err: err instanceof Error ? err.message : err, dim: k, section: sectionKey },
+          "P0① 单节定向重写失败，跳过该维度"
+        );
+        // rewriteSectionInBody 在 LLM 调用前抛错（无章节等）时没花钱；调用后抛错已花钱，统一按 1 计保守估算
+        if (!(err instanceof Error && (err.message === "no_h2_sections" || err.message === "section_not_found" || err.message === "no_ai_provider"))) {
+          calls += 1;
+        }
+      }
+    }
+  } else {
+    // 模板 HTML：无 `## ` 章节可定位 → 段落打包定向修改（单次调用）
+    const r = await htmlProseTargetedRewrite({ tenantId, userId, body, sixDim, lowDims });
+    calls += r.calls;
+    if (r.rewrote) {
+      body = r.newBody;
+      rewrote = true;
+    }
+  }
+
+  // 重写后的段落也过 ③：detect 是纯函数零成本，有命中才发 1 次清洗调用
+  if (rewrote && env.ARTICLE_DECLICHE !== "false" && detectCliches(body).length > 0) {
+    try {
+      const d = await removeCliches(body, { tenantId, userId });
+      body = d.text;
+      calls += d.llmCalls;
+    } catch { /* 清洗失败保留重写结果 */ }
+  }
+
+  return { newBody: body, rewrote, calls };
+}
+
+/**
+ * 模板 HTML 文章的定向修改：只送 <p>/<li>/<h3>/<h4> 正文段（≤8000字），
+ * 让 LLM 按 fixHint 只改有问题的段并按编号返回，其余段原样保留。
+ */
+async function htmlProseTargetedRewrite(params: {
+  tenantId: string;
+  userId?: string;
+  body: string;
+  sixDim: SixDimResult;
+  lowDims: SixDimKey[];
+}): Promise<{ newBody: string; rewrote: boolean; calls: number }> {
+  const { tenantId, userId, body, sixDim, lowDims } = params;
+
+  const segments = extractProseSegments(body);
+  if (segments.length === 0) return { newBody: body, rewrote: false, calls: 0 };
+
+  // 成本护栏：正文段累计 ≤8000 字符（模板文数据卡不在其列，正常都装得下）
+  const capped: typeof segments = [];
+  let budget = 8000;
+  for (const s of segments) {
+    if (s.text.length > budget) break;
+    capped.push(s);
+    budget -= s.text.length;
+  }
+  if (capped.length === 0) return { newBody: body, rewrote: false, calls: 0 };
+
+  const problems = lowDims
+    .map((k) => `- 【${SIX_DIM_LABELS[k]}】${sixDim.dims[k].score}/10 分，薄弱位置：${sixDim.dims[k].weakestSection}。修法：${sixDim.dims[k].fixHint}`)
+    .join("\n");
+  const numbered = capped.map((s, i) => `【段${i + 1}】${s.text}`).join("\n");
+
+  try {
+    const resp = await chat({
+      tenantId,
+      userId: userId || "system",
+      conversationId: `qloop-html-${Date.now()}`,
+      skillType: "content_generation",
+      message: `这是一篇公众号文章的正文段落（HTML 片段，按编号列出）。质检发现以下问题：
+${problems}
+
+请定向修改：
+1. 只改与上述问题相关的段落，其余段落**不要**出现在输出里
+2. 保留每段的 HTML 标签结构（<p>/<li>/<strong> 等）原样，只改文字
+3. 所有数据/事实保持原文一致，严禁编造或改数字
+4. 只输出 JSON（改了哪段就给哪段）：{"3":"改后的段3","7":"改后的段7"}，不要解释
+
+${numbered}`,
+    });
+
+    const jsonMatch = resp.content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { newBody: body, rewrote: false, calls: 1 };
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, string>;
+
+    const replacements: Array<{ seg: (typeof capped)[number]; newText: string }> = [];
+    for (const [k, v] of Object.entries(parsed)) {
+      const idx = Number(k) - 1;
+      const seg = capped[idx];
+      // 校验：段存在 + 非空 + 长度 40%-250%（防吞段/注水/改崩标签）
+      if (seg && typeof v === "string" && v.trim().length >= seg.text.length * 0.4 && v.length <= seg.text.length * 2.5) {
+        replacements.push({ seg, newText: v.trim() });
+      }
+    }
+    if (replacements.length === 0) return { newBody: body, rewrote: false, calls: 1 };
+
+    const newBody = replaceSegments(body, replacements);
+    logger.info({ segsChanged: replacements.length, dims: lowDims }, "P0① HTML 段落级定向重写完成");
+    return { newBody, rewrote: true, calls: 1 };
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "P0① HTML 定向重写失败，保留原文");
+    return { newBody: body, rewrote: false, calls: 1 };
+  }
+}
+
+/**
+ * 给 contents.metadata 用的精简元数据（各接线方统一格式，管理端好读）。
+ */
+export function qualityPipelineMeta(qp: QualityPipelineResult): Record<string, unknown> {
+  return {
+    sixDimScores: qp.qualityLoop.finalScores,
+    sixDimTotal: qp.qualityLoop.finalTotal,
+    sixDimPassed: qp.qualityLoop.passed,
+    sixDimDegraded: qp.sixDim?.degraded ?? null,
+    dataDensity: qp.sixDim?.dataDensity,
+    qualityLoop: { rounds: qp.qualityLoop.rounds, finalScores: qp.qualityLoop.finalScores, ...(qp.qualityLoop.skippedReason ? { skippedReason: qp.qualityLoop.skippedReason } : {}) },
+    condensed: qp.condense.applied,
+    ...(qp.condense.ratio ? { condenseRatio: Number(qp.condense.ratio.toFixed(2)) } : {}),
+    clicheHits: qp.decliche.hits,
+    clicheRewritten: qp.decliche.rewritten,
+    qualityPipelineLlmCalls: qp.llmCalls,
+  };
+}

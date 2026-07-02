@@ -17,6 +17,9 @@ import { chat } from "../ai/chat-service.js";
 import { retrieveForArticleV2 } from "../knowledge/rag-retriever-v2.js";
 import { db } from "../../models/db.js";
 import { productionRecords } from "../../models/schema.js";
+import { env } from "../../config/env.js";
+import { buildHookPromptBlock } from "../../data/hook-patterns.js";
+import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 
 // ============ 类型定义 ============
 
@@ -225,6 +228,11 @@ export async function generateByFormat(req: GenerateRequest): Promise<GeneratedC
   // 2. 构建 prompt
   const formatPrompt = FORMAT_PROMPTS[format](req);
   let fullPrompt = formatPrompt;
+  // P0②③预防（7-03）: 图文/长文格式注入钩子模式库; 全格式注入 AI 腔禁用清单
+  if (env.ARTICLE_HOOK_INJECT !== "false" && (format === "article" || format === "long_graphic")) {
+    fullPrompt += buildHookPromptBlock(req.platform || format);
+  }
+  fullPrompt += buildClicheBanPrompt(20);
   if (ragContext.text) {
     fullPrompt += `\n\n以下是知识库参考资料，请适当引用：\n${ragContext.text}`;
   }

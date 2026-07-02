@@ -123,27 +123,29 @@ export interface RewriteSectionResult {
   tokensUsed: number;
 }
 
+/** P0①：不落库的核心重写结果（quality-pipeline 定向重写闭环复用） */
+export interface RewriteSectionCoreResult {
+  target: SectionInfo;
+  rewrittenHeading: string;
+  rewrittenBody: string;
+  previousSection: string | null;
+  nextSection: string | null;
+  tokensUsed: number;
+}
+
 /**
- * AI 重写指定章节 —— 不写库，仅返回预览结果。
- * 上层（路由）拿到结果后给老板看 diff，确认才走 apply-rewrite 落库。
+ * P0①抽出的核心：对给定 body 的指定章节做 AI 重写（纯内存，不读写 DB）。
+ * 为什么抽这层：质检重写闭环发生在"入库前"，此时还没有 contentId；
+ * 老板手动精修（rewriteSection）与自动闭环共用同一段 prompt/解析逻辑，改一处两边生效。
  */
-export async function rewriteSection(
-  input: RewriteSectionInput
-): Promise<RewriteSectionResult> {
-  const start = Date.now();
+export async function rewriteSectionInBody(input: {
+  body: string;
+  sectionHeading: string;
+  instruction: string;
+}): Promise<RewriteSectionCoreResult> {
+  const body = input.body || "";
 
-  // 1. 读 content（按 contentId + tenantId 隔离）
-  const [content] = await db
-    .select()
-    .from(contents)
-    .where(and(eq(contents.id, input.contentId), eq(contents.tenantId, input.tenantId)))
-    .limit(1);
-  if (!content) {
-    throw new Error("content_not_found");
-  }
-  const body = content.body || "";
-
-  // 2. 切章节并匹配
+  // 1. 切章节并匹配
   const sections = splitByH2(body);
   if (sections.length === 0) {
     throw new Error("no_h2_sections");
@@ -160,7 +162,7 @@ export async function rewriteSection(
   const previousSection = prev ? prev.content.slice(-200) : null;
   const nextSection = next ? next.content.slice(0, 200) : null;
 
-  // 3. 构 prompt
+  // 2. 构 prompt
   const systemPrompt = `你是写作助手。根据老板指令重写指定章节，必须保持上下文连贯。
 
 原文章节：
@@ -186,7 +188,7 @@ ${nextSection || "（这是结尾章节）"}
 ${target.heading}
 新版正文...`;
 
-  // 4. 调 AI（DeepSeek-Reasoner，对应 modelRouter quality_check primary）
+  // 3. 调 AI（DeepSeek-Reasoner，对应 modelRouter quality_check primary）
   const provider = getProviderByName("deepseek");
   if (!provider) {
     throw new Error("no_ai_provider");
@@ -206,14 +208,11 @@ ${target.heading}
     aiContent = res.content || "";
     tokensUsed = (res.inputTokens || 0) + (res.outputTokens || 0);
   } catch (err) {
-    logger.error(
-      { err, contentId: input.contentId, tenantId: input.tenantId },
-      "T4-2-1: 章节重写 AI 调用失败"
-    );
+    logger.error({ err, sectionHeading: input.sectionHeading }, "T4-2-1: 章节重写 AI 调用失败");
     throw err;
   }
 
-  // 5. 解析 AI 输出 —— 期望第一行是 heading，其余是正文
+  // 4. 解析 AI 输出 —— 期望第一行是 heading，其余是正文
   const aiLines = aiContent.split("\n");
   let rewrittenHeading = target.heading;
   let rewrittenBodyStart = 0;
@@ -227,19 +226,68 @@ ${target.heading}
   // 若 AI 没输出 ## heading（违反指令），整段当 body，heading 沿用原文
   const rewrittenBody = aiLines.slice(rewrittenBodyStart).join("\n").trim();
 
+  return { target, rewrittenHeading, rewrittenBody, previousSection, nextSection, tokensUsed };
+}
+
+/**
+ * P0①：把重写后的章节按行号拼回全文（纯函数）。
+ */
+export function spliceSection(
+  body: string,
+  target: SectionInfo,
+  newHeading: string,
+  newBody: string
+): string {
+  const lines = (body || "").split("\n");
+  const replaced = [
+    ...lines.slice(0, target.startLine),
+    newHeading,
+    ...newBody.split("\n"),
+    ...lines.slice(target.endLine + 1),
+  ];
+  return replaced.join("\n");
+}
+
+/**
+ * AI 重写指定章节 —— 不写库，仅返回预览结果。
+ * 上层（路由）拿到结果后给老板看 diff，确认才走 apply-rewrite 落库。
+ */
+export async function rewriteSection(
+  input: RewriteSectionInput
+): Promise<RewriteSectionResult> {
+  const start = Date.now();
+
+  // 1. 读 content（按 contentId + tenantId 隔离）
+  const [content] = await db
+    .select()
+    .from(contents)
+    .where(and(eq(contents.id, input.contentId), eq(contents.tenantId, input.tenantId)))
+    .limit(1);
+  if (!content) {
+    throw new Error("content_not_found");
+  }
+  const body = content.body || "";
+
+  // 2. 核心重写（P0① 抽出的共用逻辑）
+  const core = await rewriteSectionInBody({
+    body,
+    sectionHeading: input.sectionHeading,
+    instruction: input.instruction,
+  });
+
   return {
     original: {
-      heading: target.heading,
-      body: target.content,
-      startLine: target.startLine,
-      endLine: target.endLine,
+      heading: core.target.heading,
+      body: core.target.content,
+      startLine: core.target.startLine,
+      endLine: core.target.endLine,
     },
     rewritten: {
-      heading: rewrittenHeading,
-      body: rewrittenBody,
+      heading: core.rewrittenHeading,
+      body: core.rewrittenBody,
     },
-    context: { previousSection, nextSection },
+    context: { previousSection: core.previousSection, nextSection: core.nextSection },
     durationMs: Date.now() - start,
-    tokensUsed,
+    tokensUsed: core.tokensUsed,
   };
 }

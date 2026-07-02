@@ -636,16 +636,27 @@ export async function runDailyContentByType(
           const gen = await generateByFormat({
             tenantId: SYS, userId: SYS_USER, topic: pick.keyword, format: "article",
           });
-          // PR-U2 轻量质检: 字数下限 + 合规硬词; 过 → generated, 不过 → needs_review
+          // P0四件套(7-03): ④压缩→③去AI腔→①六维质检+定向重写闭环, 失败兜底用原文(绝不阻塞每日生成)
+          let finalBody = gen.body;
+          let qpMeta: Record<string, unknown> = {};
+          let sixDimFail = false;
+          try {
+            const { runArticleQualityPasses, qualityPipelineMeta } = await import("../content-engine/quality-pipeline.js");
+            const qp = await runArticleQualityPasses({ tenantId: SYS, userId: SYS_USER, title: gen.title, body: gen.body });
+            finalBody = qp.body;
+            qpMeta = qualityPipelineMeta(qp);
+            sixDimFail = qp.qualityLoop.passed === false;
+          } catch (e) { logger.warn({ e }, "P0四件套流水线失败(topicPool, 非阻塞)"); }
+          // PR-U2 轻量质检: 字数下限 + 合规硬词; P0① 六维未过同样转 needs_review(人工看低分)
           const { checkCompliance } = await import("../compliance/content-check.js");
-          const comp = await checkCompliance(`${gen.title}\n${gen.body}`);
-          const plainLen = (gen.body || "").replace(/<[^>]+>/g, "").length;
-          const qcPass = plainLen >= 300 && !comp.blocked;
+          const comp = await checkCompliance(`${gen.title}\n${finalBody}`);
+          const plainLen = (finalBody || "").replace(/<[^>]+>/g, "").length;
+          const qcPass = plainLen >= 300 && !comp.blocked && !sixDimFail;
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article",
-            title: gen.title, body: gen.body,
+            title: gen.title, body: finalBody,
             ...initialStatusFields(qcPass ? "generated" : "needs_review"),
-            metadata: { source: "topic_pool", topic: pick.keyword, needsReview: !qcPass, ...gen.metadata },
+            metadata: { source: "topic_pool", topic: pick.keyword, needsReview: !qcPass, ...gen.metadata, ...qpMeta },
           }).returning({ id: contents.id });
           if (row?.id) batchIds.push(row.id);
           await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, pick.id));

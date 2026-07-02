@@ -86,10 +86,29 @@ async function main() {
     if (titles[0]) title = titles[0];
   } catch { /* 保留原标题 */ }
 
+  // P0四件套(7-03): 与生产 batch-worker 一致 — 生成后跑 ④压缩→③去AI腔→①六维质检+重写闭环, 并打印六维分数明细(验收工具)
+  let finalBody = body;
+  try {
+    const { runArticleQualityPasses } = await import("../services/content-engine/quality-pipeline.js");
+    const { SIX_DIM_LABELS, SIX_DIM_WEIGHTS } = await import("../services/content-engine/quality-check-v2.js");
+    const qp = await runArticleQualityPasses({ tenantId, userId, title, body });
+    finalBody = qp.body;
+    console.log("══════════════ 六维质检(老韩标准) ══════════════");
+    if (qp.sixDim) {
+      for (const k of Object.keys(qp.sixDim.dims) as Array<keyof typeof qp.sixDim.dims>) {
+        const d = qp.sixDim.dims[k];
+        console.log(`  ${SIX_DIM_LABELS[k]}(${SIX_DIM_WEIGHTS[k]}%): ${d.score}/10${d.score < 8 ? `  ⚠️ 最弱: ${d.weakestSection} → ${d.fixHint}` : ""}`);
+      }
+      console.log(`  ─ 总分: ${qp.sixDim.totalScore}/100  ${qp.sixDim.passed ? "✅ 过80分线" : "❌ 未过(需≥80且无维度<6)"}${qp.sixDim.degraded ? "（⚠️ 评分降级, 分数不可信）" : ""}`);
+      console.log(`  ─ 数据密度: ${qp.sixDim.dataDensity}`);
+    }
+    console.log(`  ─ 压缩: ${qp.condense.applied ? `已压缩(比例${qp.condense.ratio?.toFixed(2)})` : `未压缩(${qp.condense.reason})`} | AI腔命中: ${qp.decliche.hits}${qp.decliche.rewritten ? "(已清洗)" : ""} | 重写轮数: ${qp.qualityLoop.rounds} | 本次新增LLM调用: ${qp.llmCalls}`);
+  } catch (e) { console.log("⚠️ P0四件套流水线失败(样片继续):", e instanceof Error ? e.message : e); }
+
   console.log("══════════════ 标题 ══════════════");
   console.log(title);
   console.log("══════════════ 正文 ══════════════");
-  console.log(body.replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim());
+  console.log(finalBody.replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim());
   console.log("════════════ 数字人口播稿 ════════════");
   if (videoScript && videoScript.trim()) {
     const vs = videoScript.trim();

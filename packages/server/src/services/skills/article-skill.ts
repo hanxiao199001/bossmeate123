@@ -31,6 +31,8 @@ import { db } from "../../models/db.js";
 import { platformAccounts, tenants, journals } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
+import { pickHookPatterns } from "../../data/hook-patterns.js";
 
 // ============ 类型定义 ============
 
@@ -1407,7 +1409,11 @@ ${angleHint}
    - **具体录用率百分比**: 禁止 "录用率 48%" 类表述, 仅允许"较高/较低/适中"
    - **具体审稿周数**: 禁止 "审稿 5-8 周" 类表述 (除非 ##已知期刊数据## 给了 reviewCycle), 仅允许"较快/较慢/标准"
 4. 违反 → validator 拦截 + hasWarnings=true → 文章排除推荐池, 浪费 token`;
-    const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}` : baseSystemPrompt;
+    // P0②③预防(7-03): recommendation/scope 开头注入钩子模式 + 全字段禁 AI 腔套话
+    // 只挑 1 个模式给模板路径(标题已有自己的钩子体系, 这里管的是正文开头两句)
+    const hookPick = env.ARTICLE_HOOK_INJECT !== "false" ? pickHookPatterns(journal.discipline || undefined, 1)[0] : undefined;
+    const p0Suffix = `${hookPick ? `\n【正文开头钩子】recommendation 的第一二句按【${hookPick.name}】模式写: ${hookPick.structure} 🚫 禁止"该刊是一本…"式平铺开场。` : ""}${buildClicheBanPrompt(20)}`;
+    const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}${p0Suffix}` : `${baseSystemPrompt}${p0Suffix}`;
 
     try {
       let result = await this.provider.chat({

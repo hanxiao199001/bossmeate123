@@ -13,6 +13,10 @@ import { logger } from "../../config/logger.js";
 import { chat } from "../ai/chat-service.js";
 import { retrieveForArticleV2 } from "../knowledge/rag-retriever-v2.js";
 import { qualityCheckV2 } from "./quality-check-v2.js";
+import { runArticleQualityPasses, qualityPipelineMeta, type QualityPipelineResult } from "./quality-pipeline.js";
+import { buildHookPromptBlock } from "../../data/hook-patterns.js";
+import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
+import { env } from "../../config/env.js";
 import { db } from "../../models/db.js";
 import { contents, productionRecords } from "../../models/schema.js";
 import { initialStatusFields } from "../articles/state-machine.js";
@@ -95,29 +99,30 @@ async function runSingleArticleVariant(
   // Step 3: 基于大纲生成全文
   const article = await generateFullArticle(tenantId, outline, input, ragContext.text);
 
-  // Step 4: 质检 v2
-  const quality = await qualityCheckV2({
-    tenantId,
-    title: article.title,
-    body: article.body,
-    platform: input.platform,
-  });
-
-  // Step 5: 质检不通过则重试一次
+  // Step 4: P0四件套流水线（④压缩 → ③去AI腔 → ①六维质检 → 未过→定向重写循环）
+  // 老的"整文重试一次"被定向重写闭环取代：只重写低分维度的 weakestSection，省 token 且不推倒重来
+  let qp: QualityPipelineResult | null = null;
   let finalArticle = article;
-  let finalQuality = quality;
-
-  if (!quality.overallPassed) {
-    logger.info({ variantIndex }, "质检未通过，重试生成");
-    const feedback = buildQualityFeedback(quality);
-    finalArticle = await generateFullArticle(tenantId, outline, input, ragContext.text, feedback);
-    finalQuality = await qualityCheckV2({
+  try {
+    qp = await runArticleQualityPasses({
       tenantId,
-      title: finalArticle.title,
-      body: finalArticle.body,
-      platform: input.platform,
+      userId,
+      title: article.title,
+      body: article.body,
     });
+    finalArticle = { ...article, body: qp.body, wordCount: qp.body.length };
+  } catch (err) {
+    logger.warn({ err, variantIndex }, "P0四件套流水线失败(非阻塞), 用原文继续");
   }
+
+  // Step 5: 完整质检 v2（红线/风格/平台照旧；六维分复用流水线结果，不重复打分）
+  const finalQuality = await qualityCheckV2({
+    tenantId,
+    title: finalArticle.title,
+    body: finalArticle.body,
+    platform: input.platform,
+    precomputedSixDim: qp?.sixDim ?? undefined,
+  });
 
   // Step 6: 入库
   const [content] = await db.insert(contents).values({
@@ -135,6 +140,8 @@ async function runSingleArticleVariant(
       ragSources: ragContext.sources,
       seoKeywords: outline.seoKeywords,
       pipeline: "article-pipeline-v2",
+      // P0四件套: 六维分/重写轮数/压缩/去AI腔 全量落 metadata, 管理端可见低分文章
+      ...(qp ? qualityPipelineMeta(qp) : {}),
       variantIndex,
       ...(parentContentId ? { variantOf: parentContentId } : {}),
     },
@@ -252,6 +259,12 @@ ${input.tone ? `风格: ${input.tone}` : ""}
     prompt += `\n\n知识库参考：\n${ragContext.slice(0, 2000)}`;
   }
 
+  // P0②: 注入钩子模式库（按 articleType 随机挑 3 个），hook 字段必须从中选
+  if (env.ARTICLE_HOOK_INJECT !== "false") {
+    prompt += buildHookPromptBlock(input.articleType);
+    prompt += `\n（"hook" 字段必须写明选了哪个钩子模式以及开头前两句的具体写法）`;
+  }
+
   prompt += `\n\n直接输出 JSON:
 {
   "title": "文章标题（25字以内，有吸引力）",
@@ -348,6 +361,12 @@ ${input.audience ? `受众: ${input.audience}` : ""}`;
     prompt += `\n\n上次质检反馈，请改进：\n${qualityFeedback}`;
   }
 
+  // P0②③预防: 钩子模式 + AI 腔禁用清单（生成端先防，生成后还有 decliche 清洗兜底）
+  if (env.ARTICLE_HOOK_INJECT !== "false") {
+    prompt += buildHookPromptBlock(input.articleType);
+  }
+  prompt += buildClicheBanPrompt(20);
+
   prompt += `\n\n要求:
 - Markdown 格式，每章节用 ## 标题
 - 开头 3 句话必须抓住读者
@@ -372,25 +391,4 @@ ${input.audience ? `受众: ${input.audience}` : ""}`;
     body: response.content,
     wordCount: response.content.length,
   };
-}
-
-// ============ 工具 ============
-
-function buildQualityFeedback(quality: Awaited<ReturnType<typeof qualityCheckV2>>): string {
-  const parts: string[] = [];
-
-  if (quality.totalScore < 70) {
-    parts.push(`总分 ${quality.totalScore}/100，需要提升整体质量`);
-  }
-  if (!quality.redlineCheck.passed) {
-    parts.push(`红线违规: ${quality.redlineCheck.violations.map((v) => v.rule).join("、")}`);
-  }
-  if (quality.styleCheck.consistency < 60) {
-    parts.push(`风格偏差: ${quality.styleCheck.deviations.join("、")}`);
-  }
-  if (!quality.platformCheck.passed) {
-    parts.push(`平台问题: ${quality.platformCheck.issues.join("、")}`);
-  }
-
-  return parts.join("\n");
 }

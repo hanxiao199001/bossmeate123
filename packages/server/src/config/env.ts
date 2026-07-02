@@ -107,6 +107,14 @@ const envSchema = z.object({
   // 文章排版库 (PR-G)
   ARTICLE_TEMPLATE_ROTATION: z.string().default("true"),                // 主版本模板轮换: true=4模板随机, false=固定默认 shunshi
 
+  // P0四件套（7-03 公众号图文质量）—— 每个 pass 都可独立开关, LLM 失败一律用原文兜底不阻塞
+  ARTICLE_CONDENSE: z.string().default("true"),                         // ④压缩去水分: false=跳过
+  ARTICLE_CONDENSE_RATIO: z.coerce.number().default(0.72),              // ④目标压缩比(压到原文的72%)
+  ARTICLE_DECLICHE: z.string().default("true"),                         // ③AI腔检测+段落级清洗: false=跳过
+  ARTICLE_SIXDIM_QC: z.string().default("true"),                        // ①老韩六维质检+定向重写闭环: false=跳过
+  ARTICLE_QUALITY_REWRITE_MAX: z.coerce.number().default(2),            // ①质检未过时定向重写最多几轮(0=不重写只打分)
+  ARTICLE_HOOK_INJECT: z.string().default("true"),                      // ②生成prompt注入钩子模式库: false=不注入
+
   // CORS
   // PR #108（5-9 hotfix 永久）：default 含 boss-mates.com 防新部署忘加 .env 导致跨域白屏。
   // 5-9 prod 事故 root cause：.env 缺 ALLOWED_ORIGINS → fallback 仅 localhost → 浏览器 CORS reject。
