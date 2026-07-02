@@ -78,29 +78,40 @@ export interface LetPubJournalDetail {
 /**
  * 从 LetPub 搜索并抓取期刊详情数据
  */
-export async function scrapeLetPubDetail(
+// 7-02: LetPub 抓取分类结果 — 供断路器分级(only "blocked" 计入 5 连败)。
+export type LetPubFetchOutcome =
+  | { kind: "ok"; detail: LetPubJournalDetail }
+  | { kind: "not_found" }                       // 正常返回页面但无匹配 = 自然查无(不计熔断)
+  | { kind: "blocked"; reason: string };        // HTTP异常/超时/解析异常页 = 反爬信号(计入)
+
+/**
+ * 分类版抓取: 返回 ok/not_found/blocked。断路器只对 blocked 计数。
+ * 自然查无(not_found)不计入连败, 可继续; 真反爬(blocked)才累加。
+ */
+export async function scrapeLetPubDetailClassified(
   journalName: string,
   issn?: string
-): Promise<LetPubJournalDetail | null> {
+): Promise<LetPubFetchOutcome> {
+  const page = await fetchLetPubDetailPage(journalName, issn);
+  if (page.kind === "blocked") {
+    logger.warn({ journalName, reason: page.reason }, "LetPub 抓取被拦(反爬信号, 计入熔断)");
+    return page;
+  }
+  if (page.kind === "not_found") {
+    logger.info({ journalName, issn }, "LetPub adapter: 期刊未找到(自然查无, 不计熔断)");
+    return { kind: "not_found" };
+  }
+  // page.kind === "page" — 拿到详情页, 解析
   try {
-    // 第一步：通过搜索找到期刊详情页
-    const detailHtml = await fetchLetPubDetailPage(journalName, issn);
-    if (!detailHtml) {
-      logger.warn({ journalName }, "LetPub 详情页未找到");
-      return null;
-    }
-
-    // 第二步：解析各项数据（PR #30 后 parsers 直接读 ECharts，不再需要 guard 兜底）
     const result: LetPubJournalDetail = {
-      ifHistory: parseIFHistory(detailHtml),
-      pubVolumeHistory: parsePubVolumeHistory(detailHtml),
-      casPartitions: parseCASPartitions(detailHtml),
-      jcrPartitions: parseJCRPartitions(detailHtml),
-      jciPartitions: parseJCIPartitions(detailHtml),
-      coverImageUrl: parseCoverImage(detailHtml),
+      ifHistory: parseIFHistory(page.html),
+      pubVolumeHistory: parsePubVolumeHistory(page.html),
+      casPartitions: parseCASPartitions(page.html),
+      jcrPartitions: parseJCRPartitions(page.html),
+      jciPartitions: parseJCIPartitions(page.html),
+      coverImageUrl: parseCoverImage(page.html),
       websiteBannerUrl: null, // TODO: 从期刊官网抓取
     };
-
     logger.info(
       {
         journalName,
@@ -111,12 +122,21 @@ export async function scrapeLetPubDetail(
       },
       "LetPub 详情数据抓取成功"
     );
-
-    return result;
+    return { kind: "ok", detail: result };
   } catch (err) {
-    logger.warn({ journalName, error: String(err) }, "LetPub 详情抓取失败");
-    return null;
+    // 拿到页面却解析失败 → 疑似异常页/验证码页, 归为反爬信号
+    logger.warn({ journalName, error: String(err) }, "LetPub 详情解析异常(疑似异常页, 计入熔断)");
+    return { kind: "blocked", reason: "parse: " + String(err) };
   }
+}
+
+/** 原签名 (月度 cron 等旧调用方保持不变): 只要 detail, blocked/not_found 都塌成 null。 */
+export async function scrapeLetPubDetail(
+  journalName: string,
+  issn?: string
+): Promise<LetPubJournalDetail | null> {
+  const r = await scrapeLetPubDetailClassified(journalName, issn);
+  return r.kind === "ok" ? r.detail : null;
 }
 
 // ============ 页面获取 ============
@@ -206,14 +226,20 @@ export function buildLetPubSearchFormData(
   });
 }
 
+// 7-02: 页面获取分类结果 — page(拿到详情页) / not_found(正常返回但无匹配=自然查无) / blocked(HTTP异常/超时=反爬信号)。
+type LetPubPageResult =
+  | { kind: "page"; html: string }
+  | { kind: "not_found" }
+  | { kind: "blocked"; reason: string };
+
 async function fetchLetPubDetailPage(
   journalName: string,
   issn?: string
-): Promise<string | null> {
+): Promise<LetPubPageResult> {
   const formData = buildLetPubSearchFormData(journalName || null, issn || null);
   if (!formData) {
     logger.debug({ journalName, issn }, "LetPub: 缺 issn 与 journalName，跳过");
-    return null;
+    return { kind: "not_found" }; // 无搜索键 = 无从匹配, 属自然查无(非反爬)
   }
   const searchUrl = `${LETPUB_BASE}/index.php?page=journalapp&view=search`;
 
@@ -228,21 +254,21 @@ async function fetchLetPubDetailPage(
       },
       body: formData.toString(),
     });
-    if (!searchResp) return null;
+    if (!searchResp) return { kind: "blocked", reason: "search 页 fetch 失败(HTTP非200/超时/网络)" }; // 拿不到页 = 反爬信号
 
     const searchHtml = await searchResp.text();
 
-    // 0-results 早返回（防御 fallback 误把错误页当详情页）
+    // 0-results 早返回（防御 fallback 误把错误页当详情页）— 正常返回页面但无结果 = 自然查无
     if (isZeroResultsSearchPage(searchHtml)) {
       logger.debug({ journalName, issn }, "LetPub: 0 search results");
-      return null;
+      return { kind: "not_found" };
     }
 
-    // 提取 journalid（容忍参数顺序 + 不依赖 href 包装）
+    // 提取 journalid（容忍参数顺序 + 不依赖 href 包装）— 返回页面但无 id = 自然查无
     const journalId = extractJournalIdFromSearchHtml(searchHtml);
     if (!journalId) {
       logger.debug({ journalName, issn }, "LetPub: journalid 提取失败");
-      return null;
+      return { kind: "not_found" };
     }
 
     // 自己拼详情 URL（不再"返回搜索页伪装详情页"的危险 fallback）
@@ -254,12 +280,12 @@ async function fetchLetPubDetailPage(
         Accept: "text/html",
       },
     });
-    if (!detailResp) return null;
+    if (!detailResp) return { kind: "blocked", reason: "detail 页 fetch 失败(有id却拿不到, 反爬信号)" }; // 有 id 却拿不到详情 = 反爬
 
-    return await detailResp.text();
+    return { kind: "page", html: await detailResp.text() };
   } catch (err) {
     logger.debug({ journalName, err: String(err) }, "LetPub 页面获取失败");
-    return null;
+    return { kind: "blocked", reason: String(err) }; // 异常 = 反爬信号
   }
 }
 

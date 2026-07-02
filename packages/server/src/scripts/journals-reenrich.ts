@@ -82,9 +82,14 @@ async function main() {
       conds.push(or(isNull(journals.confidence), lt(journals.confidence, 60))!);
     }
     if (neverVerified) conds.push(isNull(journals.lastVerifiedAt));
-    // 7-02: 国际/国内筛选 — 名字含中文=国内刊(country字段100%空, 用名字CJK判)。国际刊LetPub才有料; 国内刊配 ENRICH_SKIP_LETPUB=true 探万方。
-    if (flag("intl")) conds.push(sql`${journals.name} !~ '[一-龥]'`);
-    if (flag("domestic")) conds.push(sql`${journals.name} ~ '[一-龥]'`);
+    // 7-02: 默认只打国际刊(名字纯英文)。国内刊(名字含中文)无 SCI 指标、无源可补 IF/分区(见 B 探测), 须显式 --domestic 才碰。
+    //   country 字段 100% 空, 用名字 CJK 判最可靠(英文名 IF 缺 20.7% vs 中文名 98.8%)。
+    if (flag("domestic")) {
+      conds.push(sql`${journals.name} ~ '[一-龥]'`);
+      console.warn("⚠️  --domestic: 国内刊无 SCI 指标、无数据源可补 IF/分区, 本批多为空转(仅重算内部分数)。");
+    } else {
+      conds.push(sql`${journals.name} !~ '[一-龥]'`); // 默认 / --intl: 只国际刊
+    }
     where = and(...conds);
   }
 
@@ -109,7 +114,8 @@ async function main() {
   }
 
   const tracker = new LetPubFailStreakTracker();
-  let success = 0, failed = 0, skipped = 0;
+  const letpubCap = Number(arg("letpub-cap") ?? 300); // 7-02: 单次运行 LetPub 真实调用上限(防"自然查无不计数"变相硬打, 默认300)
+  let success = 0, failed = 0, skipped = 0, letpubCalls = 0;
 
   for (let i = 0; i < targets.length; i++) {
     const t = targets[i];
@@ -121,7 +127,8 @@ async function main() {
     let record: Record<string, unknown>;
     try {
       const result = await enrichJournal(t.id);
-      tracker.observe(result.successFields);
+      tracker.observe(result.letpubOutcome ?? "not_found"); // 7-02 分级: 只 blocked 计连败; not_found(自然查无)/skipped 不计
+      if (result.letpubOutcome && result.letpubOutcome !== "skipped") letpubCalls++;
       const after = await snapshot(t.id);
       const changes = before && after ? diff(before, after) : {};
       const changedKeys = Object.keys(changes);
@@ -136,7 +143,7 @@ async function main() {
       record = {
         ts: new Date().toISOString(), journalId: t.id, name: label, status: "success",
         durationMs: Date.now() - t0, successFields: result.successFields, failedFields: result.failedFields,
-        before, after, diff: changes,
+        letpubOutcome: result.letpubOutcome, before, after, diff: changes,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -146,12 +153,20 @@ async function main() {
     }
     fs.appendFileSync(logPath, JSON.stringify(record) + "\n", "utf-8");
 
-    // B.3 同款反爬护栏: 连续 5 条 LetPub 没数据 → 疑似被封, 停批保护 IP
+    // 7-02 反爬护栏(分级后): 连续 5 条 blocked(HTTP异常/超时/异常页) → 真被封, 停批保护 IP。自然查无不再误触发。
     if (tracker.shouldAbort()) {
       skipped = targets.length - i - 1;
-      const msg = `LetPub 连续 ${MAX_LETPUB_FAIL_STREAK} 条未拿到数据(疑似反爬), abort 剩余 ${skipped} 本`;
+      const msg = `LetPub 连续 ${MAX_LETPUB_FAIL_STREAK} 条 blocked(HTTP异常/超时/异常页=真反爬), abort 剩余 ${skipped} 本`;
       console.error(`\n⛔ ${msg}`);
-      fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), status: "aborted", reason: msg, skipped }) + "\n", "utf-8");
+      fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), status: "aborted", reason: msg, skipped, stats: tracker.stats() }) + "\n", "utf-8");
+      break;
+    }
+    // 7-02 防"变相硬打": 单次运行 LetPub 真实调用达上限即停(自然查无不计连败, 但仍受总量约束)
+    if (letpubCalls >= letpubCap) {
+      skipped = targets.length - i - 1;
+      const msg = `LetPub 调用达单次上限 ${letpubCap} 次, 停批(剩余 ${skipped} 本, 重跑续)`;
+      console.warn(`\n🛑 ${msg}`);
+      fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), status: "letpub_cap", reason: msg, skipped, stats: tracker.stats() }) + "\n", "utf-8");
       break;
     }
 
@@ -161,6 +176,12 @@ async function main() {
   }
 
   console.log(`\n=== 汇总 === 成功 ${success} / 失败 ${failed} / 跳过 ${skipped} (共 ${targets.length})`);
+  const st = tracker.stats();
+  console.log(`LetPub 分级: 命中 ${st.ok} / 自然查无 ${st.notFound} / 反爬blocked ${st.blocked} (真跑 ${st.ran} 次, 上限 ${letpubCap}) | 查无率 ${(st.notFoundRate * 100).toFixed(0)}%`);
+  // 7-02 软封检测: 查无率异常高 = LetPub 可能返回空页(而非报错), 断路器看不到 → 主动提示, 别让它失明
+  if (st.ran >= 10 && st.notFoundRate > 0.7) {
+    console.warn(`⚠️  查无率 ${(st.notFoundRate * 100).toFixed(0)}% 异常高 → 疑似软封(LetPub 返回空页而非报错, 断路器会失明)。建议换 IP / 降速 / 挂 LETPUB_PROXY, 或暂停排查。`);
+  }
   console.log(`断点续跑: 成功的已更新 last_verified_at, 直接重跑同命令即从剩余最脏的继续。`);
 }
 

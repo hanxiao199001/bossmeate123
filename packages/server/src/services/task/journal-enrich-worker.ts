@@ -53,8 +53,8 @@ export function startJournalEnrichWorker(): Worker {
       logger.info({ jobId: job.id, journalId }, "journal-enrich job 开始");
       const result = await enrichJournal(journalId, { dryRun, skipLetpub, skipDoaj });
 
-      // 反爬信号：LetPub 派生字段都没成功 → streak++；否则 reset
-      failTracker.observe(result.successFields);
+      // 7-02 反爬信号(分级): 只 blocked(HTTP异常/超时/异常页) → streak++; ok→reset; not_found(自然查无)/skipped 不计
+      failTracker.observe(result.letpubOutcome ?? "not_found");
       logger.info(
         {
           jobId: job.id,

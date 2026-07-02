@@ -10,7 +10,7 @@
  *  3. null/异常时降级为 null（不抛，让 orchestrator partial OK）
  */
 
-import { scrapeLetPubDetail, type LetPubJournalDetail } from "../../crawler/letpub-detail-scraper.js";
+import { scrapeLetPubDetailClassified, type LetPubJournalDetail, type LetPubFetchOutcome } from "../../crawler/letpub-detail-scraper.js";
 import { logger } from "../../../config/logger.js";
 
 export interface LetpubFetchInput {
@@ -18,26 +18,22 @@ export interface LetpubFetchInput {
   issn?: string | null;
 }
 
+// 7-02: 返回分类 outcome(ok/not_found/blocked) 供断路器分级。缺名字=自然查无; 抓取异常=反爬信号。
 export async function fetchLetpubDetail(
   input: LetpubFetchInput
-): Promise<LetPubJournalDetail | null> {
+): Promise<LetPubFetchOutcome> {
   const { journalName, issn } = input;
   if (!journalName) {
     logger.warn("LetPub adapter: journalName 缺失，跳过");
-    return null;
+    return { kind: "not_found" };
   }
   try {
-    const detail = await scrapeLetPubDetail(journalName, issn || undefined);
-    if (!detail) {
-      logger.info({ journalName, issn }, "LetPub adapter: 期刊未找到");
-      return null;
-    }
-    return detail;
+    return await scrapeLetPubDetailClassified(journalName, issn || undefined);
   } catch (err) {
-    logger.warn({ journalName, issn, err: String(err) }, "LetPub adapter: 抓取异常");
-    return null;
+    logger.warn({ journalName, issn, err: String(err) }, "LetPub adapter: 抓取异常(计入熔断)");
+    return { kind: "blocked", reason: String(err) };
   }
 }
 
 // 为了 unit test 方便，re-export 类型
-export type { LetPubJournalDetail };
+export type { LetPubJournalDetail, LetPubFetchOutcome };

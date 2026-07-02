@@ -59,28 +59,59 @@ describe("LetPubFailStreakTracker", () => {
     expect(t.current()).toBe(0);
     expect(t.shouldAbort()).toBe(false);
   });
-  it("each LetPub-empty enrich bumps streak; LetPub-success resets", () => {
+  it("7-02: only 'blocked' bumps streak; 'ok' resets", () => {
     const t = new LetPubFailStreakTracker();
-    t.observe(["recommendation_score"]); // 1
-    t.observe(["recommendation_score"]); // 2
+    t.observe("blocked"); // 1
+    t.observe("blocked"); // 2
     expect(t.current()).toBe(2);
-    t.observe(["if_history", "recommendation_score"]); // reset
+    t.observe("ok"); // reset
     expect(t.current()).toBe(0);
     expect(t.shouldAbort()).toBe(false);
   });
-  it("triggers abort exactly at MAX_LETPUB_FAIL_STREAK consecutive empties (= 5)", () => {
+  it("triggers abort exactly at MAX_LETPUB_FAIL_STREAK consecutive 'blocked' (= 5)", () => {
     const t = new LetPubFailStreakTracker();
     for (let i = 0; i < MAX_LETPUB_FAIL_STREAK - 1; i++) {
-      t.observe(["recommendation_score"]);
+      t.observe("blocked");
       expect(t.shouldAbort()).toBe(false);
     }
-    t.observe(["recommendation_score"]); // 5th
+    t.observe("blocked"); // 5th
     expect(t.current()).toBe(MAX_LETPUB_FAIL_STREAK);
     expect(t.shouldAbort()).toBe(true);
   });
+  it("7-02: 'not_found'(自然查无) never bumps streak — no false abort", () => {
+    const t = new LetPubFailStreakTracker();
+    for (let i = 0; i < 20; i++) t.observe("not_found");
+    expect(t.current()).toBe(0);
+    expect(t.shouldAbort()).toBe(false);
+  });
+  it("7-02: 'skipped'(ENRICH_SKIP_LETPUB) counts nothing — fixes B-10 false abort", () => {
+    const t = new LetPubFailStreakTracker();
+    for (let i = 0; i < 20; i++) t.observe("skipped");
+    expect(t.current()).toBe(0);
+    expect(t.shouldAbort()).toBe(false);
+    expect(t.stats().ran).toBe(0);
+  });
+  it("7-02: blocked interspersed with not_found still accumulates to abort", () => {
+    const t = new LetPubFailStreakTracker();
+    for (let i = 0; i < MAX_LETPUB_FAIL_STREAK; i++) {
+      t.observe("blocked");
+      t.observe("not_found"); // 不重置、不计连败
+    }
+    expect(t.current()).toBe(MAX_LETPUB_FAIL_STREAK);
+    expect(t.shouldAbort()).toBe(true);
+  });
+  it("7-02: stats() notFoundRate for soft-ban detection", () => {
+    const t = new LetPubFailStreakTracker();
+    for (let i = 0; i < 8; i++) t.observe("not_found");
+    t.observe("ok"); t.observe("ok");
+    const s = t.stats();
+    expect(s.ran).toBe(10);
+    expect(s.notFound).toBe(8);
+    expect(s.notFoundRate).toBeCloseTo(0.8);
+  });
   it("reset() clears streak (admin / restart-equivalent)", () => {
     const t = new LetPubFailStreakTracker();
-    for (let i = 0; i < 6; i++) t.observe(["recommendation_score"]);
+    for (let i = 0; i < 6; i++) t.observe("blocked");
     expect(t.shouldAbort()).toBe(true);
     t.reset();
     expect(t.current()).toBe(0);

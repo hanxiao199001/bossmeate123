@@ -138,6 +138,10 @@ export interface ScopeDetailsShape {
 /**
  * 单期刊 enrichment 结果。orchestrator 返回这个 + 写 metadata.enrichmentLog
  */
+// 7-02: LetPub 本条抓取分类 — 断路器只对 "blocked"(真反爬:HTTP异常/超时/异常页) 计数;
+//   "not_found"(正常返回页面但无匹配=自然查无) 不计、可继续; "skipped"(ENRICH_SKIP_LETPUB) 完全不计。
+export type LetpubOutcomeKind = "ok" | "not_found" | "blocked" | "skipped";
+
 export interface EnrichmentResult {
   journalId: string;
   startedAt: string;     // ISO
@@ -146,6 +150,7 @@ export interface EnrichmentResult {
   successFields: string[]; // 成功 set 的字段名（DB 列名）
   failedFields: string[];
   errors: Record<string, string>;
+  letpubOutcome?: LetpubOutcomeKind; // 7-02: 本条 LetPub 抓取分类 (断路器据此分级计数)
   fieldsSummary: {
     if_history: boolean;
     jcr_full: boolean;

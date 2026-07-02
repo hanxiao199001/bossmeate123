@@ -68,7 +68,7 @@ import {
   extractCarIndexHistory,
 } from "./extractors/openalex-extractor.js";
 import { calculateRecommendationScore } from "./score/recommendation-score-calculator.js";
-import type { EnrichmentResult, EnrichOptions, TopInstitutionRow } from "./types.js";
+import type { EnrichmentResult, EnrichOptions, TopInstitutionRow, LetpubOutcomeKind } from "./types.js";
 
 /** 单条 enrichmentLog entry */
 interface EnrichLogEntry {
@@ -125,7 +125,13 @@ export async function enrichJournal(
     timed("crossref", fetchCrossrefByIssn(journal.issn)),
   ]);
 
-  const letpub = letpubTimed.value;
+  // 7-02: letpubTimed.value 现在是分类 outcome(skip 时为 null)。detail 供下游 extractor, outcome 供断路器分级。
+  const letpubOutcomeVal = letpubTimed.value; // LetPubFetchOutcome | null
+  const letpub = (letpubOutcomeVal && letpubOutcomeVal.kind === "ok") ? letpubOutcomeVal.detail : null;
+  const letpubOutcome: LetpubOutcomeKind =
+    skipLetpub ? "skipped"
+      : letpubTimed.status !== "success" ? "blocked"
+        : (letpubOutcomeVal?.kind ?? "blocked");
   const doaj = doajTimed.value;
   const openalex = openalexTimed.value;
   const warningList = fenqubiaoTimed.value;
@@ -477,6 +483,7 @@ export async function enrichJournal(
     successFields,
     failedFields,
     errors,
+    letpubOutcome,
     fieldsSummary: {
       if_history: !!updates.ifHistory,
       jcr_full: !!updates.jcrFull,
