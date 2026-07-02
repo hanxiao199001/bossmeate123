@@ -26,6 +26,8 @@ const configSchema = z.object({
   token: z.string().min(1).max(100),
   encodingAesKey: z.string().length(43).optional(), // 企微固定 43 字符；更新时可不传（保留旧值）
   kfSecret: z.string().min(1).optional(),           // 微信客服 Secret；可后补
+  agentSecret: z.string().min(1).optional(),        // 自建应用 Secret（handoff 通知运营）；可后补，省略保留旧值
+  notifyUserIds: z.string().max(500).optional(),    // 通知接收人 userid 逗号分隔；省略保留旧值，传空串=清空(回退@all)
 });
 
 const faqSchema = z.object({
@@ -53,6 +55,8 @@ export async function workWechatKfRoutes(app: FastifyInstance) {
           token: body.token,
           ...(body.encodingAesKey ? { encodingAesKeyEnc: encryptCredentials(body.encodingAesKey) } : {}),
           ...(body.kfSecret ? { kfSecretEnc: encryptCredentials(body.kfSecret) } : {}),
+          ...(body.agentSecret ? { agentSecretEnc: encryptCredentials(body.agentSecret) } : {}),
+          ...(body.notifyUserIds !== undefined ? { notifyUserids: body.notifyUserIds.trim() || null } : {}),
           updatedAt: new Date(),
         }).where(eq(workWechatConfigs.id, existing.id));
         return reply.send({ code: "ok", data: { updated: true } });
@@ -68,6 +72,8 @@ export async function workWechatKfRoutes(app: FastifyInstance) {
         token: body.token,
         encodingAesKeyEnc: encryptCredentials(body.encodingAesKey),
         kfSecretEnc: body.kfSecret ? encryptCredentials(body.kfSecret) : undefined,
+        agentSecretEnc: body.agentSecret ? encryptCredentials(body.agentSecret) : undefined,
+        notifyUserids: body.notifyUserIds?.trim() || undefined,
       });
       return reply.send({ code: "ok", data: { created: true } });
     } catch (err) {

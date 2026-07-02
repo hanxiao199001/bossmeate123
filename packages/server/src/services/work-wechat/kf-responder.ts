@@ -10,14 +10,15 @@
  *   4. journal_query 只用 journals 表真实字段作事实源，缺字段说"暂无数据"，禁止编造
  *   5. 全链路降级：AI/DB 任何异常 → 转人工，绝不向上抛（保回调 200）
  *
- * 运营通知：仓库暂无站内通知/webhook 机制（grep notify/webhook 只有日志），
- * handoff 先记 warn 日志 + mode=manual（前端会话列表标红），后续接通知渠道时在 handoffToHuman 处扩展。
+ * 运营通知：handoff 时通过企微自建应用（kf-client.notifyStaff）给运营推消息；
+ * agent_secret 未配置则静默跳过，通知失败只 warn —— 通知是旁路，绝不影响主流程。
  */
 import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { kfConversations, kfMessages, kfFaqs, journals } from "../../models/schema.js";
 import { chat } from "../ai/chat-service.js";
-import { sendKfText, transferServiceState, syncKfMessages } from "./kf-client.js";
+import { sendKfText, transferServiceState, syncKfMessages, notifyStaff } from "./kf-client.js";
+import type { KfSyncedMsg } from "./kf-client.js";
 import { logger } from "../../config/logger.js";
 
 export interface KfInboundText {
@@ -70,8 +71,23 @@ async function handoffToHuman(conv: { id: string; tenantId: string; openKfid: st
   await replyAndRecord(conv, HANDOFF_REPLY, intent, "transferred");
   await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
   await transferServiceState(conv.openKfid, conv.externalUserid, 2); // 2=进待接入池等人工认领
-  // 通知运营：暂无站内通知渠道，先 warn 日志兜底（前端会话列表 manual 标红即可见）
   logger.warn({ conversationId: conv.id, tenantId: conv.tenantId, reason }, "kf 会话已转人工，请运营尽快跟进");
+  // 通知运营（企微自建应用 message/send）：失败只 warn，绝不影响 handoff 主流程
+  try {
+    const [lastIn] = await db.select({ content: kfMessages.content }).from(kfMessages)
+      .where(and(eq(kfMessages.conversationId, conv.id), eq(kfMessages.direction, "in")))
+      .orderBy(desc(kfMessages.createdAt)).limit(1);
+    const lastText = (lastIn?.content ?? "").slice(0, 120);
+    await notifyStaff([
+      "【AI 客服转人工】",
+      `客户: ${conv.externalUserid.slice(0, 12)}…`,
+      `原因: ${reason}`,
+      `客户最后一条消息: ${lastText || "（无）"}`,
+      "请到 BossMate「AI 客服」页接管会话",
+    ].join("\n"));
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err, conversationId: conv.id }, "handoff 运营通知失败（已忽略）");
+  }
 }
 
 /** 从 LLM 输出里抠 JSON（容忍 ```json 围栏 / 前后废话） */
@@ -242,22 +258,88 @@ export async function processKfTextMessage(msg: KfInboundText): Promise<void> {
   }
 }
 
+// 客户非 text 消息的占位文案（管理页会话完整性用；AI 只答 text，这些不触发 AI）
+const NON_TEXT_PLACEHOLDER: Record<string, string> = {
+  image: "[图片]",
+  voice: "[语音]",
+  video: "[视频]",
+  file: "[文件]",
+  location: "[位置]",
+};
+
+/** 客户(origin=3)发的非 text 消息 → 落一条占位入站消息，不触发 AI */
+async function recordNonTextInbound(tenantId: string, m: KfSyncedMsg): Promise<void> {
+  try {
+    const conv = await upsertConversation({ tenantId, openKfid: m.open_kfid, externalUserid: m.external_userid, msgid: m.msgid, content: "" });
+    await db.insert(kfMessages).values({
+      conversationId: conv.id,
+      direction: "in",
+      msgType: m.msgtype,
+      content: NON_TEXT_PLACEHOLDER[m.msgtype] ?? "[不支持的消息类型]",
+      aiAction: "skipped", // AI 只答 text，占位消息明确标跳过
+      wxMsgid: m.msgid,    // 防重照旧：冲突即静默跳过
+    }).onConflictDoNothing();
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : err, msgid: m.msgid }, "kf 非文本占位消息落库失败");
+  }
+}
+
 /**
- * 回调 kf_msg_or_event 事件入口：sync_msg 拉增量 → 逐条喂 responder。
- * 只处理客户(origin=3)发的 text；系统/接待人员消息与非文本落库价值低，先跳过。
+ * 接待人员(origin=5)在企微客户端发的 text 回复 → 回流落库 + 会话置 manual。
+ * 置 manual 是防 AI 与人工打架的关键：人工既已在企微端接管，AI 必须让位。
+ */
+async function recordHumanWecomReply(tenantId: string, m: KfSyncedMsg): Promise<void> {
+  try {
+    const conv = await upsertConversation({ tenantId, openKfid: m.open_kfid, externalUserid: m.external_userid, msgid: m.msgid, content: "" });
+    const inserted = await db.insert(kfMessages).values({
+      conversationId: conv.id,
+      direction: "out",
+      msgType: "text",
+      content: m.text?.content ?? "",
+      aiAction: "human_wecom", // 企微端人工回复（区分系统内 manual 回复）
+      wxMsgid: m.msgid,        // 防重照旧
+    }).onConflictDoNothing().returning({ id: kfMessages.id });
+    if (inserted.length === 0) return; // sync 重放，这条已处理过
+
+    if (conv.mode !== "manual") {
+      await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
+      logger.info({ conversationId: conv.id }, "接待人员已在企微端回复，会话切 manual（AI 让位）");
+    }
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : err, msgid: m.msgid }, "kf 接待人员回复回流失败");
+  }
+}
+
+/**
+ * 回调 kf_msg_or_event 事件入口：sync_msg 拉增量 → 按 origin 分流。
+ * origin 语义（企微官方文档「微信客服-读取消息」sync_msg 返回字段）：
+ *   3=微信客户发送的消息  4=系统推送的消息（欢迎语/系统事件等）  5=接待人员在企业微信客户端发送的消息
+ * 分流规则：
+ *   - origin=3 + text     → AI 应答主流程（processKfTextMessage）
+ *   - origin=3 + 非 text  → 落占位消息（[图片]/[语音]…），不触发 AI
+ *   - origin=5 + text     → 回流落库（ai_action=human_wecom）+ 会话置 manual（AI 让位）
+ *   - origin=4 / event    → 跳过不落库
  */
 export async function handleKfMsgEvent(callbackToken?: string, openKfid?: string): Promise<void> {
   const synced = await syncKfMessages(callbackToken, openKfid);
   if (!synced) return;
+  // 串行处理保证同会话消息顺序；各分支内部消化所有异常
   for (const m of synced.msgs) {
-    if (m.origin !== 3 || m.msgtype !== "text" || !m.text?.content) continue;
-    // 串行处理保证同会话消息顺序；processKfTextMessage 内部消化所有异常
-    await processKfTextMessage({
-      tenantId: synced.tenantId,
-      openKfid: m.open_kfid,
-      externalUserid: m.external_userid,
-      msgid: m.msgid,
-      content: m.text.content,
-    });
+    if (m.origin === 3) {
+      if (m.msgtype === "text" && m.text?.content) {
+        await processKfTextMessage({
+          tenantId: synced.tenantId,
+          openKfid: m.open_kfid,
+          externalUserid: m.external_userid,
+          msgid: m.msgid,
+          content: m.text.content,
+        });
+      } else if (m.msgtype !== "event") {
+        await recordNonTextInbound(synced.tenantId, m);
+      }
+    } else if (m.origin === 5 && m.msgtype === "text" && m.text?.content) {
+      await recordHumanWecomReply(synced.tenantId, m);
+    }
+    // origin=4（系统推送）及其余情况：跳过不落库
   }
 }

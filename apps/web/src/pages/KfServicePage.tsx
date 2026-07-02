@@ -42,7 +42,7 @@ const INTENT_LABEL: Record<string, string> = {
   journal_query: "期刊查询", service_faq: "服务FAQ", chitchat: "闲聊", handoff: "转人工",
 };
 const ACTION_LABEL: Record<string, string> = {
-  answered: "AI已答", transferred: "已转人工", skipped: "跳过", manual: "人工",
+  answered: "AI已答", transferred: "已转人工", skipped: "跳过", manual: "人工", human_wecom: "企微端人工",
 };
 
 function relTime(t: string | null): string {
@@ -166,7 +166,7 @@ function ConversationsTab() {
                   <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap break-words ${
                     m.direction === "out" ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-800"
                   }`}>
-                    <p>{m.content}</p>
+                    <p className={m.msgType !== "text" ? "italic text-gray-400" : ""}>{m.content}</p>
                     <p className={`text-[10px] mt-1 ${m.direction === "out" ? "text-indigo-200" : "text-gray-400"}`}>
                       {m.aiIntent ? `${INTENT_LABEL[m.aiIntent] ?? m.aiIntent} · ` : ""}
                       {m.aiAction ? `${ACTION_LABEL[m.aiAction] ?? m.aiAction} · ` : ""}

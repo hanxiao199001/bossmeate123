@@ -432,4 +432,12 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_kf_faqs_tenant ON kf_faqs (tenant_id, enabled, sort);
     `,
   },
+  {
+    version: "022_kf_agent_notify",
+    description: "7-2 企微客服 handoff 运营通知: work_wechat_configs 加 agent_secret_enc(自建应用Secret加密存) + notify_userids(接收通知的企微userid逗号分隔, 空=@all)",
+    sql: `
+      ALTER TABLE work_wechat_configs ADD COLUMN IF NOT EXISTS agent_secret_enc TEXT;
+      ALTER TABLE work_wechat_configs ADD COLUMN IF NOT EXISTS notify_userids TEXT;
+    `,
+  },
 ];

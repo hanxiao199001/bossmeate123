@@ -503,6 +503,8 @@ export const workWechatConfigs = pgTable("work_wechat_configs", {
   token: varchar("token", { length: 100 }).notNull(),
   encodingAesKeyEnc: text("encoding_aes_key_enc").notNull(), // 密文存储（credentialsKey AES）
   kfSecretEnc: text("kf_secret_enc"), // B-kf: 微信客服 Secret（gettoken 用），同 encodingAesKey 走 credentialsKey 加密
+  agentSecretEnc: text("agent_secret_enc"), // B-kf: 自建应用 Secret（handoff 通知运营用 message/send），credentialsKey 加密
+  notifyUserids: text("notify_userids"), // B-kf: handoff 通知接收人（企微 userid 逗号分隔；空 = "@all"）
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

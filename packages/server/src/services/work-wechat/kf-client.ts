@@ -169,3 +169,83 @@ export async function transferServiceState(openKfid: string, externalUserid: str
     return false;
   }
 }
+
+// ============ 自建应用通知（handoff 通知运营，B-kf ①） ============
+// 走 workWechatConfigs.agentId 对应自建应用的 Secret（agent_secret_enc），token 与 kf token 分开缓存互不干扰。
+
+interface AgentCredential { tenantId: string; corpId: string; agentId: string; agentSecret: string; notifyUserids: string | null }
+
+/** 读自建应用凭证；agent_secret_enc 未配置返回 null（调用方静默跳过通知） */
+async function loadAgentCredential(): Promise<AgentCredential | null> {
+  const [cfg] = await db.select().from(workWechatConfigs).limit(1);
+  if (!cfg || !cfg.agentSecretEnc) return null;
+  try {
+    return { tenantId: cfg.tenantId, corpId: cfg.corpId, agentId: cfg.agentId, agentSecret: decryptCredentials(cfg.agentSecretEnc), notifyUserids: cfg.notifyUserids };
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "agent_secret 解密失败，跳过运营通知");
+    return null;
+  }
+}
+
+// 自建应用 access_token 独立缓存（key=corpId）；kf 与自建应用 Secret 不同，token 不可混用
+const agentTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+async function getAgentAccessToken(cred: AgentCredential, forceRefresh = false): Promise<string> {
+  const cached = agentTokenCache.get(cred.corpId);
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) return cached.token;
+
+  const url = `${QY_API}/cgi-bin/gettoken?corpid=${encodeURIComponent(cred.corpId)}&corpsecret=${encodeURIComponent(cred.agentSecret)}`;
+  const res = await fetch(url);
+  const data = (await res.json()) as { errcode?: number; errmsg?: string; access_token?: string; expires_in?: number };
+  if (data.errcode || !data.access_token) {
+    throw new Error(`agent gettoken 失败: ${data.errcode} ${data.errmsg}`);
+  }
+  const ttlMs = ((data.expires_in ?? 7200) - 300) * 1000; // 同 kf token：提前 5 分钟过期
+  agentTokenCache.set(cred.corpId, { token: data.access_token, expiresAt: Date.now() + ttlMs });
+  return data.access_token;
+}
+
+/**
+ * 自建应用给运营推文本通知（POST /cgi-bin/message/send，msgtype=text）。
+ * touser = notify_userids（DB 逗号分隔 → API 竖线分隔）；未配置则 "@all"。
+ * 红线：任何失败只 warn 返回 false 绝不抛 —— 通知是 handoff 的旁路，不能拖垮主流程。
+ */
+export async function notifyStaff(text: string): Promise<boolean> {
+  try {
+    const cred = await loadAgentCredential();
+    if (!cred) {
+      logger.debug({}, "agent_secret 未配置，跳过 handoff 运营通知");
+      return false;
+    }
+    const touser = cred.notifyUserids
+      ? (cred.notifyUserids.split(",").map((s) => s.trim()).filter(Boolean).join("|") || "@all")
+      : "@all";
+
+    const doSend = async (token: string) => {
+      const res = await fetch(`${QY_API}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          touser,
+          msgtype: "text",
+          agentid: Number(cred.agentId),
+          text: { content: text.slice(0, 2000) }, // message/send text 上限 2048 字节，粗截断保底
+        }),
+      });
+      return (await res.json()) as { errcode?: number; errmsg?: string };
+    };
+
+    let data = await doSend(await getAgentAccessToken(cred));
+    if (data.errcode === 42001 || data.errcode === 40014) { // token 过期/非法 → 强刷重试一次
+      data = await doSend(await getAgentAccessToken(cred, true));
+    }
+    if (data.errcode) {
+      logger.warn({ errcode: data.errcode, errmsg: data.errmsg, touser }, "运营通知 message/send 失败（不影响主流程）");
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "运营通知发送异常（不影响主流程）");
+    return false;
+  }
+}
