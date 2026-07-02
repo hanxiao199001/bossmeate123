@@ -148,14 +148,16 @@ export function wrapCjkLine(line: string, maxCharsPerLine: number): string[] {
   if (line.length <= maxCharsPerLine) return [line];
   const mid = Math.ceil(line.length / 2);
   let cut = -1;
+  let dropPunct = false; // 7-02: 在标点处断则该标点不带入任一行(否则上行行尾挂个逗号很丑)
   for (let d = 0; d <= 3; d++) {
     for (const idx of [mid + d, mid - d]) {
-      if (idx > 0 && idx < line.length && /[，、,;；\s]/.test(line[idx - 1]!)) { cut = idx; break; }
+      if (idx > 0 && idx < line.length && /[，、,;；\s]/.test(line[idx - 1]!)) { cut = idx; dropPunct = true; break; }
     }
     if (cut > 0) break;
   }
-  if (cut <= 0) cut = mid;
-  return [...wrapCjkLine(line.slice(0, cut).trim(), maxCharsPerLine), ...wrapCjkLine(line.slice(cut).trim(), maxCharsPerLine)].filter(Boolean);
+  if (cut <= 0) cut = mid; // 无标点: 硬切中点, 不丢字
+  const first = dropPunct ? line.slice(0, cut - 1) : line.slice(0, cut); // 标点断: 上行去掉行尾标点
+  return [...wrapCjkLine(first.trim(), maxCharsPerLine), ...wrapCjkLine(line.slice(cut).trim(), maxCharsPerLine)].filter(Boolean);
 }
 
 /** "&H00FFFFFF&" / "&H00FFFFFF" → ASS Styles 行标准形 "&H00FFFFFF"; 非法回退给定默认。 */
