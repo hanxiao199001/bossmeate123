@@ -1256,6 +1256,8 @@ export class ArticleSkill implements ISkill {
     } else {
       unknownFields.push("版面费");
     }
+    // 7-03 B-①: 年发文量注入正文(现只标题用, 正文没有)— 提升数据密度
+    if ((journal as any).annualVolume) knownFields.push(`- 年发文量：约 ${(journal as any).annualVolume} 篇/年`);
     // 预警名单只覆盖国际(SCI)刊; 国内刊不在其适用范围, 不做"不在预警名单"的正面断言(避免误导)
     const inWarnScope = journal.isWarningList || typeof journal.impactFactor === "number" || !!journal.partition || !!(journal as any).jcrFull;
     if (journal.isWarningList) knownFields.push("- ⚠️ 在中科院预警名单中");
@@ -1310,6 +1312,9 @@ export class ArticleSkill implements ISkill {
 ##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
 ${knownFields.join("\n")}
 ${unknownBlock}${blacklistBlock}${enrichmentBlock}
+## 数据密度与卖点兑现 (7-03 供给侧强化)
+1. 【密度】各分析章节必须把 ##已知期刊数据## 里的硬指标自然写进正文, 数据密度约每 200 字至少 1 个具体数字/指标(IF/两套分区/审稿周期/录用率/版面费/年发文量), 少写空泛评价、多用真数字支撑。
+2. 【卖点兑现】上述数据里的亮点(审稿快 / 分区高 / 免版面费 / 录用友好等)是本文核心卖点, 也是标题会挑来做噱头的点。开头首段必须挑最亮的 1-2 个做痛点承诺切入(如"还在为审稿半年发愁? 这本 X 周就出结果"), 正文再逐一兑现展开。**凡开头/标题承诺的数字, 正文必须出现并给出场景, 严禁承诺了不兑现(标题吹的数正文一定要有)。**
 ## 分区数据约束 (PR #180)
 任何 "分区" / "Q1" / "Q2" / "Q3" / "Q4" / "X区顶刊" 等表述,
 必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.

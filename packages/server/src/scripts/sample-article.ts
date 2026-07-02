@@ -91,7 +91,7 @@ async function main() {
   try {
     const { runArticleQualityPasses } = await import("../services/content-engine/quality-pipeline.js");
     const { SIX_DIM_LABELS, SIX_DIM_WEIGHTS } = await import("../services/content-engine/quality-check-v2.js");
-    const qp = await runArticleQualityPasses({ tenantId, userId, title, body });
+    const qp = await runArticleQualityPasses({ tenantId, userId, title, body, journalId: j.id });
     finalBody = qp.body;
     console.log("══════════════ 六维质检(老韩标准) ══════════════");
     if (qp.sixDim) {

@@ -59,7 +59,8 @@ export async function generateTitles(opts: {
     fmt("中科院分区", journal.casPartition) + fmt("JCR分区", journal.jcrPartition) +
     fmt("影响因子", journal.impactFactor) + fmt("IF趋势", journal.ifTrend) +
     fmt("审稿周期", journal.reviewCycle) + fmt("录用率", journal.acceptanceRate) +
-    fmt("自引率", journal.selfCitationRate) + fmt("版面费", journal.apc) +
+    // 7-03 选B: 自引率(OpenAlex派生)PR#210已从正文下线为不可靠 → 标题也不再用, 避免标题吹正文兑现不了的数
+    fmt("版面费", journal.apc) +
     fmt("预警情况", journal.warning) + fmt("领域", journal.discipline) +
     fmt("年发文量", journal.yearPublished) + fmt("其它卖点", journal.extra);
 

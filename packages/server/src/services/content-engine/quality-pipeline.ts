@@ -12,8 +12,11 @@
  * 铁律：任何 pass 的 LLM 失败 → 用当前文本继续/跳过该 pass，绝不 throw、绝不阻塞生成。
  * 成本封顶：正常路径 ≤3 次新增 LLM 调用；重写循环每轮 ≤4 次、最多 ARTICLE_QUALITY_REWRITE_MAX（默认2）轮。
  */
+import { eq } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
+import { db } from "../../models/db.js";
+import { journals } from "../../models/schema.js";
 import { chat } from "../ai/chat-service.js";
 import { condenseArticle } from "./condense.js";
 import {
@@ -56,6 +59,30 @@ export interface QualityPipelineResult {
   llmCalls: number;
 }
 
+/**
+ * 7-03 B-②: 期刊硬数据 → 定向重写用的紧凑清单字符串。字段容错(不同调用方 journal 形状不同)。
+ * 刻意不含自引率(selfCitationRate): 选B, OpenAlex 派生不可靠, 标题正文都不用。
+ */
+export function buildJournalDataContext(j: Record<string, any> | null | undefined): string | undefined {
+  if (!j) return undefined;
+  const L: string[] = [];
+  const name = j.name || j.nameEn;
+  if (name) L.push(`期刊：${name}${j.nameEn && j.nameEn !== name ? `（${j.nameEn}）` : ""}`);
+  if (j.impactFactor != null) L.push(`影响因子：${j.impactFactor}`);
+  if (j.casPartition || j.partition) L.push(`中科院分区：${j.casPartition || j.partition}`);
+  if (j.casPartitionNew) L.push(`新锐分区：${j.casPartitionNew}`);
+  if (j.acceptanceRate != null) L.push(`录用率：${(j.acceptanceRate >= 1 ? j.acceptanceRate : j.acceptanceRate * 100).toFixed(0)}%`);
+  else if (j.acceptanceDifficulty) L.push(`投稿难度：${j.acceptanceDifficulty}`);
+  if (j.reviewCycle) L.push(`审稿周期：${j.reviewCycle}`);
+  const apc = j.apcFee ?? j.publicationCosts?.apc ?? null;
+  if (apc === 0) L.push(`版面费：免费(无APC)`);
+  else if (apc != null && apc > 0) L.push(`版面费(APC)：${j.publicationCosts?.currency || "USD"} ${apc}`);
+  if (j.annualVolume) L.push(`年发文量：约${j.annualVolume}篇/年`);
+  if (j.isWarningList) L.push("⚠️在中科院预警名单中");
+  if (j.publisher) L.push(`出版商：${j.publisher}`);
+  return L.length ? L.map((s) => `- ${s}`).join("\n") : undefined;
+}
+
 // ============ 主入口 ============
 
 export async function runArticleQualityPasses(params: {
@@ -63,11 +90,23 @@ export async function runArticleQualityPasses(params: {
   userId?: string;
   title: string;
   body: string;
+  journalId?: string; // 7-03 B-②: 传 journalId, 内部查库构造硬数据清单, 透传给定向重写(数据准确/密度维度补数)
 }): Promise<QualityPipelineResult> {
-  const { tenantId, userId, title } = params;
+  const { tenantId, userId, title, journalId } = params;
   let body = params.body || "";
   const originalBody = body;
   let llmCalls = 0;
+
+  // 7-03 B-②: 查期刊真实硬数据 → 定向重写补数上下文(查不到/无id 就不带, 退回原行为)
+  let journalContext: string | undefined;
+  if (journalId) {
+    try {
+      const [jr] = await db.select().from(journals).where(eq(journals.id, journalId)).limit(1);
+      journalContext = buildJournalDataContext(jr as Record<string, unknown> | undefined);
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err, journalId }, "B-② 期刊数据查询失败, 重写不带硬数据");
+    }
+  }
 
   // ---- ④ 压缩去水分（env ARTICLE_CONDENSE，内部自带短文/模板HTML/比例护栏） ----
   let condenseMeta: QualityPipelineResult["condense"] = { applied: false, reason: "skipped" };
@@ -121,6 +160,7 @@ export async function runArticleQualityPasses(params: {
             body,
             sixDim,
             roundNo,
+            journalContext,
           });
           llmCalls += calls;
           if (!rewrote) {
@@ -187,8 +227,9 @@ async function targetedRewriteRound(params: {
   body: string;
   sixDim: SixDimResult;
   roundNo: number;
+  journalContext?: string;
 }): Promise<{ newBody: string; rewrote: boolean; calls: number }> {
-  const { tenantId, userId, sixDim, roundNo } = params;
+  const { tenantId, userId, sixDim, roundNo, journalContext } = params;
   let body = params.body;
   let calls = 0;
   let rewrote = false;
@@ -215,6 +256,7 @@ async function targetedRewriteRound(params: {
           body,
           sectionHeading: sectionKey,
           instruction,
+          journalContext,
         });
         calls += 1;
         if (core.rewrittenBody) {
@@ -237,7 +279,7 @@ async function targetedRewriteRound(params: {
     }
   } else {
     // 模板 HTML：无 `## ` 章节可定位 → 段落打包定向修改（单次调用）
-    const r = await htmlProseTargetedRewrite({ tenantId, userId, body, sixDim, lowDims });
+    const r = await htmlProseTargetedRewrite({ tenantId, userId, body, sixDim, lowDims, journalContext });
     calls += r.calls;
     if (r.rewrote) {
       body = r.newBody;
@@ -267,8 +309,9 @@ async function htmlProseTargetedRewrite(params: {
   body: string;
   sixDim: SixDimResult;
   lowDims: SixDimKey[];
+  journalContext?: string;
 }): Promise<{ newBody: string; rewrote: boolean; calls: number }> {
-  const { tenantId, userId, body, sixDim, lowDims } = params;
+  const { tenantId, userId, body, sixDim, lowDims, journalContext } = params;
 
   const segments = extractProseSegments(body);
   if (segments.length === 0) return { newBody: body, rewrote: false, calls: 0 };
@@ -296,11 +339,11 @@ async function htmlProseTargetedRewrite(params: {
       skillType: "content_generation",
       message: `这是一篇公众号文章的正文段落（HTML 片段，按编号列出）。质检发现以下问题：
 ${problems}
-
+${journalContext ? `\n【期刊真实硬数据（补数据/提密度只能用这里的，严禁编造/改数）】\n${journalContext}\n` : ""}
 请定向修改：
 1. 只改与上述问题相关的段落，其余段落**不要**出现在输出里
 2. 保留每段的 HTML 标签结构（<p>/<li>/<strong> 等）原样，只改文字
-3. 所有数据/事实保持原文一致，严禁编造或改数字
+3. 数据/事实以原文和上面【期刊真实硬数据】为准；补硬数据只能用清单里的真实数字，严禁编造或改数
 4. 只输出 JSON（改了哪段就给哪段）：{"3":"改后的段3","7":"改后的段7"}，不要解释
 
 ${numbered}`,

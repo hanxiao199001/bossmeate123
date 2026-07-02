@@ -214,6 +214,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               userId,
               title: cur.title ?? row.topic,
               body: cur.body,
+              ...(row.journalId ? { journalId: row.journalId } : {}),
             });
             const meta = qualityPipelineMeta(qp);
             await db

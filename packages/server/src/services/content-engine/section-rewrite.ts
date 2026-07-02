@@ -142,6 +142,7 @@ export async function rewriteSectionInBody(input: {
   body: string;
   sectionHeading: string;
   instruction: string;
+  journalContext?: string; // 7-03 B-②: 期刊真实硬数据清单; 数据准确/密度类重写据此补数(否则重写手里只有原文, fixHint说"加硬数据"也做不到)
 }): Promise<RewriteSectionCoreResult> {
   const body = input.body || "";
 
@@ -174,7 +175,7 @@ ${previousSection || "（这是开头章节）"}
 
 下文（后一章节前 200 字）：
 ${nextSection || "（这是结尾章节）"}
-
+${input.journalContext ? `\n【期刊真实硬数据（重写必须与此一致，补数据只能用这里的，严禁编造/改数）】\n${input.journalContext}\n` : ""}
 老板指令：${input.instruction}
 
 要求：
