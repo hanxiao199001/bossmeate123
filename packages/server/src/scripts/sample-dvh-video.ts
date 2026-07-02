@@ -15,8 +15,12 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db, closePool } from "../models/db.js";
 import { contents } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID, SYSTEM_RECOMMENDATION_USER_ID } from "../config/system-recommendation.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { triggerDvhFromArticle } from "../services/digital-human/article-bridge.js";
 import { remixVideo } from "../services/digital-human/video-remix.js";
+import { resolveRemixAssets } from "../services/digital-human/remix-assets.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -68,9 +72,18 @@ async function main() {
   console.log(`\n✅ 数字人原片: ${baseUrl}`);
   console.log(`   形象=${meta?.avatarLabel ?? template}  配音=${meta?.voiceLabel ?? "—"}  时长≈${Math.round((meta?.durationMs ?? 0)/1000)}s  ${meta?.realMode ? "" : "(⚠️ mock占位, 未配真实DVH)"}`);
 
-  // 混剪(防查重: 片头卡+缩放+片尾CTA+转场)
-  console.log("\n⏳ 正在混剪(片头标题卡/缩放/片尾CTA/转场)...\n");
-  const remix = await remixVideo({ videoUrl: baseUrl, title: art.title ?? "BossMate", seed: Math.floor(Math.random() * 1e6) });
+  // 混剪(防查重: 片头卡+缩放+片尾CTA+转场; 7-02 提质: 期刊封面片头背景 + 图表 B-roll + BGM ducking)
+  console.log("\n⏳ 正在混剪(片头标题卡/缩放/片尾CTA/转场/B-roll)...\n");
+  // 素材解析失败返回空对象, 混剪照常跑(样片脚本同样不因素材阻塞)
+  const assetsDir = await mkdtemp(join(tmpdir(), "dvh-remix-assets-"));
+  let remix: { videoUrl: string; remixed: boolean };
+  try {
+    const { journalId, ...assets } = await resolveRemixAssets(vid.id, assetsDir);
+    console.log(`   素材: 期刊=${journalId ?? "未关联"}  片头背景=${assets.introBgUrl ? "✓封面" : "✗纯色"}  B-roll=${assets.brollPaths?.length ?? 0}张`);
+    remix = await remixVideo({ videoUrl: baseUrl, title: art.title ?? "BossMate", seed: Math.floor(Math.random() * 1e6), ...assets });
+  } finally {
+    await rm(assetsDir, { recursive: true, force: true }).catch(() => undefined);
+  }
   console.log(`✅ 混剪成片: ${remix.videoUrl}  ${remix.remixed ? "(已混剪)" : "(混剪未生效, 回退原片)"}`);
 
   console.log("\n   👉 两条都打开对比看: 数字人形象/口型/配音自不自然; 混剪后片头/转场/CTA 观感; 像不像能直接发的号。\n");

@@ -22,6 +22,8 @@ import { join } from "node:path";
 import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
 import { env } from "../../config/env.js";
+import { srtToAssWithEmphasis } from "./subtitle-emphasis.js";
+import { probeVideo } from "./video-remix.js";
 
 export interface PostprocessOptions {
   videoUrl: string;         // DVH 原始 mp4 OSS URL
@@ -82,13 +84,15 @@ function buildForceStyle(style: SubtitleAssStyle): string {
   ].join(",");
 }
 
-async function runFFmpeg(inputMp4: string, srtPath: string, outputMp4: string, style: SubtitleAssStyle): Promise<void> {
+async function runFFmpeg(inputMp4: string, srtPath: string, outputMp4: string, style: SubtitleAssStyle, useAss = false): Promise<void> {
   const forceStyle = buildForceStyle(style);
-  // ffmpeg -y -i input.mp4 -vf "subtitles=input.srt:force_style='...'" -c:v libx264 -c:a copy output.mp4
+  // useAss=true: srtPath 传入的是我们自己生成的完整 ASS(含关键词强调内联标签) → ass= 滤镜直接渲染;
+  //   force_style 会整体覆盖行内样式基线, 所以 ASS 路径不能再挂 force_style。
+  // useAss=false: 老路径 subtitles=SRT+force_style, 与混剪提质②之前完全一致。
   const args = [
     "-y",
     "-i", inputMp4,
-    "-vf", `subtitles=${srtPath}:force_style='${forceStyle}'`,
+    "-vf", useAss ? `ass=${srtPath}` : `subtitles=${srtPath}:force_style='${forceStyle}'`,
     "-c:v", "libx264",
     "-preset", "fast",
     "-crf", "22",
@@ -159,8 +163,38 @@ export async function postprocessVideoWithSubtitle(opts: PostprocessOptions): Pr
       downloadToFile(subtitlesUrl, srtPath),
     ]);
 
-    // ffmpeg burn-in
-    await runFFmpeg(inputMp4, srtPath, outputMp4, subtitleStyle ?? {});
+    // 混剪提质②: 关键词强调 — SRT→完整 ASS(数字/分区/硬词黄色加粗放大), 用 ass= 滤镜烧。
+    //   开关 DVH_SUBTITLE_EMPHASIS(默认开); 转换/探测任一步失败 → assPath 置空走老路径, 绝不阻塞出片。
+    let assPath: string | undefined;
+    if (env.DVH_SUBTITLE_EMPHASIS) {
+      try {
+        const { w, h } = await probeVideo(inputMp4);
+        const srtText = await readFile(srtPath, "utf-8");
+        const mergedStyle: Required<SubtitleAssStyle> = { ...DEFAULT_STYLE, ...(subtitleStyle ?? {}) };
+        const ass = srtToAssWithEmphasis(srtText, mergedStyle, w, h);
+        if (ass) {
+          assPath = join(workDir, "input.ass");
+          await writeFile(assPath, ass, "utf-8");
+        } else {
+          logger.warn({ taskUuid }, "dvh.postprocess.emphasis_empty_fallback"); // SRT 解析不出 cue
+        }
+      } catch (e) {
+        logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.postprocess.emphasis_convert_failed_fallback");
+        assPath = undefined;
+      }
+    }
+
+    // ffmpeg burn-in: 优先 ASS(带强调); ASS 渲染阶段挂了再降级老 SRT+force_style 重烧一次
+    if (assPath) {
+      try {
+        await runFFmpeg(inputMp4, assPath, outputMp4, subtitleStyle ?? {}, true);
+      } catch (e) {
+        logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.postprocess.ass_burn_failed_fallback_srt");
+        await runFFmpeg(inputMp4, srtPath, outputMp4, subtitleStyle ?? {});
+      }
+    } else {
+      await runFFmpeg(inputMp4, srtPath, outputMp4, subtitleStyle ?? {});
+    }
 
     // 上传到 BossMate OSS
     const buffer = await readFile(outputMp4);

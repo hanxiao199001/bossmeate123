@@ -826,7 +826,32 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!videoUrl) return reply.code(400).send({ code: "NO_VIDEO", message: "该内容不是视频或找不到视频地址" });
       const { remixVideo } = await import("../services/digital-human/video-remix.js");
       const seed = Number.isFinite(rb.seed) ? Number(rb.seed) : undefined;
-      const result = await remixVideo({ videoUrl, title: c.title || "", cta: rb.cta, taskUuid: `c${String(id).slice(0, 8)}`, seed });
+      // 7-02 混剪提质: 解析关联期刊素材(封面→片头背景, 图表→B-roll)。素材目录由本端点创建/清理;
+      //   resolveRemixAssets 任何失败返回空对象, remix 照常跑 — 素材永远不阻塞出片。
+      let assetsDir: string | undefined;
+      let assets: { introBgUrl?: string; brollPaths?: string[] } = {};
+      try {
+        const [{ resolveRemixAssets }, { mkdtemp }, { tmpdir }, { join }] = await Promise.all([
+          import("../services/digital-human/remix-assets.js"),
+          import("node:fs/promises"),
+          import("node:os"),
+          import("node:path"),
+        ]);
+        assetsDir = await mkdtemp(join(tmpdir(), "dvh-remix-assets-"));
+        const { journalId: _j, ...rest } = await resolveRemixAssets(id, assetsDir);
+        assets = rest;
+      } catch (e) {
+        logger.warn({ id, err: e instanceof Error ? e.message : e }, "remix 素材解析失败(忽略, 走无素材混剪)");
+      }
+      let result: { videoUrl: string; remixed: boolean };
+      try {
+        result = await remixVideo({ videoUrl, title: c.title || "", cta: rb.cta, taskUuid: `c${String(id).slice(0, 8)}`, seed, ...assets });
+      } finally {
+        if (assetsDir) {
+          const { rm } = await import("node:fs/promises");
+          await rm(assetsDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
       if (!result.remixed) return reply.code(502).send({ code: "REMIX_FAILED", message: "混剪失败(已回退原视频), 看服务端日志 dvh.remix.failed_fallback(多半是字体路径或2核4G超时)" });
       return { code: "OK", data: { videoUrl: result.videoUrl, remixed: true } };
     } catch (err) {

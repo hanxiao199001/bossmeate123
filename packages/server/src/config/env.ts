@@ -91,6 +91,12 @@ const envSchema = z.object({
   DVH_SUBTITLE_ALIGNMENT: z.coerce.number().default(2),                 // 1-9 九宫格, 2=居中下方, 8=居中上方
   DVH_SUBTITLE_MARGIN_V: z.coerce.number().default(200),               // 距底/顶边距 (避抖音 UI 遮挡)
   DVH_SUBTITLE_BOLD: z.coerce.number().default(1),                      // 0/1 粗体
+  // 7-02 混剪提质②: 字幕关键词强调 — SRT→ASS 内联标签(数字/分区/硬词黄色加粗放大 1.35 倍)。
+  //   默认开; 出问题设 false 一键回老 subtitles+force_style 路径(仅影响新生成视频)。
+  DVH_SUBTITLE_EMPHASIS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   DVH_FFMPEG_TIMEOUT_MS: z.coerce.number().default(300000),             // PR-F: ffmpeg 后处理超时(5min), 超时 kill
   DVH_DOWNLOAD_TIMEOUT_MS: z.coerce.number().default(60000),            // PR-F: 下载 mp4/srt 超时(1min)
   DVH_DOWNLOAD_MAX_MB: z.coerce.number().default(600),                  // PR-F: 下载大小上限(MB)

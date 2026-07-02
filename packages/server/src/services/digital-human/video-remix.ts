@@ -4,10 +4,17 @@
  *   口型同步: 主视频/主音频 t0 都对齐到 xfade offset, 不变速、不裁主轴, 保证对口型。
  *   失败兜底: 任一步出错 → 返回原 videoUrl(不阻塞发布)。轻量(短视频 90s), 2核4G 可承受。
  *
+ * 7-02 混剪提质(①③④):
+ *   ① 片头钩子卡: 可传 introBgUrl(期刊封面等) — 铺满压暗当背景, 标题放大到 w/14 + 黑描边 + 两行断行 + 整段 fade in;
+ *   ② BGM ducking: volume 死压 0.16 → sidechaincompress(人声出现自动压 BGM, 停顿处浮起, 有呼吸感);
+ *   ③ B-roll 中段插层: brollPaths(1-3 张本地图) 全屏 overlay + enable 时间窗 + 轻微平移 —
+ *      只叠加不切主轴, 主视频时间轴/音频完全不动(口型安全)。
+ *   兜底策略: 增强滤镜图任何原因跑挂 → 自动降级重跑老滤镜图(无素材/无 ducking); 再挂才回原片。
+ *
  * ffmpeg 管线已在沙盒 4.4.2 验证通过。中文字幕需 CJK 字体(服务器装了 fonts-noto-cjk)。
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, readFile, rm, readdir } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { storage } from "../storage/index.js";
@@ -20,6 +27,8 @@ export interface RemixOptions {
   cta?: string;       // 片尾 CTA 文案
   taskUuid?: string;  // 用于 OSS key / 日志
   seed?: number;      // 随机种子: 不同账号传不同 seed → 不同成片
+  introBgUrl?: string;   // ① 片头背景图(URL/本地路径, 如期刊封面); 拿不到/下载失败回退纯色
+  brollPaths?: string[]; // ④ B-roll 本地图片路径(1-3 张, 如期刊封面/图表 PNG); 无效路径自动剔除
 }
 export interface RemixResult {
   videoUrl: string;   // 混剪后 URL(失败时回原 URL)
@@ -44,6 +53,18 @@ function rng(seed: number) {
 }
 const escFf = (s: string) => s.replace(/'/g, "").replace(/[\\:]/g, " ").slice(0, 26);
 
+/**
+ * ① 标题断行: 26 字上限保留, 但超过 14 字改成 ~13 字断两行(drawtext textfile 支持真实换行) —
+ *    比原来"截 26 字塞一行"更抓人; 单行时长标题字太小/两行都溢出的问题一并解决。
+ */
+export function wrapIntroTitle(title: string): string {
+  const t = escFf(title || "");
+  if (t.length <= 14) return t;
+  const head = t.slice(0, 13);
+  const tail = t.slice(13);
+  return `${head}\n${tail}`;
+}
+
 /** 6-26 混剪 BGM: 从 DVH_BGM_DIR 按 seed 随机选一曲(老韩放曲到该目录); 无目录/无曲则跳过(不阻塞)。 */
 async function resolveBgm(seed: number): Promise<string | undefined> {
   const dir = process.env.DVH_BGM_DIR || process.env.BGM_DIR;
@@ -55,7 +76,7 @@ async function resolveBgm(seed: number): Promise<string | undefined> {
   } catch { return undefined; }
 }
 
-async function probe(file: string): Promise<{ w: number; h: number; dur: number }> {
+export async function probeVideo(file: string): Promise<{ w: number; h: number; dur: number }> {
   return new Promise((resolve, reject) => {
     const p = spawn("ffprobe", ["-v", "error", "-select_streams", "v:0",
       "-show_entries", "stream=width,height", "-show_entries", "format=duration",
@@ -107,6 +128,62 @@ async function downloadToFile(url: string, filePath: string): Promise<void> {
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * ① 片头背景图落地: 本地已存在的路径直接用; URL(/storage/ 或 http) 下载到 workDir。
+ *    任何失败返回 undefined → 片头回退纯色, 不阻塞。
+ */
+async function resolveIntroBg(introBgUrl: string, workDir: string): Promise<string | undefined> {
+  try {
+    if (!/^https?:\/\//i.test(introBgUrl) && !introBgUrl.startsWith("/storage/")) {
+      await stat(introBgUrl); // 本地路径(remix-assets 已下载好的封面)
+      return introBgUrl;
+    }
+    const dst = join(workDir, "intro-bg.img");
+    await downloadToFile(introBgUrl, dst);
+    return dst;
+  } catch (err) {
+    logger.warn({ introBgUrl, err: err instanceof Error ? err.message : err }, "dvh.remix.intro_bg_skip");
+    return undefined;
+  }
+}
+
+/** ④ 剔除不存在的 B-roll 路径, 最多 3 张。 */
+async function filterBroll(paths: string[] | undefined): Promise<string[]> {
+  if (!paths?.length) return [];
+  const ok: string[] = [];
+  for (const p of paths.slice(0, 3)) {
+    try { await stat(p); ok.push(p); } catch { /* 素材缺失直接跳过, 不阻塞 */ }
+  }
+  return ok;
+}
+
+interface BrollSlot { start: number; seg: number; }
+
+/**
+ * ④ B-roll 排期(seed 驱动): 全部落在主视频 25%~80% 区间(避开片头/片尾 xfade),
+ *    每段 2.6~3.2s, 多张互不重叠且间隔 ≥5s(把区间均分成 slot, 抖动上限扣掉段长+最小间隔,
+ *    数学上保证任意相邻两段 gap ≥ 5s)。放不下就少放, 一张都放不下返回空。
+ */
+export function planBrollSlots(r: () => number, mainDur: number, mainStart: number, count: number): BrollSlot[] {
+  const MIN_GAP = 5, SEG_MIN = 2.6, SEG_MAX = 3.2;
+  const spanStart = mainStart + mainDur * 0.25;
+  const span = mainDur * 0.55; // 25%~80%
+  const n = Math.min(count, 3, Math.floor((span + MIN_GAP) / (SEG_MAX + MIN_GAP)));
+  if (n <= 0) return [];
+  const slot = span / n;
+  const out: BrollSlot[] = [];
+  for (let i = 0; i < n; i++) {
+    const seg = +(SEG_MIN + r() * (SEG_MAX - SEG_MIN)).toFixed(3);
+    const jitterMax = Math.max(0, slot - seg - MIN_GAP);
+    const start = +(spanStart + i * slot + r() * jitterMax).toFixed(3);
+    out.push({ start, seg });
+  }
+  return out;
+}
+
+/** 偶数化(yuv420p 尺寸必须偶数)。 */
+const even = (n: number) => 2 * Math.ceil(n / 2);
+
 /** 主入口: 原视频 → 混剪 → OSS。失败回原 URL, 不阻塞。 */
 export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
   const { videoUrl, title, cta, taskUuid } = opts;
@@ -120,7 +197,7 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     const ctaTxt = join(workDir, "cta.txt");
 
     await downloadToFile(videoUrl, inMp4);
-    const { w, h, dur } = await probe(inMp4);
+    const { w, h, dur } = await probeVideo(inMp4);
 
     const r = rng(seed);
     const pick = <T,>(arr: T[]) => arr[Math.floor(r() * arr.length) % arr.length]!;
@@ -136,34 +213,115 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     const total = +(off2 + outroDur).toFixed(3);
     const delayMs = Math.round(off1 * 1000);
 
-    await writeFile(titleTxt, escFf(title || ""));
+    await writeFile(titleTxt, wrapIntroTitle(title));
     await writeFile(ctaTxt, escFf(cta || "关注我，投稿少踩坑"));
 
     const bgmPath = await resolveBgm(seed);
-    // 6-26 加重: 片头/CTA 字号放大(w/16→w/12, w/17→w/13)更抓人; 有 BGM 则全片叠(音量压低)。
-    const audioFc = bgmPath
-      ? `[0:a]adelay=${delayMs}|${delayMs}[amain];[3:a]volume=0.16[bg];[amain][bg]amix=inputs=2:duration=longest:dropout_transition=500[aout]`
-      : `[0:a]adelay=${delayMs}|${delayMs},apad[aout]`;
-    const fc =
-      `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
-      `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 24)}:line_spacing=8:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[intro];` +
-      `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 26)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
-      `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
-      `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
-      audioFc;
+    // ① 片头背景图 + ④ B-roll 素材(全部可缺省, 缺了回退老观感)
+    const introBgPath = opts.introBgUrl ? await resolveIntroBg(opts.introBgUrl, workDir) : undefined;
+    const brollFiles = await filterBroll(opts.brollPaths);
+    const brollSlots = planBrollSlots(r, dur, off1, brollFiles.length);
+    const brolls = brollSlots.map((s, i) => ({ ...s, file: brollFiles[i]! }));
 
-    const args = [
-      "-y", "-i", inMp4,
-      "-f", "lavfi", "-t", introDur.toFixed(2), "-i", `color=c=${introCol}:s=${w}x${h}:r=25`,
-      "-f", "lavfi", "-t", outroDur.toFixed(2), "-i", `color=c=${outroCol}:s=${w}x${h}:r=25`,
-      ...(bgmPath ? ["-stream_loop", "-1", "-i", bgmPath] : []),  // input #3 = BGM(循环)
-      "-filter_complex", fc,
-      "-map", "[vv]", "-map", "[aout]", "-t", total.toFixed(2),
-      "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac",
-      "-movflags", "+faststart", outMp4,
-    ];
-    logger.info({ taskUuid, seed, dur, total, t1, t2 }, "dvh.remix.start");
-    await runFFmpeg(args);
+    /**
+     * 组装 ffmpeg 参数。enhanced=false 是 6-26 老滤镜图原样保留 —
+     * 为什么留两套: 增强图(图片片头/ducking/overlay)滤镜面更宽, 任何一处在某台机器/某个素材上
+     * 跑挂都不该导致这条片废掉, 降级重跑老图比直接回原片多保住 90% 的混剪价值。
+     */
+    const buildArgs = (enhanced: boolean) => {
+      const introFontSize = enhanced ? Math.round(w / 14) : Math.round(w / 24);
+      const borderW = Math.max(2, Math.round(w / 270)); // 1080 宽 ≈ 4px 黑描边
+      const titleDraw = enhanced
+        ? `drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${introFontSize}:borderw=${borderW}:bordercolor=black:line_spacing=${Math.round(w / 90)}:x=(w-text_w)/2:y=(h-text_h)/2`
+        : `drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${introFontSize}:line_spacing=8:x=(w-text_w)/2:y=(h-text_h)/2`;
+
+      // ① 片头: 有图 → 铺满(等比放大裁切) + eq 压暗当底; 无图 → 纯色。整段 fade in 0.4s 更抓人。
+      const useIntroImg = enhanced && !!introBgPath;
+      const introChain = useIntroImg
+        ? `[1:v]fps=25,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},eq=brightness=-0.28,setsar=1,format=yuv420p,${titleDraw},fade=t=in:d=0.4,settb=AVTB[intro];`
+        : `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,${titleDraw}${enhanced ? ",fade=t=in:d=0.4" : ""},settb=AVTB[intro];`;
+
+      // ③ BGM: 老图 volume=0.16 死压; 增强图 sidechaincompress — BGM 基线提到 0.30,
+      //   人声(delay 对齐后 asplit 一路)当 sidechain 自动压下, 人声停顿/片头片尾自然浮起。
+      //   sidechain 输入顺序: [被压的 BGM][控制信号人声]; 人声侧链 apad 铺满, 避免人声先结束把 BGM 截断。
+      let audioFc: string;
+      if (!bgmPath) {
+        audioFc = `[0:a]adelay=${delayMs}|${delayMs},apad[aout]`;
+      } else if (enhanced) {
+        // 注意: 4.4 的 sidechaincompress 不会自动协商两路输入格式(实测直接报
+        // "could not choose their formats"), 必须两路都显式 aformat 到 dbl/44100/stereo。
+        audioFc =
+          `[0:a]adelay=${delayMs}|${delayMs},asplit=2[amain][avraw];` +
+          `[avraw]apad,aformat=sample_fmts=dbl:sample_rates=44100:channel_layouts=stereo[avduck];` +
+          `[3:a]volume=0.30,aformat=sample_fmts=dbl:sample_rates=44100:channel_layouts=stereo[bgin];` +
+          `[bgin][avduck]sidechaincompress=threshold=0.02:ratio=10:attack=20:release=400[bgduck];` +
+          `[amain][bgduck]amix=inputs=2:duration=longest:dropout_transition=500[aout]`;
+      } else {
+        audioFc = `[0:a]adelay=${delayMs}|${delayMs}[amain];[3:a]volume=0.16[bg];[amain][bg]amix=inputs=2:duration=longest:dropout_transition=500[aout]`;
+      }
+
+      // ④ B-roll: 只在增强图。每张图: 放大 1.08 倍→crop 随 t 平移(比 zoompan 省资源)→
+      //   fade in/out 0.35s→setpts 平移到插入时刻; overlay 用 enable 精确开窗, 主轴帧/音频不动。
+      const useBroll = enhanced && brolls.length > 0;
+      const brollBase = bgmPath ? 4 : 3; // 输入序: 0=主片 1=片头 2=片尾 [3=BGM] 之后是 B-roll 图
+      const sw = even(w * 1.08), sh = even(h * 1.08);
+      let brollChains = "";
+      let lastLabel = "vv";
+      if (useBroll) {
+        brolls.forEach((b, i) => {
+          const idx = brollBase + i;
+          const fadeOutSt = +(b.seg - 0.35).toFixed(3);
+          brollChains +=
+            `[${idx}:v]fps=25,scale=${sw}:${sh}:force_original_aspect_ratio=increase,` +
+            `crop=${w}:${h}:x='(iw-ow)*min(t/${b.seg}\\,1)':y=(ih-oh)/2,setsar=1,format=yuv420p,` +
+            `fade=t=in:st=0:d=0.35,fade=t=out:st=${fadeOutSt}:d=0.35,setpts=PTS-STARTPTS+${b.start}/TB[b${i}];`;
+        });
+        brolls.forEach((b, i) => {
+          const src = i === 0 ? "vv" : `ov${i - 1}`;
+          const dst = `ov${i}`;
+          const end = +(b.start + b.seg).toFixed(3);
+          brollChains += `[${src}][b${i}]overlay=eof_action=pass:enable='between(t\\,${b.start}\\,${end})'[${dst}];`;
+          lastLabel = dst;
+        });
+      }
+
+      const fc =
+        `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
+        introChain +
+        `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 26)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
+        `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
+        `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
+        brollChains +
+        audioFc;
+
+      const args = [
+        "-y", "-i", inMp4,
+        // 片头输入: 图片(loop 成 introDur 视频流) 或 lavfi 纯色
+        ...(useIntroImg
+          ? ["-framerate", "25", "-loop", "1", "-t", introDur.toFixed(2), "-i", introBgPath!]
+          : ["-f", "lavfi", "-t", introDur.toFixed(2), "-i", `color=c=${introCol}:s=${w}x${h}:r=25`]),
+        "-f", "lavfi", "-t", outroDur.toFixed(2), "-i", `color=c=${outroCol}:s=${w}x${h}:r=25`,
+        ...(bgmPath ? ["-stream_loop", "-1", "-i", bgmPath] : []),  // input #3 = BGM(循环)
+        ...(useBroll ? brolls.flatMap((b) => ["-framerate", "25", "-loop", "1", "-t", b.seg.toFixed(3), "-i", b.file]) : []),
+        "-filter_complex", fc,
+        "-map", `[${useBroll ? lastLabel : "vv"}]`, "-map", "[aout]", "-t", total.toFixed(2),
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac",
+        "-movflags", "+faststart", outMp4,
+      ];
+      return args;
+    };
+
+    logger.info(
+      { taskUuid, seed, dur, total, t1, t2, introBg: !!introBgPath, brolls: brolls.map((b) => ({ start: b.start, seg: b.seg })), ducking: !!bgmPath },
+      "dvh.remix.start",
+    );
+    try {
+      await runFFmpeg(buildArgs(true));
+    } catch (err) {
+      // 增强图挂了(滤镜不兼容/素材损坏/超时等) → 降级老图重跑, 保住基础混剪, 绝不因新能力阻塞出片
+      logger.warn({ taskUuid, err: err instanceof Error ? err.message : err }, "dvh.remix.enhanced_failed_downgrade");
+      await runFFmpeg(buildArgs(false));
+    }
 
     const buffer = await readFile(outMp4);
     const key = `dvh-videos/remix-${taskUuid || Date.now()}-${seed}.mp4`;
