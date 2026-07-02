@@ -79,24 +79,54 @@ export function parseSrt(srt: string): SrtCue[] {
 }
 
 /**
+ * 强调区间的信息量权重(7-02 老韩反馈黄字可能过密, 每条限强调 maxEmphasis 处, 按权重挑):
+ *   带小数/百分号的数值(IF 26.3 / 65%) > 分区(1区/Q1) > 纯数字 > 硬词。
+ */
+function spanWeight(s: string): number {
+  if (/\d+\.\d+|%/.test(s)) return 3;
+  if (/[一二三四1-4]\s*区|Q[1-4]/.test(s)) return 2;
+  if (/\d/.test(s)) return 1.5;
+  return 1;
+}
+
+/**
  * 单行文本 → 带内联强调标签的 ASS 文本。
  * 相邻命中(间隔为空或纯空白)合并成一个标签区间, 避免 "IF 3.5" 变成两段标签碎片。
+ * @param maxEmphasis 每条字幕最多强调几处(按信息量权重挑, 位置早者优先); 0 = 不限
  */
-export function emphasizeLine(text: string, baseFontSize: number): string {
+export function emphasizeLine(text: string, baseFontSize: number, maxEmphasis = 0): string {
   const escaped = escAssText(text); // 逐字符等长替换, 不影响 match index
   EMPHASIS_RE.lastIndex = 0;
-  const spans: Array<{ start: number; end: number }> = [];
+  let spans: Array<{ start: number; end: number; lastType: string }> = [];
   let m: RegExpExecArray | null;
+  // hw=硬词(开启新语义单元) / num=数值·分区(附着在前一单元上)
+  const tokenType = (s: string) => (/^(影响因子|录用率|审稿周期|中科院|预警|SCI|IF)$/.test(s) ? "hw" : "num");
   while ((m = EMPHASIS_RE.exec(escaped)) !== null) {
     const start = m.index;
     const end = start + m[0].length;
     const last = spans[spans.length - 1];
-    // 合并: 与上一命中相邻(间隔纯空白)则扩展上一区间
-    if (last && /^\s*$/.test(escaped.slice(last.end, start))) last.end = end;
-    else spans.push({ start, end });
+    const curType = tokenType(m[0]);
+    // 合并: 与上一命中相邻(间隔纯空白/空)则扩展上一区间 — 让 "影响因子26.3"/"IF 3.5" 成一个单元。
+    // 7-02 例外: 上一单元已以数字/分区收尾、当前是硬词 → 断开(硬词开启新语义单元),
+    //   否则 "影响因子26.3中科院1区录用率65%" 这类无空格连排会链式合并成整行黄字(满屏黄字最坏形态)。
+    const gapOk = last && /^\s*$/.test(escaped.slice(last.end, start));
+    if (gapOk && !(curType === "hw" && last!.lastType === "num")) {
+      last!.end = end;
+      last!.lastType = curType;
+    } else {
+      spans.push({ start, end, lastType: curType });
+    }
     if (m[0].length === 0) EMPHASIS_RE.lastIndex++; // 防零宽死循环(理论不会)
   }
   if (spans.length === 0) return toAssNewline(escaped);
+  // 超上限 → 按权重降序(同权重取位置靠前)挑 top-N, 再按位置排回去插标签
+  if (maxEmphasis > 0 && spans.length > maxEmphasis) {
+    spans = spans
+      .map((s, i) => ({ ...s, w: spanWeight(escaped.slice(s.start, s.end)), i }))
+      .sort((a, b) => b.w - a.w || a.i - b.i)
+      .slice(0, maxEmphasis)
+      .sort((a, b) => a.start - b.start);
+  }
   // 黄色(&HBBGGRR&: 00FFFF=黄) + 加粗 + 放大 1.35 倍; {\r} 重置回 Default 样式
   const emFs = Math.round(baseFontSize * 1.35);
   const openTag = `{\\1c&H00FFFF&\\b1\\fs${emFs}}`;
@@ -107,6 +137,25 @@ export function emphasizeLine(text: string, baseFontSize: number): string {
     cursor = s.end;
   }
   return toAssNewline(out + escaped.slice(cursor));
+}
+
+/**
+ * 中文强制换行保底(7-02): ffmpeg 4.4 的 libass(0.15) 不会给无空格的 CJK 自动换行,
+ *   超宽行会直接溢出画面两侧(老韩截图实锤) — 所以超过 maxCharsPerLine 的行必须手动断。
+ *   断点优先挑中点附近(±3)的标点/空格, 挑不到就硬切中点; 过长行递归多切。
+ */
+export function wrapCjkLine(line: string, maxCharsPerLine: number): string[] {
+  if (line.length <= maxCharsPerLine) return [line];
+  const mid = Math.ceil(line.length / 2);
+  let cut = -1;
+  for (let d = 0; d <= 3; d++) {
+    for (const idx of [mid + d, mid - d]) {
+      if (idx > 0 && idx < line.length && /[，、,;；\s]/.test(line[idx - 1]!)) { cut = idx; break; }
+    }
+    if (cut > 0) break;
+  }
+  if (cut <= 0) cut = mid;
+  return [...wrapCjkLine(line.slice(0, cut).trim(), maxCharsPerLine), ...wrapCjkLine(line.slice(cut).trim(), maxCharsPerLine)].filter(Boolean);
 }
 
 /** "&H00FFFFFF&" / "&H00FFFFFF" → ASS Styles 行标准形 "&H00FFFFFF"; 非法回退给定默认。 */
@@ -126,12 +175,18 @@ export function srtToAssWithEmphasis(
   style: Required<SubtitleAssStyle>,
   videoW: number,
   videoH: number,
+  opts?: { maxEmphasis?: number; maxCharsPerLine?: number },
 ): string {
   const cues = parseSrt(srt);
   if (cues.length === 0) return "";
 
   const playResY = 288;
   const playResX = videoW > 0 && videoH > 0 ? Math.max(1, Math.round((playResY * videoW) / videoH)) : 384;
+  const marginLR = 8; // 7-02: 原 30 在 PlayResX≈162 竖屏坐标系里 = 两侧各占 18% 屏宽, 挤没了文本区; 8≈5%
+  // 每行最大字数: 可用宽度(PlayResX - 两侧边距)按字号折算, 1.1 = CJK 实测字advance略小于字号的余量
+  const maxChars = opts?.maxCharsPerLine
+    ?? Math.max(6, Math.floor(((playResX - marginLR * 2) * 1.1) / Math.max(1, style.fontSize)));
+  const maxEmphasis = opts?.maxEmphasis ?? 0;
   const primary = normColour(style.primaryColour, "&H00FFFFFF");
   const outline = normColour(style.outlineColour, "&H00000000");
   // ASS Styles 的 Bold 用 -1 表示 true(不是 1)
@@ -148,14 +203,18 @@ export function srtToAssWithEmphasis(
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,${style.fontName},${style.fontSize},${primary},&H000000FF,${outline},&H00000000,${bold},0,0,0,100,100,0,0,1,${style.outline},${style.shadow},${style.alignment},30,30,${style.marginV},1`,
+    `Style: Default,${style.fontName},${style.fontSize},${primary},&H000000FF,${outline},&H00000000,${bold},0,0,0,100,100,0,0,1,${style.outline},${style.shadow},${style.alignment},${marginLR},${marginLR},${style.marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
   ].join("\n");
 
   const events = cues
-    .map((c) => `Dialogue: 0,${fmtAssTs(c.startMs)},${fmtAssTs(c.endMs)},Default,,0,0,0,,${emphasizeLine(c.text, style.fontSize)}`)
+    .map((c) => {
+      // 先强制换行(每个已有行独立判断), 再做强调 — 换行插的是真实\n, emphasizeLine 输出时统一转 \N
+      const wrapped = c.text.split("\n").flatMap((l) => wrapCjkLine(l, maxChars)).join("\n");
+      return `Dialogue: 0,${fmtAssTs(c.startMs)},${fmtAssTs(c.endMs)},Default,,0,0,0,,${emphasizeLine(wrapped, style.fontSize, maxEmphasis)}`;
+    })
     .join("\n");
 
   return `${header}\n${events}\n`;

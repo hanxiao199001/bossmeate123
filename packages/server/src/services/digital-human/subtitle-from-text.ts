@@ -10,7 +10,7 @@ function splitCues(text: string): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   const sentences = clean.split(/(?<=[。！？!?；;])/).map((s) => s.trim()).filter(Boolean);
   const cues: string[] = [];
-  const MAX = 16;
+  const MAX = 10; // 7-02: 16字/行在校准后字号(≈100px)下仍会超宽触发强制换行, 10字=单行正好(与ASS端maxChars对齐)
   for (const s of sentences) {
     // 去掉句尾标点占位(字幕里不显示标点更干净), 但保留逗号断句
     if (s.length <= MAX + 2) {

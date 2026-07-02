@@ -171,7 +171,7 @@ export async function postprocessVideoWithSubtitle(opts: PostprocessOptions): Pr
         const { w, h } = await probeVideo(inputMp4);
         const srtText = await readFile(srtPath, "utf-8");
         const mergedStyle: Required<SubtitleAssStyle> = { ...DEFAULT_STYLE, ...(subtitleStyle ?? {}) };
-        const ass = srtToAssWithEmphasis(srtText, mergedStyle, w, h);
+        const ass = srtToAssWithEmphasis(srtText, mergedStyle, w, h, { maxEmphasis: env.DVH_SUBTITLE_EMPHASIS_MAX });
         if (ass) {
           assPath = join(workDir, "input.ass");
           await writeFile(assPath, ass, "utf-8");

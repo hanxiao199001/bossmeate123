@@ -3,18 +3,18 @@
  * 覆盖: 命中高亮 / 相邻命中合并 / 无命中原样 / SRT 边界(多行 cue、空行、缺序号、非法时间)。
  */
 import { describe, it, expect } from "vitest";
-import { srtToAssWithEmphasis, emphasizeLine, parseSrt } from "../services/digital-human/subtitle-emphasis.js";
+import { srtToAssWithEmphasis, emphasizeLine, parseSrt, wrapCjkLine } from "../services/digital-human/subtitle-emphasis.js";
 import type { SubtitleAssStyle } from "../services/digital-human/video-postprocess.js";
 
 const STYLE: Required<SubtitleAssStyle> = {
   fontName: "Noto Sans CJK SC",
-  fontSize: 36,
+  fontSize: 15, // 7-02 重校准默认(288坐标系≈100px实际)
   primaryColour: "&H00FFFFFF&",
   outlineColour: "&H00000000&",
   outline: 2,
   shadow: 0,
   alignment: 2,
-  marginV: 200,
+  marginV: 84, // 7-02 重校准默认(距底29%)
   bold: 1,
 };
 
@@ -117,7 +117,7 @@ describe("srtToAssWithEmphasis 完整 ASS 输出", () => {
     expect(ass).toContain("PlayResY: 288"); // 锚定 ffmpeg subrip 默认坐标系, 字号/边距与老路径视觉一致
     expect(ass).toContain("[V4+ Styles]");
     // Style 行: 字体/字号/颜色(尾 & 已规整)/描边/位置/边距/粗体(-1)
-    expect(ass).toContain("Style: Default,Noto Sans CJK SC,36,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,30,30,200,1");
+    expect(ass).toContain("Style: Default,Noto Sans CJK SC,15,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,8,8,84,1");
     expect(ass).toContain("[Events]");
   });
 
@@ -130,7 +130,35 @@ describe("srtToAssWithEmphasis 完整 ASS 输出", () => {
 
   it("命中行带强调标签, 无命中部分保持原文", () => {
     const ass = srtToAssWithEmphasis(SRT, STYLE, 1080, 1920);
-    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs49}影响因子 3.5{\\r} 稳步上升");
-    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs49}审稿周期{\\r}约{\\1c&H00FFFF&\\b1\\fs49}2{\\r}个月");
+    // 13字超 maxChars(10) → 强制换行(空格断点)后再强调, 标签跨 \N 合法
+    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs20}影响因子 3.5{\\r}\\N稳步上升");
+    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs20}审稿周期{\\r}约{\\1c&H00FFFF&\\b1\\fs20}2{\\r}个月");
+  });
+});
+
+describe("emphasizeLine maxEmphasis 上限(7-02 防满屏黄字)", () => {
+  it("超上限按信息量权重挑: 带小数/百分号数值 > 分区 > 硬词", () => {
+    // 3 个合并区间: 影响因子26.3(w3) / 中科院1区(w2) / 录用率65%(w3) → cap2 留两个 w3
+    const out = emphasizeLine("影响因子26.3中科院1区录用率65%高", 15, 2);
+    expect(out).toContain("}影响因子26.3{\\r}");
+    expect(out).toContain("}录用率65%{\\r}");
+    expect(out).not.toContain("}中科院1区{\\r}");
+    expect(out.split("{\\1c").length - 1).toBe(2);
+  });
+  it("0 = 不限(纯函数默认), 全部命中都强调", () => {
+    const out = emphasizeLine("影响因子26.3中科院1区录用率65%高", 15, 0);
+    expect(out.split("{\\1c").length - 1).toBe(3);
+  });
+});
+
+describe("wrapCjkLine 中文强制换行(libass 0.15 不折 CJK)", () => {
+  it("不超限原样返回", () => {
+    expect(wrapCjkLine("十个字以内不折行", 10)).toEqual(["十个字以内不折行"]);
+  });
+  it("超限优先在中点附近标点断", () => {
+    expect(wrapCjkLine("前面七个字没错的，后面六个字", 10)).toEqual(["前面七个字没错的", "后面六个字"]);
+  });
+  it("无标点硬切中点", () => {
+    expect(wrapCjkLine("一二三四五六七八九十一二", 10)).toEqual(["一二三四五六", "七八九十一二"]);
   });
 });

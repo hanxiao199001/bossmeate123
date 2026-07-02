@@ -84,12 +84,14 @@ const envSchema = z.object({
   // DVH 数字人字幕 + 语速 (PR-E 配置化: 改 .env 重启 pm2 即可生效, 不用改码部署; 仅影响新生成视频)
   DVH_SPEECH_RATE: z.coerce.number().default(50),                       // 阿里云 -500~500, 0=1.0x, 50≈1.1x
   DVH_SUBTITLE_FONT_NAME: z.string().default("Noto Sans CJK SC"),       // 中文字体
-  DVH_SUBTITLE_FONT_SIZE: z.coerce.number().default(36),                // 字号 (6-26: 竖屏60太大→36; env 可调 DVH_SUBTITLE_FONT_SIZE)
+  // 7-02 重校准: 字号在 288 坐标系 → 实际像素 = 值/288×视频高。36 在 1080×1920 上=240px/字(4.5字占满屏宽,
+  //   老韩截图实锤溢出), 15≈100px≈抖音正常字幕(11字/行)。调之前先算像素账, 别再肉眼盲调。
+  DVH_SUBTITLE_FONT_SIZE: z.coerce.number().default(15),
   DVH_SUBTITLE_PRIMARY_COLOUR: z.string().default("&H00FFFFFF&"),       // 字色 ASS &HAABBGGRR& (白)
   DVH_SUBTITLE_OUTLINE_COLOUR: z.string().default("&H00000000&"),       // 描边色 (黑)
   DVH_SUBTITLE_OUTLINE: z.coerce.number().default(2),                   // 描边宽度
   DVH_SUBTITLE_ALIGNMENT: z.coerce.number().default(2),                 // 1-9 九宫格, 2=居中下方, 8=居中上方
-  DVH_SUBTITLE_MARGIN_V: z.coerce.number().default(200),               // 距底/顶边距 (避抖音 UI 遮挡)
+  DVH_SUBTITLE_MARGIN_V: z.coerce.number().default(84),                // 7-02: 200/288=距底69%(快到画面中间)→84≈29%, 避抖音底部UI又不压人脸
   DVH_SUBTITLE_BOLD: z.coerce.number().default(1),                      // 0/1 粗体
   // 7-02 混剪提质②: 字幕关键词强调 — SRT→ASS 内联标签(数字/分区/硬词黄色加粗放大 1.35 倍)。
   //   默认开; 出问题设 false 一键回老 subtitles+force_style 路径(仅影响新生成视频)。
@@ -97,6 +99,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  DVH_SUBTITLE_EMPHASIS_MAX: z.coerce.number().default(2),              // 7-02: 每条字幕最多强调几处(按信息量权重挑, 防满屏黄字); 0=不限
   DVH_FFMPEG_TIMEOUT_MS: z.coerce.number().default(300000),             // PR-F: ffmpeg 后处理超时(5min), 超时 kill
   DVH_DOWNLOAD_TIMEOUT_MS: z.coerce.number().default(60000),            // PR-F: 下载 mp4/srt 超时(1min)
   DVH_DOWNLOAD_MAX_MB: z.coerce.number().default(600),                  // PR-F: 下载大小上限(MB)
