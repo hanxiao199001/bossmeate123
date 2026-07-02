@@ -84,7 +84,8 @@ describe("PR #252: article-bridge 集成", () => {
   it("produceVideo 在 query 后调 postprocess", async () => {
     const src = await readSrc(BRIDGE);
     expect(src).toMatch(/const pp = await postprocessVideoWithSubtitle\(\{/);
-    expect(src).toMatch(/subtitlesUrl: query\.subtitlesUrl \?\? ""/);
+    // 7-02: 音频驱动重构后 subtitlesUrl 改为变量(音频驱动自生成SRT / 文字驱动用 query)。断言文字驱动路径仍取 query.subtitlesUrl。
+    expect(src).toMatch(/subtitlesUrl = query\.subtitlesUrl \?\? ""/);
   });
   it("returned videoUrl 用 pp.videoUrl (后处理版本)", async () => {
     const src = await readSrc(BRIDGE);
