@@ -1429,6 +1429,7 @@ ${angleHint}
 请输出纯 JSON（不要 markdown）：
 {
   "title": "按照上面指定的标题风格生成的标题",
+  "openingHook": "开头钩子导语（60-120字/2-3句），文章的第一段, 决定读者划不划走, 也是评分'选题与钩子'维度读的开头。必须按【下方指定的开头钩子模式】写: 用读者真实处境/痛点场景切入(卡审稿/被拒/赶毕业/选刊纠结/评职压力), 小编第一人称口吻(像跟朋友说话), 落到本刊能解决什么。🚫 严禁'该刊是一本…'/'随着…的发展'/'今天给大家介绍'式平铺温吞开场。🚫 钩子里任何数字/分区/判断必须真实(红线, 无数据就用开放式提问, 不给假答案)。",
   "scopeDescription": "收稿范围的详细描述（200-400字），分总述和具体方向列表。用HTML格式，可用<p>和<strong>标签。说明期刊聚焦什么领域、欢迎什么类型的稿件、有什么特色。要专业准确但不枯燥。",
   "recommendation": "推荐总结（150-300字），综合点评期刊的优势、适合什么样的作者投稿，用HTML格式。要有态度和个人观点，不要像百科全书。",
   "editorComment": "一句话小编点评（15-30字），极口语化、接地气，像朋友间推荐，如'说实话审稿快到离谱，赶毕业的同学冲！'",
@@ -1473,7 +1474,8 @@ ${angleHint}
         hookPick = candidates[0];
       }
     }
-    const p0Suffix = `${hookPick ? `\n【正文开头钩子】recommendation 的第一二句按【${hookPick.name}】模式写: ${hookPick.structure} 🚫 禁止"该刊是一本…"式平铺开场。` : ""}${hookBanLine}${buildClicheBanPrompt(20)}`;
+    // 7-03 A: 主钩子落 openingHook(区块0, 评分器读的"开头"); recommendation 结尾再带一句作 CTA 复读位(无害, 非主钩子)。
+    const p0Suffix = `${hookPick ? `\n【开头钩子·主】openingHook 字段按【${hookPick.name}】模式写 2-3 句: ${hookPick.structure} 用痛点场景切入、小编口吻, 🚫 禁止"该刊是一本…"式平铺开场。\n【结尾钩子·复读】recommendation 收尾可呼应同一痛点做行动号召(CTA), 但主钩子在 openingHook, 别把开场留空。` : ""}${hookBanLine}${buildClicheBanPrompt(20)}`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}${p0Suffix}` : `${baseSystemPrompt}${p0Suffix}`;
 
     try {
@@ -1511,6 +1513,7 @@ ${angleHint}
         const parsed = JSON.parse(jsonMatch[0]);
         return {
           title: parsed.title || `期刊推荐：${journalName}`,
+          openingHook: typeof parsed.openingHook === "string" && parsed.openingHook.trim().length > 0 ? parsed.openingHook.trim() : undefined, // 7-03 A 区块0
           scopeDescription: parsed.scopeDescription || "",
           recommendation: parsed.recommendation || "",
           ifPrediction: parsed.ifPrediction || undefined,

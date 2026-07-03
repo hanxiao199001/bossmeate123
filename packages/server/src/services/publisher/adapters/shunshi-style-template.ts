@@ -52,6 +52,7 @@
 
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
+import { renderOpeningHookBlock } from "../../skills/journal-template.js"; // 7-03 A 区块0
 import { esc } from "../../skills/journal-template.js";
 import {
   renderIfHistoryLineChart,
@@ -1209,6 +1210,7 @@ export async function generateShunshiStyleHtml(
   //   唯一仍不恢复的是派生投稿建议块 renderSubmissionAdviceBlock(它同时是审稿周期重复展示 + "预警名单安全"矛盾源)。
   const wrapChart = (svg: string) => svg ? `<section style="margin:0 0 18px 0;padding:8px 0;">${svg}</section>` : "";
 
+  sections.push(renderOpeningHookBlock(aiContent));                   //  0 开头钩子导语(7-03 A, 评分器读的"开头"; 空则降级不渲染)
   sections.push(renderHeroBlock(journal));                            //  1 封面/品牌头
   sections.push(renderBasicInfoBlock(journal));                       //  2 ISSN/出版商
   // 6-17: 国内刊(无 WoS 信号)跳过 JCR/IF/CAR 这些 SCI 专属版块, 否则满屏占位空洞。

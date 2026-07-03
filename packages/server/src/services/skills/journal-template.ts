@@ -134,6 +134,9 @@ export function resolveTheme(discipline: string | null | undefined): ThemeColors
 
 export interface AIGeneratedContent {
   title: string;           // 吸引眼球的文章标题
+  // 7-03 A: 开头钩子导语（评分器和读者读的"开头"就是它）。2-3 句痛点场景切入, 小编口吻,
+  // 走 8 钩子库选型(article-skill p0Suffix 注入)。空则区块0降级不渲染(老文章兼容)。
+  openingHook?: string;
   scopeDescription: string; // 收稿范围描述
   recommendation: string;   // 推荐指数+总结
   ifPrediction?: string;    // IF 预测语句（如 "预测今年涨至15"）
@@ -150,6 +153,22 @@ export interface AIGeneratedContent {
   carRiskAnalysis?: string;       // 章 2：CAR 趋势 + 国内学者投稿风险（HTML，200-400 字）
   scopeAndCitations?: string;     // 章 3：收稿范围 + 引用生态（HTML，200-400 字）
   submissionAdvice?: string;      // 章 4：投稿建议 - APC + 录用率 + 同类对比（HTML，300-500 字）
+}
+
+/**
+ * 7-03 A 区块0: 开头钩子导语 — 插在所有模板 hero 之前, 是评分器/读者读到的"第一段"。
+ * openingHook 由 LLM 走 8 钩子库生成(痛点场景/2-3句/小编口吻)。空则不渲染(降级, 老文章兼容)。
+ * 两个 adapter(shunshi/wechat)共用此函数, 保证开头钩子"每篇都在", 不再时灵时不灵。
+ */
+export function renderOpeningHookBlock(ai: AIGeneratedContent): string {
+  const hook = (ai.openingHook || "").trim();
+  if (!hook) return "";
+  // LLM 可能输出裸文本或简单 HTML(<p>/<strong>); 无块级标签则包一层 <p> 保证被质检当"正文段"读到。
+  const inner = /<(p|div)[\s>]/i.test(hook) ? hook : `<p style="margin:0;">${esc(hook)}</p>`;
+  return `
+<section style="margin:0 0 20px 0;padding:16px 18px;background:#fff7ed;border-left:4px solid #ea580c;border-radius:8px;font-size:16px;line-height:1.9;color:#1f2937;font-weight:500;">
+${inner}
+</section>`;
 }
 
 // ============ 叙事风格定义 ============

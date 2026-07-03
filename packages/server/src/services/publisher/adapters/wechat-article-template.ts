@@ -19,6 +19,7 @@ import {
   THEMES, WECHAT_QR_BASE64,
   resolveTheme, chooseNarrative, analyzeSellingPoints, inferIndexBadges,
   esc, getIfColor, getPartitionColor,
+  renderOpeningHookBlock, // 7-03 A 区块0
 } from "../../skills/journal-template.js";
 import { generateIFTrendChart, generatePubVolumeChart, svgToDataUri } from "../../crawler/journal-chart-generator.js";
 
@@ -739,6 +740,9 @@ export async function generateWechatJournalArticleHtml(
   const cover: CoverResult = (journal as any).coverUrlHd
     ? { url: (journal as any).coverUrlHd, isHd: true }
     : { url: journal.coverUrl || "", isHd: false };
+
+  // 区块 0: 开头钩子导语(7-03 A, 评分器读的"开头"; 空则降级不渲染)
+  sections.push(renderOpeningHookBlock(aiContent));
 
   // 区块 1: 免责
   if (journal.synthetic) sections.push(renderDisclaimer());
