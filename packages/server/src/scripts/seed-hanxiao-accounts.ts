@@ -2,7 +2,7 @@
  * 5-18 P1: 给韩宵 tenant (你好集团) 插 demo 用 platform_accounts。
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     HANXIAO_TENANT_ID=4c03a3d0-cad4-4286-b14d-d6b12b6422bd \
  *     node dist/scripts/seed-hanxiao-accounts.js'

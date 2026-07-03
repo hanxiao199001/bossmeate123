@@ -10,7 +10,7 @@
  *   仅回填为 NULL 的字段, 不覆盖手维/已有真值。
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && node dist/scripts/backfill-website-from-openalex.js'
  */
 import { db } from "../models/db.js";

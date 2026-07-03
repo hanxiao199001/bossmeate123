@@ -10,7 +10,7 @@ import { createHash as nodeCreateHash } from "node:crypto";
  *         + dist + start-agent.command + bossmate.cfg + 使用说明.txt
  * 客户解压 → 双击 start-agent.command → 零安装(用包内node + 系统Edge/Chrome) → 输配对码 → 跑。
  *
- * 环境变量: NODE_VER(默认 v18.20.4, 兼容 macOS 10.15+), SERVER_URL(默认 http://122.152.234.155)
+ * 环境变量: NODE_VER(默认 v18.20.4, 兼容 macOS 10.15+), SERVER_URL(默认 http://119.91.52.13)
  */
 import { execSync, execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, chmodSync, existsSync } from "node:fs";
@@ -73,7 +73,7 @@ function bundleChromium(platform) {
   console.log(`   ✓ ${platform} Chromium(缓存) → ${rel}`);
   return rel;
 }
-const SERVER_URL = process.env.SERVER_URL || "http://122.152.234.155";
+const SERVER_URL = process.env.SERVER_URL || "http://119.91.52.13";
 
 function fetchNodeBin(arch, outBin) {
   const dirName = `node-${NODE_VER}-darwin-${arch}`;
@@ -171,7 +171,7 @@ const cmd = [
   "",
   'if [ ! -f "$HOME/.bossmate-agent/config.json" ]; then',
   "  while true; do",
-  '    [ -z "$SERVER_URL" ] && read -r -p "服务器地址 (如 http://122.152.234.155): " SERVER_URL',
+  '    [ -z "$SERVER_URL" ] && read -r -p "服务器地址 (如 http://119.91.52.13): " SERVER_URL',
   '    [ -z "$PAIR_CODE" ] && read -r -p "配对码 (6 位, 网页生成): " PAIR_CODE',
   '    echo "正在配对…"',
   '    if "$NODE" dist/cli.js pair "$SERVER_URL" "$PAIR_CODE" "$DEVICE_NAME"; then',

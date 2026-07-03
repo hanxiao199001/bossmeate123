@@ -2,7 +2,7 @@
  * 5-21 P3: 给韩宵 tenant seed 8 demo leads + sales_messages (覆盖 5 stage)。
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     HANXIAO_TENANT_ID=4c03a3d0-cad4-4286-b14d-d6b12b6422bd \
  *     node dist/scripts/seed-demo-leads.js'

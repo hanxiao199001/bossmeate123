@@ -1,6 +1,6 @@
-# BossMate — Claude 工程纪律
+# BossMate — Codex 工程纪律
 
-> 项目约束 + 红线总览。Claude Code 进项目自动加载本文件。
+> 项目约束 + 红线总览。Codex 进项目自动加载本文件。
 
 ---
 
@@ -22,17 +22,17 @@
 
 ---
 
-## 红线 #1-#10（参考 .claude/projects/-Users-a01/memory/bossmate_workflow_rules.md）
+## 红线 #1-#10（参考 .Codex/projects/-Users-a01/memory/bossmate_workflow_rules.md）
 
 | # | 规则 | 要点 |
 |---|---|---|
 | 1 | base=main | PR 严格 base=main，禁分支套娃（PR #96/#98 教训） |
 | 2 | drift 4 规则 | 桌面写代码 / 服务器跑 / 不可逆操作前 verify / PR 自助 merge |
-| 3 | AI 模型硬约束 | 锁 DeepSeek + Qwen-Plus，禁 Claude/GPT；T2 路由 + T3 死代码已清 |
-| 4 | 云厂商硬约束（已迁阿里云） | 服务器阿里云 ECS **119.91.52.13**（key `~/.ssh/bossmate_deploy`，ssh config alias `bossmate-boss`）；存储阿里云 **OSS**（私有桶 + 签名 URL，见 chart/音频段）；LLM 阿里云**百炼**（DeepSeek + Qwen-Plus，红线 #3）；数字人阿里云 **DVH**；语音阿里云 **NLS**；短信阿里云。**腾讯云 COS/CMS/ECS 已全部弃用，122.152.234.155 是旧机（勿再引用）。迁移细节以 `迁移手册-新服务器.md` 为准。** |
+| 3 | AI 模型硬约束 | 锁 DeepSeek + Qwen-Plus，禁 Codex/GPT；T2 路由 + T3 死代码已清 |
+| 4 | 云厂商硬约束（已迁阿里云） | 服务器阿里云 ECS **119.91.52.13**（key `~/.ssh/bossmate_deploy`，ssh config alias `bossmate-boss`）；存储阿里云 **OSS**（私有桶 + 签名 URL）；LLM 阿里云**百炼**（DeepSeek + Qwen-Plus）；数字人阿里云 **DVH**；语音阿里云 **NLS**；短信阿里云。**腾讯云 COS/CMS/ECS 已全部弃用，122.152.234.155 是旧机（勿再引用）。迁移细节以 `迁移手册-新服务器.md` 为准。** |
 | 5 | merge 后立刻 deploy + verify | pnpm deploy:smart + 至少 3 项 verify (mtime / 字面 / health) |
 | 6 | 不扩 scope | spec 外不动；新需求开新 PR |
-| 7 | 依赖锁文件同 commit | 改 `package.json` 依赖必须**同一 commit** 更新 `pnpm-lock.yaml`（服务器 frozen-lockfile，漏更新 = 部署直接失败）。见下方教训 |
+| 7 | 依赖锁文件同 commit | 改 `package.json` 依赖必须**同一 commit** 更新 `pnpm-lock.yaml`（服务器 frozen-lockfile，漏更新 = 部署直接失败） |
 | 11 | 复用 > 重写 | 见上方 |
 
 ---
@@ -68,11 +68,9 @@
   c. ssh curl http://localhost:3000/api/v1/health → 200
 ```
 
-deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
+deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`。
 
-**依赖锁文件铁律（红线 #7）**：改 `package.json` 依赖（加/删/升）必须**同一 commit** 更新 `pnpm-lock.yaml`。服务器 `pnpm install` 走 frozen-lockfile，manifest 与锁文件 specifier 不一致 → 安装报错 → 部署整条失败（build 都到不了）。
-> 教训：07d2a74 加 `ali-oss` 到 `packages/server/package.json` 却漏更新锁文件，静默潜伏到下次部署（185222d 图文重构）才炸出来，报 "specifiers in the lockfile don't match specs in package.json"。补锁单独 commit 3dd3f2e 才通。
-> 自查：本地 `pnpm install --lockfile-only` 后 `git status` 若 `pnpm-lock.yaml` 有改动，说明之前漏了 —— 必须一起提交。**每个新依赖都会再踩一次，故列为红线。**
+**依赖锁文件铁律（红线 #7）**：改 `package.json` 依赖必须**同一 commit** 更新 `pnpm-lock.yaml`。服务器走 frozen-lockfile，manifest 与锁文件 specifier 不一致 → 安装报错 → 部署整条失败。教训：07d2a74 加 `ali-oss` 漏更新锁文件，潜伏到 185222d 部署才炸（"specifiers don't match"），补锁 commit 3dd3f2e 才通。自查：`pnpm install --lockfile-only` 后 `git status` 若锁文件有改动即漏了。
 
 ---
 
@@ -101,3 +99,5 @@ console.log(h+\".\"+p+\".\"+s);
 3. **报告 user 拍板**，禁未授权直接执行
 
 实例: PR #125 Step 1 删 20 ai_fabricated journals 前先 verify count = 20 + 0 contents 引用 → user 拍板 → DELETE。
+
+## Imported Claude Cowork project instructions

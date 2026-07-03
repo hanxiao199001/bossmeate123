@@ -38,7 +38,7 @@ fi
 
 do_pair() {
   while true; do
-    [ -z "$SERVER_URL" ] && read -r -p "服务器地址 (如 http://122.152.234.155): " SERVER_URL
+    [ -z "$SERVER_URL" ] && read -r -p "服务器地址 (如 http://119.91.52.13): " SERVER_URL
     [ -z "$PAIR_CODE" ] && read -r -p "配对码 (6 位, 网页生成): " PAIR_CODE
     echo "正在配对…"
     if node dist/cli.js pair "$SERVER_URL" "$PAIR_CODE" "$DEVICE_NAME"; then

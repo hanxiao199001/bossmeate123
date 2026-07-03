@@ -6,7 +6,7 @@
  *   而标题(无IF不放IF风格)/SCI过滤(wosLevel OR IF)/卡片显示 都依赖 impact_factor 单值.
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && node dist/scripts/backfill-if-from-history.js'
  *
  * 行为: 遍历 if_history 非空 + impact_factor 空的期刊, 取 if_history.data 最新年 IF 写 impact_factor.

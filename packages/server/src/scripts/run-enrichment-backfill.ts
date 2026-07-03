@@ -2,7 +2,7 @@
  * 5-23 PR #165a + #165b — 全表跑 enrichJournal, 拿源覆盖度报告.
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/run-enrichment-backfill.js'
  *

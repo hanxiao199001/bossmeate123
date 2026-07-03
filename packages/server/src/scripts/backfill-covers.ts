@@ -2,7 +2,7 @@
  * 5-20 PR #184 — 期刊封面 backfill (运营反馈: 部分期刊无封面, 文章只剩纯背景).
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/backfill-covers.js'
  *

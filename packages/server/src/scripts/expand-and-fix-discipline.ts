@@ -2,7 +2,7 @@
  * 合并任务: 5000 拉新 + multidisciplinary 重推 discipline.
  *
  * 用法:
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     nohup node dist/scripts/expand-and-fix-discipline.js \
  *     > /tmp/expand-fix-$(date +%s).log 2>&1 &'

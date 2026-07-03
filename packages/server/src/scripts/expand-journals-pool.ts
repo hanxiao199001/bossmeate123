@@ -2,7 +2,7 @@
  * PR #176 — 离线 batch ingest: 从 OpenAlex API 拉 top N 期刊入 journals 表.
  *
  * 用法 (prod):
- *   ssh ubuntu@122.152.234.155 'cd /home/projects/bossmate/packages/server && \
+ *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/expand-journals-pool.js --count=500'
  *
