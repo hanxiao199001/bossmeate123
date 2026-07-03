@@ -607,7 +607,7 @@ export function renderSelfCitation(journal: JournalInfo, theme: ThemeColors): st
 
   return sectionTitle("自引率", "📊", theme) +
     `<section style="margin:8px 0;padding:12px 16px;background:#FAFAFA;border-left:4px solid ${theme.accent};border-radius:0 8px 8px 0;">` +
-    `<p style="margin:0;font-size:15px;line-height:1.8;">${esc(journal.nameEn || journal.name)} 自引率为 <strong>${pct.toFixed(1)}%</strong>，${safe ? `处于安全范围，可放心投稿。` : `偏高，投稿时需关注。`}</p>` +
+    `<p style="margin:0;font-size:15px;line-height:1.8;">${esc(journal.nameEn || journal.name)} 自引率为 <strong>${pct.toFixed(1)}%</strong>，${safe ? `处于安全范围。` : `偏高，投稿时需关注。`}</p>` +
     `</section>`;
 }
 
@@ -623,7 +623,7 @@ export function renderWarning(journal: JournalInfo, theme: ThemeColors): string 
 
   return sectionTitle("预警名单", "✅", theme) +
     `<section style="margin:8px 0;padding:12px 16px;background:#E8F5E9;border-left:4px solid #2E7D32;border-radius:0 8px 8px 0;">` +
-    `<p style="margin:0;color:#16a34a;font-size:15px;">✅ 中科院《国际期刊预警名单》：<strong>不在预警名单中</strong>，可放心投稿。</p>` +
+    `<p style="margin:0;color:#16a34a;font-size:15px;">✅ 中科院《国际期刊预警名单》：<strong>不在预警名单中</strong>。</p>` +
     `</section>`;
 }
 

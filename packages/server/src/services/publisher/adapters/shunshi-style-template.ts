@@ -469,7 +469,7 @@ function renderImpactFactorBlock(journal: JournalInfo): string {
 function renderCarHistoryBlock(journal: JournalInfo): string {
   // PR #213/#215 (5-22): CAR 显示 — 数据源锁死 jcarindex(权威风险库). 表格+文字说明形式(图三).
   //   语义(页面核实): carIndex 是"CAR 指数(学术诚信风险)", 原值即百分数(0.87→"0.87%"), 非占比, 不×100.
-  //   文字说明为规则生成(非 AI), 风险结论以 jcarindex sciRiskRank 为准, 不自行重算. carIndex===0 标"未公布".
+  //   文字说明为规则生成(非 AI), 风险结论以 jcarindex sciRiskRank 为准, 不自行重算. 7-03: 0/缺失年份不再渲染(无"未公布"占位列), 全空整块隐藏.
   const raw = (journal as any).carIndexHistory as
     | { data?: Array<{ year: number; carIndex: number }>; riskRankText?: string | null; problemArticles?: { current?: number | null; last?: number | null }; source?: string }
     | null;
@@ -485,28 +485,30 @@ function renderCarHistoryBlock(journal: JournalInfo): string {
   }
   const riskText = rank === "高" ? "高风险" : rank === "中" ? "中等风险" : rank === "低" ? "低风险" : "";
   const riskColor = rank === "高" ? "#D32F2F" : rank === "中" ? "#F57C00" : "#388E3C";
-  // 既无有效数据点也无风险等级 → 不渲染
-  if (known.length === 0 && !riskText) return "";
+  // 7-03 ③(老韩截图实锤): CAR 数据点全空 → 整块隐藏。原先"有风险等级就渲染"会出
+  // "2024 2025 2026 未公布未公布未公布"的空表, 比不渲染更伤信任。
+  if (known.length === 0) return "";
 
   // ---- 文字说明 (规则生成, 结论以 jcarindex 风险等级为准) ----
   const yearPhrase = known.map((d) => `${d.year} 年 ${d.carIndex.toFixed(2)}%`).join("、");
   const conclusion =
     rank === "高" ? "属高风险刊，建议谨慎评估或避开"
     : rank === "中" ? "属中等风险，投稿前留意论文合规与送审"
-    : rank === "低" ? "属低风险，相对安全，可放心投稿"
+    : rank === "低" ? "属低风险" // 7-03 ③: 删承诺性收尾话术(留数据与等级, 不替读者拍板投稿决策)
     : "风险等级暂未公布";
   const intro =
     `<p style="margin:0 0 12px 0;font-size:14px;line-height:1.8;color:${TEXT};">` +
     `<strong style="color:${BLUE};">CAR 指数（学术诚信风险）：</strong>据 jcarindex 查询，该刊${known.length > 0 ? ` ${yearPhrase}` : "近年 CAR 指数暂未公布"}。CAR 指数 &lt;5% 为低风险；该刊风险等级为 <span style="color:${riskColor};font-weight:700;">${riskText || "未知"}</span>，${conclusion}。` +
     `</p>`;
 
-  // ---- 表格 (年份 × CAR 指数, 0 值标"未公布") ----
+  // ---- 表格 (年份 × CAR 指数, 7-03: 只出有真值的年份列) ----
   let table = "";
-  if (rows.length > 0) {
-    const headCells = rows.map((d) => `<th style="padding:7px 10px;font-size:13px;background:${BLUE};color:#fff;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,0.25);">${d.year}</th>`).join("");
-    const valCells = rows
+  // 7-03 ③: 只渲染有真值的年份列 — 部分年份缺失时不再出"未公布"占位列(截图事故根因)
+  if (known.length > 0) {
+    const headCells = known.map((d) => `<th style="padding:7px 10px;font-size:13px;background:${BLUE};color:#fff;font-weight:600;text-align:center;border-right:1px solid rgba(255,255,255,0.25);">${d.year}</th>`).join("");
+    const valCells = known
       .map((d) => {
-        const v = typeof d.carIndex === "number" && d.carIndex > 0 ? `${d.carIndex.toFixed(2)}%` : `<span style="color:${MUTED};">未公布</span>`;
+        const v = `${d.carIndex.toFixed(2)}%`;
         return `<td style="padding:7px 10px;font-size:13px;color:${TEXT};text-align:center;border-right:1px solid #EEE;border-bottom:1px solid #EEE;">${v}</td>`;
       })
       .join("");

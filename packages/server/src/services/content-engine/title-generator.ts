@@ -5,6 +5,18 @@
  */
 import { chat } from "../ai/chat-service.js";
 import { logger } from "../../config/logger.js";
+import { exhaustedKeys, recordUsage, usageCount } from "./usage-rotation.js";
+
+// 7-03 ④: 标题"狠话"标签 — 按人设分级 + 批次内轮换（治"全员闭眼冲"）
+const AGGRESSIVE_TITLE_TAGS = ["闭眼冲", "闭眼投", "沾边就收", "有手就发", "水刊", "灌水神刊", "捡漏"] as const;
+
+/** 人设分级: strict(编辑/老师/学术号)禁狠话; aggressive(营销/研究生党号)放开; default(无人设)允许但降频 */
+export function classifyPersonaTone(persona?: string | null): "strict" | "aggressive" | "default" {
+  if (!persona || !persona.trim()) return "default";
+  if (/编辑|老师|导师|教授|审稿|学术顾问|严谨|权威|专业机构/.test(persona)) return "strict";
+  if (/营销|研究生|硕博|学生|毕业党|接地气|爆款|狠|带货/.test(persona)) return "aggressive";
+  return "default";
+}
 
 export interface TitleJournalData {
   name?: string | null;        // 中文名/英文名
@@ -50,6 +62,10 @@ export async function generateTitles(opts: {
   userId: string;
   journal: TitleJournalData;
   styleProfile?: string | null;
+  /** 7-03 ④: 账号人设原文 — 决定狠话标签是否可用（编辑/学术号禁, 营销/学生号放开） */
+  persona?: string | null;
+  /** 7-03 ④: 措辞轮换 scope（batchId/accountId）— 同 scope 当天每个狠话标签限用, 防全批"闭眼冲" */
+  rotationScope?: string | null;
   count?: number;
 }): Promise<string[]> {
   const { tenantId, userId, journal } = opts;
@@ -64,7 +80,21 @@ export async function generateTitles(opts: {
     fmt("预警情况", journal.warning) + fmt("领域", journal.discipline) +
     fmt("年发文量", journal.yearPublished) + fmt("其它卖点", journal.extra);
 
-  const system = opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA;
+  // 7-03 ④: 人设分级 + 批次内措辞轮换
+  const tone = classifyPersonaTone(opts.persona);
+  const scope = opts.rotationScope || "";
+  let toneSuffix = "";
+  if (tone === "strict") {
+    toneSuffix = `\n\n【人设约束(优先级最高)】本账号是编辑/学术型人设: 🚫 严禁使用"${AGGRESSIVE_TITLE_TAGS.join("/")}/毕业神刊/有手就发"等夸张狠话标签; 行动指令改用"值得认真考虑/建议重点关注/可列入备选"等稳健表述。仍要有钩子和具体数字, 但语气克制专业。`;
+  } else {
+    // aggressive(营销/学生号)限用 2 次/天/scope; default(无人设)允许但降频 1 次/天/scope
+    const limit = tone === "aggressive" ? 2 : 1;
+    const banned = scope ? exhaustedKeys(scope, [...AGGRESSIVE_TITLE_TAGS], limit) : [];
+    if (banned.length > 0) {
+      toneSuffix = `\n\n【措辞轮换】以下夸张措辞今天本批次已用满, 本次标题严禁出现: ${banned.join("、")}。换其它卖点表述, 别的规则不变。`;
+    }
+  }
+  const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + toneSuffix;
   const message = `期刊真实数据(只用这些, 缺的不写):\n${data}\n请按上述风格产 ${count} 个候选标题, 严格 JSON 数组输出。`;
 
   const resp = await chat({ tenantId, userId, conversationId: `title-gen-${Date.now()}`, message, skillType: "content_generation", systemPrompt: system } as any);
@@ -81,5 +111,13 @@ export async function generateTitles(opts: {
     // 兜底: 按行拆, 去编号/引号
     titles = content.split("\n").map((l) => l.replace(/^\s*\d+[\.、)]\s*/, "").replace(/^["'，、]+|["'，、]+$/g, "").trim()).filter((l) => l.length >= 8);
   }
-  return titles.map((t) => String(t).trim()).filter(Boolean).slice(0, count);
+  const finalTitles = titles.map((t) => String(t).trim()).filter(Boolean).slice(0, count);
+  // 7-03 ④: 记账 — 调用方(batch-worker/sample-article)只用 finalTitles[0], 按它计狠话用量
+  if (scope && finalTitles[0]) {
+    for (const tag of AGGRESSIVE_TITLE_TAGS) {
+      if (finalTitles[0].includes(tag)) recordUsage(scope, tag);
+    }
+  }
+  void usageCount; // usageCount 供调用方/测试直查, 保留导出链路
+  return finalTitles;
 }

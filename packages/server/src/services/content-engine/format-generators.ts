@@ -230,7 +230,8 @@ export async function generateByFormat(req: GenerateRequest): Promise<GeneratedC
   let fullPrompt = formatPrompt;
   // P0②③预防（7-03）: 图文/长文格式注入钩子模式库; 全格式注入 AI 腔禁用清单
   if (env.ARTICLE_HOOK_INJECT !== "false" && (format === "article" || format === "long_graphic")) {
-    fullPrompt += buildHookPromptBlock(req.platform || format);
+    // 7-03 ④: 以 tenant 为轮换 scope — 同租户当天每个钩子模式限用, 防一天产出全员同款开头
+    fullPrompt += buildHookPromptBlock(req.platform || format, 3, tenantId);
   }
   fullPrompt += buildClicheBanPrompt(20);
   if (ragContext.text) {

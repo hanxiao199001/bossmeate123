@@ -123,6 +123,8 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           user: { userId, role: "owner" }, // batch 用 system user 默认 owner 权限
           metadata: {
             templateId: mapTemplateLetter(row.template),
+            batchId, // 7-03 ④: 钩子/措辞批次内轮换 scope
+            ...(boundAccountId ? { accountId: boundAccountId } : {}),
             ...(row.journalId ? { journalId: row.journalId } : {}),
             ...(personaPrompt ? { personaPrompt } : {}),
           },
@@ -171,13 +173,17 @@ export function startBatchWorker(): Worker<BatchRowJob> {
                 acceptanceRate: journals.acceptanceRate, selfCitationRate: journals.selfCitationRate, discipline: journals.discipline,
               }).from(journals).where(eq(journals.id, row.journalId)).limit(1);
               let styleProfile: string | undefined;
+              let acctPersona: string | undefined; // 7-03 ④: 人设分级(编辑号禁狠话/营销号放开)
               if (boundAccountId) {
-                const [acct] = await db.select({ s: platformAccounts.styleProfile }).from(platformAccounts).where(eq(platformAccounts.id, boundAccountId)).limit(1);
+                const [acct] = await db.select({ s: platformAccounts.styleProfile, p: platformAccounts.persona }).from(platformAccounts).where(eq(platformAccounts.id, boundAccountId)).limit(1);
                 styleProfile = acct?.s ?? undefined;
+                acctPersona = acct?.p ?? undefined;
               }
               if (jr) {
                 const titles = await generateTitles({
                   tenantId, userId, styleProfile, count: 3,
+                  persona: acctPersona, // 7-03 ④ 人设分级
+                  rotationScope: batchId, // 7-03 ④ 本批内"闭眼冲"等狠话限次轮换
                   journal: {
                     name: jr.name, nameEn: jr.nameEn, publisher: jr.publisher,
                     casPartition: jr.casPartition, jcrPartition: jr.jcrSubjects,

@@ -105,6 +105,26 @@ async function main() {
     console.log(`  ─ 压缩: ${qp.condense.applied ? `已压缩(比例${qp.condense.ratio?.toFixed(2)})` : `未压缩(${qp.condense.reason})`} | AI腔命中: ${qp.decliche.hits}${qp.decliche.rewritten ? "(已清洗)" : ""} | 重写轮数: ${qp.qualityLoop.rounds} | 本次新增LLM调用: ${qp.llmCalls}`);
   } catch (e) { console.log("⚠️ P0四件套流水线失败(样片继续):", e instanceof Error ? e.message : e); }
 
+  // 7-03 ⑥: 冒烟排版/口吻指标 — 验收"短段落 + 图文交替 + 小编口吻"
+  try {
+    const paras = Array.from(finalBody.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi))
+      .map((m) => m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, "").trim())
+      .filter((t) => t.length > 0);
+    const avgLen = paras.length ? Math.round(paras.reduce((a, b) => a + b.length, 0) / paras.length) : 0;
+    const longParas = paras.filter((t) => t.length > 150).length;
+    const imgSlotHits = (finalBody.match(/<!--img-slot:(\w+)-->/g) || []).length;
+    const leftoverMarkers = (finalBody.match(/\{\{\s*IMG\s*:/gi) || []).length;
+    const imgTags = (finalBody.match(/<img\b/gi) || []).length;
+    const plainAll = finalBody.replace(/<[^>]+>/g, "");
+    const voiceWords = ["说实话", "我翻了", "划重点", "注意", "讲真", "坦白说"];
+    const voiceHits = voiceWords.reduce((n, w) => n + (plainAll.split(w).length - 1), 0);
+    const density = plainAll.length > 0 ? (voiceHits / (plainAll.length / 1000)).toFixed(2) : "0";
+    console.log("══════════ 排版/口吻冒烟指标(7-03) ══════════");
+    console.log(`  段落数: ${paras.length} | 平均段长: ${avgLen} 字 | >150字长段: ${longParas} 个${longParas > 0 ? " ⚠️(要求每段≤3句/≤100字)" : " ✅"}`);
+    console.log(`  图位命中: ${imgSlotHits} 个 | <img>总数: ${imgTags} | 残留字面标记: ${leftoverMarkers}${leftoverMarkers > 0 ? " ⚠️ 有 {{IMG:}} 泄漏!" : " ✅"}`);
+    console.log(`  小编语气词: ${voiceHits} 处 ≈ ${density} 处/千字${voiceHits === 0 ? " ⚠️ 口吻可能还是论文腔" : ""} (统计词: ${voiceWords.join("/")})`);
+  } catch { /* 指标统计失败不影响样片 */ }
+
   console.log("══════════════ 标题 ══════════════");
   console.log(title);
   console.log("══════════════ 正文 ══════════════");

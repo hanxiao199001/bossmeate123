@@ -12,6 +12,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { exhaustedKeys, recordUsage, usageCount } from "../services/content-engine/usage-rotation.js";
 
 export interface HookPattern {
   /** 模式名 */
@@ -153,10 +154,23 @@ export function pickHookPatterns(articleType?: string, n: number = 3): HookPatte
  * 生成注入 prompt 的钩子块：3 个候选模式 + 硬性要求。
  * 供 article-pipeline / format-generators 的大纲与开头 prompt 直接拼接。
  */
-export function buildHookPromptBlock(articleType?: string, n: number = 3): string {
-  const picks = pickHookPatterns(articleType, n);
+export function buildHookPromptBlock(articleType?: string, n: number = 3, rotationScope?: string): string {
+  // 7-03 ④: 传 rotationScope 时按"同 scope 当天每模式限用 2 次"过滤候选 + 注入禁选清单。
+  // LLM 自选型注入无法精确知道最终选中哪个, 按"候选第一个"近似记账（LLM 强倾向选首项）。
+  const HOOK_LIMIT = 2;
+  let picks = pickHookPatterns(articleType, rotationScope ? Math.max(n, 6) : n);
+  let banLine = "";
+  if (rotationScope) {
+    const banned = exhaustedKeys(rotationScope, picks.map((p) => p.name), HOOK_LIMIT);
+    const fresh = picks.filter((p) => usageCount(rotationScope, p.name) < HOOK_LIMIT);
+    picks = (fresh.length > 0 ? fresh : picks).slice(0, n);
+    if (banned.length > 0) {
+      banLine = `\n（以下模式今天已用满，禁选：${banned.join("、")}）`;
+    }
+    if (picks[0]) recordUsage(rotationScope, picks[0].name);
+  }
   const lines = picks.map(
     (p, i) => `${i + 1}. 【${p.name}】${p.structure}\n   例：${p.examples[0] ?? ""}`
   );
-  return `\n【开头钩子要求】从以下钩子模式中任选一种写开头（前两句必须完成钩子），🚫 禁止平铺直叙介绍背景、禁止"随着…的发展"式开场：\n${lines.join("\n")}`;
+  return `\n【开头钩子要求】从以下钩子模式中任选一种写开头（前两句必须完成钩子），🚫 禁止平铺直叙介绍背景、禁止"随着…的发展"式开场：${banLine}\n${lines.join("\n")}`;
 }

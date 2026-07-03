@@ -498,7 +498,9 @@ export class WechatAdapter implements PlatformAdapter {
     // 检测方式：以 <div 开头说明是已渲染的 HTML 模板，无需 Markdown 转换
     // 已渲染的 HTML 模板（<section / <div / <!DOCTYPE）直接返回，不做 Markdown 转换
     const trimmed = content.trimStart();
-    if (trimmed.startsWith("<section") || trimmed.startsWith("<div") || trimmed.startsWith("<!")) {
+    // 7-03 ③: 补 <article（PR Q.4 起模板体外包 <article class="bm-template-..."> — 之前漏判,
+    // 整篇模板 HTML 误走下方 Markdown 正则, 首行被包 <p text-indent> 且 **/> 被误替换, 排版泄漏。
+    if (trimmed.startsWith("<section") || trimmed.startsWith("<div") || trimmed.startsWith("<article") || trimmed.startsWith("<!")) {
       return content;
     }
 

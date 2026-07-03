@@ -33,6 +33,8 @@ import { eq, and, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 import { pickHookPatterns } from "../../data/hook-patterns.js";
+import { buildImageSlotPromptBlock, applyImageSlots } from "../content-engine/image-slots.js";
+import { recordUsage, usageCount, exhaustedKeys } from "../content-engine/usage-rotation.js";
 
 // ============ 类型定义 ============
 
@@ -233,6 +235,8 @@ export class ArticleSkill implements ISkill {
     let explicitTemplateId = context.metadata?.templateId as string | undefined;
     // PR-X1: batch worker 注入的账号人设/风格 prompt (独家模式)
     const personaPrompt = (context.metadata?.personaPrompt as string) || "";
+    // 7-03 ④: 钩子/措辞轮换 scope — 批量路径 batchId(本批内轮换), 单号路径 accountId, 兜底 tenantId(当天)
+    const hookScope = (context.metadata?.batchId as string) || (context.metadata?.accountId as string) || context.tenantId || "";
     if (!explicitTemplateId) {
       try {
         const { getPreference, setPreference } = await import("../preferences.js");
@@ -268,6 +272,7 @@ export class ArticleSkill implements ISkill {
       templateIds,
       context.tenantId, // task #35: 透传给 generateJournalRecommendation 拉 contact_meta
       personaPrompt, // PR-X1
+      hookScope, // 7-03 ④ 钩子轮换
     );
     const totalVariants = (extraVariants?.length ?? 0) + 1;
 
@@ -564,6 +569,7 @@ export class ArticleSkill implements ISkill {
     templateIds: string[] = [getDefaultTemplateId()],
     tenantId?: string,
     personaPrompt: string = "", // PR-X1
+    hookScope: string = "", // 7-03 ④: 批次/账号级钩子轮换 scope（只作用于主版本, 副版本不重复计数）
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -638,7 +644,7 @@ export class ArticleSkill implements ISkill {
     // 2. 主版本（必须先跑，副版本依赖其作为 parent 的语义）
     // T4-3-4: 每个 variant 用 templateIds[i]，缺位时退回 templateIds[0] / default
     const primaryTemplateId = templateIds[0] ?? getDefaultTemplateId();
-    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId, tenantId, personaPrompt);
+    const primary = await this.generateJournalRecommendation(requirement, finalJournalData, primaryTemplateId, tenantId, personaPrompt, hookScope);
 
     // 3. 副版本并行跑（共享 finalJournalData，差异来自 LLM temperature 随机性 + 不同 templateId）
     if (requestedVariants > 1) {
@@ -832,6 +838,7 @@ export class ArticleSkill implements ISkill {
     templateId: string = getDefaultTemplateId(),
     tenantId?: string,
     extraPromptSuffix: string = "", // PR-X1: 账号人设/风格画像 (batch 独家模式注入)
+    hookScope: string = "", // 7-03 ④: 钩子轮换 scope（batchId/accountId/tenantId）
   ): Promise<{
     article: GeneratedArticle;
     quality: QualityReport;
@@ -929,7 +936,7 @@ export class ArticleSkill implements ISkill {
     } catch { /* 学习失败不影响生成 */ }
     const variation = buildVariation(recipeWeights);
     const fullSuffix = `${templateAware.suffix}${variation.suffix}${extraPromptSuffix}`;
-    const aiContentRaw = await this.generateJournalAIContent(journal, fullSuffix);
+    const aiContentRaw = await this.generateJournalAIContent(journal, fullSuffix, hookScope);
 
     // 2.5 数据校验：AI 输出 vs 真实数据交叉验证
     const validation = validateAIContent(aiContentRaw, journal);
@@ -994,9 +1001,21 @@ export class ArticleSkill implements ISkill {
     );
 
     // PR Q.4 D3：根据 selected template 的 styleTag 包裹 CSS class，前端 4 CSS 主题生效
-    const wrappedBody = templateAware.styleTag
+    let wrappedBody = templateAware.styleTag
       ? `<article class="bm-template-${templateAware.styleTag}">${articleBody}</article>`
       : articleBody;
+
+    // 7-03 ②: 图位标记 → 真图/表（模板组装后立即替换; 没数据/编造的标记删除。
+    // quality-pipeline 还会幂等地再跑一次, 兜住不走本路径的正文。）
+    try {
+      const slotResult = applyImageSlots(wrappedBody, journal as unknown as Record<string, unknown>);
+      if (slotResult.changed) {
+        wrappedBody = slotResult.body;
+        logger.info({ inserted: slotResult.inserted, droppedMarkers: slotResult.dropped.length }, "7-03 图位标记替换完成");
+      }
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, "7-03 图位替换失败(非阻塞), 保留原文");
+    }
 
     const article: GeneratedArticle = {
       title: aiContent.title,
@@ -1101,7 +1120,7 @@ export class ArticleSkill implements ISkill {
    * PR Q.3: q3PromptSuffix 由 generateJournalRecommendation 算好后传入
    * （含 prompt_overrides 风格约束 + few-shot 行业样板）。
    */
-  async generateJournalAIContent(journal: JournalInfo, q3PromptSuffix: string = ""): Promise<AIGeneratedContent> {
+  async generateJournalAIContent(journal: JournalInfo, q3PromptSuffix: string = "", hookScope: string = ""): Promise<AIGeneratedContent> {
     // PR #209: IF<=0 是占位值(非真实IF, 如中文法学刊), 一律当"无IF", 防止泄漏成 "IF 0.0"
     const ifText = (journal.impactFactor != null && journal.impactFactor > 0) ? journal.impactFactor.toFixed(1) : "N/A";
     const journalName = journal.nameEn || journal.name;
@@ -1307,11 +1326,29 @@ export class ArticleSkill implements ISkill {
 违反任一 → validator 拦截 → 文章排除推荐池 (无效产出, 浪费 token).
 `;
 
-    const prompt = `你是一个学术期刊推荐自媒体的资深写手，擅长用不同风格的标题吸引读者。根据以下期刊信息，生成内容。
+    // 7-03 老韩②: 图位标记清单（按本刊真实数据动态生成; 无数据图位不出现在清单里）
+    const imageSlotBlock = buildImageSlotPromptBlock(journal as unknown as Record<string, unknown>);
+
+    const prompt = `你是这个学术期刊推荐公众号的小编——替读者翻过这本期刊全部资料的人。你的任务不是写论文摘要，而是用自己的话把这本刊**转述**给读者，边报数据边给你的主观判断。根据以下期刊信息，生成内容。
 
 ##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
 ${knownFields.join("\n")}
 ${unknownBlock}${blacklistBlock}${enrichmentBlock}
+## 小编口吻铁律 (7-03 老韩拍板 — 不是论文摘要, 是小编转述)
+1. 【身份与人称】全程以"小编"身份、第一人称口语化转述（"我翻了下它近几年的数据"），像把你研究过的期刊讲给读者听，不是客观陈述堆砌。
+2. 【每个硬数据都要带小编解读】报完数字必须跟一句你的主观判断，例："2.4 的 IF 在工程技术 3 区里不算亮眼，但胜在稳" / "5 个月录用，说实话在这个领域算快的"。只报数不评价 = 论文摘要腔，不合格。
+3. 【禁学术论文腔】🚫 严禁"本文/该刊具有/本刊系/综上所述/综上/呈现出/表明/据统计显示"这类论文式句式堆砌；想说"该刊具有较快的审稿速度"就改说"它审稿是真的快"。
+4. 【小编语气词】适量用"说实话 / 我翻了下 / 划重点 / 注意 / 讲真"拉近距离，但别过量——每段最多一处，全文不超过 5 处，堆多了油腻。
+5. 【人设优先】若下方注入了【账号人设】，以人设为准调整狠度/术语密度——"小编转述+给判断"是基调，具体口吻跟人设走；无人设时默认"贴心学术小编"（热心、有判断、不端着）。
+6. 【真实为界】口语化只改"怎么说"，不改"说什么"——所有数字/事实仍严格来自 ##已知期刊数据##，主观判断只能基于这些真数据做，严禁为了口气顺编数据。
+
+## 排版铁律 (7-03 短段落 + 图文交替)
+1. 所有 HTML 正文字段一律切成**短段落**：每个 <p> 最多 3 句、不超过 100 字；一个意思一段，宁可多段不要长段。
+2. 200 字以上的分析章节必须拆成至少 2-3 个 <p>，🚫 严禁整章挤成一个大 <p>。
+3. 重点结论/数字用 <strong> 标出（每段最多一处）。
+${imageSlotBlock ? `${imageSlotBlock}
+- 标记写法：在 scopeDescription / ifHistoryAnalysis / scopeAndCitations / submissionAdvice / recommendation 这些 HTML 字段里，用独立段落 <p>{{IMG:xxx}}</p> 插入。
+` : ""}
 ## 数据密度与卖点兑现 (7-03 供给侧强化)
 1. 【密度】各分析章节必须把 ##已知期刊数据## 里的硬指标自然写进正文, 数据密度约每 200 字至少 1 个具体数字/指标(IF/两套分区/审稿周期/录用率/版面费/年发文量), 少写空泛评价、多用真数字支撑。
 2. 【卖点兑现】上述数据里的亮点(审稿快 / 分区高 / 免版面费 / 录用友好等)是本文核心卖点, 也是标题会挑来做噱头的点。开头首段必须挑最亮的 1-2 个做痛点承诺切入(如"还在为审稿半年发愁? 这本 X 周就出结果"), 正文再逐一兑现展开。**凡开头/标题承诺的数字, 正文必须出现并给出场景, 严禁承诺了不兑现(标题吹的数正文一定要有)。**
@@ -1364,7 +1401,7 @@ ${angleHint}
 🚫 严格禁止基于上方未提及的字段编造数据。
 🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
 - ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
-- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，可放心冲 / 谨慎评估 / 强烈避雷"）。**无 CAR 数据时返回 null**。
+- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，风险较低可列入备选 / 谨慎评估 / 强烈避雷"）。🚫 严禁"放心投稿/放心冲/必中/稳过"等替读者拍板的承诺话术（7-03 老韩红线）。**无 CAR 数据时返回 null**。
 - scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
 - submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。🚫 **若上方数据中已给出 APC 具体金额, 必须按该金额表述(如"APC 约 USD 3350"), 严禁写"未公开/未披露/未明确/通常 OA 期刊版面费较高"这类模糊或泛化说法**(数据明摆着却说"未公开"是误导)。
 
@@ -1406,7 +1443,7 @@ ${angleHint}
 }`;
 
     // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
-    const baseSystemPrompt = `你是学术期刊分析专家，输出严格JSON格式。
+    const baseSystemPrompt = `你是学术期刊公众号的小编（口吻：第一人称转述+主观判断，禁论文腔）兼期刊数据分析专家（纪律：数据只认给定真值），输出严格JSON格式。
 
 ##硬规则##
 1. 文章中所有具体数字 **以及分区/学科标签** 必须来自 user 消息 ##已知期刊数据## 段, 严禁从训练记忆调任何数字 / 年份 / 国家 / 价格 / **分区(如"1区"/"Q1"/"医学1区TOP"/"生物学1区TOP")** / **学科大类(如"医学"/"生物学"/"工程技术")** / TOP 标记 / SCIE/SSCI 收录状态等任何具体数据点。**(PR #232)** 当 ##已知期刊数据## 已给出"分区"/"新锐分区"字段时, 引用时必须**逐字原文搬运**(包括"X区"和学科名的顺序、数字、字符), 严禁基于训练记忆改写、调换"X区"和学科的顺序、改数字或仅截取部分
@@ -1419,8 +1456,24 @@ ${angleHint}
 4. 违反 → validator 拦截 + hasWarnings=true → 文章排除推荐池, 浪费 token`;
     // P0②③预防(7-03): recommendation/scope 开头注入钩子模式 + 全字段禁 AI 腔套话
     // 只挑 1 个模式给模板路径(标题已有自己的钩子体系, 这里管的是正文开头两句)
-    const hookPick = env.ARTICLE_HOOK_INJECT !== "false" ? pickHookPatterns(journal.discipline || undefined, 1)[0] : undefined;
-    const p0Suffix = `${hookPick ? `\n【正文开头钩子】recommendation 的第一二句按【${hookPick.name}】模式写: ${hookPick.structure} 🚫 禁止"该刊是一本…"式平铺开场。` : ""}${buildClicheBanPrompt(20)}`;
+    // 7-03 ④: 批次内钩子轮换 — 同 scope(批次/账号)当天每个模式限用 2 次, 用满剔除并注入禁选清单(治"全员闭眼冲")
+    const HOOK_SCOPE_LIMIT = 2;
+    let hookPick: ReturnType<typeof pickHookPatterns>[number] | undefined;
+    let hookBanLine = "";
+    if (env.ARTICLE_HOOK_INJECT !== "false") {
+      const candidates = pickHookPatterns(journal.discipline || undefined, 8);
+      if (hookScope) {
+        const banned = exhaustedKeys(hookScope, candidates.map((c) => c.name), HOOK_SCOPE_LIMIT);
+        const fresh = candidates.filter((c) => usageCount(hookScope, c.name) < HOOK_SCOPE_LIMIT);
+        hookPick = fresh[0] ?? candidates[0]; // 全用满时兜底随机(退回旧行为)
+        if (hookPick) recordUsage(hookScope, hookPick.name);
+        const bannedShow = banned.filter((b) => b !== hookPick?.name);
+        if (bannedShow.length > 0) hookBanLine = `\n【钩子轮换】以下开头模式本批次/今天已用满, 禁止再用其结构开头: ${bannedShow.join("、")}。`;
+      } else {
+        hookPick = candidates[0];
+      }
+    }
+    const p0Suffix = `${hookPick ? `\n【正文开头钩子】recommendation 的第一二句按【${hookPick.name}】模式写: ${hookPick.structure} 🚫 禁止"该刊是一本…"式平铺开场。` : ""}${hookBanLine}${buildClicheBanPrompt(20)}`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}${p0Suffix}` : `${baseSystemPrompt}${p0Suffix}`;
 
     try {

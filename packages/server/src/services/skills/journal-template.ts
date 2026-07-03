@@ -1152,7 +1152,7 @@ function buildSelfCitationSection(j: JournalInfo): string {
   <div style="padding:16px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
     <p style="margin:0;">
       ${esc(j.nameEn || j.name)} 自引率为 <strong>${rate.toFixed(1)}%</strong>，
-      ${safe ? `处于安全范围，可放心投稿。` : `偏高，投稿时需关注。`}
+      ${safe ? `处于安全范围。` : `偏高，投稿时需关注。`}
     </p>
   </div>
 </div>`;
@@ -1179,7 +1179,7 @@ function buildWarningSection(j: JournalInfo): string {
   ${sectionTitle("预警名单", undefined)}
   <div style="padding:16px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">
     <p style="margin:0;color:#16a34a;">
-      ✅ 中科院《国际期刊预警名单》：<strong>不在预警名单中</strong>，可放心投稿。
+      ✅ 中科院《国际期刊预警名单》：<strong>不在预警名单中</strong>。
     </p>
   </div>
 </div>`;
@@ -1365,7 +1365,14 @@ export function getPartitionColor(partition: string): string {
 }
 
 export function esc(str: string): string {
-  return str
+  // 7-03 ③: 先解一层基础实体再转义（幂等化）。crawler 存库的字符串可能已含
+  // "&amp;"/"&lt;"（抓取时没解实体），直接再 esc 会双重转义 → 读者看到 "&amp;"/"&lt;5%" 字面。
+  const decoded = str
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+  return decoded
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

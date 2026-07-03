@@ -33,6 +33,7 @@ import {
   type SixDimResult,
 } from "./quality-check-v2.js";
 import { splitByH2, rewriteSectionInBody, spliceSection } from "./section-rewrite.js";
+import { applyImageSlots, fixDoubleEscapedEntities } from "./image-slots.js";
 
 // ============ 类型 ============
 
@@ -99,10 +100,12 @@ export async function runArticleQualityPasses(params: {
 
   // 7-03 B-②: 查期刊真实硬数据 → 定向重写补数上下文(查不到/无id 就不带, 退回原行为)
   let journalContext: string | undefined;
+  let journalRow: Record<string, unknown> | undefined; // 7-03 ②: 图位替换要用完整 row（jsonb 图表字段 + 封面）
   if (journalId) {
     try {
       const [jr] = await db.select().from(journals).where(eq(journals.id, journalId)).limit(1);
-      journalContext = buildJournalDataContext(jr as Record<string, unknown> | undefined);
+      journalRow = jr as Record<string, unknown> | undefined;
+      journalContext = buildJournalDataContext(journalRow);
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, journalId }, "B-② 期刊数据查询失败, 重写不带硬数据");
     }
@@ -134,6 +137,23 @@ export async function runArticleQualityPasses(params: {
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, "P0③ decliche pass 异常，跳过");
     }
+  }
+
+  // ---- ② 图位标记替换 + 双重转义修复（7-03 图文交替; 压缩/禁词之后、六维质检之前）----
+  // 幂等: article-skill 已替换过的签名不重复出图; 没数据/编造的 {{IMG:xxx}} 标记删除, 绝不泄漏字面。
+  try {
+    const slot = applyImageSlots(body, journalRow ?? null);
+    if (slot.changed) {
+      body = slot.body;
+      logger.info({ inserted: slot.inserted, droppedMarkers: slot.dropped.length }, "7-03 图位标记替换(pipeline 兜底)完成");
+    }
+    const fixed = fixDoubleEscapedEntities(body);
+    if (fixed !== body) {
+      logger.info("7-03 修复双重转义泄漏(&amp;lt; 等)");
+      body = fixed;
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "7-03 图位/转义后处理异常, 跳过");
   }
 
   // ---- ① 六维质检 + 定向重写闭环（env ARTICLE_SIXDIM_QC） ----
