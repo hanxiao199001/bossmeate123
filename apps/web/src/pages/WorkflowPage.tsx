@@ -1730,7 +1730,7 @@ export default function WorkflowPage() {
                 </div>
                 {wechatStatus === "configured" && (
                   <div className="p-3 rounded-lg bg-amber-100 text-amber-700 text-xs">
-                    需要在微信公众平台的IP白名单中添加 <code className="px-1 py-0.5 bg-amber-200 rounded font-mono font-bold">106.53.163.120</code>，然后到设置页重新验证
+                    需要在微信公众平台的IP白名单中添加 <code className="px-1 py-0.5 bg-amber-200 rounded font-mono font-bold">119.91.52.13</code>，然后到设置页重新验证
                   </div>
                 )}
                 {publishResult && (
