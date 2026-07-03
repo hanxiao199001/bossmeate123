@@ -101,6 +101,23 @@ describe("extractProseSegments / replaceSegments", () => {
     ]);
     expect(out).toBe("aaaa\n\nBBB\n\ncc");
   });
+
+  // 7-03 回归: 图位段(<img>/<!--img-slot-->)不进改写候选, 否则段落级重写/去AI腔会吞掉图文交替排版
+  it("排除含 <img> / <!--img-slot--> 的段落，只留纯文字正文段", () => {
+    const html = `<p>正文一。</p><p><!--img-slot:if_trend--><img src="data:image/svg+xml;base64,AAAA"/></p><p>正文二。</p><p><img src="x.png"/></p>`;
+    const segs = extractProseSegments(html);
+    expect(segs.length).toBe(2);
+    expect(segs.map((s) => s.text)).toEqual(["<p>正文一。</p>", "<p>正文二。</p>"]);
+  });
+
+  it("图位段被排除后, replaceSegments 只改文字段, 图位在 body 原样保留", () => {
+    const html = `<p>弱段要改。</p><p><img src="data:image/svg+xml;base64,ZZZ"/></p><p>另一段。</p>`;
+    const segs = extractProseSegments(html);
+    const out = replaceSegments(html, [{ seg: segs[0], newText: "<p>改后的强段。</p>" }]);
+    expect(out).toContain(`<img src="data:image/svg+xml;base64,ZZZ"/>`);
+    expect(out).toContain("<p>改后的强段。</p>");
+    expect(out).not.toContain("弱段要改");
+  });
 });
 
 describe("removeCliches", () => {

@@ -97,6 +97,10 @@ export function extractProseSegments(body: string): ProseSegment[] {
     const re = /<(p|li|h3|h4)\b[^>]*>([\s\S]*?)<\/\1>/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(body)) !== null) {
+      // 图位/图表块（<img> / <!--img-slot-->）不是"承载正文文字"的段，排除在改写候选外(7-03):
+      // 否则段落级重写/去AI腔会把 base64 <img> 当普通段送进 LLM → 图文交替排版被吞。
+      // replaceSegments 按偏移替换, 未入选段原样留在 body → 图位保住。
+      if (/<img\b|<!--\s*img-slot/i.test(m[0])) continue;
       segs.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
     }
   } else {
