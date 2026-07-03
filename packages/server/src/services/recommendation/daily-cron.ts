@@ -648,10 +648,13 @@ export async function runDailyContentByType(
             sixDimFail = qp.qualityLoop.passed === false;
           } catch (e) { logger.warn({ e }, "P0四件套流水线失败(topicPool, 非阻塞)"); }
           // PR-U2 轻量质检: 字数下限 + 合规硬词; P0① 六维未过同样转 needs_review(人工看低分)
-          const { checkCompliance } = await import("../compliance/content-check.js");
+          const { checkCompliance, checkTitleBodyConsistency } = await import("../compliance/content-check.js");
           const comp = await checkCompliance(`${gen.title}\n${finalBody}`);
           const plainLen = (finalBody || "").replace(/<[^>]+>/g, "").length;
-          const qcPass = plainLen >= 300 && !comp.blocked && !sixDimFail;
+          // 7-03 标题-正文一致性(行7): 正文有风险信号却标题喊保录 → needs_review
+          const tbc = checkTitleBodyConsistency(gen.title, finalBody);
+          if (!tbc.ok) logger.warn({ topic: pick.keyword, titleHits: tbc.titleHits, riskSignal: tbc.riskSignal }, "标题-正文矛盾, 转 needs_review");
+          const qcPass = plainLen >= 300 && !comp.blocked && !sixDimFail && tbc.ok;
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article",
             title: gen.title, body: finalBody,

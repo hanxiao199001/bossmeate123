@@ -68,7 +68,7 @@ const SANITIZE_MAP: Array<[RegExp, string]> = [
   [/100\s*%\s*有效|百分之百有效|百分百有效/g, "效果显著"],
   [/完全无副作用|无任何副作用|绝无副作用/g, "副作用较小"],
   // 投稿/录用过度承诺
-  [/保证录用|百分百中刊|百分之百录用|包过|保过|包录用|稳过|包中/g, "录用率较高"],
+  [/保证录用|百分百中刊|百分之百录用|包过|保过|包录用|稳过|稳发|稳中|稳录|包中/g, "录用率较高"],
   [/包发表|保发表|保证发表/g, "较易发表"],
   // 7-03 ③: 投稿承诺性话术红线（老韩反馈"据xx查询…可放心投稿"式替读者拍板的承诺全禁）
   [/(?:可以|可)?放心投稿/g, "综合评估后再投稿"],
@@ -86,6 +86,23 @@ export function sanitizeForCompliance(text: string | null | undefined): string {
   let out = String(text);
   for (const [re, rep] of SANITIZE_MAP) out = out.replace(re, rep);
   return out;
+}
+
+// 7-03 标题-正文一致性检查（行7 教训: 标题喊"稳发", 正文却"CAR 高风险, 建议避开" = 信任事故）。
+// 规则级、零 LLM、极便宜: 只在正文出现高风险/预警/退稿信号时, 才禁止标题的"稳发/稳过/闭眼冲/放心/沾边就收"类保录承诺。
+// (无风险信号时这些狠话由 rotation 限量放行, 不在此拦; 命中即转 needs_review, 标题需人工/重生修正)
+const BODY_RISK_SIGNAL = /高风险|预警名单|已列入预警|上了?预警|建议(?:谨慎|避开|回避|绕行)|谨慎评估|已被\s*SCI\s*除名|被踢出|剔除出|拒稿率(?:高|偏高)|退稿率(?:高|偏高)|自引率[^。]{0,8}(?:高风险|偏高|过高)/;
+const TITLE_OVERPROMISE = /稳发|稳过|稳中|稳录|闭眼[投冲]|放心[投冲发]|包过|包录|沾边就收|必中|无脑冲/g;
+
+export function checkTitleBodyConsistency(
+  title: string | null | undefined,
+  body: string | null | undefined,
+): { ok: boolean; titleHits: string[]; riskSignal: string | null } {
+  const plainBody = (body || "").replace(/<[^>]+>/g, "");
+  const risk = plainBody.match(BODY_RISK_SIGNAL);
+  if (!risk) return { ok: true, titleHits: [], riskSignal: null };
+  const hits = [...new Set((title || "").match(TITLE_OVERPROMISE) || [])];
+  return { ok: hits.length === 0, titleHits: hits, riskSignal: risk[0] };
 }
 
 const AI_LABEL_HTML = `<p style="color:#999;font-size:12px;margin-top:24px;">本文由 AI 辅助生成，内容仅供参考。</p>`;

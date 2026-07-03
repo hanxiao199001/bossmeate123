@@ -247,13 +247,23 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         const artMetaForGate = (result.artifact as { metadata?: Record<string, unknown> } | undefined)?.metadata || {};
         const qPassed = artMetaForGate.qualityPassed;
         const qScore = typeof artMetaForGate.qualityScore === "number" ? artMetaForGate.qualityScore : undefined;
+        // 7-03 标题-正文一致性(行7 教训): 正文有高风险/预警信号却标题喊"稳发/闭眼冲/放心" → 信任事故, 转 needs_review
+        let titleBodyBad: { titleHits: string[]; riskSignal: string | null } | null = null;
+        try {
+          const { checkTitleBodyConsistency } = await import("../compliance/content-check.js");
+          const [fin] = await db.select({ title: contents.title, body: contents.body }).from(contents).where(eq(contents.id, content.id)).limit(1);
+          const tc = checkTitleBodyConsistency(fin?.title, fin?.body);
+          if (!tc.ok) { titleBodyBad = { titleHits: tc.titleHits, riskSignal: tc.riskSignal }; logger.warn({ contentId: content.id, titleHits: tc.titleHits, riskSignal: tc.riskSignal }, "标题-正文矛盾(标题保录承诺 vs 正文风险信号), 转 needs_review"); }
+        } catch { /* 一致性检查失败不阻塞生产 */ }
         // PR-U2(调) 只在质检明确判不通过时转待审; 尊重原质检结论, 不再用分数二次卡(过严会误伤)
         // P0①: 六维质检(重写循环后)仍未过 → 同样转 needs_review, 低分文章人工可在管理端看到, 不阻塞生产
-        const failed = qPassed === false || sixDimPassedGate === false;
+        const failed = qPassed === false || sixDimPassedGate === false || titleBodyBad !== null;
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
-          // 7-03: 区分待审原因 — 评分降级(分数不可信,需重评)vs 质量真不过。首过率统计据 sixDimDegraded 排除降级样本。
-          const reviewMeta = sixDimDegraded ? { needsReview: true, needsReviewReason: "sixdim_degraded" } : { needsReview: true };
+          // 7-03: 区分待审原因 — 标题-正文矛盾 / 评分降级(分数不可信,需重评) / 质量真不过。首过率统计据 sixDimDegraded 排除降级样本。
+          const reviewMeta = titleBodyBad
+            ? { needsReview: true, needsReviewReason: "title_body_inconsistent", titleOverpromise: titleBodyBad.titleHits, bodyRiskSignal: titleBodyBad.riskSignal }
+            : sixDimDegraded ? { needsReview: true, needsReviewReason: "sixdim_degraded" } : { needsReview: true };
           await db.update(contents)
             .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(reviewMeta)}::jsonb` })
             .where(eq(contents.id, content.id));
