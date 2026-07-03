@@ -293,6 +293,44 @@ export function applyImageSlots(body: string, journal: ImageSlotJournalLike): Ap
 }
 
 /**
+ * 7-03 B 确定性保底：**只对无内建图表的路径**（markdown / 非图表模板）。
+ * shunshi 等模板已把 IF/发文量/分区渲成内建图表块(<svg>/<img>)，强插 img-slot = 重复出图 → 门直接跳过。
+ * 无图正文 + 该刊有数据图位 → 在第 2/4/6 个 <p> 后按规则位自动插(不靠 LLM 插 {{IMG}}, 遵从率永远不到 100%)。
+ * 纯函数、幂等(有 <img>/<svg>/img-slot 签名即跳过)、无 IO。cover 不插(由 hero 渲染)。
+ */
+export function applyImageSlotsFallback(body: string, journal: ImageSlotJournalLike): ApplyImageSlotsResult {
+  const empty: ApplyImageSlotsResult = { body: body || "", inserted: [], dropped: [], changed: false };
+  if (!body) return empty;
+  // 门1: 正文已有任何图(内建图表模板 / 已插过的 img-slot / 封面) → 不保底, 绝不重复出图
+  if (/<img\b|<svg\b|<!--img-slot:/i.test(body)) return empty;
+  // 门2: 该刊可用数据图位(排除 cover — cover 归 hero)
+  const slots = availableImageSlots(journal).filter((k) => k !== "cover");
+  if (slots.length === 0) return empty;
+  // 段落定位: 第 2/4/6 个 </p> 之后, 最多 min(3, slots) 个
+  const pRe = /<\/p>/gi;
+  const positions: number[] = [];
+  let m: RegExpExecArray | null;
+  let n = 0;
+  const cap = Math.min(3, slots.length);
+  while ((m = pRe.exec(body)) !== null) {
+    n++;
+    if (n === 2 || n === 4 || n === 6) positions.push(m.index + m[0].length);
+    if (positions.length >= cap) break;
+  }
+  if (positions.length === 0) return empty;
+  // 从后往前插(偏移不串位); 位置 i 对应 slots[i]
+  const inserted: ImageSlotKey[] = [];
+  let out = body;
+  for (let i = positions.length - 1; i >= 0; i--) {
+    const rendered = renderSlot(slots[i], journal);
+    if (!rendered) continue;
+    out = out.slice(0, positions[i]) + rendered + out.slice(positions[i]);
+    inserted.unshift(slots[i]);
+  }
+  return { body: out, inserted, dropped: [], changed: out !== body };
+}
+
+/**
  * 7-03 ③：双重转义泄漏修复。正文中出现 `&amp;lt;` / `&amp;amp;` 等二次转义
  * （crawler 存了已转义文本再被 esc()，或 LLM 回写时二次转义），读者会看到
  * "&lt;5%"、"&amp;" 字面。这些序列在本产品正文里永远是转义事故，降一层是安全的。

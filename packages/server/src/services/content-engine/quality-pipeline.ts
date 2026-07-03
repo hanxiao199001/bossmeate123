@@ -33,7 +33,7 @@ import {
   type SixDimResult,
 } from "./quality-check-v2.js";
 import { splitByH2, rewriteSectionInBody, spliceSection } from "./section-rewrite.js";
-import { applyImageSlots, fixDoubleEscapedEntities } from "./image-slots.js";
+import { applyImageSlots, applyImageSlotsFallback, fixDoubleEscapedEntities } from "./image-slots.js";
 
 // ============ 类型 ============
 
@@ -146,6 +146,12 @@ export async function runArticleQualityPasses(params: {
     if (slot.changed) {
       body = slot.body;
       logger.info({ inserted: slot.inserted, droppedMarkers: slot.dropped.length }, "7-03 图位标记替换(pipeline 兜底)完成");
+    }
+    // 7-03 B: 确定性保底 — 只对无内建图表的路径(markdown/非图表模板)。shunshi 等已有 <svg>/<img> → 门内跳过, 不重复出图。
+    const fb = applyImageSlotsFallback(body, journalRow ?? null);
+    if (fb.changed) {
+      body = fb.body;
+      logger.info({ inserted: fb.inserted }, "7-03 图位确定性保底(无内建图路径, 规则位插入)");
     }
     const fixed = fixDoubleEscapedEntities(body);
     if (fixed !== body) {

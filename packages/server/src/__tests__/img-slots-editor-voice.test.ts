@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   applyImageSlots,
+  applyImageSlotsFallback,
   availableImageSlots,
   buildImageSlotPromptBlock,
   fixDoubleEscapedEntities,
@@ -27,6 +28,34 @@ const FULL_JOURNAL = {
   casPartitionNew: "3区材料科学",
   jcrFull: { jifSubjects: [{ subject: "MATERIALS SCIENCE", zone: "Q2", rank: "120/345" }] },
 };
+
+describe("7-03 B image-slots 确定性保底(只对无内建图路径)", () => {
+  const textBody6 = Array.from({ length: 6 }, (_, i) => `<p>正文第${i + 1}段的一些文字内容。</p>`).join("");
+
+  it("无图正文 + 有数据 → 规则位插入(非 cover)", () => {
+    const r = applyImageSlotsFallback(textBody6, FULL_JOURNAL);
+    expect(r.changed).toBe(true);
+    expect(r.inserted.length).toBeGreaterThanOrEqual(1);
+    expect(r.inserted).not.toContain("cover"); // cover 归 hero, 保底不插
+    expect(r.body).toContain("<!--img-slot:");
+  });
+
+  it("门: 正文已含 <svg>(shunshi 内建图表) → 跳过, 不重复出图", () => {
+    const r = applyImageSlotsFallback(textBody6 + `<svg width="10"></svg>`, FULL_JOURNAL);
+    expect(r.changed).toBe(false);
+    expect(r.inserted).toHaveLength(0);
+  });
+
+  it("门: 正文已含 <img>(封面等) → 跳过", () => {
+    const r = applyImageSlotsFallback(textBody6 + `<img src="x.png"/>`, FULL_JOURNAL);
+    expect(r.changed).toBe(false);
+  });
+
+  it("门: 该刊无数据图位 → 跳过", () => {
+    const r = applyImageSlotsFallback(textBody6, { coverUrl: null });
+    expect(r.changed).toBe(false);
+  });
+});
 
 describe("7-03 ② image-slots 标记替换", () => {
   it("有数据的图位: cover 用 coverUrlHd 优先, 图表转 data URI <img>", () => {
