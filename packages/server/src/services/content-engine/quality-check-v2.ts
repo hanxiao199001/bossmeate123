@@ -378,6 +378,9 @@ export async function sixDimQualityCheck(params: {
     ...body.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi),
   ].map((m) => m[1].replace(/<[^>]+>/g, "").trim()).filter(Boolean).slice(0, 12);
 
+  // 7-03 评分降级修复: deepseek-reasoner 偶发降级会污染首过率(旧 degradedSixDim 伪装 passed=true)。
+  // 降级 → 自动重打 1 次; 两次都挂才判 degraded(下游转 needs_review, 不计入首过率)。
+  for (let attempt = 1; attempt <= 2; attempt++) {
   try {
     const response = await chat({
       tenantId,
@@ -449,18 +452,30 @@ ${body.slice(0, 4000)}
       degraded: false,
     };
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : err }, "P0① 六维评分 LLM 失败，走降级兜底（不阻塞）");
-    return degradedSixDim();
+    const last = attempt >= 2;
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, attempt },
+      last ? "P0① 六维评分两次均失败 → degraded(转 needs_review, 不计入首过率)" : "P0① 六维评分 LLM 失败，自动重打 1 次"
+    );
+    if (last) return degradedSixDim();
+    // else: 继续 for 循环重打一次
   }
+  }
+  return degradedSixDim(); // 循环内必 return, 此行仅满足类型
 }
 
-/** LLM 失败兜底：passed=true 跳过该 pass（绝不阻塞生成），degraded 标记让下游知道分数不可信 */
+/**
+ * LLM 两次均失败兜底：degraded=true + passed=false。
+ * 7-03 改: 旧版 passed=true+80分 会把"没打成分"伪装成"过线", 污染首过率并让降级文章直接放行。
+ * 改为 passed=false → batch-worker 转 needs_review(人工复核); degraded 标记让首过率统计把它排除在分母外。
+ * (degraded 仍跳过重写循环, 见 quality-pipeline 的 sixDim.degraded 判断, 不会拿默认分瞎重写烧钱)
+ */
 function degradedSixDim(): SixDimResult {
   const dims = {} as Record<SixDimKey, SixDimDetail>;
   for (const key of Object.keys(SIX_DIM_WEIGHTS) as SixDimKey[]) {
-    dims[key] = { score: 8, weakestSection: "全文", fixHint: "", justification: "评分服务降级，默认分" };
+    dims[key] = { score: 0, weakestSection: "全文", fixHint: "", justification: "评分服务降级，分数不可信" };
   }
-  return { dims, totalScore: 80, passed: true, dataDensity: "评分服务降级，无统计", degraded: true };
+  return { dims, totalScore: 0, passed: false, dataDensity: "评分服务降级，无统计", degraded: true };
 }
 
 function clamp(v: number, min: number, max: number): number {

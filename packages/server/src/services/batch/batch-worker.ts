@@ -207,6 +207,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         // 四件套的 2-4 次 LLM 调用会把正常生成挤爆超时; 放在超时圈外, 生成成功后再提质。
         // 铁律: 流水线任何失败只 warn, 文章按现状继续走, 绝不让提质把生产打挂。
         let sixDimPassedGate: boolean | null = null;
+        let sixDimDegraded = false; // 7-03: 评分器两次均降级 → needs_review 标 degraded(区别于"质量不过"), 首过率统计排除
         try {
           const { runArticleQualityPasses, qualityPipelineMeta } = await import("../content-engine/quality-pipeline.js");
           const [cur] = await db
@@ -232,6 +233,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               })
               .where(eq(contents.id, content.id));
             sixDimPassedGate = qp.qualityLoop.passed;
+            sixDimDegraded = qp.sixDim?.degraded ?? false;
             logger.info(
               { contentId: content.id, sixDimTotal: qp.qualityLoop.finalTotal, rounds: qp.qualityLoop.rounds, passed: qp.qualityLoop.passed, llmCalls: qp.llmCalls },
               "P0四件套: batch 路径提质完成"
@@ -250,11 +252,13 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         const failed = qPassed === false || sixDimPassedGate === false;
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
+          // 7-03: 区分待审原因 — 评分降级(分数不可信,需重评)vs 质量真不过。首过率统计据 sixDimDegraded 排除降级样本。
+          const reviewMeta = sixDimDegraded ? { needsReview: true, needsReviewReason: "sixdim_degraded" } : { needsReview: true };
           await db.update(contents)
-            .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify({ needsReview: true })}::jsonb` })
+            .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(reviewMeta)}::jsonb` })
             .where(eq(contents.id, content.id));
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
-          logger.info({ rowId, contentId: content.id, qScore }, "PR-U2 质检未过, 转 needs_review 待人工复核");
+          logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded }, sixDimDegraded ? "评分降级(两次), 转 needs_review 待重评" : "PR-U2 质检未过, 转 needs_review 待人工复核");
         } else {
           await transitionStatus(content.id, "generating", "generated");
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
