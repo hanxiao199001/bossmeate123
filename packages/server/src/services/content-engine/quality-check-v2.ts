@@ -372,6 +372,15 @@ export async function sixDimQualityCheck(params: {
   const { tenantId, title, body } = params;
   const plain = body.replace(/<[^>]+>/g, "");
   const plainLen = plain.replace(/\s+/g, "").length;
+  // 7-03 评分视图去噪: shunshi 模板 HTML ~92% 是内联 <svg> 图表 + style 样式(32k HTML vs 2.5k 正文)。
+  // 旧版喂 body.slice(0,4000) 原始 HTML → 前4000字符全被封面/数据卡/SVG 吃光, 评分器读不到后面的投稿实操段
+  // → 实用/结构/密度 被误判低分 + "戛然而止"幻觉。改: 剥 SVG/style/注释保结构(<p>/<h3>/<img>), 放大预算装全篇。
+  const scorerView = body
+    .replace(/<svg[\s\S]*?<\/svg>/gi, "【图表】")
+    .replace(/\sstyle="[^"]*"/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .slice(0, 9000);
   // 章节标题列表：让 LLM 的 weakestSection 落在真实章节名上，重写闭环才能定位
   const headings = [
     ...body.matchAll(/^##\s+(.+?)\s*$/gm),
@@ -400,8 +409,8 @@ export async function sixDimQualityCheck(params: {
 标题: ${title}
 全文纯文本字数: 约${plainLen}字
 ${headings.length > 0 ? `章节列表: ${headings.join(" / ")}` : ""}
-正文（前4000字）:
-${body.slice(0, 4000)}
+正文（已去图表SVG/样式噪声, 保留段落结构; 全篇约${plainLen}字）:
+${scorerView}
 
 对每一维输出：score（0-10 整数）、weakestSection（拖后腿最严重的一节，必须从章节列表选，或写"开头"/"结尾"/"全文"）、fixHint（一句话怎么修，要具体可执行）、justification（一句评分理由）。
 
