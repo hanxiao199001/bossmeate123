@@ -65,6 +65,25 @@ describe("checkTitleDataConsistency (7-05 行1 教训: 标题审稿/录用率数
     const r = checkTitleDataConsistency("IF10.5+1区化学顶刊，毕业党必投！", "<p>影响因子10.5，化学1区。</p>");
     expect(r.ok).toBe(true);
   });
+
+  it("行4 场景(DB硬校验): 标题+正文都写'审稿60天/录用率35%'一致编造, 但 DB 两字段皆空 → 不通过", () => {
+    const r = checkTitleDataConsistency(
+      "IF5.4环境神刊，审稿60天录用率35%，闭眼冲！",
+      "<p>该刊审稿约60天，录用率35%左右。</p>", // 正文复现了(一致编造) → 只有 DB 校验能抓
+      { reviewCycle: null, acceptanceRate: null },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.mismatches.join()).toMatch(/DB无/);
+  });
+
+  it("DB硬校验放行: DB 有审稿周期(20Weeks)且标题正文一致 → 通过", () => {
+    const r = checkTitleDataConsistency(
+      "审稿20周的Cell子刊",
+      "<p>审稿周期约20周。</p>",
+      { reviewCycle: "20Weeks", acceptanceRate: null },
+    );
+    expect(r.ok).toBe(true);
+  });
 });
 
 describe("7-05 脏点净化", () => {

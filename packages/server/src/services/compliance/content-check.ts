@@ -111,20 +111,34 @@ export function checkTitleBodyConsistency(
 // 正文由核验过的期刊库派生 → 正文没有 = DB 没有 = 标题编造(行1 标题"审稿60天/录用率35%", DB两者皆空, 正文写"3-4个月/较低")。
 // 只查 审稿周期(天/周/月) + 录用率(%) 这两个 DB 常缺、最易被 LLM 编造吸睛的字段; IF/分区等几乎必复现, 不查以免误伤。
 const TITLE_DATA_CLAIM = /(?:审稿|外审|见刊|接收|录用率|命中率)[约仅低于\s]*\d+(?:\.\d+)?\s*(?:天|周|个月|月|%)/g;
+/**
+ * 标题的审稿周期/录用率具体数字校验。两道:
+ *  ① DB 硬校验(最强): 传 db 时, 审稿数字要求 db.reviewCycle 非空、录用率数字要求 db.acceptanceRate 非空;
+ *     字段 DB 为空 = 该数字必是编造(行4: 标题+正文都写"审稿60天/录用率35%"一致编造, 但 DB 两者皆空)。
+ *  ② 正文复现(兜底, 未传 db 时): 标题数字须在正文出现(治标题-正文脱节, 行1)。
+ */
 export function checkTitleDataConsistency(
   title: string | null | undefined,
   body: string | null | undefined,
+  db?: { reviewCycle?: string | null; acceptanceRate?: number | null },
 ): { ok: boolean; mismatches: string[] } {
   const plainBody = (body || "").replace(/<[^>]+>/g, "");
   const claims = [...new Set((title || "").match(TITLE_DATA_CLAIM) || [])];
-  const mismatches = claims.filter((c) => {
+  const mismatches: string[] = [];
+  for (const c of claims) {
     const m = c.match(/(\d+(?:\.\d+)?)\s*(天|周|个月|月|%)/);
-    if (!m) return false;
+    if (!m) continue;
     const [, num, unit] = m;
+    const isAcceptance = unit === "%";
+    // ① DB 硬校验: 字段空 → 编造
+    if (db) {
+      if (isAcceptance && db.acceptanceRate == null) { mismatches.push(`${c}(DB无录用率数据)`); continue; }
+      if (!isAcceptance && !db.reviewCycle) { mismatches.push(`${c}(DB无审稿周期数据)`); continue; }
+    }
+    // ② 正文复现
     const unitAlt = unit === "月" || unit === "个月" ? "(?:个月|月)" : unit === "%" ? "%" : unit;
-    // 正文出现 同数字+同单位 即算复现(月/个月 等价)
-    return !new RegExp(num.replace(".", "\\.") + "\\s*" + unitAlt).test(plainBody);
-  });
+    if (!new RegExp(num.replace(".", "\\.") + "\\s*" + unitAlt).test(plainBody)) mismatches.push(`${c}(正文未复现)`);
+  }
   return { ok: mismatches.length === 0, mismatches };
 }
 

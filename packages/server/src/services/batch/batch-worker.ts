@@ -252,8 +252,15 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         try {
           const { checkTitleBodyConsistency, checkTitleDataConsistency } = await import("../compliance/content-check.js");
           const [fin] = await db.select({ title: contents.title, body: contents.body }).from(contents).where(eq(contents.id, content.id)).limit(1);
+          // 7-05: 取 DB 审稿周期/录用率做硬校验(字段空→标题该数字必是编造, 治行4 一致编造绕过正文复现)
+          let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+          if (row.journalId) {
+            const { journals: journalsTbl } = await import("../../models/schema.js");
+            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
+            if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+          }
           const tc = checkTitleBodyConsistency(fin?.title, fin?.body);
-          const td = checkTitleDataConsistency(fin?.title, fin?.body);
+          const td = checkTitleDataConsistency(fin?.title, fin?.body, dbFields);
           if (!tc.ok) { titleBodyBad = { reason: "title_body_inconsistent", detail: { titleHits: tc.titleHits, riskSignal: tc.riskSignal } }; logger.warn({ contentId: content.id, ...tc }, "标题-正文矛盾(标题保录承诺 vs 正文风险信号), 转 needs_review"); }
           else if (!td.ok) { titleBodyBad = { reason: "title_data_fabricated", detail: { mismatches: td.mismatches } }; logger.warn({ contentId: content.id, mismatches: td.mismatches }, "标题数字正文无据(疑编造审稿/录用率), 转 needs_review"); }
         } catch { /* 一致性检查失败不阻塞生产 */ }
