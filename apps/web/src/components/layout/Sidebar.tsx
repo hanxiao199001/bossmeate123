@@ -9,6 +9,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useAuthStore } from "../../hooks/useAuthStore";
 import { api } from "../../utils/api";
 import { SALES_RADAR_ENABLED } from "../../utils/featureFlags";
+import { usePlatformAdmin } from "../../hooks/usePlatformAdmin"; // 7-05 平台管理入口(手机号白名单)
 import {
   IconHome,
   IconPenSquare,
@@ -111,7 +112,12 @@ export default function Sidebar() {
     });
   const dailyNav = visible(DAILY_NAV);
   const dataNav = visible(DATA_NAV);
-  const systemNav = visible(SYSTEM_NAV);
+  // 7-05 多租户开通 P0: 「平台管理」仅平台管理员(PLATFORM_ADMIN_PHONES 白名单)可见, 与租户角色无关
+  const { isPlatformAdmin } = usePlatformAdmin();
+  const platformNav: NavItem[] = isPlatformAdmin
+    ? [{ to: "/platform", icon: IconUsers, label: "平台管理", matchPrefix: "/platform" }]
+    : [];
+  const systemNav = [...visible(SYSTEM_NAV), ...platformNav];
 
   return (
     <aside className="fixed top-0 left-0 z-30 h-screen w-52 bg-slate-900 flex flex-col">

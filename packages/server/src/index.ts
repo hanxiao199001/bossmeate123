@@ -156,6 +156,9 @@ async function bootstrap() {
     protectedApp.addHook("onRequest", authMiddleware);
     protectedApp.addHook("onRequest", tenantMiddleware);
     await protectedApp.register(tenantRoutes, { prefix: `${env.API_PREFIX}/tenant` });
+    // 7-05 多租户开通 P0: 平台管理端(手机号白名单, 见 middleware/platform-admin.ts)
+    const { platformRoutes } = await import("./routes/platform.js");
+    await protectedApp.register(platformRoutes, { prefix: `${env.API_PREFIX}/platform` });
     await protectedApp.register(async (chatApp) => {
       await chatApp.register(rateLimit, { max: 20, timeWindow: "1 minute" });
       await chatApp.register(chatRoutes, { prefix: `${env.API_PREFIX}/chat` });

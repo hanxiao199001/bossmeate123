@@ -49,6 +49,15 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(8, "JWT_SECRET 至少8位"),
   JWT_EXPIRES_IN: z.string().default("7d"),
 
+  // 7-05 多租户开通 P0: 平台管理员手机号白名单(逗号分隔)。默认空=无人可见平台管理功能(/platform/*)。
+  PLATFORM_ADMIN_PHONES: z.string().default(""),
+  // 7-05 生产自注册闸: production 下默认关闭 POST /auth/register(-company), 客户由平台开通;
+  //   设 true 可重开。非 production(dev/test)不受此闸影响, 保持放行以免破坏本地开发与测试。
+  ALLOW_SELF_REGISTER: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   // 凭证加密密钥
   CREDENTIALS_KEY: z.string().optional(),
 

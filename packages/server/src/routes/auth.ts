@@ -7,6 +7,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { users, tenants, tenantInvites } from "../models/schema.js";
 import { logger } from "../config/logger.js";
+import { env } from "../config/env.js";
 import { sendSmsCode, verifySmsCode, isValidPhone, SmsError, type SmsPurpose } from "../services/auth/sms-service.js";
 import { code2Session, getPhoneNumberByCode, decryptPhone, miniConfigured } from "../services/wechat/miniprogram.js";
 
@@ -24,11 +25,20 @@ const loginSchema = z.object({
   password: z.string().min(1, "密码不能为空"),
 });
 
+// 7-05 多租户开通 P0: 生产默认关闭自注册(客户由平台在 /platform 开通)。
+//   ALLOW_SELF_REGISTER=true 可重开; 非 production(dev/test)恒放行, 不破坏本地开发与现有测试。
+function selfRegisterClosed(): boolean {
+  return env.NODE_ENV === "production" && !env.ALLOW_SELF_REGISTER;
+}
+
 export async function authRoutes(app: FastifyInstance) {
   /**
-   * POST /auth/register - 注册（同时创建租户）
+   * POST /auth/register - 注册（同时创建租户）。7-05: 生产默认关闭(见 selfRegisterClosed)。
    */
   app.post("/register", async (request, reply) => {
+    if (selfRegisterClosed()) {
+      return reply.code(403).send({ code: "SELF_REGISTER_DISABLED", message: "自助注册未开放, 请联系平台开通" });
+    }
     const body = registerSchema.parse(request.body);
 
     // 检查邮箱是否已注册
@@ -257,6 +267,9 @@ export async function authRoutes(app: FastifyInstance) {
    * POST /auth/register-company - 手机号注册新公司(创建租户 + owner 主账号)。
    */
   app.post("/register-company", async (request, reply) => {
+    if (selfRegisterClosed()) {
+      return reply.code(403).send({ code: "SELF_REGISTER_DISABLED", message: "自助注册未开放, 请联系平台开通" });
+    }
     const body = z.object({ phone: z.string(), code: z.string(), name: z.string().min(1), tenantName: z.string().min(1) }).parse(request.body);
     if (!isValidPhone(body.phone)) return reply.code(400).send({ code: "INVALID_PHONE", message: "手机号格式不正确" });
     const [dup] = await db.select().from(users).where(eq(users.phone, body.phone)).limit(1);

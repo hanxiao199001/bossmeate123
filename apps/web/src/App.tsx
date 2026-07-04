@@ -24,6 +24,7 @@ import CostComparisonPage from "./pages/CostComparisonPage";
 import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
 import SalesRadarPage from "./pages/SalesRadarPage";
 import KfServicePage from "./pages/KfServicePage"; // 7-2 B-kf 企微微信客服管理页
+import PlatformPage from "./pages/PlatformPage"; // 7-05 平台管理(客户开通, 白名单手机号)
 // 5-21 P3 全局 chat 抽屉 (mount 在登录后所有 protected 页可见)
 import { useState } from "react";
 import ChatFab from "./components/chat-drawer/ChatFab";
@@ -87,6 +88,18 @@ export default function App() {
         }
       />
       <Route path="/recommendations" element={<Navigate to="/workbench" replace />} />
+
+      {/* 7-05 多租户开通 P0: 平台管理(客户开通页, 页面内按 /platform/me 守卫) */}
+      <Route
+        path="/platform"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <PlatformPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
 
       {/* PR-Y2: 新客户开通向导 */}
       <Route

@@ -5,6 +5,7 @@ import { db } from "../models/db.js";
 import { tenants, users, tenantInvites } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { requirePermission } from "../middleware/permission.js";
+import { getPreference, setPreference } from "../services/preferences.js";
 
 /** Day 2 PR A: 租户级联系信息（admin 可改），shape 与 shunshi-style 模板 ContactMeta 对齐。 */
 const contactMetaSchema = z.object({
@@ -251,5 +252,64 @@ export async function tenantRoutes(app: FastifyInstance) {
     await db.update(users).set(patch).where(eq(users.id, id));
     logger.info({ tenantId: request.tenantId, target: id, patch, by: request.user.userId }, "调整成员");
     return { code: "OK", data: { id, ...patch } };
+  });
+
+  // ========== 7-05 多租户开通 P0: 老板首登向导 checklist ==========
+  // 存 tenantPreferences(key='onboarding_checklist', value=JSON 文本, 不加 migration)。
+  // shape: { steps: { profile|invite|accounts|persona|sample: 'pending'|'done'|'skipped' }, dismissedAt?: string }
+  const ONBOARDING_KEY = "onboarding_checklist";
+  const ONBOARDING_STEPS = ["profile", "invite", "accounts", "persona", "sample"] as const;
+  type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+  type StepStatus = "pending" | "done" | "skipped";
+  interface OnboardingChecklist {
+    steps: Record<OnboardingStep, StepStatus>;
+    dismissedAt?: string;
+  }
+  function defaultChecklist(): OnboardingChecklist {
+    return { steps: { profile: "pending", invite: "pending", accounts: "pending", persona: "pending", sample: "pending" } };
+  }
+  async function loadChecklist(tenantId: string): Promise<OnboardingChecklist> {
+    const raw = await getPreference(tenantId, ONBOARDING_KEY, null);
+    const base = defaultChecklist();
+    if (!raw) return base;
+    try {
+      const parsed = JSON.parse(raw) as Partial<OnboardingChecklist>;
+      for (const step of ONBOARDING_STEPS) {
+        const v = parsed.steps?.[step];
+        if (v === "done" || v === "skipped" || v === "pending") base.steps[step] = v;
+      }
+      if (typeof parsed.dismissedAt === "string") base.dismissedAt = parsed.dismissedAt;
+    } catch { /* 脏数据 → 按全新 checklist 处理 */ }
+    return base;
+  }
+
+  /** GET /tenant/onboarding — 当前租户首登向导进度(owner/admin 用, 普通成员读也无妨)。 */
+  app.get("/onboarding", async (request) => {
+    const checklist = await loadChecklist(request.tenantId);
+    const doneCount = ONBOARDING_STEPS.filter((k) => checklist.steps[k] !== "pending").length;
+    return { code: "OK", data: { ...checklist, doneCount, totalCount: ONBOARDING_STEPS.length } };
+  });
+
+  /** PATCH /tenant/onboarding — 改单步状态或整体收起(dismiss)。owner/admin only。 */
+  app.patch("/onboarding", async (request, reply) => {
+    if (!requireAdmin(request, reply)) return;
+    const body = z
+      .object({
+        step: z.enum(ONBOARDING_STEPS).optional(),
+        status: z.enum(["pending", "done", "skipped"]).optional(),
+        dismiss: z.boolean().optional(),
+      })
+      .refine((b) => (b.step ? !!b.status : true), { message: "改单步需同时给 step + status" })
+      .refine((b) => b.step != null || b.dismiss != null, { message: "至少给 step+status 或 dismiss" })
+      .parse(request.body);
+
+    const checklist = await loadChecklist(request.tenantId);
+    if (body.step && body.status) checklist.steps[body.step] = body.status;
+    if (body.dismiss === true) checklist.dismissedAt = new Date().toISOString();
+    if (body.dismiss === false) delete checklist.dismissedAt;
+    await setPreference(request.tenantId, ONBOARDING_KEY, JSON.stringify(checklist));
+    logger.info({ tenantId: request.tenantId, patch: body, by: request.user.userId }, "首登向导 checklist 更新");
+    const doneCount = ONBOARDING_STEPS.filter((k) => checklist.steps[k] !== "pending").length;
+    return { code: "OK", data: { ...checklist, doneCount, totalCount: ONBOARDING_STEPS.length } };
   });
 }

@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import { useAuthStore } from "../hooks/useAuthStore";
 import Greeting from "../components/dashboard/Greeting";
+import OnboardingChecklist from "../components/OnboardingChecklist"; // 7-05 老板首登向导
 
 interface TodayContent {
   id: string;
@@ -334,6 +335,7 @@ export default function TodayPage() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">
       <Greeting userName={user?.name} />
+      <OnboardingChecklist />
       {/* 头部: 日期 + 花费 + 预算 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>

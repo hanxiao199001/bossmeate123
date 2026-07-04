@@ -99,12 +99,18 @@ export async function verifySmsCode(phone: string, code: string, purpose: SmsPur
 
 /** 阿里云短信发送(可选)。需 @alicloud/dysmsapi20170525 + SMS_SIGN_NAME + SMS_TEMPLATE_CODE + ALIYUN key。 */
 async function sendViaAliyun(phone: string, code: string): Promise<void> {
-  const signName = process.env.SMS_SIGN_NAME;
   const templateCode = process.env.SMS_TEMPLATE_CODE;
+  if (!templateCode) throw new SmsError("SMS_NOT_CONFIGURED", "阿里云短信未配置(缺 SMS_TEMPLATE_CODE)");
+  await sendViaAliyunTemplate(phone, templateCode, { code });
+}
+
+/** 7-05 通用阿里云模板短信(验证码/欢迎短信共用)。 */
+async function sendViaAliyunTemplate(phone: string, templateCode: string, templateParam: Record<string, string>): Promise<void> {
+  const signName = process.env.SMS_SIGN_NAME;
   const akId = env.ALIYUN_ACCESS_KEY_ID || env.ALIYUN_AK_ID;
   const akSecret = env.ALIYUN_ACCESS_KEY_SECRET || env.ALIYUN_AK_SECRET;
-  if (!signName || !templateCode || !akId || !akSecret) {
-    throw new SmsError("SMS_NOT_CONFIGURED", "阿里云短信未配置(签名/模板/AccessKey 缺失)");
+  if (!signName || !akId || !akSecret) {
+    throw new SmsError("SMS_NOT_CONFIGURED", "阿里云短信未配置(签名/AccessKey 缺失)");
   }
   try {
     // 动态导入: 未装 SDK 时给出明确指引, 不让整个服务编译期硬依赖。
@@ -118,7 +124,7 @@ async function sendViaAliyun(phone: string, code: string): Promise<void> {
     const Config = (OpenApi.default ?? OpenApi).Config;
     const client = new Dysms(new Config({ accessKeyId: akId, accessKeySecret: akSecret, endpoint: "dysmsapi.aliyuncs.com" }));
     const Req = (mod.SendSmsRequest ?? Dysms.SendSmsRequest);
-    const req = new Req({ phoneNumbers: phone, signName, templateCode, templateParam: JSON.stringify({ code }) });
+    const req = new Req({ phoneNumbers: phone, signName, templateCode, templateParam: JSON.stringify(templateParam) });
     const runtime = Util ? new (Util.default ?? Util).RuntimeOptions({}) : undefined;
     const resp = await client.sendSmsWithOptions(req, runtime);
     const body = resp?.body;
@@ -128,6 +134,28 @@ async function sendViaAliyun(phone: string, code: string): Promise<void> {
     if (err instanceof SmsError) throw err;
     logger.error({ err: String(err), phone }, "阿里云短信发送异常");
     throw new SmsError("SMS_SEND_FAILED", "短信发送失败, 请稍后重试");
+  }
+}
+
+/**
+ * 7-05 多租户开通 P0: 开通成功后的欢迎短信("您的 BossMate 已开通, 用本手机号验证码登录: <域名>")。
+ * 优雅降级: 短信通道/欢迎模板未配置(SMS_PROVIDER != aliyun 或缺 SMS_WELCOME_TEMPLATE_CODE)
+ *   或发送失败 → 不抛错, 返回 { sent: false, reason }, 由调用方在响应里提示"请口头通知客户"。
+ * 阿里云欢迎模板变量约定: { company } (如"${company}的 BossMate 已开通...")。
+ */
+export async function sendWelcomeSms(phone: string, params: Record<string, string>): Promise<{ sent: boolean; reason?: string }> {
+  if (!isValidPhone(phone)) return { sent: false, reason: "手机号格式不正确" };
+  const provider = (process.env.SMS_PROVIDER || "").toLowerCase();
+  if (provider !== "aliyun") return { sent: false, reason: "短信通道未配置(SMS_PROVIDER)" };
+  const templateCode = process.env.SMS_WELCOME_TEMPLATE_CODE;
+  if (!templateCode) return { sent: false, reason: "欢迎短信模板未配置(SMS_WELCOME_TEMPLATE_CODE)" };
+  try {
+    await sendViaAliyunTemplate(phone, templateCode, params);
+    logger.info({ phone }, "欢迎短信已发送");
+    return { sent: true };
+  } catch (err) {
+    logger.warn({ err: String(err), phone }, "欢迎短信发送失败(不阻塞开通)");
+    return { sent: false, reason: err instanceof SmsError ? err.message : "短信发送失败" };
   }
 }
 
