@@ -648,13 +648,15 @@ export async function runDailyContentByType(
             sixDimFail = qp.qualityLoop.passed === false;
           } catch (e) { logger.warn({ e }, "P0四件套流水线失败(topicPool, 非阻塞)"); }
           // PR-U2 轻量质检: 字数下限 + 合规硬词; P0① 六维未过同样转 needs_review(人工看低分)
-          const { checkCompliance, checkTitleBodyConsistency } = await import("../compliance/content-check.js");
+          const { checkCompliance, checkTitleBodyConsistency, checkTitleDataConsistency } = await import("../compliance/content-check.js");
           const comp = await checkCompliance(`${gen.title}\n${finalBody}`);
           const plainLen = (finalBody || "").replace(/<[^>]+>/g, "").length;
-          // 7-03 标题-正文一致性(行7): 正文有风险信号却标题喊保录 → needs_review
+          // 7-03/7-05 标题-正文一致性: ①风险信号 vs 保录承诺(行7) ②标题审稿/录用率数字正文无据(行1) → needs_review
           const tbc = checkTitleBodyConsistency(gen.title, finalBody);
-          if (!tbc.ok) logger.warn({ topic: pick.keyword, titleHits: tbc.titleHits, riskSignal: tbc.riskSignal }, "标题-正文矛盾, 转 needs_review");
-          const qcPass = plainLen >= 300 && !comp.blocked && !sixDimFail && tbc.ok;
+          const tdc = checkTitleDataConsistency(gen.title, finalBody);
+          if (!tbc.ok) logger.warn({ topic: pick.keyword, ...tbc }, "标题-正文矛盾, 转 needs_review");
+          if (!tdc.ok) logger.warn({ topic: pick.keyword, mismatches: tdc.mismatches }, "标题数字正文无据, 转 needs_review");
+          const qcPass = plainLen >= 300 && !comp.blocked && !sixDimFail && tbc.ok && tdc.ok;
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article",
             title: gen.title, body: finalBody,

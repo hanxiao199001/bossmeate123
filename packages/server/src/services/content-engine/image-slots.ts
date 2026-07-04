@@ -114,18 +114,22 @@ function normCasPartitions(j: ImageSlotJournalLike): CasPartitionData[] {
   // 兜底：casPartition / casPartitionNew 纯字符串（DB 真值，原文拆分渲染）
   const out: CasPartitionData[] = [];
   const jcrFull = (j["jcrFull"] ?? j["promptJcrFull"]) as { isTopJournal?: boolean; isReviewJournal?: boolean } | null | undefined;
-  for (const [field, version] of [["casPartition", "中科院分区（基础版）"], ["casPartitionNew", "中科院分区（升级版）"]] as const) {
-    const raw = j[field];
-    if (typeof raw !== "string" || !raw.trim()) continue;
-    const zs = splitZoneSubject(raw.trim());
-    if (!zs) continue;
-    out.push({
-      version,
-      majorCategory: zs.subject,
-      subCategories: [zs],
-      isTop: jcrFull?.isTopJournal === true,
-      isReview: jcrFull?.isReviewJournal === true,
-    });
+  // 7-05 脏点清理: 只渲一张分区表(老韩: 基础版+升级版并排像"打架自相矛盾")。
+  // 升级版(casPartitionNew, 2023+新标准)优先, 无则基础版; 是中科院两个官方版本, 取当前标准即可。
+  const nv = typeof j["casPartitionNew"] === "string" ? (j["casPartitionNew"] as string).trim() : "";
+  const bv = typeof j["casPartition"] === "string" ? (j["casPartition"] as string).trim() : "";
+  const raw = nv || bv;
+  if (raw) {
+    const zs = splitZoneSubject(raw);
+    if (zs) {
+      out.push({
+        version: "中科院分区",
+        majorCategory: zs.subject,
+        subCategories: [zs],
+        isTop: jcrFull?.isTopJournal === true,
+        isReview: jcrFull?.isReviewJournal === true,
+      });
+    }
   }
   return out;
 }

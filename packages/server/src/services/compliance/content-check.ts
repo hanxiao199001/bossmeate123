@@ -75,6 +75,8 @@ const SANITIZE_MAP: Array<[RegExp, string]> = [
   [/闭眼[投冲]必中|投了?必中|必中无疑/g, "命中率相对较高"],
   // 赚钱类
   [/稳赚不赔|稳赚|躺赚/g, "有收益空间"],
+  // 7-05 脏点清理: 大类学科名叠字(LLM 拼接 discipline+分区串致"医学医学2区TOP"). 限已知学科名, 不误伤合法叠词。
+  [/(医学|生物学|工程技术|化学|物理学|材料科学|环境科学与生态学|环境科学|数学|农林科学|地球科学|计算机科学|药学|管理科学|经济学|心理学|社会学)(TOP)?\1/g, "$1$2"],
   // 绝对化(无歧义)
   [/绝无仅有/g, "较为少见"],
   [/全球首创|全球首发|全球第一|世界第一/g, "较早"],
@@ -103,6 +105,27 @@ export function checkTitleBodyConsistency(
   if (!risk) return { ok: true, titleHits: [], riskSignal: null };
   const hits = [...new Set((title || "").match(TITLE_OVERPROMISE) || [])];
   return { ok: hits.length === 0, titleHits: hits, riskSignal: risk[0] };
+}
+
+// 7-05 脏点清理(行1 教训): 标题的"审稿周期/录用率"具体数字必须在正文复现。
+// 正文由核验过的期刊库派生 → 正文没有 = DB 没有 = 标题编造(行1 标题"审稿60天/录用率35%", DB两者皆空, 正文写"3-4个月/较低")。
+// 只查 审稿周期(天/周/月) + 录用率(%) 这两个 DB 常缺、最易被 LLM 编造吸睛的字段; IF/分区等几乎必复现, 不查以免误伤。
+const TITLE_DATA_CLAIM = /(?:审稿|外审|见刊|接收|录用率|命中率)[约仅低于\s]*\d+(?:\.\d+)?\s*(?:天|周|个月|月|%)/g;
+export function checkTitleDataConsistency(
+  title: string | null | undefined,
+  body: string | null | undefined,
+): { ok: boolean; mismatches: string[] } {
+  const plainBody = (body || "").replace(/<[^>]+>/g, "");
+  const claims = [...new Set((title || "").match(TITLE_DATA_CLAIM) || [])];
+  const mismatches = claims.filter((c) => {
+    const m = c.match(/(\d+(?:\.\d+)?)\s*(天|周|个月|月|%)/);
+    if (!m) return false;
+    const [, num, unit] = m;
+    const unitAlt = unit === "月" || unit === "个月" ? "(?:个月|月)" : unit === "%" ? "%" : unit;
+    // 正文出现 同数字+同单位 即算复现(月/个月 等价)
+    return !new RegExp(num.replace(".", "\\.") + "\\s*" + unitAlt).test(plainBody);
+  });
+  return { ok: mismatches.length === 0, mismatches };
 }
 
 const AI_LABEL_HTML = `<p style="color:#999;font-size:12px;margin-top:24px;">本文由 AI 辅助生成，内容仅供参考。</p>`;

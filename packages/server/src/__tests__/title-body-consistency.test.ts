@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkTitleBodyConsistency, sanitizeForCompliance } from "../services/compliance/content-check.js";
+import { checkTitleBodyConsistency, checkTitleDataConsistency, sanitizeForCompliance } from "../services/compliance/content-check.js";
 
 describe("checkTitleBodyConsistency (7-03 行7 教训: 标题保录承诺 vs 正文风险信号)", () => {
   it("行7 场景: 标题'稳发' + 正文'CAR 高风险,建议避开' → 不通过", () => {
@@ -40,5 +40,38 @@ describe("checkTitleBodyConsistency (7-03 行7 教训: 标题保录承诺 vs 正
 
   it("sanitizeForCompliance: 正文'稳发'被净化", () => {
     expect(sanitizeForCompliance("这本刊毕业稳发")).not.toContain("稳发");
+  });
+});
+
+describe("checkTitleDataConsistency (7-05 行1 教训: 标题审稿/录用率数字须正文复现)", () => {
+  it("行1 场景: 标题'审稿60天,录用率35%' 正文写'3-4个月/较低' → 不通过", () => {
+    const r = checkTitleDataConsistency(
+      "IF5.3物理顶刊！审稿60天，录用率35%，闭眼冲！",
+      "<p>审稿周期属于标准水平，通常需要3-4个月；录用率较低，竞争激烈。</p>",
+    );
+    expect(r.ok).toBe(false);
+    expect(r.mismatches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("良性: 标题'审稿3.4个月' 正文复现'3.4个月' → 通过", () => {
+    const r = checkTitleDataConsistency(
+      "IF9.8工程刊，审稿3.4个月，值得投！",
+      "<p>该刊平均审稿周期约3.4个月，在工程类算快。</p>",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("良性: 标题无审稿/录用率数字(只有IF/分区) → 不触发", () => {
+    const r = checkTitleDataConsistency("IF10.5+1区化学顶刊，毕业党必投！", "<p>影响因子10.5，化学1区。</p>");
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("7-05 脏点净化", () => {
+  it("大类学科叠字: '医学医学2区TOP' → '医学2区TOP'", () => {
+    expect(sanitizeForCompliance("中科院分区医学医学2区TOP")).toBe("中科院分区医学2区TOP");
+  });
+  it("不误伤合法叠词: '看看/常常' 不动", () => {
+    expect(sanitizeForCompliance("你可以看看这本，投稿常常被拒")).toBe("你可以看看这本，投稿常常被拒");
   });
 });

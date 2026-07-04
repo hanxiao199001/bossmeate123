@@ -960,6 +960,8 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
     const stripped = aiContent.recommendation.replace(/<\/?[a-zA-Z][^>]*>/g, "");
     const sentences = stripped.split(/[。；;\n]+/).map((s) => s.trim());
     for (const s of sentences) {
+      // 7-05 脏点清理: 跳过以悬空连词/代词开头的半句(如"但门槛也不低…"), 它们依赖上文, 单拎成 bullet 是残句。
+      if (/^(但|而|不过|所以|因此|因而|则|故|其|它|这|那|此外|另外|同时|加上|再加上|同样)/.test(s)) continue;
       if (s.length >= 8 && s.length <= 80 && /慢|长|低|严|拒|高费|APC|风险|注意|避免|警惕/.test(s)) {
         if (!items.includes(s)) items.push(s);
         if (items.length >= 3) break;
@@ -1077,7 +1079,8 @@ function renderTimelineBlock(journal: JournalInfo): string {
 // 给读者一个"横向参照": 同档位还有哪些选择, 各自 IF/录用率/版面费如何。全用可信字段, 无 peer 则 skip。
 function renderPeerComparisonBlock(journal: JournalInfo): string {
   const peers = journal.peerJournals;
-  if (!peers || peers.length === 0) return renderMissingDataBlock("同档期刊对比"); // 老韩 6-15: 占位补满(原隐藏)
+  // 7-05 脏点清理: 老韩改口径 — 无 peer 数据直接 skip(原 6-15 占位"暂无公开数据"被判空段脏点), 回归 PR#135/#136 "无假数据感"哲学。
+  if (!peers || peers.length === 0) return "";
   const fmtIF = (v: number | null) => (typeof v === "number" && v > 0 ? v.toFixed(1) : "—"); // PR #209: IF<=0 占位值显示 —
   const fmtAR = (v: number | null) => (typeof v === "number" ? `${(v >= 1 ? v : v * 100).toFixed(0)}%` : "—");
   const fmtAPC = (v: number | null) => (typeof v === "number" ? (v === 0 ? "免费" : `$${v}`) : "—");
