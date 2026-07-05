@@ -17,6 +17,7 @@ interface TodayContent {
   createdAt: string;
   hasVideo: boolean;
   reviewReason?: string | null;
+  reviewWeak?: Array<{ label: string; score: number; fixHint: string }>; // 7-05 ① 失败维度+fixHint
   source: string | null;
 }
 
@@ -116,6 +117,18 @@ export default function TodayPage() {
       void load();
     } finally {
       setApproving(null);
+    }
+  };
+  // 7-05 ③: 驳回待审内容(→草稿, 落校准样本)
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const rejectContent = async (contentId: string) => {
+    const reason = window.prompt("驳回理由(可选, 会记入校准样本):") ?? undefined;
+    setRejecting(contentId);
+    try {
+      await api.post(`/today/reject/${contentId}`, reason ? { reason } : {});
+      void load();
+    } finally {
+      setRejecting(null);
     }
   };
 
@@ -653,10 +666,20 @@ export default function TodayPage() {
                           <button
                             onClick={() => void approveContent(c.id)}
                             disabled={approving === c.id}
-                            title="质检未过, 看过没问题就采用 (转为可发)"
+                            title="质检未过, 看过没问题就采用 (转为可发, 并记为校准样本)"
                             className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                           >
                             {approving === c.id ? "…" : "采用"}
+                          </button>
+                        )}
+                        {c.status === "needs_review" && (
+                          <button
+                            onClick={() => void rejectContent(c.id)}
+                            disabled={rejecting === c.id}
+                            title="退回草稿, 并记为校准样本(评分器偏松证据)"
+                            className="shrink-0 text-xs px-2 py-0.5 rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            {rejecting === c.id ? "…" : "驳回"}
                           </button>
                         )}
                         {c.status === "generated" && eligible.length > 0 && (
@@ -675,6 +698,17 @@ export default function TodayPage() {
                           填数据
                         </button>
                       </div>
+                      {c.status === "needs_review" && c.reviewWeak && c.reviewWeak.length > 0 && (
+                        <div className="ml-2 mb-2 p-2.5 rounded-lg border border-amber-100 bg-amber-50/60 space-y-1">
+                          <div className="text-[11px] font-medium text-amber-700">六维失败维度 · 改这些再采用</div>
+                          {c.reviewWeak.map((w, i) => (
+                            <div key={i} className="text-[11px] text-gray-600 leading-relaxed">
+                              <span className="font-medium text-amber-700">{w.label} {w.score}/10</span>
+                              {w.fixHint ? <span className="text-gray-500"> → {w.fixHint}</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {metricFor === c.id && (
                         <div className="ml-2 mb-2 p-3 rounded-lg border border-gray-200 bg-gray-50 flex flex-wrap items-end gap-2">
                           <select value={mPlatform} onChange={(e) => setMPlatform(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg">

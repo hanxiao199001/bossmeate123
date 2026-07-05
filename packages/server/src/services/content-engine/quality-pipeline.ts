@@ -409,6 +409,12 @@ export function qualityPipelineMeta(qp: QualityPipelineResult): Record<string, u
     sixDimTotal: qp.qualityLoop.finalTotal,
     sixDimPassed: qp.qualityLoop.passed,
     sixDimDegraded: qp.sixDim?.degraded ?? null,
+    // 7-05 ①: 存失败维度(score<8)的 weakestSection + fixHint, 供待审卡片露出"哪挂了/怎么改"
+    sixDimWeak: qp.sixDim && !qp.sixDim.degraded
+      ? (Object.keys(qp.sixDim.dims) as SixDimKey[])
+          .filter((k) => qp.sixDim!.dims[k].score < 8)
+          .map((k) => ({ dim: k, label: SIX_DIM_LABELS[k], score: qp.sixDim!.dims[k].score, weakest: qp.sixDim!.dims[k].weakestSection, fixHint: qp.sixDim!.dims[k].fixHint }))
+      : [],
     dataDensity: qp.sixDim?.dataDensity,
     qualityLoop: { rounds: qp.qualityLoop.rounds, finalScores: qp.qualityLoop.finalScores, ...(qp.qualityLoop.skippedReason ? { skippedReason: qp.qualityLoop.skippedReason } : {}) },
     condensed: qp.condense.applied,

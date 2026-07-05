@@ -12,6 +12,7 @@ import { db } from "../models/db.js";
 import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenants } from "../models/schema.js";
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
+import { writeCalibrationSample } from "../services/content-engine/calibration-sample.js"; // 7-05 ③
 import { logger } from "../config/logger.js";
 
 /** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
@@ -120,15 +121,31 @@ export async function todayRoutes(app: FastifyInstance) {
       data: {
         date: todayDateString(),
         contents: rows.map((r) => {
-          const meta = r.metadata as { videoUrl?: string; source?: string; validatorIssues?: string[]; hasWarnings?: boolean; qualityScore?: number } | null;
-          // 6-20: 待审给出质检失败原因, 让运营审核有据可依(否则只能猜)。
+          const meta = r.metadata as {
+            videoUrl?: string; source?: string; validatorIssues?: string[]; hasWarnings?: boolean; qualityScore?: number;
+            needsReviewReason?: string; sixDimTotal?: number; sixDimWeak?: Array<{ label: string; score: number; fixHint: string }>;
+            titleIssue?: unknown; sixDimDegraded?: boolean;
+          } | null;
+          // 6-20/7-05 ①: 待审给出失败原因 + 六维失败维度 + fixHint, 让运营知道哪把尺挂的、怎么改。
           let reviewReason: string | null = null;
+          let reviewWeak: Array<{ label: string; score: number; fixHint: string }> = [];
           if (r.status === "needs_review") {
-            const issues = Array.isArray(meta?.validatorIssues) ? meta!.validatorIssues!.filter(Boolean) : [];
-            if (issues.length > 0) reviewReason = issues.slice(0, 3).join("；");
-            else if (meta?.hasWarnings) reviewReason = "事实/合规告警 — 核对正文数据与措辞";
-            else if (typeof meta?.qualityScore === "number") reviewReason = `质检分偏低 (${meta.qualityScore})`;
-            else reviewReason = "质检未过(多为结构/字数/重复词)";
+            const nrr = meta?.needsReviewReason;
+            const REASON_LABEL: Record<string, string> = {
+              title_body_inconsistent: "标题-正文矛盾(标题喊保录/稳发, 正文却有风险信号)",
+              title_data_fabricated: "标题数字无据(审稿周期/录用率 DB 无、疑编造)",
+              sixdim_degraded: "评分器降级(分数不可信, 建议重评)",
+            };
+            if (nrr && REASON_LABEL[nrr]) reviewReason = REASON_LABEL[nrr];
+            else if (Array.isArray(meta?.sixDimWeak) && meta!.sixDimWeak!.length > 0) reviewReason = `六维偏低 (总分 ${meta?.sixDimTotal ?? "—"})`;
+            else {
+              const issues = Array.isArray(meta?.validatorIssues) ? meta!.validatorIssues!.filter(Boolean) : [];
+              if (issues.length > 0) reviewReason = issues.slice(0, 3).join("；");
+              else if (meta?.hasWarnings) reviewReason = "事实/合规告警 — 核对正文数据与措辞";
+              else if (typeof meta?.qualityScore === "number") reviewReason = `质检分偏低 (${meta.qualityScore})`;
+              else reviewReason = "质检未过(多为结构/字数/重复词)";
+            }
+            reviewWeak = Array.isArray(meta?.sixDimWeak) ? meta!.sixDimWeak!.slice(0, 6) : [];
           }
           return {
             id: r.id,
@@ -139,6 +156,7 @@ export async function todayRoutes(app: FastifyInstance) {
             hasVideo: !!meta?.videoUrl,
             source: meta?.source ?? null,
             reviewReason,
+            reviewWeak, // 7-05 ①: [{label, score, fixHint}] 失败维度+怎么改
           };
         }),
         agentTasks: tasks.map((t) => ({ ...t, error: t.error ? t.error.slice(0, 160) : null })),
@@ -159,7 +177,7 @@ export async function todayRoutes(app: FastifyInstance) {
   /** POST /today/approve/:contentId — PR-U2 人工采用待审内容 (needs_review → generated) */
   app.post("/today/approve/:contentId", async (request, reply) => {
     const { contentId } = request.params as { contentId: string };
-    const [c] = await db.select({ id: contents.id, status: contents.status })
+    const [c] = await db.select({ id: contents.id, status: contents.status, metadata: contents.metadata })
       .from(contents)
       .where(and(eq(contents.id, contentId), or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID))))
       .limit(1);
@@ -168,7 +186,25 @@ export async function todayRoutes(app: FastifyInstance) {
       return reply.code(409).send({ code: "BAD_STATUS", message: `仅待审内容可采用, 当前 ${c.status}` });
     }
     await db.update(contents).set({ status: "generated", statusUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(contents.id, contentId));
+    await writeCalibrationSample(contentId, c.metadata, "accept"); // 7-05 ③ 采用=偏严样本
     return { code: "OK", data: { id: contentId, status: "generated" } };
+  });
+
+  /** POST /today/reject/:contentId — 7-05 ③ 人工驳回待审内容 (needs_review → draft, 落校准样本) */
+  app.post("/today/reject/:contentId", async (request, reply) => {
+    const { contentId } = request.params as { contentId: string };
+    const { reason } = (request.body ?? {}) as { reason?: string };
+    const [c] = await db.select({ id: contents.id, status: contents.status, metadata: contents.metadata })
+      .from(contents)
+      .where(and(eq(contents.id, contentId), or(eq(contents.tenantId, request.tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID))))
+      .limit(1);
+    if (!c) return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
+    if (c.status !== "needs_review") {
+      return reply.code(409).send({ code: "BAD_STATUS", message: `仅待审内容可驳回, 当前 ${c.status}` });
+    }
+    await db.update(contents).set({ status: "draft", statusUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(contents.id, contentId));
+    await writeCalibrationSample(contentId, c.metadata, "reject", reason); // 7-05 ③ 驳回=偏松样本
+    return { code: "OK", data: { id: contentId, status: "draft" } };
   });
 
   /** POST /today/generate-now — PR-W8: 手动触发一次每日推荐生成 (错过 03:00 或想立即测试时用) */

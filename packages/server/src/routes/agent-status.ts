@@ -22,6 +22,7 @@ import {
   tenants,
   // PR P1：scheduledPublishes 已删（即时发布走 publisher.publishToAccounts）
 } from "../models/schema.js";
+import { writeCalibrationSample } from "../services/content-engine/calibration-sample.js"; // 7-05 ③
 
 export async function agentRoutes(app: FastifyInstance) {
   // ===== Agent 状态 =====
@@ -232,7 +233,8 @@ export async function agentRoutes(app: FastifyInstance) {
         .where(
           and(
             eq(contents.tenantId, request.tenantId),
-            inArray(contents.status, ["draft", "reviewing", "approved"])
+            // 7-05: 纳入 needs_review(质检/一致性未过, 待人工采用放行), 否则运营看不到无法放行
+            inArray(contents.status, ["draft", "reviewing", "approved", "needs_review"])
           )
         )
         .orderBy(desc(contents.createdAt))
@@ -241,6 +243,17 @@ export async function agentRoutes(app: FastifyInstance) {
       // 映射为前端 ReviewItem 格式
       const items = pending.map((c) => {
         const platforms = (c.platforms as Array<{ platform?: string }>) || [];
+        const md = (c.metadata ?? {}) as Record<string, any>;
+        // 7-05 ①: 待审卡片露出"哪把尺挂的 + 失败维度 + fixHint", 让运营知道为何待审、怎么改
+        const review = c.status === "needs_review" ? {
+          reason: md.needsReviewReason ?? (md.sixDimPassed === false ? "sixdim_low" : md.qualityPassed === false ? "fact_validation" : "quality"),
+          sixDimTotal: md.sixDimTotal ?? null,
+          sixDimPassed: md.sixDimPassed ?? null,
+          qualityPassed: md.qualityPassed ?? null, // 验证器尺(85/60)
+          weakDims: Array.isArray(md.sixDimWeak) ? md.sixDimWeak : [],
+          titleIssue: md.titleIssue ?? null,
+          degraded: md.sixDimDegraded === true,
+        } : undefined;
         return {
           id: c.id,
           topic: c.title || "未命名内容",
@@ -249,6 +262,7 @@ export async function agentRoutes(app: FastifyInstance) {
           type: c.type,
           createdAt: c.createdAt,
           summary: c.body ? c.body.slice(0, 100) : undefined,
+          ...(review ? { review } : {}),
         };
       });
       return { code: "OK", data: { items, count: items.length } };
@@ -289,6 +303,9 @@ export async function agentRoutes(app: FastifyInstance) {
         contentId: id,
         action: "approve",
       });
+
+      // 7-05 ③: 采用落库为校准样本(含当时六维分)。评分器判"待审"人工却"采用" = 评分器偏严的标注样本, 后台据此校标尺。
+      await writeCalibrationSample(id, content.metadata, "accept");
 
       // PR P1：定时发布功能已删，approve 后等待用户手动一键发布即可
       return { code: "OK", data: { success: true, message: "已通过审核" } };
@@ -384,6 +401,9 @@ export async function agentRoutes(app: FastifyInstance) {
         action: "reject",
         rejectReason: reason || "",
       });
+
+      // 7-05 ③: 驳回落库为校准样本(含当时六维分 + 驳回理由)。评分器可能判"过"人工却"驳回" = 评分器偏松的标注样本。
+      await writeCalibrationSample(id, content.metadata, "reject", reason);
 
       return { code: "OK", data: { success: true, message: "已打回" } };
     } catch (err) {
