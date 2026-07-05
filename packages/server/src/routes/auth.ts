@@ -25,10 +25,12 @@ const loginSchema = z.object({
   password: z.string().min(1, "密码不能为空"),
 });
 
-// 7-05 多租户开通 P0: 生产默认关闭自注册(客户由平台在 /platform 开通)。
-//   ALLOW_SELF_REGISTER=true 可重开; 非 production(dev/test)恒放行, 不破坏本地开发与现有测试。
+// 7-05 多租户开通 P0: 默认关闭自注册(客户由平台在 /platform 开通)。
+//   Option B(7-05): 不再依赖 NODE_ENV(生产机实际以 development 身份跑, 旧逻辑架空了闸门)。
+//   规则: 默认关闭 → ALLOW_SELF_REGISTER=true 显式打开; test 环境恒开(不破坏现有测试)。
+//   本地开发需自注册时, .env 加 ALLOW_SELF_REGISTER=true。
 function selfRegisterClosed(): boolean {
-  return env.NODE_ENV === "production" && !env.ALLOW_SELF_REGISTER;
+  return env.NODE_ENV !== "test" && !env.ALLOW_SELF_REGISTER;
 }
 
 export async function authRoutes(app: FastifyInstance) {
