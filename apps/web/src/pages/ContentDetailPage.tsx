@@ -864,6 +864,38 @@ export default function ContentDetailPage() {
         <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-100 px-6 py-3 shrink-0">
           <div className="max-w-6xl mx-auto flex items-center gap-3 flex-wrap">
             <span className="text-xs text-gray-500 mr-2">下一步：</span>
+            {/* 7-05 老韩: 详情页读全文后直接裁决(原来只有 Today 卡片有, 读文的地方反而没有)。复用 /today 校准端点, 裁决同时落校准样本 */}
+            {content.status === "needs_review" && (
+              <>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.post(`/today/approve/${content.id}`, {});
+                      toast.success("已采用，转为可发（已记入校准样本）");
+                      fetchContent();
+                    } catch { toast.error("采用失败"); }
+                  }}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                  title="质检未过但你读过没问题 → 放行并记为'评分器偏严'校准样本"
+                >
+                  ✅ 采用
+                </button>
+                <button
+                  onClick={async () => {
+                    const reason = window.prompt("驳回理由(可选, 会记入校准样本):") ?? undefined;
+                    try {
+                      await api.post(`/today/reject/${content.id}`, reason ? { reason } : {});
+                      toast.success("已驳回（已记入校准样本）");
+                      fetchContent();
+                    } catch { toast.error("驳回失败"); }
+                  }}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500 text-white hover:bg-red-600"
+                >
+                  ❌ 驳回
+                </button>
+                <span className="w-px h-5 bg-gray-300" />
+              </>
+            )}
             <button
               onClick={() => setShowRewriteModal(true)}
               disabled={!canEdit || !/^##\s+/m.test(editBody)}

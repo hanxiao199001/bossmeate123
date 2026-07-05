@@ -39,7 +39,9 @@ describe("PR #226: 抓取脚本", () => {
 describe("PR #227: 徽章重启", () => {
   it("renderSelfCitationBadge 读 journal.selfCitationRate, 不再 return ''", async () => {
     const src = await readSrc(TEMPLATE);
-    expect(src).toMatch(/PR #227[\s\S]{0,180}?const rate = journal\.selfCitationRate;/);
+    // 7-05: 去掉"PR #227 内 180 字符"脆弱锚(阈值重构在两者间加了行致失配), 直接断言徽章读 selfCitationRate。
+    expect(src).toMatch(/function renderSelfCitationBadge/);
+    expect(src).toMatch(/const rate = journal\.selfCitationRate;/);
   });
   it("仅非空且 >0 才渲染 (空就静默, 不显空白徽章)", async () => {
     const src = await readSrc(TEMPLATE);
@@ -48,6 +50,10 @@ describe("PR #227: 徽章重启", () => {
   it("展示 % + 低/中/高风险 + 数据来源 ablesci", async () => {
     const src = await readSrc(TEMPLATE);
     expect(src).toMatch(/数据来源：ablesci/);
-    expect(src).toMatch(/pct < 5 \? "低" : pct < 15 \? "中" : "高"/);
+    // 7-05 老韩拍板: 阈值统一进 utils/self-citation-risk (≤20 低/≤30 中/>30 高)
+    expect(src).toMatch(/selfCitationRisk\(pct\)/);
+    const helperSrc = await readSrc("../utils/self-citation-risk.ts");
+    expect(helperSrc).toMatch(/pct <= 20/);
+    expect(helperSrc).toMatch(/pct <= 30/);
   });
 });

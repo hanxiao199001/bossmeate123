@@ -23,6 +23,7 @@
  * 与 'data-card' / 'storytelling' 互换性：签名完全一致。
  */
 
+import { selfCitationRisk } from "../../../utils/self-citation-risk.js";
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { esc } from "../../skills/journal-template.js";
@@ -134,7 +135,7 @@ function deriveCautions(journal: JournalInfo, aiContent: AIGeneratedContent): st
       const r = journal.selfCitationRate;
       if (typeof r === "number" && r > 0 && r <= 100) {
         const pct = r > 1 ? r : r * 100;
-        if (pct >= 20) fb.push(`自引率偏高，引用本刊文献时酌情把控`);
+        if (selfCitationRisk(pct).level !== "低") fb.push(`自引率偏高，引用本刊文献时酌情把控`); // 7-05: >20% 才提醒(统一阈值)
       }
     }
     if (journal.isWarningList) {

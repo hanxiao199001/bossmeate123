@@ -50,6 +50,7 @@
  * WeChat 兼容性约束：inline style only / table 布局 / ≥14px / 不用 flex/grid。
  */
 
+import { selfCitationRisk } from "../../../utils/self-citation-risk.js";
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { renderOpeningHookBlock } from "../../skills/journal-template.js"; // 7-03 A 区块0
@@ -750,8 +751,8 @@ function renderSelfCitationBadge(journal: JournalInfo): string {
     return "";
   }
   const pct = rate > 1 ? rate : rate * 100;
-  const risk = pct < 5 ? "低" : pct < 15 ? "中" : "高";
-  const color = pct < 5 ? "#388E3C" : pct < 15 ? "#F57C00" : "#D32F2F";
+  // 7-05 老韩: 阈值统一走 selfCitationRisk(≤20 低/≤30 中/>30 高), 原 5/15 分界过严
+  const { level: risk, color } = selfCitationRisk(pct);
   return `<section style="margin:0 0 18px 0;text-align:center;">` +
     `<p style="margin:0 0 4px 0;font-size:13px;color:${MUTED};line-height:1.6;">自引率</p>` +
     `<p style="margin:0;font-size:20px;font-weight:bold;color:${color};line-height:1.4;">${pct.toFixed(1)}% · ${risk}风险</p>` +

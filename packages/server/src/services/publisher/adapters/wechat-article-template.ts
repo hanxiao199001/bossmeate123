@@ -12,6 +12,7 @@
  * 分隔符：直接 · 不用 &middot;
  */
 
+import { selfCitationRisk } from "../../../utils/self-citation-risk.js";
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import { getJournalCover, type CoverResult } from "../../crawler/cover-fetcher.js";
 import {
@@ -604,7 +605,7 @@ export function renderSelfCitation(journal: JournalInfo, theme: ThemeColors): st
     return "";
   }
   const pct = rate > 1 ? rate : rate * 100;
-  const safe = pct < 20;
+  const safe = selfCitationRisk(pct).level === "低"; // 7-05 老韩: ≤20% 均属安全, 统一 helper
 
   return sectionTitle("自引率", "📊", theme) +
     `<section style="margin:8px 0;padding:12px 16px;background:#FAFAFA;border-left:4px solid ${theme.accent};border-radius:0 8px 8px 0;">` +
