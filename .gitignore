@@ -87,3 +87,7 @@ __pycache__/
 .daily-reports/
 packages/server/scripts/raw-*
 project.private.config.json
+
+# 7-06 排雷: 防误提 — worldmonitor/ 是误入的无关第三方仓库(建议手动移出项目目录); deploy-*.py 死脚本已封存
+worldmonitor/
+deploy-*.py

@@ -70,7 +70,7 @@
 
 deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`。
 
-**唯一部署入口 = `pnpm deploy:smart`。其余部署脚本一律不得手跑（含 AI）。** 遗留 `deploy.sh`/`deploy-v4*.sh`/`deploy-*.py` 硬编码指向弃用机，手跑=部署到死机；已删三个 .sh 孤儿，日后从 git 翻出旧脚本只可读不可跑。
+**唯一部署入口 = `pnpm deploy:smart`。其余部署脚本一律不得手跑（含 AI）。** 遗留 `deploy.sh`/`deploy-v4*.sh`/`deploy-*.py` 硬编码指向弃用机，手跑=部署到死机；已删三个 .sh 孤儿；7-06 排雷三个 .py 死脚本（从未入 git，移入 .review-stash 封存）。日后从 git 翻出旧脚本只可读不可跑。
 
 **依赖锁文件铁律（红线 #7）**：改 `package.json` 依赖必须**同一 commit** 更新 `pnpm-lock.yaml`。服务器走 frozen-lockfile，manifest 与锁文件 specifier 不一致 → 安装报错 → 部署整条失败。教训：07d2a74 加 `ali-oss` 漏更新锁文件，潜伏到 185222d 部署才炸（"specifiers don't match"），补锁 commit 3dd3f2e 才通。自查：`pnpm install --lockfile-only` 后 `git status` 若锁文件有改动即漏了。
 
