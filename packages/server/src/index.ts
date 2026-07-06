@@ -104,7 +104,11 @@ async function bootstrap() {
   try {
     const fastifyStatic = await import("@fastify/static");
     const { join, resolve } = await import("node:path");
+    const { mkdirSync } = await import("node:fs");
     const storageRoot = resolve(env.UPLOAD_DIR, "storage");
+    // 7-06: storage 改懒实例化后, LocalStorage 构造器的 mkdir 延到首次上传 → 此处静态服务注册时目录可能不存在。
+    // 原先靠 storage import-时 mkdir 隐性保证; 现在启动路径显式建目录, 保留本地 /storage/ 服务可用(OSS 模式下无害)。
+    mkdirSync(storageRoot, { recursive: true });
     await app.register(fastifyStatic.default, {
       root: storageRoot,
       prefix: "/storage/",

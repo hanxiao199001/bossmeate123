@@ -146,4 +146,20 @@ function createStorage(): IStorage {
   return new LocalStorage();
 }
 
-export const storage = createStorage();
+// 懒实例化(7-06): 原 `export const storage = createStorage()` 在 import 时急切实例化 —
+// createStorage 读 env(OSS_*/UPLOAD_DIR) + LocalStorage 构造器 mkdirSync = import 副作用 + env 依赖,
+// 任一 env 不完整(如测试 vi.mock 漏 UPLOAD_DIR)就在 import 时硬崩, 拖垮整套测试 load。
+// 改懒代理: 保持 `storage` 导出形状与 IStorage 类型不变(全仓 storage.xxx 调用点零改动), 首次访问方法时才 createStorage。
+// ⚠️ 不加 ?? 静默兜底: 生产 env 真缺失时, 首次使用清晰 fail-fast(总比悄悄把文件写进错目录好); mkdir 副作用随之延到首次使用。
+let _storageInstance: IStorage | null = null;
+export function getStorage(): IStorage {
+  if (!_storageInstance) _storageInstance = createStorage();
+  return _storageInstance;
+}
+export const storage: IStorage = new Proxy({} as IStorage, {
+  get(_t, prop) {
+    const inst = getStorage();
+    const value = Reflect.get(inst, prop, inst);
+    return typeof value === "function" ? value.bind(inst) : value;
+  },
+});
