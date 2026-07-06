@@ -13,6 +13,7 @@ import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
 import { withRetry } from "../../utils/retry.js";
 import { createTimeoutController } from "../../utils/timeout.js";
+import { recordLlmUsage } from "../billing/llm-cost.js";
 
 export interface ChatRequest {
   tenantId: string;
@@ -201,11 +202,22 @@ export async function chat(request: ChatRequest): Promise<ChatResponse> {
   // 根据策略选择执行方式
   const strategy = modelRouter.getFallbackStrategy();
 
-  if (strategy === "race") {
-    return await chatWithRaceMode(request, messages, taskType, timeoutMs);
-  } else {
-    return await chatWithSerialMode(request, messages, taskType, timeoutMs);
-  }
+  const response = strategy === "race"
+    ? await chatWithRaceMode(request, messages, taskType, timeoutMs)
+    : await chatWithSerialMode(request, messages, taskType, timeoutMs);
+
+  // 7-06: LLM 成本落库(旁路, 不 await 不抛错) — 单出口覆盖 serial/race 全路径。
+  // 此前 cost-ledger 的 "llm" 类型 0 写入, token 花费黑盒(战略评估薄弱点#2)。
+  void recordLlmUsage({
+    tenantId: request.tenantId,
+    taskType,
+    model: response.model,
+    provider: response.provider,
+    inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
+  });
+
+  return response;
 }
 
 /**

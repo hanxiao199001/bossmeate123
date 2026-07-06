@@ -73,6 +73,10 @@ const envSchema = z.object({
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
   AI_ARTICLE_TIMEOUT_MS: z.coerce.number().default(120000),
 
+  // 7-06: LLM 单价覆盖(JSON, 单位: 分/1M token), 如 {"deepseek-chat":{"in":200,"out":800}}
+  //   默认价目在 services/billing/llm-cost.ts(2026-07 手抄, 以百炼账单为准); 改价/补新模型不用改代码
+  LLM_PRICE_OVERRIDES: z.string().optional(),
+
   // 7-05 ④ AI 审稿员 (services/review/ai-reviewer.ts)
   //   off=完全关闭; shadow=只记建议不动状态(默认, 影子期); live=达信心阈值自动采用/驳回
   AI_REVIEWER_MODE: z.enum(["off", "shadow", "live"]).default("shadow"),
