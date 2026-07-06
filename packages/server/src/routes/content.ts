@@ -125,11 +125,26 @@ export async function contentRoutes(app: FastifyInstance) {
 
       const total = totalResult[0]?.total || 0;
 
+      // 7-06 ②: 标注"运营已选发" — 推过草稿箱且回流数据确认被运营群发的文章 (市场选择正信号)
+      let operatorPublishedIds = new Set<string>();
+      if (list.length > 0) {
+        try {
+          const opLogs = await db
+            .select({ contentId: contentPublishLog.contentId })
+            .from(contentPublishLog)
+            .where(and(
+              inArray(contentPublishLog.contentId, list.map((c) => c.id)),
+              eq(contentPublishLog.status, "published_by_operator"),
+            ));
+          operatorPublishedIds = new Set(opLogs.map((l) => l.contentId));
+        } catch { /* 标注失败不阻塞列表 */ }
+      }
+
       // Note: userId in response indicates who created the content (createdBy)
       return {
         code: "OK",
         data: {
-          items: list,
+          items: list.map((c) => ({ ...c, operatorPublished: operatorPublishedIds.has(c.id) })),
           total,
           page,
           pageSize,
@@ -1077,20 +1092,52 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
   });
 
   /**
+   * 7-06 ①: GET /content/:id/metrics — 该内容各平台最新回流指标 (累计快照)。
+   * wechat 行 = 效果回流 (source=api, 含 dailyReadDelta); 其余平台可能是运营手填 (source=manual)。
+   */
+  app.get("/:id/metrics", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const rows = await db.execute(sql`
+        SELECT DISTINCT ON (platform) platform, views, likes, shares, saves, snapshot_date, metadata
+        FROM content_metrics
+        WHERE content_id = ${id} AND tenant_id = ${request.tenantId}
+        ORDER BY platform, snapshot_date DESC`);
+      const data = (((rows as any).rows ?? []) as Array<Record<string, any>>).map((r) => ({
+        platform: r.platform,
+        views: Number(r.views ?? 0),
+        likes: Number(r.likes ?? 0),
+        shares: Number(r.shares ?? 0),
+        saves: Number(r.saves ?? 0),
+        snapshotDate: r.snapshot_date,
+        source: (r.metadata as any)?.source ?? null,
+      }));
+      return { code: "OK", data };
+    } catch (err) {
+      logger.error({ err, contentId: id }, "获取内容回流指标失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
    * PR-P1: 半自动发布记录 (抖音/视频号矩阵号人工发布).
    * GET /content/:id/manual-publish-log — 该内容各账号的已发状态 (刷新不丢)。
    */
   app.get("/:id/manual-publish-log", async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
+      // 7-05 ⑤: join 账号名 — 前端"已推草稿箱→某号"标记直接可用, 不用再拉全账号列表
       const rows = await db
         .select({
           accountId: contentPublishLog.accountId,
           status: contentPublishLog.status,
           initiatedBy: contentPublishLog.initiatedBy,
           updatedAt: contentPublishLog.updatedAt,
+          accountName: platformAccounts.accountName,
+          platform: platformAccounts.platform,
         })
         .from(contentPublishLog)
+        .leftJoin(platformAccounts, eq(contentPublishLog.accountId, platformAccounts.id))
         .where(and(eq(contentPublishLog.contentId, id), eq(contentPublishLog.tenantId, request.tenantId)));
       return { code: "OK", data: rows };
     } catch (err) {

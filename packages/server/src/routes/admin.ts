@@ -679,6 +679,21 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
+   * 7-05 ⑤: POST /admin/draft-distribute — 手动触发本租户草稿箱分发一轮 (同步跑, 量小: 每号≤N 篇)。
+   * 返回每号推了什么 (perAccount[{accountName, pushed[], errors[]}]), 供运营立即核对公众号后台草稿箱。
+   */
+  app.post("/draft-distribute", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const { distributeDraftsForTenant } = await import("../services/publisher/draft-distributor.js");
+      const report = await distributeDraftsForTenant(request.tenantId);
+      return { code: "OK", data: report };
+    } catch (err) {
+      logger.error({ err: err instanceof Error ? err.message : err }, "手动草稿分发失败");
+      return reply.code(500).send({ code: "DRAFT_DISTRIBUTE_FAILED", message: err instanceof Error ? err.message : "草稿分发失败" });
+    }
+  });
+
+  /**
    * PR #223: 每日推荐配置 — 每学科篇数 (dailyQuota).
    *   存 SYSTEM 租户 config.automationConfig.dailyQuota. daily-cron 据此选刊 (PR #222).
    *   GET 返回当前配额 + 全学科列表(供 UI); PATCH 写入(校验学科 code + 单学科≤50 + 总数≤100).

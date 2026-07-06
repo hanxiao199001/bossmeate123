@@ -440,4 +440,11 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       ALTER TABLE work_wechat_configs ADD COLUMN IF NOT EXISTS notify_userids TEXT;
     `,
   },
+  {
+    version: "023_cpl_status_varchar30",
+    description: "7-06 ② 效果回流运营选择信号: content_publish_log.status 扩到 varchar(30) (published_by_operator=21字符, 旧 varchar(20) 放不下)",
+    sql: `
+      ALTER TABLE content_publish_log ALTER COLUMN status TYPE VARCHAR(30);
+    `,
+  },
 ];

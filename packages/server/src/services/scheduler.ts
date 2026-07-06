@@ -47,7 +47,10 @@ export type SchedulerJobType =
   | "login-keepalive"          // 6-11: 抖音/视频号登录态每日保活巡检(掉线标expired+cookie续期)
   | "daily-auto-distribute"    // PR-W6: 每日 07:00 BJ 推荐池按账号领域自动配对分发(草稿), 租户开关 autoDistribute
   | "journal-gap-fill"         // PR-FW: 每日补全缺 IF/分区/录用率 的期刊(知识库自愈)
-  | "journal-topic-mining";    // 6-19: 每日从期刊库 LLM 衍生选题入库(选题库自动扩充, 按学科表现加权)
+  | "journal-topic-mining"     // 6-19: 每日从期刊库 LLM 衍生选题入库(选题库自动扩充, 按学科表现加权)
+  | "ai-review-scan"           // 7-05 ④: 每小时 AI 审稿员扫灰区待审(影子模式记建议/live 自动裁决)
+  | "draft-distribute"         // 7-05 ⑤: 每日早晨公众号草稿箱分发(每号 top-N 候选)
+  | "wechat-stats-collect";    // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -438,6 +441,36 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { tenantsProcessed: activeTenantsForCover.length, totalSuccess, totalFailed };
     }
 
+    case "ai-review-scan": {
+      // 7-05 ④: AI 审稿员 — 模式由 env.AI_REVIEWER_MODE 控(off/shadow/live), off 时空转
+      const { runAiReviewScan } = await import("./review/ai-reviewer.js");
+      return runAiReviewScan();
+    }
+
+    case "draft-distribute": {
+      // 7-05 ⑤: 公众号草稿箱分发 — 每号 top-N (env DRAFT_PUSH_PER_ACCOUNT) 进微信草稿箱
+      const { runDraftDistribute } = await import("./publisher/draft-distributor.js");
+      const r = await runDraftDistribute();
+      return {
+        tenantsProcessed: r.tenantsProcessed,
+        pushed: r.reports.reduce((n, x) => n + x.pushed, 0),
+        failed: r.reports.reduce((n, x) => n + x.failed, 0),
+      };
+    }
+
+    case "wechat-stats-collect": {
+      // 7-06 ①: 公众号"昨日"阅读数据回流 — 逐号 getarticlesummary → content_metrics + ② 运营选择信号
+      const { runWechatStatsCollection } = await import("./metrics/wechat-stats-collector.js");
+      const r = await runWechatStatsCollection();
+      return {
+        date: r.date,
+        accountsProcessed: r.accountsProcessed,
+        matched: r.matched,
+        unmatched: r.unmatched,
+        expiredDrafts: r.expiredDrafts,
+      };
+    }
+
     case "login-keepalive": {
       // 串行慢巡检(账号间8-20s), 不要与推草稿/扫码并发跑浏览器 — keepalive 内部有 running 互斥
       const { runLoginKeepalive } = await import("./publisher/login-keepalive.js");
@@ -678,6 +711,29 @@ async function registerCronJobs() {
     "journal-gap-fill-schedule",
     { pattern: "30 5 * * *", tz: "Asia/Shanghai" },
     { name: "journal-gap-fill", data: { type: "journal-gap-fill" as SchedulerJobType } }
+  );
+
+  // 7-05 ④: 每小时 :20 AI 审稿员扫灰区待审 (避开整点的爬虫/知识任务高峰; off 模式空转极便宜)
+  await crawlerQueue.upsertJobScheduler(
+    "ai-review-scan-schedule",
+    { pattern: "20 * * * *", tz: "Asia/Shanghai" },
+    { name: "ai-review-scan", data: { type: "ai-review-scan" as SchedulerJobType } }
+  );
+
+  // 7-05 ⑤: 每日 DRAFT_PUSH_CRON_HOUR 点(默认 08:00 BJ) 公众号草稿箱分发 — 在 07:00 auto-distribute 之后,
+  // 老板/运营到工位时草稿已就位, 到公众号后台自选发布
+  await crawlerQueue.upsertJobScheduler(
+    "draft-distribute-schedule",
+    { pattern: `0 ${env.DRAFT_PUSH_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
+    { name: "draft-distribute", data: { type: "draft-distribute" as SchedulerJobType } }
+  );
+
+  // 7-06 ①: 每日 WECHAT_STATS_CRON_HOUR 点(默认 09:00 BJ):10 拉各公众号"昨日"图文阅读数据回流。
+  // 微信 datacube T+1 出数, 上午拉最稳; :10 错开整点的推草稿/爬虫任务。
+  await crawlerQueue.upsertJobScheduler(
+    "wechat-stats-collect-schedule",
+    { pattern: `10 ${env.WECHAT_STATS_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
+    { name: "wechat-stats-collect", data: { type: "wechat-stats-collect" as SchedulerJobType } }
   );
 
   // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）

@@ -101,6 +101,8 @@ export async function computeSmartPairs(opts: {
   tenantId: string;
   articleIds: string[];
   accountIds?: string[];
+  /** 7-05 ⑤: 覆盖每号每日上限 (草稿箱分发 top-N 用; 缺省走 publishLimits 配置/默认1) */
+  dailyCap?: number;
 }): Promise<SmartAssignResult> {
   const { tenantId, articleIds } = opts;
   if (articleIds.length === 0) return { pairs: [], unmatched: [] };
@@ -146,7 +148,9 @@ export async function computeSmartPairs(opts: {
   // PR-B1 宁缺毋滥: 每号每日发布上限 (公众号订阅号本就日发1次; 配置可覆盖)
   const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
   const cfgLimit = Number((t?.config as any)?.publishLimits?.perAccountPerDay);
-  const DAILY_CAP = Number.isFinite(cfgLimit) && cfgLimit > 0 ? Math.floor(cfgLimit) : 1; // 公众号默认 1/天
+  const DAILY_CAP = Number.isFinite(opts.dailyCap) && (opts.dailyCap as number) > 0
+    ? Math.floor(opts.dailyCap as number)
+    : Number.isFinite(cfgLimit) && cfgLimit > 0 ? Math.floor(cfgLimit) : 1; // 公众号默认 1/天
   // 今日各号已发数 (北京时间当日)
   const bj = new Date(Date.now() + 8 * 3600_000); bj.setUTCHours(0, 0, 0, 0);
   const since = new Date(bj.getTime() - 8 * 3600_000);

@@ -26,7 +26,10 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).toMatch(/pipeline24h/);
     expect(src).toMatch(/latestArticlePreview/);
     expect(src).toMatch(/recentPublished/);
-    expect(src).toMatch(/totalReadsToday:\s*8500/); // hardcode with TODO
+    // 7-06 ④: 8500 假数据已拔 — totalReadsToday 改为真实回流聚合 (content_metrics.dailyReadDelta 求和)
+    expect(src).not.toMatch(/totalReadsToday:\s*8500/);
+    expect(src).toMatch(/dailyReadDelta/);
+    expect(src).toMatch(/totalReadsToday:\s*Number/);
   });
 
   it("HeroSection.tsx 含今日产出 + 双 CTA (5-21 hotfix: ROI 卡已搬 /cost-comparison)", async () => {

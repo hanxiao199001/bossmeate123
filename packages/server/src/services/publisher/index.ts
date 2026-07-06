@@ -42,6 +42,8 @@ export interface PublishRequest {
   // 5-20 P2 风控: 默认 false → 触发 audit gate; true → 跳过 (用户已二次确认强制放行)
   forceOverride?: boolean;
   overrideReason?: string; // 强制放行原因 (审计留底)
+  /** 7-05 ⑤: 强制只建草稿(微信 draft/add), 无视账号 capability=full — 草稿箱分发用, 保证绝不误群发 */
+  capabilityOverride?: "draft_only";
 }
 
 export interface PublishResult {
@@ -322,7 +324,7 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
             accountId: account.id,
             tenantId,
           },
-          capability: accountCapability,
+          capability: req.capabilityOverride ?? accountCapability,
         });
 
         // 记录发布结果

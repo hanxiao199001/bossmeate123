@@ -73,6 +73,21 @@ const envSchema = z.object({
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
   AI_ARTICLE_TIMEOUT_MS: z.coerce.number().default(120000),
 
+  // 7-05 ④ AI 审稿员 (services/review/ai-reviewer.ts)
+  //   off=完全关闭; shadow=只记建议不动状态(默认, 影子期); live=达信心阈值自动采用/驳回
+  AI_REVIEWER_MODE: z.enum(["off", "shadow", "live"]).default("shadow"),
+  // live 模式 approve 的最低 confidence, 低于只记建议
+  AI_REVIEWER_MIN_CONFIDENCE: z.coerce.number().default(0.75),
+  // live 模式每租户每日自动裁决上限(安全阀), 超了退回 shadow 行为
+  AI_REVIEWER_DAILY_CAP: z.coerce.number().default(10),
+
+  // 7-05 ⑤ 公众号草稿箱分发 (services/publisher/draft-distributor.ts)
+  DRAFT_PUSH_PER_ACCOUNT: z.coerce.number().default(2), // 每号每日推草稿上限 (top-N)
+  DRAFT_PUSH_CRON_HOUR: z.coerce.number().min(0).max(23).default(8), // 每日几点(BJ)推
+
+  // 7-06 ① 公众号效果数据回流 (services/metrics/wechat-stats-collector.ts)
+  WECHAT_STATS_CRON_HOUR: z.coerce.number().min(0).max(23).default(9), // 每日几点(BJ)拉"昨日"getarticlesummary (T+1)
+
   // 模型直映射（T2）— TaskType → 具体模型名
   DEEPSEEK_MODEL_CHAT: z.string().default("deepseek-chat"),
   DEEPSEEK_MODEL_REASONER: z.string().default("deepseek-reasoner"),

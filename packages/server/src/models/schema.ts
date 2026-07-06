@@ -1254,7 +1254,9 @@ export const contentPublishLog = pgTable(
     tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     contentId: uuid("content_id").notNull(),
     accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
-    status: varchar("status", { length: 20 }).notNull(), // success | failed | skipped
+    // 7-06 ② 扩到 30 (migration 023): success | failed | skipped | draft | draft_pushed | dispatched
+    //   | published_by_operator (推的草稿被运营群发 = 市场选择正信号) | draft_expired (推了7天没发 = 负信号)
+    status: varchar("status", { length: 30 }).notNull(),
     mediaId: varchar("media_id", { length: 200 }),
     errorMessage: varchar("error_message", { length: 500 }),
     initiatedBy: varchar("initiated_by", { length: 20 }),

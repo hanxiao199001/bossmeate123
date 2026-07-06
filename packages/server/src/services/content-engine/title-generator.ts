@@ -121,3 +121,38 @@ export async function generateTitles(opts: {
   void usageCount; // usageCount 供调用方/测试直查, 保留导出链路
   return finalTitles;
 }
+
+/**
+ * 7-06 ② 标题反馈飞轮 — 运营改标题正例读取。
+ * 效果回流 (wechat-stats-collector) 发现"我们推送的标题 ≠ 运营实际群发的标题"时, 会落
+ * contents.metadata.titleFeedback = { pushed, published, at, accountId } — 运营改标题 = 最真实的标题课。
+ *
+ * TODO(标题飞轮接通): generateTitles 的 TITLE_DNA 目前是静态规则 prompt;
+ *   攒够 ≥10 条 titleFeedback 后, 在 generateTitles 里调本函数, 把 published 标题以
+ *   "【运营改后正例, 风格参照不逐字抄】" 块注入 system prompt (few-shot)。本 PR 先把数据攒起来。
+ */
+export async function getOperatorTitleExamples(
+  tenantId: string,
+  limit = 10,
+): Promise<Array<{ pushed: string; published: string; at: string }>> {
+  try {
+    const { db } = await import("../../models/db.js");
+    const { sql } = await import("drizzle-orm");
+    const { SYSTEM_RECOMMENDATION_TENANT_ID } = await import("../../config/system-recommendation.js");
+    // 共享推荐池 (SYSTEM tenant) 的内容也算 — 草稿分发推的多来自共享池
+    const res = await db.execute(sql`
+      SELECT metadata->'titleFeedback' AS fb
+      FROM contents
+      WHERE (tenant_id = ${tenantId} OR tenant_id = ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid)
+        AND metadata->'titleFeedback' IS NOT NULL
+      ORDER BY updated_at DESC
+      LIMIT ${Math.max(1, Math.min(50, limit))}`);
+    return (((res as any).rows ?? []) as Array<{ fb: any }>)
+      .map((r) => r.fb)
+      .filter((fb) => fb && typeof fb.pushed === "string" && typeof fb.published === "string")
+      .map((fb) => ({ pushed: fb.pushed, published: fb.published, at: String(fb.at ?? "") }));
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "7-06 ② 读取运营改标题正例失败");
+    return [];
+  }
+}

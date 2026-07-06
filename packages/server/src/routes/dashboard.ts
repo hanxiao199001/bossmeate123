@@ -49,6 +49,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         heroArticlesPub24h,
         heroLatestArticle,
         heroRecentPublished,
+        heroRealReads,
       ] = await Promise.all([
       // 内容统计
       db
@@ -140,6 +141,15 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .from(contents)
         .where(and(eq(contents.tenantId, tenantId), eq(contents.status, "published")))
         .orderBy(desc(contents.updatedAt)).limit(3),
+
+      // 7-06 ④: 拔 8500 假数据 — 昨日以来真实回流阅读求和。
+      //   wechat-stats-collector 写 content_metrics 时把"当日阅读增量"存 metadata.dailyReadDelta
+      //   (views 列是累计快照, 直接 SUM 会重复计); 运营手填行无 delta 用 views 兜底。无回流数据 = 0。
+      db.execute(sql`
+        SELECT COALESCE(SUM(COALESCE((cm.metadata->>'dailyReadDelta')::int, cm.views)), 0) AS total
+        FROM content_metrics cm
+        WHERE cm.tenant_id = ${tenantId}
+          AND cm.snapshot_date >= (CURRENT_DATE - 1)`),
     ]);
 
     // 知识库汇总
@@ -201,7 +211,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
             keywordsCrawled: Number(heroKeywords24h[0]?.c ?? 0),
             articlesGenerated: Number(heroArticlesGen24h[0]?.c ?? 0),
             articlesPublished: Number(heroArticlesPub24h[0]?.c ?? 0),
-            totalReadsToday: 8500, // TODO: 等 P2 接入实际阅读数据 (微信公众平台 stats API)
+            // 7-06 ④: 真实回流数据 (昨日+今日快照阅读增量求和); 没有回流数据 = 0, 前端显示"暂无回流数据"
+            totalReadsToday: Number(((heroRealReads as any).rows?.[0]?.total) ?? 0),
           },
           latestArticlePreview: heroLatestArticle[0]
             ? { id: heroLatestArticle[0].id, title: heroLatestArticle[0].title || "(无标题)", coverUrl: null, createdAt: heroLatestArticle[0].createdAt }

@@ -18,6 +18,9 @@ export async function writeCalibrationSample(
   try {
     const md = (metadata ?? {}) as Record<string, any>;
     const sample = {
+      // 7-05 ④: 显式标 source=human — calibration 是"人工真值池", 只有人手落样本。
+      // AI 审稿员(ai-reviewer)的裁决只写 metadata.aiReview, 绝不写这里(机器教机器会把尺子校歪)。
+      source: "human",
       verdict,
       at: new Date().toISOString(),
       ...(reason ? { reason } : {}),

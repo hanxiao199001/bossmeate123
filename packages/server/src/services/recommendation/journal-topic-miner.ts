@@ -14,28 +14,20 @@ import { logger } from "../../config/logger.js";
 const BASE_SCORE = 45; // 衍生选题初始综合分(放中游, 与爬虫热词公平竞争)
 const POOL_CAP = Number(process.env.JOURNAL_TOPIC_POOL_CAP) || 1500; // journal_mining 选题池上限, 防无上限增长
 
-/** ③ 学科表现因子: 各学科过往内容 avg(阅读/互动代理) ÷ 全局均值, clamp 到 [0.7, 1.5]。无数据=全 1。 */
+/**
+ * ③ 学科表现因子 — 7-06 接上真实回流阅读数据 (category-weights.ts):
+ *   近 30 天各学科平均阅读表现 → log2 缩放减半 + clamp [0.5, 2.0]。
+ *   有数据(≥3 篇样本)的学科才动, 没数据保持 1 (下方 `factors.get(...) || 1`);
+ *   log 缩放 + AVG + 最少样本数三重防爆, 单篇 10w+ 拉不爆学科权重 (算法详注见 category-weights.ts)。
+ */
 async function categoryFactors(): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
   try {
-    const res = await db.execute(sql`
-      SELECT c.metadata->>'discipline' AS disc,
-             AVG(GREATEST(cm.views, cm.likes*10 + cm.comments*15 + cm.shares*20)) AS av
-      FROM content_metrics cm JOIN contents c ON c.id = cm.content_id
-      WHERE c.metadata->>'discipline' IS NOT NULL
-      GROUP BY 1`);
-    const rows = ((res as any).rows ?? []) as Array<{ disc: string; av: string }>;
-    const vals = rows.map((r) => Number(r.av) || 0).filter((v) => v > 0);
-    if (vals.length === 0) return map;
-    const overall = vals.reduce((s, v) => s + v, 0) / vals.length;
-    if (overall <= 0) return map;
-    for (const r of rows) {
-      const av = Number(r.av) || 0;
-      if (av <= 0 || !r.disc) continue;
-      map.set(r.disc, Math.max(0.7, Math.min(1.5, av / overall)));
-    }
-  } catch (err) { logger.warn({ err: String(err) }, "journal-topic-miner: 学科表现聚合失败(因子全1)"); }
-  return map;
+    const { computeCategoryWeights } = await import("./category-weights.js");
+    return await computeCategoryWeights(30);
+  } catch (err) {
+    logger.warn({ err: String(err) }, "journal-topic-miner: 学科表现聚合失败(因子全1)");
+    return new Map();
+  }
 }
 
 /** 封顶淘汰: 保留最多 POOL_CAP 个 active 衍生选题, 多余的归档(优先淘汰 从未被推荐+低分+最老)。

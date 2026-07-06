@@ -9,6 +9,7 @@ export interface WorkbenchListItem {
   type?: string | null; // article=图文 / video=视频, 用于列表类型标
   status?: string | null; // 老韩6-15: needs_review 标'待审'
   metadata?: Record<string, unknown> | null;
+  operatorPublished?: boolean; // 7-06 ②: 回流确认被运营从草稿箱群发 (市场选择信号)
   createdAt?: string | null; // PR #186: 生成时间 (列表项显示相对时间)
   journal?: {
     name: string | null;
@@ -93,6 +94,10 @@ export default function ContentListItem({
           )}
           {(item.metadata as { hasWarnings?: boolean } | null | undefined)?.hasWarnings && (
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700">⚠️校验</span>
+          )}
+          {/* 7-06 ②: 回流确认被运营从公众号后台群发 — 市场选择正信号 */}
+          {item.operatorPublished && (
+            <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700" title="效果回流发现该文已被运营群发">✅ 运营已选发</span>
           )}
           {item.title || "(无标题)"}
         </p>

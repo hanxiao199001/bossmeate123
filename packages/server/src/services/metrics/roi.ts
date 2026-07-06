@@ -17,14 +17,19 @@ export interface RecordMetricInput {
   views?: number;
   likes?: number;
   shares?: number;
+  saves?: number;       // 7-06 ①: 微信"收藏"(add_to_fav) — datacube 无"在看"字段, 用收藏
   followers?: number;
   inquiries?: number;
   source?: "api" | "manual";
+  /** 7-06 ①: 回流写"昨日"快照时指定 (默认今天)。upsert 键 = (contentId, platform, snapshotDate) → 重跑幂等 */
+  snapshotDate?: string;
+  /** 7-06 ①: 平台特有指标并入 metadata (如 dailyReadDelta / msgids / matchType) */
+  metadataExtra?: Record<string, unknown>;
 }
 
 /** 录入/更新一条指标 (同内容同平台同快照日 upsert — 当天多次填以最新为准) */
 export async function recordMetric(input: RecordMetricInput): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = input.snapshotDate ?? new Date().toISOString().slice(0, 10);
   const existing = await db
     .select({ id: contentMetrics.id })
     .from(contentMetrics)
@@ -42,9 +47,10 @@ export async function recordMetric(input: RecordMetricInput): Promise<void> {
     views: Math.max(0, Math.floor(input.views ?? 0)),
     likes: Math.max(0, Math.floor(input.likes ?? 0)),
     shares: Math.max(0, Math.floor(input.shares ?? 0)),
+    saves: Math.max(0, Math.floor(input.saves ?? 0)),
     followers: Math.max(0, Math.floor(input.followers ?? 0)),
     inquiries: Math.max(0, Math.floor(input.inquiries ?? 0)),
-    metadata: { source: input.source ?? "manual", accountId: input.accountId },
+    metadata: { source: input.source ?? "manual", accountId: input.accountId, ...(input.metadataExtra ?? {}) },
   };
   if (existing.length > 0) {
     await db.update(contentMetrics).set(values).where(eq(contentMetrics.id, existing[0]!.id));

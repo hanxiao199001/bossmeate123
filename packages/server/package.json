@@ -23,7 +23,9 @@
     "oss:check": "tsx src/scripts/oss-check.ts",
     "journals:health": "tsx src/scripts/journals-health-check.ts",
     "journals:reenrich": "tsx src/scripts/journals-reenrich.ts",
-    "journals:schedule-refresh": "tsx src/scripts/journals-schedule-refresh.ts"
+    "journals:schedule-refresh": "tsx src/scripts/journals-schedule-refresh.ts",
+    "review:ai": "tsx src/scripts/ai-review.ts",
+    "review:report": "tsx src/scripts/ai-reviewer-report.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",

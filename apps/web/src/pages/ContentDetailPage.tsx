@@ -353,6 +353,39 @@ export default function ContentDetailPage() {
     }
   }, [showPublishPanel, fetchAccounts]);
 
+  // 7-05 ⑤: 文章类内容 → 拉"已推草稿箱→某号"记录 (draft_dist 推的 status=draft_pushed; 浏览器推的 status=draft)
+  // 7-06 ②: 同一接口顺带识别 published_by_operator (回流确认运营已群发 — 市场选择信号)
+  const [draftPushedTo, setDraftPushedTo] = useState<string[]>([]);
+  const [operatorPublishedTo, setOperatorPublishedTo] = useState<string[]>([]);
+  // 7-06 ①: 公众号回流指标 (累计快照: 阅读/分享/收藏 + 截至日期)
+  const [reflowStats, setReflowStats] = useState<{ views: number; shares: number; saves: number; snapshotDate: string; source: string | null } | null>(null);
+  useEffect(() => {
+    if (!id || !content || content.type === "video") return;
+    (async () => {
+      try {
+        const res = await api.get<Array<{ accountId: string; status: string; accountName?: string | null }>>(
+          `/content/${id}/manual-publish-log`
+        );
+        const rows = res.data || [];
+        const names = rows
+          .filter((r) => r.status === "draft_pushed" || r.status === "draft")
+          .map((r) => r.accountName || "未知账号");
+        setDraftPushedTo([...new Set(names)]);
+        const opNames = rows
+          .filter((r) => r.status === "published_by_operator")
+          .map((r) => r.accountName || "未知账号");
+        setOperatorPublishedTo([...new Set(opNames)]);
+      } catch { /* 无记录/接口失败不阻塞详情页 */ }
+      try {
+        const m = await api.get<Array<{ platform: string; views: number; shares: number; saves: number; snapshotDate: string; source: string | null }>>(
+          `/content/${id}/metrics`
+        );
+        const wx = (m.data || []).find((r) => r.platform === "wechat" && (r.views > 0 || r.shares > 0 || r.saves > 0));
+        setReflowStats(wx ? { views: wx.views, shares: wx.shares, saves: wx.saves, snapshotDate: String(wx.snapshotDate ?? "").slice(0, 10), source: wx.source } : null);
+      } catch { /* 无回流数据不阻塞 */ }
+    })();
+  }, [id, content?.type]);
+
   // PR-P1: 视频内容 → 拉当前平台矩阵账号 + 已发记录 (刷新不丢)
   useEffect(() => {
     if (!id || content?.type !== "video") return;
@@ -758,6 +791,38 @@ export default function ContentDetailPage() {
             templateId={content.metadata?.templateId as string | undefined}
             templates={templates}
           />
+          {/* 7-05 ④: AI 审稿建议徽章 (metadata.aiReview — 影子模式记录, 人工终审时参考) */}
+          {(content.metadata?.aiReview as any)?.verdict && (
+            <span
+              className={`px-2 py-1 rounded-md text-xs ${
+                (content.metadata!.aiReview as any).verdict === "approve" ? "bg-emerald-50 text-emerald-700"
+                : (content.metadata!.aiReview as any).verdict === "reject" ? "bg-rose-50 text-rose-600"
+                : "bg-gray-100 text-gray-500"
+              }`}
+              title={`AI 建议(仅参考): ${(content.metadata!.aiReview as any).reason ?? ""} · confidence ${Math.round(((content.metadata!.aiReview as any).confidence ?? 0) * 100)}%`}
+            >
+              🤖 AI建议：{(content.metadata!.aiReview as any).verdict === "approve" ? "采用" : (content.metadata!.aiReview as any).verdict === "reject" ? "驳回" : "存疑"}
+              {(content.metadata!.aiReview as any).reason ? ` · ${String((content.metadata!.aiReview as any).reason).slice(0, 20)}` : ""}
+            </span>
+          )}
+          {/* 7-05 ⑤: 已推草稿箱标记 (draft-distributor 推的, 运营去公众号后台发) */}
+          {draftPushedTo.length > 0 && (
+            <span className="px-2 py-1 rounded-md text-xs bg-indigo-50 text-indigo-600" title="已推入公众号草稿箱, 到 mp.weixin.qq.com 草稿箱确认发布">
+              📥 已推草稿箱 → {draftPushedTo.join("、")}
+            </span>
+          )}
+          {/* 7-06 ②: 运营已选发 (回流数据确认草稿被运营群发 — 市场选择正信号) */}
+          {operatorPublishedTo.length > 0 && (
+            <span className="px-2 py-1 rounded-md text-xs bg-emerald-50 text-emerald-700" title="效果回流发现该文已被运营从公众号后台群发 — 运营的市场选择信号">
+              ✅ 运营已选发 → {operatorPublishedTo.join("、")}
+            </span>
+          )}
+          {/* 7-06 ①: 公众号阅读数据回流 (T+1; datacube 无"在看"字段, 用收藏) */}
+          {reflowStats && (
+            <span className="px-2 py-1 rounded-md text-xs bg-sky-50 text-sky-700" title={`公众号数据回流 (${reflowStats.source === "api" ? "微信数据接口 T+1 自动回流" : "运营手填"})`}>
+              📊 阅读 {reflowStats.views.toLocaleString()} · 分享 {reflowStats.shares.toLocaleString()} · 收藏 {reflowStats.saves.toLocaleString()}（截至 {reflowStats.snapshotDate || "昨日"}）
+            </span>
+          )}
           {/* PR D6 sprint B: aiScore + 4 维度 hardMetrics 浮窗展示（5-13 demo 老板信任感）*/}
           {typeof content.metadata?.aiScore === "number" && (
             <div className="flex items-center gap-1.5 ml-2 text-xs">

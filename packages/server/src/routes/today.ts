@@ -125,6 +125,7 @@ export async function todayRoutes(app: FastifyInstance) {
             videoUrl?: string; source?: string; validatorIssues?: string[]; hasWarnings?: boolean; qualityScore?: number;
             needsReviewReason?: string; sixDimTotal?: number; sixDimWeak?: Array<{ label: string; score: number; fixHint: string }>;
             titleIssue?: unknown; sixDimDegraded?: boolean;
+            aiReview?: { verdict?: string; confidence?: number; reason?: string; mode?: string }; // 7-05 ④ AI 审稿建议
           } | null;
           // 6-20/7-05 ①: 待审给出失败原因 + 六维失败维度 + fixHint, 让运营知道哪把尺挂的、怎么改。
           let reviewReason: string | null = null;
@@ -157,6 +158,13 @@ export async function todayRoutes(app: FastifyInstance) {
             source: meta?.source ?? null,
             reviewReason,
             reviewWeak, // 7-05 ①: [{label, score, fixHint}] 失败维度+怎么改
+            // 7-05 ④: AI 审稿建议(影子模式的核心价值 — 老韩审的时候能看到 AI 意见做参考)
+            aiReview: meta?.aiReview?.verdict ? {
+              verdict: String(meta.aiReview.verdict),
+              confidence: Number(meta.aiReview.confidence ?? 0),
+              reason: String(meta.aiReview.reason ?? "").slice(0, 120),
+              mode: String(meta.aiReview.mode ?? ""),
+            } : null,
           };
         }),
         agentTasks: tasks.map((t) => ({ ...t, error: t.error ? t.error.slice(0, 160) : null })),

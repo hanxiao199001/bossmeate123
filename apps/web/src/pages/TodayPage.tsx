@@ -18,6 +18,7 @@ interface TodayContent {
   hasVideo: boolean;
   reviewReason?: string | null;
   reviewWeak?: Array<{ label: string; score: number; fixHint: string }>; // 7-05 ① 失败维度+fixHint
+  aiReview?: { verdict: string; confidence: number; reason: string; mode: string } | null; // 7-05 ④ AI 审稿建议
   source: string | null;
 }
 
@@ -661,6 +662,20 @@ export default function TodayPage() {
                         <Link to={`/content/${c.id}`} className="text-sm text-gray-800 truncate flex-1 group-hover:text-indigo-600">{c.title ?? "(无标题)"}</Link>
                         {c.status === "needs_review" && c.reviewReason && (
                           <span className="shrink-0 max-w-[260px] truncate text-xs text-amber-600" title={c.reviewReason}>⚠ {c.reviewReason}</span>
+                        )}
+                        {/* 7-05 ④: AI 审稿建议徽章 — 影子模式的价值: 老韩审的时候看得到 AI 意见 */}
+                        {c.status === "needs_review" && c.aiReview && (
+                          <span
+                            className={`shrink-0 max-w-[220px] truncate text-xs px-1.5 py-0.5 rounded ${
+                              c.aiReview.verdict === "approve" ? "bg-emerald-50 text-emerald-700"
+                              : c.aiReview.verdict === "reject" ? "bg-rose-50 text-rose-600"
+                              : "bg-gray-100 text-gray-500"
+                            }`}
+                            title={`AI 建议(仅参考, 不代表已裁决): ${c.aiReview.reason} (confidence ${Math.round((c.aiReview.confidence ?? 0) * 100)}%)`}
+                          >
+                            🤖 AI建议：{c.aiReview.verdict === "approve" ? "采用" : c.aiReview.verdict === "reject" ? "驳回" : "存疑"}
+                            {c.aiReview.reason ? ` · ${c.aiReview.reason.slice(0, 24)}` : ""}
+                          </span>
                         )}
                         {c.status === "needs_review" && (
                           <button
