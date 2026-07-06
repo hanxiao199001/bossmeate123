@@ -53,6 +53,43 @@ async function upsertConversation(msg: KfInboundText) {
   return created;
 }
 
+type ChatContext = Array<{ role: string; content: string }>;
+
+const HISTORY_LIMIT = 10;         // 最近 N 条消息进上下文（含入站/出站）
+const HISTORY_CHAR_BUDGET = 2400; // 历史总字符预算（约 ≤2K token），超出从最旧开始丢
+const HISTORY_ITEM_MAX = 500;     // 单条消息截断上限，防超长粘贴挤爆预算
+
+/**
+ * 多轮记忆：取会话最近历史（排除刚落库的当前入站消息），转成 chat() 的 context（旧→新）。
+ * 查询走 idx_kf_msg_conv(conversation_id, created_at) 索引。
+ * 历史是增强不是关键路径：任何失败返回 []（本条无记忆应答），绝不影响主流程——与本模块"旁路失败只降级"哲学一致。
+ */
+async function loadHistoryContext(conversationId: string, excludeMessageId?: string): Promise<ChatContext> {
+  try {
+    const rows = await db.select({ id: kfMessages.id, direction: kfMessages.direction, content: kfMessages.content })
+      .from(kfMessages)
+      .where(eq(kfMessages.conversationId, conversationId))
+      .orderBy(desc(kfMessages.createdAt))
+      .limit(HISTORY_LIMIT + 1); // +1：结果可能含当前这条，过滤后仍够 HISTORY_LIMIT 条
+
+    let budget = HISTORY_CHAR_BUDGET;
+    const ctx: ChatContext = [];
+    for (const r of rows) { // rows 新→旧
+      if (excludeMessageId && r.id === excludeMessageId) continue;
+      if (ctx.length >= HISTORY_LIMIT) break;
+      const content = (r.content ?? "").slice(0, HISTORY_ITEM_MAX);
+      if (!content) continue; // 空内容不进上下文
+      if (budget < content.length) break; // 预算耗尽，更旧的全部丢弃
+      budget -= content.length;
+      ctx.push({ role: r.direction === "in" ? "user" : "assistant", content });
+    }
+    return ctx.reverse(); // 转回旧→新（chat 会按顺序拼进 messages）
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err, conversationId }, "kf 历史上下文加载失败（忽略，本条无记忆应答）");
+    return [];
+  }
+}
+
 /** 出站消息：发企微 + 落库（ai_action 记录 answered/transferred 等） */
 async function replyAndRecord(conv: { id: string; openKfid: string; externalUserid: string }, text: string, intent: Intent | null, action: string) {
   await sendKfText(conv.openKfid, conv.externalUserid, text);
@@ -98,19 +135,21 @@ function extractJson(raw: string): Record<string, unknown> | null {
 }
 
 /** 意图分类：一次 LLM 调用，JSON 输出；解析失败按 handoff 处理（宁转人工不瞎答） */
-async function classifyIntent(tenantId: string, conversationId: string, content: string): Promise<{ intent: Intent; journalName?: string }> {
+async function classifyIntent(tenantId: string, conversationId: string, content: string, history: ChatContext): Promise<{ intent: Intent; journalName?: string }> {
   const systemPrompt = `你是一家学术期刊咨询服务公司的客服意图分类器。业务背景：我们为科研作者提供 SCI / 中文核心期刊的推荐与投稿咨询服务，客户常问某期刊的影响因子、分区、审稿周期、录用难度、版面费，或咨询我们的服务内容与价格。
 把用户消息分类为以下四种意图之一，只输出 JSON，不要输出任何其他文字：
 - journal_query：询问某本具体期刊的信息（需抽取期刊名，中英文均可，去掉书名号）
 - service_faq：询问我们的服务内容、流程、售后等常规问题
 - chitchat：寒暄、问候、闲聊
 - handoff：投诉、价格谈判、复杂个案，或你不确定属于哪类
+用户消息可能是对历史对话的追问（如"那审稿周期呢""这个期刊版面费多少"）。结合对话历史消解指代：journal_name 必须输出完整期刊名（优先取历史中最近提到的期刊），禁止输出"这个期刊"之类的代词；若历史中也定位不到所指期刊，才归类 handoff。
 输出格式：{"intent":"journal_query","journal_name":"期刊名"}；非 journal_query 时省略 journal_name。`;
   const res = await chat({
     tenantId,
     userId: "kf-bot",
     conversationId,
     message: content,
+    context: history, // 多轮记忆：历史对话（旧→新），供追问/指代消解
     skillType: "customer_service", // 走 Qwen-Plus（model-router 锁 DeepSeek/Qwen）
     systemPrompt,
   });
@@ -163,7 +202,7 @@ function journalFacts(j: typeof journals.$inferSelect): string {
 }
 
 /** journal_query：DB 真实字段是唯一事实源；查不到诚实说没收录并转人工 */
-async function answerJournalQuery(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string, journalName?: string) {
+async function answerJournalQuery(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string, journalName: string | undefined, history: ChatContext) {
   const name = journalName?.trim();
   if (!name) { await handoffToHuman(conv, "journal_query", "未抽取到期刊名"); return; }
 
@@ -183,16 +222,17 @@ async function answerJournalQuery(conv: { id: string; tenantId: string; openKfid
 2. 数据里标"暂无数据"的字段，就如实告诉用户"该项暂无数据"；
 3. 禁止编造影响因子、分区、录用率、周期、费用等任何数值；
 4. 若期刊在预警名单，必须明确提醒用户。
+5. 对话历史仅用于理解指代与衔接语气，任何数值仍只能来自「期刊数据」。
 风格：中文、简洁友好、适当分行，结尾可提示"还想了解其他期刊或投稿服务，随时问我"。
 
 期刊数据：
 ${journalFacts(journal)}`;
-  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, skillType: "customer_service", systemPrompt });
+  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, context: history, skillType: "customer_service", systemPrompt });
   await replyAndRecord(conv, res.content.trim(), "journal_query", "answered");
 }
 
 /** service_faq：租户 enabled FAQ 全量（≤30）塞 prompt；覆盖不了 → 转人工 */
-async function answerServiceFaq(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string) {
+async function answerServiceFaq(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string, history: ChatContext) {
   const faqs = await db.select().from(kfFaqs)
     .where(and(eq(kfFaqs.tenantId, conv.tenantId), eq(kfFaqs.enabled, true)))
     .orderBy(asc(kfFaqs.sort), asc(kfFaqs.createdAt)).limit(30);
@@ -206,16 +246,16 @@ async function answerServiceFaq(conv: { id: string; tenantId: string; openKfid: 
 
 FAQ 列表：
 ${faqText}`;
-  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, skillType: "customer_service", systemPrompt });
+  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, context: history, skillType: "customer_service", systemPrompt });
   const answer = res.content.trim();
   if (!answer || answer.includes("NO_ANSWER")) { await handoffToHuman(conv, "service_faq", "FAQ 未覆盖该问题"); return; }
   await replyAndRecord(conv, answer, "service_faq", "answered");
 }
 
 /** chitchat：简短友好 + 引导到期刊咨询 */
-async function answerChitchat(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string) {
+async function answerChitchat(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string, history: ChatContext) {
   const systemPrompt = `你是学术期刊咨询服务公司的客服。用户在寒暄闲聊，用 1-2 句中文简短友好地回应，并自然地引导：可以直接发期刊名查影响因子/分区/审稿周期，也可咨询论文投稿服务。不要长篇大论。`;
-  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, skillType: "customer_service", systemPrompt });
+  const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, context: history, skillType: "customer_service", systemPrompt });
   await replyAndRecord(conv, res.content.trim() || "您好～有期刊或投稿方面的问题，随时问我！", "chitchat", "answered");
 }
 
@@ -241,12 +281,15 @@ export async function processKfTextMessage(msg: KfInboundText): Promise<void> {
     // 人工接管中：只落库，AI 静默
     if (conv.mode === "manual") return;
 
-    const { intent, journalName } = await classifyIntent(msg.tenantId, conv.id, msg.content);
-    logger.info({ conversationId: conv.id, intent, journalName }, "kf 意图分类完成");
+    // 多轮记忆：取最近历史（排除刚落库的当前消息）作对话上下文；失败返回 [] 不影响应答
+    const history = await loadHistoryContext(conv.id, inserted[0]?.id);
 
-    if (intent === "journal_query") await answerJournalQuery(conv, msg.content, journalName);
-    else if (intent === "service_faq") await answerServiceFaq(conv, msg.content);
-    else if (intent === "chitchat") await answerChitchat(conv, msg.content);
+    const { intent, journalName } = await classifyIntent(msg.tenantId, conv.id, msg.content, history);
+    logger.info({ conversationId: conv.id, intent, journalName, historyLen: history.length }, "kf 意图分类完成");
+
+    if (intent === "journal_query") await answerJournalQuery(conv, msg.content, journalName, history);
+    else if (intent === "service_faq") await answerServiceFaq(conv, msg.content, history);
+    else if (intent === "chitchat") await answerChitchat(conv, msg.content, history);
     else await handoffToHuman(conv, "handoff", "分类为 handoff（投诉/议价/复杂/不确定）");
   } catch (err) {
     // AI/DB 挂了不能把回调拖成 5xx：降级转人工
