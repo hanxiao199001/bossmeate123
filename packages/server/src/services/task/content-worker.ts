@@ -1,6 +1,7 @@
 import { Worker, Job } from "bullmq";
 import { getRedisConnection } from "./queue.js";
 import { SkillRegistry } from "../skills/index.js";
+import { runWithLlmCallAttribution } from "../billing/llm-cost.js";
 import { getProvider } from "../ai/provider-factory.js";
 import { db } from "../../models/db.js";
 // PR P1（5-9 砍定时发布）：scheduledPublishes 已删
@@ -112,10 +113,13 @@ async function handleDefaultContent(job: Job<ContentJobData>) {
 
   const stepStart = Date.now();
 
-  const result = await skill.handle(
-    userInput,
-    history as Array<{ role: "user" | "assistant" | "system"; content: string }>,
-    { tenantId, userId, conversationId, provider }
+  // 7-06 成本归属: skills 用单例 RoutedProvider(实例无租户), ALS 把本次任务租户带给 chat() 记账
+  const result = await runWithLlmCallAttribution({ tenantId, userId, conversationId }, () =>
+    skill.handle(
+      userInput,
+      history as Array<{ role: "user" | "assistant" | "system"; content: string }>,
+      { tenantId, userId, conversationId, provider }
+    )
   );
 
   await job.updateProgress(90);
@@ -184,15 +188,19 @@ async function handleArticleWrite(job: Job<ContentJobData>) {
   const enrichedInput = userInput;
 
   // 2. Call ArticleSkill.handle()
-  const result = await skill.handle(
-    enrichedInput,
-    history as Array<{ role: "user" | "assistant" | "system"; content: string }>,
-    {
-      tenantId,
-      userId: ownerUserId,
-      conversationId: agentMeta?.planId || nanoid(),
-      provider,
-    }
+  const skillConversationId = agentMeta?.planId || nanoid();
+  // 7-06 成本归属(同 handleDefaultContent)
+  const result = await runWithLlmCallAttribution({ tenantId, userId: ownerUserId, conversationId: skillConversationId }, () =>
+    skill.handle(
+      enrichedInput,
+      history as Array<{ role: "user" | "assistant" | "system"; content: string }>,
+      {
+        tenantId,
+        userId: ownerUserId,
+        conversationId: skillConversationId,
+        provider,
+      }
+    )
   );
 
   await job.updateProgress(70);
