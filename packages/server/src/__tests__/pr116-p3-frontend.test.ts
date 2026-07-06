@@ -59,23 +59,7 @@ describe("PR #116: RecommendationModal 组件", () => {
   });
 });
 
-describe("PR #116: ContentPage 入口", () => {
-  const src = readWeb("pages/ContentPage.tsx");
-
-  it("import RecommendationModal", () => {
-    expect(src).toMatch(/import\s+RecommendationModal\s+from\s+["'][^"']*RecommendationModal["']/);
-  });
-
-  it("含 recommendOpen state + setRecommendOpen", () => {
-    expect(src).toMatch(/const\s+\[recommendOpen,\s*setRecommendOpen\]\s*=\s*useState/);
-  });
-
-  it("含 🤖 AI 推荐 button + onClick 触发 modal", () => {
-    expect(src).toMatch(/🤖 AI 推荐/);
-    expect(src).toMatch(/onClick=\{[\s\S]{0,30}setRecommendOpen\(true\)/);
-  });
-
-  it("Modal 渲染 + onClose 关闭", () => {
-    expect(src).toMatch(/<RecommendationModal\s+open=\{recommendOpen\}\s+onClose=\{\(\)\s*=>\s*setRecommendOpen\(false\)\}/);
-  });
-});
+// 7-06 死测试清理: 删「PR #116: ContentPage 入口」describe —
+//   断言目标 apps/web/src/pages/ContentPage.tsx 已于 43668dd 删除(首页合并进今日驾驶舱, /content 整页下线,
+//   内容管理移至 ContentWorkbenchPage/ContentDetailPage)。原 describe 在 body 即 readWeb(ContentPage) →
+//   ENOENT crash-load, 连累上方 RecommendationModal(仍存活)整套没跑。RecommendationModal 断言保留。

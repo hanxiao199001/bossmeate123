@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 function readSrc(rel: string): string { return readFileSync(join(__dirname, "..", rel), "utf8"); }
-function readWeb(rel: string): string { return readFileSync(join(__dirname, "../../../../apps/web/src", rel), "utf8"); }
+// 7-06: readWeb 已删 — 唯一调用方(ChatPage 前端断言)随 ChatPage.tsx(43668dd 删除)一并移除。
 
 describe("PR #123 schema + migration", () => {
   const schema = readSrc("models/schema.ts");
@@ -74,7 +74,11 @@ describe("PR #123 article-skill 接入", () => {
 
   it("templateId fallback 链：metadata → preference → default", () => {
     expect(src).toMatch(/getPreference\(context\.tenantId,\s*"default_template"/);
-    expect(src).toMatch(/explicitTemplateId\s*=\s*explicitTemplateId\s*\?\?\s*getDefaultTemplateId/);
+    // 7-06 断言跟进: 最终兜底 `?? getDefaultTemplateId` 已于 PR-G(模板轮换)演进为
+    //   `?? (env.ARTICLE_TEMPLATE_ROTATION === "false" ? getDefaultTemplateId() : pickRotatingTemplateId())`。
+    //   三级兜底(metadata→preference→default/rotation)仍在, 断言更新到现状。
+    expect(src).toMatch(/explicitTemplateId\s*=\s*explicitTemplateId\s*\?\?/);
+    expect(src).toMatch(/getDefaultTemplateId\(\)/);
   });
 
   it("用户显式选 template 时写回 preference（下次默认）", () => {
@@ -87,24 +91,16 @@ describe("PR #123 article-skill 接入", () => {
   });
 });
 
-describe("PR #123 boot 接入 + 前端", () => {
+describe("PR #123 boot 接入", () => {
   const idx = readSrc("index.ts");
-  const chat = readWeb("pages/ChatPage.tsx");
 
   it("index.ts 注册 preferencesRoutes 到 protectedApp", () => {
     expect(idx).toMatch(/preferencesRoutes/);
     expect(idx).toMatch(/protectedApp\.register\(preferencesRoutes/);
   });
 
-  it("ChatPage 加载时 fetch /preferences/default_template", () => {
-    expect(chat).toMatch(/api\.get[\s\S]{0,80}\/preferences\/default_template/);
-  });
-
-  it("ChatPage 用户切模板后自动 PUT /preferences/default_template", () => {
-    expect(chat).toMatch(/api\.put[\s\S]{0,80}\/preferences\/default_template[\s\S]{0,80}value:\s*templateId/);
-  });
-
-  it("ChatPage fetch 失败时 fallback 到 isDefault（向后兼容）", () => {
-    expect(chat).toMatch(/list\.find\(\(t\) => t\.isDefault\)/);
-  });
+  // 7-06 死测试清理: 删 3 条 ChatPage 前端断言 + readWeb("pages/ChatPage.tsx") —
+  //   断言目标 apps/web/src/pages/ChatPage.tsx 已于 43668dd 删除(/chat 整页下线)。
+  //   原 readWeb 在 describe body 即 ENOENT crash-load, 连累本文件所有后端断言(schema/service/route/article-skill)整套没跑。
+  //   模板偏好后端逻辑仍在(describe 1-4 保留验证); 前端偏好 UI 已随 ChatPage 下线, 无存活取代页可断言, 故删。
 });
