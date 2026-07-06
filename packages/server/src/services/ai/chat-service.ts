@@ -23,6 +23,9 @@ export interface ChatRequest {
   skillType?: string;
   context?: Array<{ role: string; content: string }>;
   systemPrompt?: string;
+  /** 7-06 生成参数透传(RoutedProvider/skills 链路用): 不传保持原默认(temperature 0.7 / 路由表 maxTokens) */
+  temperature?: number;
+  maxTokens?: number;
 }
 
 export interface ChatResponse {
@@ -105,7 +108,8 @@ async function callOpenAICompatible(
   model: string,
   messages: Array<{ role: string; content: string }>,
   maxTokens: number,
-  timeoutMs: number = env.AI_REQUEST_TIMEOUT_MS
+  timeoutMs: number = env.AI_REQUEST_TIMEOUT_MS,
+  temperature: number = 0.7
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   return withRetry(async () => {
     const { controller, cleanup } = createTimeoutController({
@@ -124,7 +128,7 @@ async function callOpenAICompatible(
           model,
           messages,
           max_tokens: maxTokens,
-          temperature: 0.7,
+          temperature,
         }),
         signal: controller.signal,
       });
@@ -158,15 +162,17 @@ async function executeAICall(
   provider: { name: string; model: string; apiKey: string; baseUrl: string; maxTokens: number },
   messages: Array<{ role: string; content: string }>,
   _systemPrompt: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  overrides?: { temperature?: number; maxTokens?: number }
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   return await callOpenAICompatible(
     provider.baseUrl,
     provider.apiKey,
     provider.model,
     messages,
-    provider.maxTokens,
-    timeoutMs
+    overrides?.maxTokens ?? provider.maxTokens,
+    timeoutMs,
+    overrides?.temperature
   );
 }
 
@@ -255,7 +261,7 @@ async function chatWithSerialMode(
   );
 
   try {
-    const result = await executeAICall(provider, messages, request.systemPrompt, timeoutMs);
+    const result = await executeAICall(provider, messages, request.systemPrompt, timeoutMs, { temperature: request.temperature, maxTokens: request.maxTokens });
     modelRouter.recordSuccess(provider.name, provider.model);
 
     logger.info(
@@ -289,7 +295,7 @@ async function chatWithSerialMode(
     if (fallback && (fallback.name !== provider.name || fallback.model !== provider.model)) {
       logger.info({ fallback: fallback.name, model: fallback.model }, "尝试备选模型");
       try {
-        const result = await executeAICall(fallback, messages, request.systemPrompt, timeoutMs);
+        const result = await executeAICall(fallback, messages, request.systemPrompt, timeoutMs, { temperature: request.temperature, maxTokens: request.maxTokens });
         modelRouter.recordSuccess(fallback.name, fallback.model);
         return {
           content: result.content,
@@ -359,7 +365,7 @@ async function chatWithRaceMode(
   }
 
   // 准备两个 Promise，用于竞速
-  const primaryPromise = executeAICall(modelPair.primary, messages, request.systemPrompt, timeoutMs)
+  const primaryPromise = executeAICall(modelPair.primary, messages, request.systemPrompt, timeoutMs, { temperature: request.temperature, maxTokens: request.maxTokens })
     .then((result) => ({
       success: true as const,
       result,
@@ -371,7 +377,7 @@ async function chatWithRaceMode(
       provider: modelPair.primary!,
     }));
 
-  const secondaryPromise = executeAICall(modelPair.secondary, messages, request.systemPrompt, timeoutMs)
+  const secondaryPromise = executeAICall(modelPair.secondary, messages, request.systemPrompt, timeoutMs, { temperature: request.temperature, maxTokens: request.maxTokens })
     .then((result) => ({
       success: true as const,
       result,

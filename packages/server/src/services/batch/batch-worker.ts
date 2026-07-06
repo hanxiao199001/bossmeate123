@@ -24,6 +24,7 @@ import {
   InvalidTransitionError,
 } from "../articles/state-machine.js";
 import { SkillRegistry } from "../skills/index.js";
+import { runWithLlmCallAttribution } from "../billing/llm-cost.js";
 import { getRedisConnection } from "../task/queue.js";
 import {
   BATCH_WORKER_CONCURRENCY,
@@ -134,8 +135,10 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         // PR-Q6 整篇硬超时(釜底抽薪): 任何环节(补数据/LLM/渲染)卡住超 180s 即快速失败, 不再干等到10分钟看门狗。
         const GEN_HARD_TIMEOUT_MS = 180_000;
         const result = await Promise.race([
-          (article as { handle: (input: string, history: unknown[], ctx: unknown) => Promise<{ reply: string; artifact?: { body: string; title?: string } }> })
-            .handle(row.topic, [], skillContext),
+          // 7-06 成本归属: ALS 把批次租户带给 RoutedProvider→chat() 记账(见 billing/llm-cost)
+          runWithLlmCallAttribution({ tenantId, userId, conversationId: `batch-${batchId}` }, () =>
+            (article as { handle: (input: string, history: unknown[], ctx: unknown) => Promise<{ reply: string; artifact?: { body: string; title?: string } }> })
+              .handle(row.topic, [], skillContext)),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("生成超时(180秒) — 可能补期刊数据或模型响应卡住, 请重试")), GEN_HARD_TIMEOUT_MS)),
         ]);
 

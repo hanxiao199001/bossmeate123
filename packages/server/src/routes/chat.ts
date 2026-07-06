@@ -11,6 +11,7 @@ import { conversations, messages, contents, tokenLogs, platformAccounts, product
 import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
 import { SkillRegistry } from "../services/skills/index.js";
+import { runWithLlmCallAttribution } from "../services/billing/llm-cost.js";
 import { publishToAccounts } from "../services/publisher/index.js";
 import {
   initialStatusFields,
@@ -214,18 +215,22 @@ export async function chatRoutes(app: FastifyInstance) {
             }));
 
             // 先调用 skill.handle，不预创建 content（避免追问阶段创建空记录）
-            const result = await skill.handle(body.content, chatHistory, {
-              tenantId: request.tenantId,
-              userId: request.user.userId,
-              conversationId: id,
-              provider,
-              metadata: {
-                // T4-1c-1: 把 body.variants 透传给 ArticleSkill（默认 1）
-                variants: body.variants ?? 1,
-                // PR Q.3: 用户选的模板 id 透传给 ArticleSkill（=> generateJournalRecommendation）
-                templateId: body.templateId,
-              },
-            });
+            // 7-06 成本归属: ALS 带租户给 RoutedProvider→chat() 记账(见 billing/llm-cost)
+            const result = await runWithLlmCallAttribution(
+              { tenantId: request.tenantId, userId: request.user.userId, conversationId: id },
+              () => skill.handle(body.content, chatHistory, {
+                tenantId: request.tenantId,
+                userId: request.user.userId,
+                conversationId: id,
+                provider,
+                metadata: {
+                  // T4-1c-1: 把 body.variants 透传给 ArticleSkill（默认 1）
+                  variants: body.variants ?? 1,
+                  // PR Q.3: 用户选的模板 id 透传给 ArticleSkill（=> generateJournalRecommendation）
+                  templateId: body.templateId,
+                },
+              })
+            );
 
             // 只有产出制品时才写入 contents 表
             if (result.artifact) {
