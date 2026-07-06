@@ -57,7 +57,8 @@ export async function wechatCallbackRoutes(app: FastifyInstance) {
       logger.warn({ q }, "wechat callback handshake signature mismatch");
       return reply.code(200).send("");
     }
-    return reply.code(200).type("text/plain").send(q.echostr);
+    // 7-06: echostr 里的 '+' 被 URL 解码成空格 → 原样回给微信会不匹配。还原后再 echo(同 work-wechat 回调修复)。
+    return reply.code(200).type("text/plain").send(q.echostr.replace(/ /g, "+"));
   });
 
   // POST /wechat/callback — 客户消息推送

@@ -58,15 +58,18 @@ export async function workWechatCallbackRoutes(app: FastifyInstance) {
   app.get("/work-wechat/callback", async (request, reply) => {
     const q = request.query as { msg_signature?: string; timestamp?: string; nonce?: string; echostr?: string };
     if (!q.msg_signature || !q.timestamp || !q.nonce || !q.echostr) return reply.code(200).send("");
+    // 7-06: 查询串里 base64 echostr 的 '+' 被 URL 解码成空格 → 签名算错(→mismatch)+ 解密炸(企微回调经典坑)。
+    //   签名与解密都必须用还原后的值。timestamp/nonce/msg_signature 是字母数字, 不受影响。
+    const echostr = q.echostr.replace(/ /g, "+");
     const cfg = await loadConfig();
     if (!cfg) return reply.code(200).send("");
-    const expected = computeMsgSignature(cfg.token, q.timestamp, q.nonce, q.echostr);
+    const expected = computeMsgSignature(cfg.token, q.timestamp, q.nonce, echostr);
     if (expected !== q.msg_signature) {
       logger.warn({ q }, "work-wechat handshake msg_signature mismatch");
       return reply.code(200).send("");
     }
     try {
-      const { msg } = decrypt(q.echostr, cfg.aesKey);
+      const { msg } = decrypt(echostr, cfg.aesKey);
       return reply.code(200).type("text/plain").send(msg);
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, "work-wechat handshake echostr decrypt failed");
