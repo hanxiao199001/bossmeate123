@@ -34,6 +34,14 @@ const queryDvhTaskMock = vi.fn();
 vi.mock("../services/digital-human/query-task.js", () => ({ queryDvhTaskUntilDone: queryDvhTaskMock }));
 const postprocessMock = vi.fn();
 vi.mock("../services/digital-human/video-postprocess.js", () => ({ postprocessVideoWithSubtitle: postprocessMock }));
+// 7-06: PR-W1(commit 1c75dc5)在 submit 前加了 checkBudget 预算闸(晚于本 PR#261 测试)。不 mock 它 →
+// checkBudget 查 db(stub 成 {})崩 → produceVideo 在 submit 前 throw → 防丢逻辑根本没走到。mock 成"放行"让流程到达 submit/query/insert。
+vi.mock("../services/billing/cost-ledger.js", () => ({
+  checkBudget: vi.fn(async () => ({ allowed: true })),
+  estimateDvhCents: vi.fn(() => 100),
+  recordCost: vi.fn(async () => {}),
+  DVH_CENTS_PER_SECOND: 16.5,
+}));
 
 const { triggerDvhFromArticle } = await import("../services/digital-human/article-bridge.js");
 

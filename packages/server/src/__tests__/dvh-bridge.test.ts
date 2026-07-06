@@ -25,6 +25,13 @@ const submitDvhTaskMock = vi.fn();
 vi.mock("../services/digital-human/submit-task.js", () => ({ submitDvhTask: submitDvhTaskMock }));
 const queryDvhTaskMock = vi.fn();
 vi.mock("../services/digital-human/query-task.js", () => ({ queryDvhTaskUntilDone: queryDvhTaskMock }));
+// 7-06: PR-W1(commit 1c75dc5)在 submit 前加了 checkBudget 预算闸(晚于本测试)。不 mock → checkBudget 查 db(stub {})崩 → submit 前 throw。放行让流程到达 submit。
+vi.mock("../services/billing/cost-ledger.js", () => ({
+  checkBudget: vi.fn(async () => ({ allowed: true })),
+  estimateDvhCents: vi.fn(() => 100),
+  recordCost: vi.fn(async () => {}),
+  DVH_CENTS_PER_SECOND: 16.5,
+}));
 
 const { triggerDvhFromArticle } = await import("../services/digital-human/article-bridge.js");
 
