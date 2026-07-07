@@ -139,9 +139,9 @@ async function classifyIntent(tenantId: string, conversationId: string, content:
   const systemPrompt = `你是一家学术期刊咨询服务公司的客服意图分类器。业务背景：我们为科研作者提供 SCI / 中文核心期刊的推荐与投稿咨询服务，客户常问某期刊的影响因子、分区、审稿周期、录用难度、版面费，或咨询我们的服务内容与价格。
 把用户消息分类为以下四种意图之一，只输出 JSON，不要输出任何其他文字：
 - journal_query：询问某本具体期刊的信息（需抽取期刊名，中英文均可，去掉书名号）
-- service_faq：询问我们的服务内容、流程、售后等常规问题
+- service_faq：询问我们的服务内容、流程、收费、时长、售后等常规问题；对"我们公司/我们的服务"的数据来源、准确性、是否靠谱、是否代写、保密性等疑问也归此类，即使语气带质疑（如"数据准不准""从哪来的""靠谱吗""你们是不是代写"）也不要因此判 handoff
 - chitchat：寒暄、问候、闲聊
-- handoff：投诉、价格谈判、复杂个案，或你不确定属于哪类
+- handoff：投诉、价格谈判、复杂个案，或你不确定属于哪类（注意：针对"我们服务"的常规疑问即便带质疑口气也属 service_faq，只有明确的投诉/议价/威胁/复杂个案才归 handoff）
 用户消息可能是对历史对话的追问（如"那审稿周期呢""这个期刊版面费多少"）。结合对话历史消解指代：journal_name 必须输出完整期刊名（优先取历史中最近提到的期刊），禁止输出"这个期刊"之类的代词；若历史中也定位不到所指期刊，才归类 handoff。
 输出格式：{"intent":"journal_query","journal_name":"期刊名"}；非 journal_query 时省略 journal_name。`;
   const res = await chat({
@@ -231,6 +231,44 @@ ${journalFacts(journal)}`;
   await replyAndRecord(conv, res.content.trim(), "journal_query", "answered");
 }
 
+// 数字有源校验：从回复里抽出"数字/中文数词 + 时长/价格/比例单位"的承诺型 token，
+// 逐个回 FAQ 原文找同数同单位的出处；找不到即视为 LLM 编造。
+// 只查会造成时效/费用/比例承诺的单位（天/工作日/周/月/小时/年 · % · 折 · 元/块/万/美元/美金/刀/RMB/人民币），
+// 刻意不查"区/Q/分区"等标签数字（如"1区""Q1"），避免误伤合法分区表述。
+const _NUM = "(?:\\d+(?:\\.\\d+)?|[一二两三四五六七八九十半]+)";
+const _UNIT_GROUPS: Array<{ re: string; canon: string }> = [
+  { re: "个?工作日", canon: "工作日" },
+  { re: "天", canon: "天" },
+  { re: "周", canon: "周" },
+  { re: "个?月", canon: "月" },
+  { re: "小时", canon: "小时" },
+  { re: "年", canon: "年" },
+  { re: "%", canon: "%" },
+  { re: "折", canon: "折" },
+  { re: "(?:元|块钱|块|万元|万|美元|美金|刀|USD|RMB|人民币)", canon: "钱" },
+];
+const _ANSWER_NUM_RE = new RegExp(`(${_NUM})\\s*(${_UNIT_GROUPS.map((g) => g.re).join("|")})`, "gi");
+
+/** 回复里出现但 FAQ 原文找不到出处的"数字+单位"承诺 token 列表（空 = 全部有据）。导出供测试。 */
+export function findUnsourcedNumbers(answer: string, faqText: string): string[] {
+  const offending: string[] = [];
+  const seen = new Set<string>();
+  for (const m of answer.matchAll(_ANSWER_NUM_RE)) {
+    const num = m[1];
+    const unitRaw = m[2];
+    const token = `${num}${unitRaw}`;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    // 归一到单位家族：工作日/月/钱各有多种写法，按 canon 组回原文放宽匹配
+    const group = _UNIT_GROUPS.find((g) => new RegExp(`^${g.re}$`, "i").test(unitRaw));
+    const numEsc = num.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const unitAlt = group ? group.re : unitRaw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // FAQ 原文里存在"同数 + 同单位家族"才算有源
+    if (!new RegExp(`${numEsc}\\s*(?:${unitAlt})`, "i").test(faqText)) offending.push(token);
+  }
+  return offending;
+}
+
 /** service_faq：租户 enabled FAQ 全量（≤30）塞 prompt；覆盖不了 → 转人工 */
 async function answerServiceFaq(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, content: string, history: ChatContext) {
   const faqs = await db.select().from(kfFaqs)
@@ -240,8 +278,11 @@ async function answerServiceFaq(conv: { id: string; tenantId: string; openKfid: 
   if (faqs.length === 0) { await handoffToHuman(conv, "service_faq", "FAQ 库为空"); return; }
 
   const faqText = faqs.map((f, i) => `${i + 1}. 问：${f.question}\n   答：${f.answer}`).join("\n");
-  const systemPrompt = `你是学术期刊咨询服务公司的客服。只能基于下面 FAQ 列表回答用户问题，不得自行发挥或承诺 FAQ 里没有的内容。
-如果 FAQ 覆盖不了用户的问题，只输出四个大写字母：NO_ANSWER（不要输出其他任何内容）。
+  const systemPrompt = `你是学术期刊咨询服务公司的客服。只能基于下面 FAQ 列表回答用户问题。
+铁律：
+1. 只能引用与用户问题直接对应的那一条 FAQ 的原文作答，禁止把多条 FAQ 的内容拼凑到一起。
+2. 禁止补充 FAQ 原文里没有的任何数字、时长、价格、比例或承诺（例如"1个工作日""3天内""500元""30%"）——FAQ 没写明的时效/费用/比例，一律不许自己给出。
+3. 如果没有任何一条 FAQ 能直接回答用户的问题，只输出四个大写字母：NO_ANSWER（不要输出其他任何内容）。
 回答风格：中文、简洁友好。
 
 FAQ 列表：
@@ -249,6 +290,14 @@ ${faqText}`;
   const res = await chat({ tenantId: conv.tenantId, userId: "kf-bot", conversationId: conv.id, message: content, context: history, skillType: "customer_service", systemPrompt });
   const answer = res.content.trim();
   if (!answer || answer.includes("NO_ANSWER")) { await handoffToHuman(conv, "service_faq", "FAQ 未覆盖该问题"); return; }
+  // 确定性防线：回复里的数字/时长/价格/比例必须在 FAQ 原文有出处，找不到 = LLM 编造承诺 → 拦下转人工。
+  // 同图文线"标题数字必须 DB 有据"哲学：prompt 求它不编不如校验拦住它编（#10 借相邻 FAQ 壳编"1个工作日"的教训）。
+  const unsourced = findUnsourcedNumbers(answer, faqText);
+  if (unsourced.length > 0) {
+    logger.warn({ conversationId: conv.id, unsourced, answer }, "FAQ 回复含无源数字，拦截转人工");
+    await handoffToHuman(conv, "service_faq", `回复含无源数字(${unsourced.join("、")})，防编造转人工`);
+    return;
+  }
   await replyAndRecord(conv, answer, "service_faq", "answered");
 }
 
