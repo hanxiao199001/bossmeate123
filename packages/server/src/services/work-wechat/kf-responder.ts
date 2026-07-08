@@ -33,6 +33,24 @@ type Intent = "journal_query" | "service_faq" | "chitchat" | "handoff";
 
 const HANDOFF_REPLY = "好的，已为您转接人工客服，请稍候，我们的顾问会尽快回复您～";
 
+// 显式转人工关键词捷径：客户直说要人工时，不进 LLM 分类（曾把两字"人工"误判 chitchat 不转接）。
+//   EXACT: 整句就是这几个字（去标点空白后精确匹配）→ handoff。
+//   PHRASE: 明确"要人工"的短消息（去标点后 ≤12 字且命中）→ handoff；限长 + 用高辨识度复合词，避开"人工智能/找人工智能"等误伤。
+const HANDOFF_EXACT = new Set([
+  "人工", "转人工", "人工客服", "转接", "找人工", "真人", "转真人", "找真人",
+  "要人工", "人工服务", "人工咨询", "转人工客服", "接人工", "人工帮忙", "人工在吗",
+]);
+const HANDOFF_PHRASE = /转人工|人工客服|人工服务|我要人工|请转人工|转真人|人工在吗|转接客服|要转人工|想转人工|需要人工|叫个人工|来个人工|接个人工/;
+
+/** 是否显式要求转人工（确定性捷径，不进 LLM）。导出供测试。 */
+export function isExplicitHandoff(content: string): boolean {
+  const norm = (content || "").replace(/[\s\p{P}\p{S}]/gu, ""); // 去空白 + 标点 + 符号
+  if (!norm) return false;
+  if (HANDOFF_EXACT.has(norm)) return true;
+  if (norm.length <= 12 && HANDOFF_PHRASE.test(norm)) return true; // 限短消息, 防"找人工智能期刊"类长句误伤
+  return false;
+}
+
 /** 会话 upsert：存在则刷 last_msg_at，不存在则建（mode 默认 auto） */
 async function upsertConversation(msg: KfInboundText) {
   const [existing] = await db.select().from(kfConversations).where(and(
@@ -332,6 +350,13 @@ export async function processKfTextMessage(msg: KfInboundText): Promise<void> {
 
     // 多轮记忆：取最近历史（排除刚落库的当前消息）作对话上下文；失败返回 [] 不影响应答
     const history = await loadHistoryContext(conv.id, inserted[0]?.id);
+
+    // 显式转人工捷径：客户直说"人工/转人工/人工客服"等 → 确定性 handoff，不进 LLM 分类
+    if (isExplicitHandoff(msg.content)) {
+      logger.info({ conversationId: conv.id }, "kf 显式转人工关键词命中，捷径 handoff");
+      await handoffToHuman(conv, "handoff", "显式转人工关键词捷径");
+      return;
+    }
 
     const { intent, journalName } = await classifyIntent(msg.tenantId, conv.id, msg.content, history);
     logger.info({ conversationId: conv.id, intent, journalName, historyLen: history.length }, "kf 意图分类完成");
