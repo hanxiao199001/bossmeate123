@@ -62,19 +62,19 @@ describe("PR #178: scheduler cron", () => {
 });
 
 describe("PR #178: Sidebar nav", () => {
-  it("Sidebar 含 内容管理 nav item", async () => {
+  it("Sidebar 含 内容工坊 nav item (原「内容管理」并入)", async () => {
+    // 7-08 更新(测试过时/功能并入): 6-14 目录重构将「内容管理」入口并入「内容工坊」, /content 现 Navigate redirect → /workbench。
+    //   PR #178 的后端保留能力(pinned/60天保留/route)仍由本文件其余 describe 验证; 此处 nav 断言跟进到取代入口 内容工坊 /workbench。
     const fs = await import("node:fs/promises");
     const src = await fs.readFile(
       new URL("../../../../apps/web/src/components/layout/Sidebar.tsx", import.meta.url),
       "utf8",
     );
-    expect(src).toContain("内容管理");
-    expect(src).toContain("/content");
+    expect(src).toContain("内容工坊");
+    expect(src).toContain("/workbench");
   });
 });
 
 // 7-08 死测试清理 (确死: 读已删文件): 删 "PR #178: ContentPage pinned UI" describe —
 //   目标 apps/web/src/pages/ContentPage.tsx 已删 (/content 整页下线)。pinned 的活断言 (schema/migration/route/cleanup/scheduler) 全保留。
-//   ⚠️ 缓刑 (未删, 待过目): 上方 "PR #178: Sidebar nav — 内容管理 nav item" it 读活文件 Sidebar.tsx 但失败;
-//      现 Sidebar (6-14 目录重构) 已无 "内容管理"/"/content" 项 (内容功能并入 /workbench 内容工坊)。
-//      属"功能已迁移"而非"读已删文件", 需你确认「内容管理」入口是有意并入工坊(→更新断言指向 /workbench)还是真丢失(→修复), 未擅动。
+//   (7-08 batch2 已跟进: 下方 Sidebar nav it 断言「内容管理」→「内容工坊 /workbench」, 功能并入已确认, 缓刑解除。)

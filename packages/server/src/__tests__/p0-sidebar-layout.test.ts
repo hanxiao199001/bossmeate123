@@ -14,37 +14,37 @@ describe("5-21 P0: Sidebar 全局 layout 重构", () => {
     const src = await readSrc("../../../../apps/web/src/components/layout/MainLayout.tsx");
     expect(src).toMatch(/import\s+Sidebar/);
     expect(src).toMatch(/<Sidebar\s*\/>/);
-    expect(src).toMatch(/<main[\s\S]*ml-40/); // sidebar 160px → main 左 margin
+    expect(src).toMatch(/<main[\s\S]*ml-52/); // 7-08 更新(测试过时): sidebar 6-11 UI 升级 160→208px(w-52), main 由 ml-40 改 ml-52
   });
 
-  it("Sidebar 含 4 主导航 (首页/工坊/雷达/账号) + 用户区", async () => {
+  it("Sidebar 含主导航 (今日/工坊/雷达/账号矩阵) + 用户区", async () => {
     const src = await readSrc("../../../../apps/web/src/components/layout/Sidebar.tsx");
-    expect(src).toMatch(/首页/);
+    // 7-08 更新(测试过时): 6-14 目录重构改名 首页→今日、账号→账号矩阵; 6-11 宽度 w-40→w-52。功能/路由不变。
+    expect(src).toMatch(/今日/);
     expect(src).toMatch(/内容工坊/);
     expect(src).toMatch(/销售雷达/);
-    expect(src).toMatch(/账号/);
+    expect(src).toMatch(/账号矩阵/);
     expect(src).toMatch(/to:\s*"\/workbench"/);
     expect(src).toMatch(/to:\s*"\/sales-radar"/);
     expect(src).toMatch(/to:\s*"\/accounts"/);
     expect(src).toMatch(/useAuthStore/);
     expect(src).toMatch(/logout/);
-    // 固定左侧 160px (w-40), z-30 让 chat FAB (z-40) 浮上面
-    expect(src).toMatch(/fixed[\s\S]*left-0[\s\S]*w-40/);
+    // 固定左侧 208px (w-52), z-30 让 chat FAB (z-40) 浮上面
+    expect(src).toMatch(/fixed[\s\S]*left-0[\s\S]*w-52/);
     expect(src).toMatch(/z-30/);
   });
 
-  it("App.tsx: 4 demo + /cost-comparison + /chat 6 路由已包 MainLayout (5-23 PR #156 收尾)", async () => {
+  it("App.tsx: 主路由已包 MainLayout (5-23 PR #156 收尾 → 7-08 跟进现状)", async () => {
     const src = await readSrc("../../../../apps/web/src/App.tsx");
     expect(src).toMatch(/import\s+MainLayout/);
-    // 4 demo 路由 (PR #153)
-    expect(src).toMatch(/path="\/"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<DashboardPage/);
+    // 7-08 更新(测试过时/重构): / 由 DashboardPage 改为 HomeRoute (按角色跳转), HomeRoute 内部包 MainLayout+TodayPage(今日驾驶舱)。
+    expect(src).toMatch(/path="\/"[\s\S]{0,300}<HomeRoute/);
+    expect(src).toMatch(/function HomeRoute[\s\S]{0,400}<MainLayout>[\s\S]{0,100}<TodayPage/);
     expect(src).toMatch(/path="\/workbench"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ContentWorkbenchPage/);
     expect(src).toMatch(/path="\/sales-radar"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<SalesRadarPage/);
     expect(src).toMatch(/path="\/content\/:id"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ContentDetailPage/);
-    // PR #156 收尾的 2 页 (cost-comparison + chat × 2 路由)
     expect(src).toMatch(/path="\/cost-comparison"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<CostComparisonPage/);
-    expect(src).toMatch(/path="\/chat"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ChatPage/);
-    expect(src).toMatch(/path="\/chat\/:conversationId"[\s\S]{0,300}<MainLayout>[\s\S]{0,100}<ChatPage/);
+    // 7-08 删 /chat + /chat/:conversationId 两条断言: ChatPage.tsx 已删 (/chat 整页下线), 路由随之移除, 无取代路由可断言。
   });
 
   it("5-23 PR #156: CostComparisonPage 已砍内联 nav", async () => {

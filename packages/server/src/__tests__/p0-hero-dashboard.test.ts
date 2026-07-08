@@ -9,13 +9,12 @@ async function readSrc(rel: string): Promise<string> {
 }
 
 describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
-  it("App.tsx: / → DashboardPage, /home redirect", async () => {
+  it("App.tsx: / → HomeRoute(今日驾驶舱), /home redirect", async () => {
     const src = await readSrc("../../../../apps/web/src/App.tsx");
-    // / 走 DashboardPage
-    expect(src).toMatch(/path="\/"[\s\S]{0,200}<DashboardPage/);
-    // /home Navigate redirect (不再渲染 DashboardPage)
+    // 7-08 更新(测试过时/重构): / 落地页从 DashboardPage 改为 HomeRoute (按角色跳转, boss 落 MainLayout+TodayPage 今日驾驶舱)。
+    expect(src).toMatch(/path="\/"[\s\S]{0,200}<HomeRoute/);
+    // /home Navigate redirect 保留 (防老书签)
     expect(src).toMatch(/path="\/home"\s+element={<Navigate to="\/" replace/);
-    // 注：/recommendations 路由从「→ RecommendationFeedPage」改为「Navigate redirect /workbench」(P1 5-18 接管)
   });
 
   it("dashboard.ts /overview 含 todayHero block (含 5 字段)", async () => {

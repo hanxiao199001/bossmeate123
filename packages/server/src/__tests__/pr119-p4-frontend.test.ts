@@ -40,9 +40,9 @@ describe("PR #119 BatchUploadModal", () => {
     expect(src).toMatch(/totalRows\s*\*\s*ESTIMATE_SECONDS_PER_ROW\s*\/\s*5/);
   });
 
-  it("上传 multipart fetch /batch/upload + 跳 /batch/:id", () => {
-    expect(src).toMatch(/POST/);
-    expect(src).toMatch(/\/api\/v1\/batch\/upload/);
+  it("上传 multipart（api.upload /batch/upload）+ 跳 /batch/:id", () => {
+    // 7-08 更新(测试过时/重构): 由裸 fetch 改走 api client。api.upload 运行时自带 /api/v1 前缀, 源码字面为 "/batch/upload"。
+    expect(src).toMatch(/api\.upload[\s\S]{0,40}\/batch\/upload/);
     expect(src).toMatch(/navigate\(`\/batch\/\$\{batchId\}`\)/);
   });
 });
@@ -83,9 +83,10 @@ describe("PR #119 BatchProgressPage", () => {
     expect(src).toMatch(/api\.post[\s\S]{0,80}\/batch\/\$\{id\}\/retry\/\$\{rowId\}/);
   });
 
-  it("完成后 [📥 下载 CSV 报告] 按钮 → GET /batch/:id/report", () => {
-    expect(src).toMatch(/📥 下载 CSV 报告/);
-    expect(src).toMatch(/\/api\/v1\/batch\/\$\{id\}\/report/);
+  it("完成后 [下载 CSV 报告] 按钮 → api.download /batch/:id/report", () => {
+    // 7-08 更新(测试过时/重构): 6-11 顶栏迁 PageHeader, 按钮去掉 📥 前缀; 下载改走 api.download (运行时带 /api/v1 前缀)。
+    expect(src).toMatch(/下载 CSV 报告/);
+    expect(src).toMatch(/api\.download[\s\S]{0,40}\/batch\/\$\{id\}\/report/);
   });
 
   it("5s polling 仅 status='running' 时；完成后停（spec）", () => {
@@ -102,8 +103,8 @@ describe("PR #119 ContentPage 入口 + App.tsx 路由", () => {
   // 7-08 死测试清理 (确死: 读已删文件): 删 "ContentPage import BatchUploadModal + state + 按钮" it —
   //   目标 apps/web/src/pages/ContentPage.tsx 已删 (/content 整页下线, 批量导入入口随之下线)。readWeb → ENOENT。
   //   BatchUploadModal 组件本身仍存活 (上方 describe 验证) + /batch/:id 路由仍在 (下方 it 验证)。
-  //   ⚠️ 缓刑 (未删, 待过目): 上方 "上传 multipart fetch /batch/upload" + "完成后 下载 CSV 报告" 两个 it 读活文件
-  //      (BatchUploadModal.tsx / BatchProgressPage.tsx) 但失败 — 属"活文件内容漂移", 可能是真行为变化, 需你判 (非读已删文件, 未擅动)。
+  //   (7-08 batch2 已解除缓刑: 那两个 it 的失败查明为 api client 重构(裸 fetch→api.upload/download, /api/v1 前缀运行时注入)
+  //    + PageHeader 去 📥, 功能未变, 断言已更新到现状。)
 
   it("App.tsx 含 /batch/:id 路由 → BatchProgressPage", () => {
     const src = readWeb("App.tsx");
