@@ -142,6 +142,27 @@ export function checkTitleDataConsistency(
   return { ok: mismatches.length === 0, mismatches };
 }
 
+/**
+ * 发布期数据编造硬闸决策（纯函数，复用 checkTitleDataConsistency）。
+ * 仅对生成期已标 needs_review / hasWarnings 的内容生效；标题审稿周期/录用率数字无 DB 支撑 = 编造。
+ * 同客服线 findUnsourcedNumbers 哲学：LLM 嘴里的数字必须有源。DB 查询留调用方（本函数纯）。
+ * @returns action: pass(放行) | block(拒发) | override(forceOverride 强发, 调用方须落审计); mismatches 列无源数字
+ */
+export function fabricationPublishGate(opts: {
+  status?: string | null;
+  hasWarnings?: boolean;
+  title?: string | null;
+  body?: string | null;
+  dbFields?: { reviewCycle?: string | null; acceptanceRate?: number | null };
+  forceOverride?: boolean;
+}): { action: "pass" | "block" | "override"; mismatches: string[] } {
+  const flagged = opts.status === "needs_review" || opts.hasWarnings === true;
+  if (!flagged) return { action: "pass", mismatches: [] }; // 正常内容零触发, 保证零回归
+  const td = checkTitleDataConsistency(opts.title, opts.body, opts.dbFields);
+  if (td.ok) return { action: "pass", mismatches: [] };
+  return { action: opts.forceOverride ? "override" : "block", mismatches: td.mismatches };
+}
+
 const AI_LABEL_HTML = `<p style="color:#999;font-size:12px;margin-top:24px;">本文由 AI 辅助生成，内容仅供参考。</p>`;
 
 /** 发布时给正文追加 AI 生成标识 (config aiLabel=false 可关; 已含标识不重复加) */

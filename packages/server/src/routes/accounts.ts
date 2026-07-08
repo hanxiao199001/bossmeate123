@@ -648,6 +648,7 @@ export async function accountRoutes(app: FastifyInstance) {
         // 5-20 P2: 风控 forceOverride 透传
         forceOverride: body.forceOverride,
         overrideReason: body.overrideReason,
+        userId: request.user?.userId, // 发布期数据编造硬闸 forceOverride 审计"谁强发"
       });
 
       const successCount = results.filter(r => r.success).length;
