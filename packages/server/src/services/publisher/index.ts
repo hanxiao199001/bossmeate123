@@ -6,7 +6,7 @@
  */
 
 import { db } from "../../models/db.js";
-import { platformAccounts, contents, distributionRecords } from "../../models/schema.js";
+import { platformAccounts, contents, distributionRecords, journals } from "../../models/schema.js";
 import { eq, and, or } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
@@ -42,6 +42,7 @@ export interface PublishRequest {
   // 5-20 P2 风控: 默认 false → 触发 audit gate; true → 跳过 (用户已二次确认强制放行)
   forceOverride?: boolean;
   overrideReason?: string; // 强制放行原因 (审计留底)
+  userId?: string; // 审计"谁强发"用; 缺省 unknown
   /** 7-05 ⑤: 强制只建草稿(微信 draft/add), 无视账号 capability=full — 草稿箱分发用, 保证绝不误群发 */
   capabilityOverride?: "draft_only";
 }
@@ -153,6 +154,36 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   if (compliance.softHits.length > 0) {
     logger.warn({ contentId, softHits: compliance.softHits }, "PR-Z3 软词警告(广告法/医疗红线), 放行但建议人工复核");
   }
+
+  // 发布期数据编造硬闸: 生成期已标 needs_review / hasWarnings 的内容, 发布前重跑 checkTitleDataConsistency(复用),
+  //   标题审稿周期/录用率数字无 DB 支撑 = 编造 → 拒发(列无源数字); 除非 forceOverride 强发, 强发落审计。
+  //   同客服线 findUnsourcedNumbers 哲学: LLM 嘴里的数字必须有源, 校验拦住它编。违禁词硬拦(上方)不变; 正常内容(非 flagged)零触发。
+  const _cMeta = (content.metadata || {}) as Record<string, any>;
+  if (content.status === "needs_review" || _cMeta.hasWarnings === true) {
+    const { fabricationPublishGate } = await import("../compliance/content-check.js");
+    // 取该刊 DB 字段做硬校验(字段空=标题该数字必编造); 无 journalId 则不传, 退化为标题-正文复现校验
+    let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+    if (_cMeta.journalId) {
+      const [jr] = await db.select({ reviewCycle: journals.reviewCycle, acceptanceRate: journals.acceptanceRate })
+        .from(journals).where(eq(journals.id, _cMeta.journalId)).limit(1);
+      if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+    }
+    const gate = fabricationPublishGate({
+      status: content.status, hasWarnings: _cMeta.hasWarnings === true,
+      title: content.title, body: content.body, dbFields, forceOverride: req.forceOverride,
+    });
+    if (gate.action === "block") {
+      logger.warn({ contentId, status: content.status, mismatches: gate.mismatches }, "发布期数据编造硬闸: 拒发(标题数字无 DB 支撑)");
+      throw new Error(`内容含无 DB 支撑的编造数字, 已拦截发布: ${gate.mismatches.join("、")}。如确认无误, 请带 forceOverride 强制发布。`);
+    }
+    if (gate.action === "override") {
+      logger.warn({
+        audit: "PUBLISH_FABRICATION_OVERRIDE", who: req.userId ?? "unknown", tenantId, contentId,
+        status: content.status, mismatches: gate.mismatches, overrideReason: req.overrideReason ?? null, at: new Date().toISOString(),
+      }, "发布期数据编造硬闸: forceOverride 强发, 审计留底");
+    }
+  }
+
   // 6-19: 只给图文追加 AI 声明; 视频内容 body 是视频URL, 追加 HTML 会污染成无效路径(Agent 下载 404)。
   if (content.type !== "video") content.body = await appendAiLabel(content.body);
 
