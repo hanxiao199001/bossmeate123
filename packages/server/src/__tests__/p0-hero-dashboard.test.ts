@@ -32,59 +32,12 @@ describe("5-17 P0: hero 改造 — 路由 / 后端 / 组件", () => {
     expect(src).toMatch(/totalReadsToday:\s*Number/);
   });
 
-  it("HeroSection.tsx 含今日产出 + 双 CTA (5-21 hotfix: ROI 卡已搬 /cost-comparison)", async () => {
-    const src = await readSrc("../../../../apps/web/src/components/dashboard/HeroSection.tsx");
-    expect(src).toMatch(/今日 BossMate 自动产出/);
-    expect(src).toMatch(/✨ 一键生成图文/);
-    expect(src).toMatch(/🎬 一键生成视频/);
-    // 双 CTA 跳转 (P1 5-18: ✨ 一键生成图文 → /workbench)
-    expect(src).toMatch(/to="\/workbench"/);
-    expect(src).toMatch(/to="\/video\/create"/);
-    // 5-21 hotfix: ROI/月省 不在 hero
-    expect(src).not.toMatch(/本月帮你节省/);
-    expect(src).not.toMatch(/monthlySavings/);
-  });
-
-  it("Pipeline24hStrip 含 4 段 + 系统/你 归属标签", async () => {
-    const src = await readSrc("../../../../apps/web/src/components/dashboard/Pipeline24hStrip.tsx");
-    expect(src).toMatch(/keywordsCrawled/);
-    expect(src).toMatch(/articlesGenerated/);
-    expect(src).toMatch(/articlesPublished/);
-    expect(src).toMatch(/totalReadsToday/);
-    // 系统 vs 你 归属 (5-17 决策 3)
-    expect(src).toMatch(/scope:\s*"系统"/);
-    expect(src).toMatch(/scope:\s*"你"/);
-  });
-
-  it("PreviewCardRow 含 2 卡 + emoji fallback (5-21 hotfix: 砍中间 ROI 卡, 改 2 列 50/50)", async () => {
-    const src = await readSrc("../../../../apps/web/src/components/dashboard/PreviewCardRow.tsx");
-    expect(src).toMatch(/📰 今日最新/);
-    expect(src).toMatch(/📈 近期发布/);
-    expect(src).toMatch(/grid-cols-2/);
-    // emoji fallback when coverUrl null
-    expect(src).toMatch(/latestArticle\?\.coverUrl/);
-    // 5-21 hotfix: ROI 卡已删
-    expect(src).not.toMatch(/💰 本月 ROI/);
-    expect(src).not.toMatch(/monthlySavings/);
-  });
-
-  it("DashboardPage 函数定义保留 (revert safety), 主 render 不再调", async () => {
-    // 5-21 P0: 全 redesign — 老 HeroSection/Pipeline24hStrip/PreviewCardRow 已撤出主 render, 改用
-    // Greeting + KpiStrip + PrimaryActionBar + RecommendationPanel + LeadsPanel (见 p0-sidebar-layout.test.ts)。
-    // 老组件文件本身仍存在 (本测试文件上方 5 个 it 仍验证), 仅 DashboardPage 不再 import / 主渲染。
-    const src = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
-    expect(src).not.toMatch(/^\s*<HeroSection/m);
-    expect(src).not.toMatch(/^\s*<Pipeline24hStrip/m);
-    expect(src).not.toMatch(/^\s*<PreviewCardRow/m);
-    expect(src).not.toMatch(/^\s*<PendingReviewQueue/m);
-    expect(src).not.toMatch(/^\s*<TopicStrip/m);
-    // PR Q.7 防回归: <FactoryHero /> 注释保留
-    expect(src).toMatch(/\{\s*\/\*\s*<FactoryHero \/>\s*\*\/\s*\}/);
-    // 5-21 P0 dead-code 函数定义保留, 方便 revert
-    expect(src).toMatch(/function FactoryHero\b/);
-    expect(src).toMatch(/function PendingReviewQueue\b/);
-    expect(src).toMatch(/function TopicStrip\b/);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 4 个 it —
+  //   ① HeroSection.tsx ② Pipeline24hStrip.tsx ③ PreviewCardRow.tsx (三者均 apps/web/src/components/dashboard/*,
+  //      已随 5-21→6-x dashboard redesign 删除, 主渲染改用 Greeting/KpiStrip/PrimaryActionBar/RecommendationPanel/LeadsPanel)
+  //   ④ DashboardPage.tsx (已删, 首页合并进「今日驾驶舱」)。四者 readSrc 目标文件均不存在 → ENOENT, 断言无存活取代目标, 故删。
+  //   保留: dashboard.ts /overview todayHero (后端, 活) + cost-comparison.ts util (活)。
+  //   ⚠️ 缓刑 (未删, 待过目): 上方 "App.tsx: / → DashboardPage" it 读活文件 App.tsx 但断言已删页名, 需确认 / 的新落地页后更新, 未擅动。
 
   it("cost-comparison.ts 含 loadInputs/saveInputs export (HeroSection 复用)", async () => {
     const src = await readSrc("../../../../apps/web/src/utils/cost-comparison.ts");

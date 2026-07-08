@@ -15,14 +15,7 @@ describe("PR #141.0: content type filter 包含 video", () => {
     expect(src).toMatch(/"article",\s*"video_script",\s*"video",\s*"reply"/);
   });
 
-  it("ContentPage.tsx dropdown 含 video option（PR #138 e2e 落地 type=video）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ContentPage.tsx");
-    expect(src).toMatch(/<option value="video">视频<\/option>/);
-  });
-
-  it("ContentPage.tsx TYPE_LABELS + TYPE_ICONS 含 video（行渲染 fallback 防误）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ContentPage.tsx");
-    expect(src).toMatch(/video:\s*"视频"/);
-    expect(src).toMatch(/video:\s*"🎥"/);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 2 个 ContentPage.tsx 前端 it (dropdown video option + TYPE_LABELS/TYPE_ICONS) —
+  //   断言目标 apps/web/src/pages/ContentPage.tsx 已删 (/content 整页下线, 内容管理移至 ContentWorkbenchPage)。readSrc → ENOENT。
+  //   video type 的后端保障 (routes/content.ts whitelist 含 video) 仍由上方第 1 个 it 验证, 活。前端 dropdown 已随页面下线, 无取代页可断言。
 });

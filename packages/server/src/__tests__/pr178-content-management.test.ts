@@ -73,15 +73,8 @@ describe("PR #178: Sidebar nav", () => {
   });
 });
 
-describe("PR #178: ContentPage pinned UI", () => {
-  it("ContentPage 含 pinned toggle button", async () => {
-    const fs = await import("node:fs/promises");
-    const src = await fs.readFile(
-      new URL("../../../../apps/web/src/pages/ContentPage.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(src).toContain("pin");
-    expect(src).toContain("pinned");
-    expect(src).toMatch(/📌|📍/);
-  });
-});
+// 7-08 死测试清理 (确死: 读已删文件): 删 "PR #178: ContentPage pinned UI" describe —
+//   目标 apps/web/src/pages/ContentPage.tsx 已删 (/content 整页下线)。pinned 的活断言 (schema/migration/route/cleanup/scheduler) 全保留。
+//   ⚠️ 缓刑 (未删, 待过目): 上方 "PR #178: Sidebar nav — 内容管理 nav item" it 读活文件 Sidebar.tsx 但失败;
+//      现 Sidebar (6-14 目录重构) 已无 "内容管理"/"/content" 项 (内容功能并入 /workbench 内容工坊)。
+//      属"功能已迁移"而非"读已删文件", 需你确认「内容管理」入口是有意并入工坊(→更新断言指向 /workbench)还是真丢失(→修复), 未擅动。

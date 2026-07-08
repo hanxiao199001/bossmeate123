@@ -24,6 +24,10 @@ describe("PR #111: 期刊审计入口（admin only） — 5-21 P0 从 DashboardP
     expect(src).toMatch(/期刊审计/);
   });
 
+  // ⚠️ 7-08 缓刑 (未删, 待过目, 属"实现细节演进"非读已删文件):
+  //   下方 it 断言旧实现 `isAdmin ? [...]` 数组 spread。现 Sidebar (6-14 目录重构) 改为 nav item 带 `adminOnly: true`
+  //   + 统一过滤 `if (i.adminOnly && !isAdmin) return false`——admin-only 期刊审计入口的**功能仍在** (上方两个 it 已验证入口存在),
+  //   只是隐藏机制从"条件 spread"变成"声明式过滤"。属测试过时而非功能丢失; 应更新断言到 `adminOnly.*true` + 过滤逻辑, 而非删。未擅动, 待你拍。
   it("非 admin 时不渲染该入口（isAdmin 条件 spread）", () => {
     expect(src).toMatch(/isAdmin\s*\?\s*\[/);
   });

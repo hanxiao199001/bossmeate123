@@ -99,14 +99,11 @@ describe("PR #119 BatchProgressPage", () => {
 });
 
 describe("PR #119 ContentPage 入口 + App.tsx 路由", () => {
-  it("ContentPage import BatchUploadModal + state + 按钮", () => {
-    const src = readWeb("pages/ContentPage.tsx");
-    expect(src).toMatch(/import\s+BatchUploadModal\s+from/);
-    expect(src).toMatch(/const\s+\[batchUploadOpen,\s*setBatchUploadOpen\]/);
-    // PR #128 5-12 V2.5 提前: 按钮文字简化 "批量导入 CSV" → "批量 CSV"（折在 ⚙️ 高级模式下）
-    expect(src).toMatch(/📤 批量 CSV/);
-    expect(src).toMatch(/<BatchUploadModal\s+open=\{batchUploadOpen\}/);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 "ContentPage import BatchUploadModal + state + 按钮" it —
+  //   目标 apps/web/src/pages/ContentPage.tsx 已删 (/content 整页下线, 批量导入入口随之下线)。readWeb → ENOENT。
+  //   BatchUploadModal 组件本身仍存活 (上方 describe 验证) + /batch/:id 路由仍在 (下方 it 验证)。
+  //   ⚠️ 缓刑 (未删, 待过目): 上方 "上传 multipart fetch /batch/upload" + "完成后 下载 CSV 报告" 两个 it 读活文件
+  //      (BatchUploadModal.tsx / BatchProgressPage.tsx) 但失败 — 属"活文件内容漂移", 可能是真行为变化, 需你判 (非读已删文件, 未擅动)。
 
   it("App.tsx 含 /batch/:id 路由 → BatchProgressPage", () => {
     const src = readWeb("App.tsx");

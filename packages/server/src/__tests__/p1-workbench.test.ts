@@ -24,11 +24,11 @@ describe("5-18 P1: 内容工坊 + 分发卡", () => {
     expect(src).not.toMatch(/to:\s*"\/recommendations"/);
   });
 
-  it("HeroSection CTA: 一键生成图文 跳 /workbench (不再 /recommendations)", async () => {
-    const src = await readSrc("../../../../apps/web/src/components/dashboard/HeroSection.tsx");
-    expect(src).toMatch(/to="\/workbench"[\s\S]{0,300}✨ 一键生成图文/);
-    expect(src).not.toMatch(/to="\/recommendations"/);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 "HeroSection CTA: 一键生成图文 跳 /workbench" it —
+  //   目标 apps/web/src/components/dashboard/HeroSection.tsx 已删 (dashboard redesign 撤除)。readSrc → ENOENT。
+  //   "生成图文 → /workbench" 的路由意图现由 App.tsx 路由 + Sidebar/PrimaryActionBar CTA 承载 (其余 it / p0-sidebar 验证)。
+  //   ⚠️ 缓刑 (未删, 待过目, 活文件内容漂移非读已删文件):
+  //      下方 "DistributionCard: 按 platform groupBy…" it 读活文件 DistributionCard.tsx 但失败, 疑组件内容演进, 需你判, 未擅动。
 
   it("ContentWorkbenchPage: 3 列布局 + 4 sub-component wire + 6 API endpoint", async () => {
     const src = await readSrc("../../../../apps/web/src/pages/ContentWorkbenchPage.tsx");

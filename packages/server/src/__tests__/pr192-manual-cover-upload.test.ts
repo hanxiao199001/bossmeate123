@@ -26,10 +26,7 @@ describe("PR #192 前端: 封面输入 + 预览", () => {
     expect(src).toMatch(/coverImageUrl\?: string \| null/);
     expect(src).toMatch(/"apcFee" \| "coverImageUrl"/);
   });
-  it("EditForm 封面 URL 输入框 + 缩略图预览", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/JournalsAdminPage.tsx");
-    expect(src).toMatch(/label="封面图 URL"/);
-    expect(src).toMatch(/alt="封面预览"/);
-    expect(src).toMatch(/coverImageUrl: j\.coverImageUrl \?\? ""/);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 "EditForm 封面 URL 输入框" it —
+  //   目标 apps/web/src/pages/JournalsAdminPage.tsx 已删。封面字段的活断言仍在: 后端 journals.ts (coverImageUrl schema + 全局期刊 PATCH)
+  //   + 前端 hooks/useJournalsAdmin.ts (PatchPayload/EditableField 含 coverImageUrl) 均保留验证; 仅已删页的 EditForm UI 断言移除。
 });

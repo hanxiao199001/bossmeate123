@@ -22,36 +22,10 @@ describe("PR Q.7 B 方案：V3 batch agent 总闸 + Dashboard widget 隐藏", ()
     expect(src).toMatch(/knowledge-engine scheduled job skipped/);
   });
 
-  it("DashboardPage.tsx 不再渲染 <FactoryHero />（widget 真消失）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/DashboardPage.tsx");
-    // FactoryHero 函数定义保留，但 jsx 调用必须被注释掉
-    expect(src).toMatch(/\{\s*\/\*\s*<FactoryHero \/>\s*\*\/\s*\}/);
-    // 主 layout 不应再含未注释的 <FactoryHero />
-    expect(src).not.toMatch(/^\s*<FactoryHero \/>$/m);
-  });
+  // 7-08 死测试清理 (确死: 读已删文件): 删 "DashboardPage.tsx 不再渲染 <FactoryHero />" it —
+  //   目标 apps/web/src/pages/DashboardPage.tsx 已删 (首页合并进「今日驾驶舱」)。V3 batch flag 的活断言 (env.ts + scheduler.ts) 上方保留。
 });
 
-describe("PR Q.7 (Q.3.1)：ChatPage 模板选择 modal 自动弹", () => {
-  it("handleSend 在 article skill 时缓存 pending args + 弹 modal（不立即 send）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ChatPage.tsx");
-    expect(src).toMatch(/setPendingSendArgs\(\{ content: userContent, convId \}\)/);
-    expect(src).toMatch(/setShowTemplatePicker\(true\)/);
-  });
-
-  it("pickTemplateAndSend 接收 templateId 后立即调 sendMessageWithTemplate", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ChatPage.tsx");
-    expect(src).toMatch(/async function pickTemplateAndSend\(templateId: string\)/);
-    expect(src).toMatch(/sendMessageWithTemplate\(args\.content, args\.convId, templateId\)/);
-  });
-
-  it("modal 按钮点击触发 pickTemplateAndSend（pendingSendArgs 有时直接发）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ChatPage.tsx");
-    expect(src).toMatch(/if \(pendingSendArgs\) pickTemplateAndSend\(t\.id\)/);
-  });
-
-  it("取消按钮恢复 input + 清 pendingSendArgs（容错）", async () => {
-    const src = await readSrc("../../../../apps/web/src/pages/ChatPage.tsx");
-    expect(src).toMatch(/setInput\(pendingSendArgs\.content\)/);
-    expect(src).toMatch(/setPendingSendArgs\(null\)/);
-  });
-});
+// 7-08 死测试清理 (确死: 读已删文件): 删整个 "ChatPage 模板选择 modal 自动弹" describe (4 个 it) —
+//   全部 readSrc apps/web/src/pages/ChatPage.tsx, 该页已删 (/chat 整页下线, 见 pr123/pr116 同期清理)。
+//   模板选择逻辑现由后端 preferences + article-skill 承载 (pr123-p6-preferences.test.ts 验证), 前端 modal 随页面下线无取代 UI 可断言。
