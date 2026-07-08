@@ -203,6 +203,11 @@ async function findJournal(tenantId: string, name: string) {
   return fuzzy[0] ?? null;
 }
 
+/** 期刊是否未核实（conf<70 或 legacy_unknown）：未核实刊的 IF/分区/预警是未多源核实数据，不当权威播报。导出供测试。 */
+export function isUnverifiedJournal(j: { confidence?: number | null; dataSource?: string | null }): boolean {
+  return (j.confidence ?? 0) < 70 || j.dataSource === "legacy_unknown";
+}
+
 /** journals 行 → 事实清单（只挑客服常问字段；null 显式标"暂无数据"让 LLM 无从编造） */
 function journalFacts(j: typeof journals.$inferSelect): string {
   const na = "暂无数据";
@@ -231,6 +236,16 @@ async function answerJournalQuery(conv: { id: string; tenantId: string; openKfid
     await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
     await transferServiceState(conv.openKfid, conv.externalUserid, 2);
     logger.warn({ conversationId: conv.id, journalName: name }, "kf 期刊未收录，已转人工");
+    return;
+  }
+
+  // 未核实期刊护栏: conf<70 或 legacy_unknown 的刊, 其 IF/分区/预警/录用率等是未多源核实的历史数据,
+  //   绝不当"权威事实"播报给客户(否则等于把未核实数据当真回复)。走"未核实/以官网为准/转顾问"口径, 不发数值。
+  if (isUnverifiedJournal(journal)) {
+    await replyAndRecord(conv, `「${journal.name}」我们已收录，但该刊的影响因子、分区、审稿周期等数据尚未完成多源核实。为避免给您不准确的信息，建议以期刊官网公布为准，我已为您转接顾问进一步核实后回复～`, "journal_query", "transferred");
+    await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
+    await transferServiceState(conv.openKfid, conv.externalUserid, 2);
+    logger.warn({ conversationId: conv.id, journalName: name, confidence: journal.confidence, dataSource: journal.dataSource }, "kf 命中未核实期刊(conf<70/legacy_unknown), 未播报数值, 转人工");
     return;
   }
 

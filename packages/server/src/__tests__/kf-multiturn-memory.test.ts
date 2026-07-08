@@ -78,7 +78,8 @@ describe("kf 多轮记忆（processKfTextMessage 传 context）", () => {
         { id: "m2", direction: "out", content: "《Nature》影响因子 50.5，中科院 1 区。" },
         { id: "m1", direction: "in", content: "Nature 的影响因子是多少？" },
       ],
-      [{ id: "j1", name: "Nature", nameEn: "Nature", isWarningList: false }], // findJournal 精确命中
+      // findJournal 精确命中; conf=95/multi_source_verified 表示已核实刊, 走正常应答路径(未核实护栏放行)
+      [{ id: "j1", name: "Nature", nameEn: "Nature", isWarningList: false, confidence: 95, dataSource: "multi_source_verified" }],
     );
     h.insertQueue.push([{ id: "msg-cur" }]); // 入站落库 returning
     h.chatQueue.push(
