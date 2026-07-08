@@ -20,7 +20,7 @@ import { db } from "../models/db.js";
 import { dedupMsgs } from "../models/schema.js";
 import { leadCollector } from "../services/sales/lead-collector.js";
 import { parseWechatXml, buildInboundMessage, buildFallbackReply } from "../services/wechat/inbound-parser.js";
-import { loadBossmateUrl, buildPassiveReplyContent, buildPassiveReplyXml } from "../services/wechat/passive-reply.js";
+import { loadBossmateUrl, buildPassiveReplyContent, buildPassiveReplyXml, buildWelcomeContent, loadKfUrl } from "../services/wechat/passive-reply.js";
 
 /** 计算公众号签名：sort([token, timestamp, nonce]).join('') → sha1。 */
 export function computeSignature(token: string, timestamp: string, nonce: string): string {
@@ -82,7 +82,22 @@ export async function wechatCallbackRoutes(app: FastifyInstance) {
       return reply.code(200).send("");
     }
 
-    // 第 3 道：消息类型白名单。非 text → 直接回兜底，不入库
+    // 第 3 道：event 事件 —— subscribe 关注返欢迎语（平台 URL + 真人客服入口，堵新粉白流失）；取关/菜单点击等静默 ack。
+    if (parsed.msgType === "event") {
+      if (parsed.event === "subscribe") {
+        const inbound = await buildInboundMessage(parsed);
+        if (inbound) {
+          const url = await loadBossmateUrl(inbound.tenantId);
+          const xml = buildPassiveReplyXml({ fromUser: parsed.fromUser, toUser: parsed.toUser, content: buildWelcomeContent(url, loadKfUrl()) });
+          logger.info({ event: parsed.event, fromUser: parsed.fromUser }, "wechat subscribe 事件, 返欢迎语 + 客服入口");
+          return reply.code(200).type("text/xml").send(xml);
+        }
+      }
+      logger.info({ event: parsed.event }, "wechat event(取关/菜单/无配置), 静默 ack");
+      return reply.code(200).send("");
+    }
+
+    // 第 3.5 道：其余非 text（image/voice/…）→ 直接回兜底，不入库
     if (parsed.msgType !== "text") {
       const fb = buildFallbackReply(parsed.msgType);
       logger.info({ msgType: parsed.msgType, msgId: parsed.msgId }, "wechat non-text msg, fallback reply");
@@ -114,7 +129,7 @@ export async function wechatCallbackRoutes(app: FastifyInstance) {
         logger.error({ err: err instanceof Error ? err.message : err, msgId: parsed.msgId }, "leadCollector.collect 失败（subscription path）");
       }
       const url = await loadBossmateUrl(inbound.tenantId);
-      const xml = buildPassiveReplyXml({ fromUser: parsed.fromUser, toUser: parsed.toUser, content: buildPassiveReplyContent(url) });
+      const xml = buildPassiveReplyXml({ fromUser: parsed.fromUser, toUser: parsed.toUser, content: buildPassiveReplyContent(url, loadKfUrl()) });
       return reply.code(200).type("text/xml").send(xml);
     }
     void leadCollector.collect(inbound).catch((err) => {
