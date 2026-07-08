@@ -18,6 +18,8 @@ import { db } from "../../models/db.js";
 import { batchRows, contents, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { sanitizeForCompliance } from "../compliance/content-check.js";
+import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
+import { isUnverifiedJournal } from "../journals/verification.js";
 import {
   initialStatusFields,
   transitionStatus,
@@ -257,15 +259,24 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           const [fin] = await db.select({ title: contents.title, body: contents.body }).from(contents).where(eq(contents.id, content.id)).limit(1);
           // 7-05: 取 DB 审稿周期/录用率做硬校验(字段空→标题该数字必是编造, 治行4 一致编造绕过正文复现)
           let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+          let unverifiedSrc: { confidence: number | null; dataSource: string | null } | null = null;
           if (row.journalId) {
             const { journals: journalsTbl } = await import("../../models/schema.js");
-            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
-            if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate, confidence: journalsTbl.confidence, dataSource: journalsTbl.dataSource }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
+            if (jr) {
+              dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+              // PR B 未核实源护栏: daily-cron(系统租户)回退选中的 conf<70/legacy_unknown 刊生成的内容 →
+              //   标 needs_review, 走 PR#200 发布期硬闸 + 工坊人工复核后才对外(国际 scope 结构上不回退, 不受影响)。
+              if (tenantId === SYSTEM_RECOMMENDATION_TENANT_ID && isUnverifiedJournal(jr)) {
+                unverifiedSrc = { confidence: jr.confidence, dataSource: jr.dataSource };
+              }
+            }
           }
           const tc = checkTitleBodyConsistency(fin?.title, fin?.body);
           const td = checkTitleDataConsistency(fin?.title, fin?.body, dbFields);
           if (!tc.ok) { titleBodyBad = { reason: "title_body_inconsistent", detail: { titleHits: tc.titleHits, riskSignal: tc.riskSignal } }; logger.warn({ contentId: content.id, ...tc }, "标题-正文矛盾(标题保录承诺 vs 正文风险信号), 转 needs_review"); }
           else if (!td.ok) { titleBodyBad = { reason: "title_data_fabricated", detail: { mismatches: td.mismatches } }; logger.warn({ contentId: content.id, mismatches: td.mismatches }, "标题数字正文无据(疑编造审稿/录用率), 转 needs_review"); }
+          else if (unverifiedSrc) { titleBodyBad = { reason: "unverified_source_journal", detail: unverifiedSrc }; logger.warn({ contentId: content.id, journalId: row.journalId, ...unverifiedSrc }, "PR B: 源刊未核实(conf<70/legacy_unknown), daily-cron 回退命中, 转 needs_review 人工复核"); }
         } catch { /* 一致性检查失败不阻塞生产 */ }
         // PR-U2(调) 只在质检明确判不通过时转待审; 尊重原质检结论, 不再用分数二次卡(过严会误伤)
         // P0①: 六维质检(重写循环后)仍未过 → 同样转 needs_review, 低分文章人工可在管理端看到, 不阻塞生产
