@@ -50,6 +50,9 @@ vi.mock("../services/digital-human/index.js", () => ({
 // articles.ts import 但本 PR 不测的 mock
 vi.mock("../services/skills/auto-video-bridge.js", () => ({ triggerVideoFromArticle: vi.fn() }));
 vi.mock("../services/ai/provider-factory.js", () => ({ getProvider: vi.fn(() => null) }));
+// PR-Z4 套餐闸 / PR-W1 预算闸 (均晚于本测试, 真实现读 mock db 会抛→500): 放行, 本 PR 只测触发链路
+vi.mock("../services/billing/plan.js", () => ({ checkBilling: vi.fn(async () => ({ allowed: true })), logBillingDenied: vi.fn() }));
+vi.mock("../services/billing/cost-ledger.js", () => ({ checkBudget: vi.fn(async () => ({ allowed: true })), estimateDvhCents: vi.fn(() => 100) }));
 
 const { articlesRoutes } = await import("../routes/articles.js");
 
@@ -58,7 +61,8 @@ async function buildApp(): Promise<FastifyInstance> {
   app.decorateRequest("tenantId", "");
   app.addHook("onRequest", async (req) => {
     (req as unknown as { tenantId: string }).tenantId = "t-1";
-    (req as unknown as { user: { userId: string } }).user = { userId: "u-1" };
+    // 6-20 RBAC: 路由挂 requirePermission("content.write"), 现算 request.user.role → 必须带 role (owner 有该权限)
+    (req as unknown as { user: { userId: string; role: string } }).user = { userId: "u-1", role: "owner" };
   });
   await app.register(articlesRoutes, { prefix: "/" });
   return app;
