@@ -73,7 +73,7 @@
 **填充率**: 国际期刊 35 行 multi_source 中 32/35 = 91% 有 if_history。中文期刊 LetPub/OpenAlex 覆盖率有限，CNKI/万方接入在 backlog（task #104）。
 
 **数据覆盖 backlog（挂 task #104 旁）**:
-- **CNKI/万方接入**（task #104）— 补中文期刊覆盖率。
+- 🔴 **CNKI/万方接入（task #104）— 已从"覆盖率 backlog"提升为"国内内容线阻塞项"（2026-07-09）**。根因数据：**国内 verified 期刊池仅 427/3,707 = 12%**（多数国内学科 verified 近零：medicine 17/438、综合性人文社科 0/122、中国政治 0/43）。后果：daily-cron 国内槽位 verified 两层频繁枯竭 → 回退 legacy_unknown 生成内容；客服查国内刊大量落"未核实/转顾问"。**CNKI/万方接入是治本**（把国内刊多源核验、conf 提到 70+、升级 multi_source_verified）；**PR B 的 needs_review 标记（回退未核实源→人工复核）+ PR A 客服护栏是止血**，不解决覆盖率本身。国内内容质量要真起来，必须补中文权威源。
 - **LetPub 反爬代理（2026-07-08，7-09 修正）** — 代理**不是全删**：**列表爬 Python 侧**（`journal_scraper.py --proxy` / `scrapling-bridge proxy`）的 proxy 支持已移除；**enrich TS 侧** `letpub-detail-scraper.ts` 的 `LETPUB_PROXY`（undici ProxyAgent，PR #189）**仍在、仍可用**。PR #260 实际只是接上了全局熔断（`ENRICH_SKIP_LETPUB`）+ "列表爬与 enrich 进程隔离"约定，**没删 enrich 侧代理**。**影响**：遇 LetPub 封 IP 时可 `ENRICH_SKIP_LETPUB=true` 熔断（停爬、无新数据、损新鲜度/覆盖率，但不产假数据），或挂 `LETPUB_PROXY` 换 IP 续爬。若数据陈旧成问题再评估扩代理池/换源。
 
 **OpenAlex 源可信度约束（老韩 2026-07-09 判定）**：OpenAlex 与 LetPub 数据出入大，**禁用于 IF / 分区 / 预警 / 录用率等信任字段的核验或写入**；只可用于**官网(website) / ISSN / 出版社(publisher) / 发文量(publicationStats)等非争议元数据**。现状核实（7-09 审计）符合此约束：orchestrator 里 `impactFactor`/`ifHistory`/`jcrFull`/预警 全部 provenance=`letpub`/中科院，OpenAlex 只写 website/publisher/publicationCosts/publicationStats；openalex_ingest 24 行 has_if=0、has_partition=0、is_warning=0（仅 website 19 行）。**日后接 OpenAlex 数据时不得把它的近似 IF/分区写进信任字段。**
