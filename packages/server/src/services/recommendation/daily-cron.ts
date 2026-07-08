@@ -431,6 +431,9 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
   // 6-19 数据质量护栏: 排除 ai_fabricated(生成时 LLM 编造、IF/分区/录用率是假的)刊, 不让它们进每日生成。
   //   只排这一类: 正经的低可信/目录刊(国内核心常 confidence 为空)仍保留, 不误杀。
   const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
+  // 7-09 未核实护栏: 优先取 conf≥70 的已核实刊生成内容(避免用 legacy_unknown/低可信刊生成对外内容);
+  //   verified 池枯竭再回退原逻辑, 保证每日篇数不因严选而空名额。
+  const verified = sql`(${journals.confidence} >= 70)`;
   const sc = journalScopeCondition(scope); // SQL | null
   const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
   const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
@@ -444,7 +447,10 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
   };
   // 6-19 修"国外槽位漏国内刊": 兜底绝不丢 scope —— 只放宽 学科/冷却, 国内/国外定位始终保留。
   //   国外刊池用尽时返回 null(该槽位跳过/空着), 也不退回国内刊(否则国内刊被当国外内容生成又错发到国外号)。
-  return (await pick([active, sc, disc, fresh], rnd))
+  //   7-09: verified(conf≥70) 优先两层, 枯竭再回退原不设 conf 门槛的层级。
+  return (await pick([active, verified, sc, disc, fresh], rnd))
+    ?? (await pick([active, verified, sc, disc], lru))
+    ?? (await pick([active, sc, disc, fresh], rnd))
     ?? (await pick([active, sc, disc], lru))
     ?? (await pick([active, sc, fresh], rnd))
     ?? (await pick([active, sc], lru));
@@ -457,6 +463,7 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
  */
 async function pickFreshJournalStrict(tenantId: string, scope: string, discipline: string, allowStale: boolean): Promise<string | null> {
   const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
+  const verified = sql`(${journals.confidence} >= 70)`; // 7-09 未核实护栏: conf≥70 优先
   const sc = journalScopeCondition(scope);
   const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
   const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
@@ -467,7 +474,9 @@ async function pickFreshJournalStrict(tenantId: string, scope: string, disciplin
     const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
     return j?.id ?? null;
   };
-  return (await pick([active, sc, disc, fresh], rnd))
+  // 7-09: verified(conf≥70) 新刊优先, 枯竭再回退原逻辑(scope+discipline 严选不放宽)。
+  return (await pick([active, verified, sc, disc, fresh], rnd))
+    ?? (await pick([active, sc, disc, fresh], rnd))
     ?? (allowStale ? await pick([active, sc, disc], lru) : null);
 }
 
