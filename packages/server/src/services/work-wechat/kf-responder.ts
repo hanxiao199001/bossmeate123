@@ -20,6 +20,9 @@ import { chat } from "../ai/chat-service.js";
 import { sendKfText, transferServiceState, syncKfMessages, notifyStaff } from "./kf-client.js";
 import type { KfSyncedMsg } from "./kf-client.js";
 import { logger } from "../../config/logger.js";
+import { isUnverifiedJournal } from "../journals/verification.js";
+
+export { isUnverifiedJournal }; // 客服播报护栏用; 从 verification.js 单一事实源导入并转出(测试仍从本模块 import)
 
 export interface KfInboundText {
   tenantId: string;
@@ -201,11 +204,6 @@ async function findJournal(tenantId: string, name: string) {
     ilike(journals.abbreviation, kw),
   ))).orderBy(byConfidence).limit(1);
   return fuzzy[0] ?? null;
-}
-
-/** 期刊是否未核实（conf<70 或 legacy_unknown）：未核实刊的 IF/分区/预警是未多源核实数据，不当权威播报。导出供测试。 */
-export function isUnverifiedJournal(j: { confidence?: number | null; dataSource?: string | null }): boolean {
-  return (j.confidence ?? 0) < 70 || j.dataSource === "legacy_unknown";
 }
 
 /** journals 行 → 事实清单（只挑客服常问字段；null 显式标"暂无数据"让 LLM 无从编造） */
