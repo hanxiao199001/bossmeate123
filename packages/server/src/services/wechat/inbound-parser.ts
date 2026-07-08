@@ -24,6 +24,7 @@ export interface ParsedWechatMsg {
   toUser: string;       // 公众号 gh_xxx
   createTime: number;
   content?: string;
+  event?: string;       // msgType=event 时的事件名（subscribe/unsubscribe/CLICK…），小写
 }
 
 const xmlParser = new XMLParser({
@@ -42,10 +43,12 @@ export function parseWechatXml(rawXml: string): ParsedWechatMsg {
   const fromUser = String(xml.FromUserName ?? "");
   const toUser = String(xml.ToUserName ?? "");
   const createTime = Number(xml.CreateTime ?? 0);
-  if (!msgType || !msgId || !fromUser || !toUser) {
+  const event = xml.Event ? String(xml.Event).toLowerCase() : undefined;
+  // event 类消息(关注/取关/菜单点击)没有 MsgId, 不能按缺字段抛错 —— 否则 subscribe 事件在 parse 阶段就炸, 新粉白流失。
+  if (!msgType || !fromUser || !toUser || (msgType !== "event" && !msgId)) {
     throw new Error(`XML 缺必需字段：MsgType=${msgType} MsgId=${msgId} From=${fromUser} To=${toUser}`);
   }
-  return { msgType, msgId, fromUser, toUser, createTime, content: xml.Content ? String(xml.Content) : undefined };
+  return { msgType, msgId, fromUser, toUser, createTime, content: xml.Content ? String(xml.Content) : undefined, event };
 }
 
 /**
