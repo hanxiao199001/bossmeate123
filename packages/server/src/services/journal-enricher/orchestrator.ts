@@ -390,6 +390,10 @@ export async function enrichJournal(
     doaj: !!doaj,
     scimago: false, // PR #166: scimago 已砍, trust-score 接 4 源 flag (scimago 永远 false)
     letpub: !!letpub,
+    // task#104 阶段1: 从本刊已 ingest 的核心目录字段派生信号, 让重富化保住核心信号(否则 confidence 会被重置回 50 冲掉核心分)。
+    pkuCore: journal.pkuCoreLevel === "北大核心",
+    cscdCore: journal.cscdLevel === "核心库",
+    cscdExtended: journal.cscdLevel === "扩展库",
   });
   // sourceUrl 优先级：letpub detail 页 > crossref API  (PR #166: scimago search 已砍)
   const trustSourceUrl =
