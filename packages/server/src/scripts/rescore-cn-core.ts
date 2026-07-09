@@ -20,7 +20,9 @@ function deriveFlags(j: typeof journals.$inferSelect) {
     crossref: prov.publisher === "crossref" || prov.issn === "crossref",
     doaj: prov.apc === "doaj" || prov.openAccess === "doaj",
     scimago: false,
-    letpub: prov.if_history === "letpub" || prov.cas_partition === "letpub" || j.ifHistory != null,
+    // letpub 从 provenance/if_history 反推; 再兜底: 现 data_source 已是 letpub_only/multi_source_verified 的刊必然曾命中 letpub
+    letpub: prov.if_history === "letpub" || prov.cas_partition === "letpub" || j.ifHistory != null
+      || j.dataSource === "letpub_only" || j.dataSource === "multi_source_verified",
     pkuCore: j.pkuCoreLevel === "北大核心",
     cscdCore: j.cscdLevel === "核心库",
     cscdExtended: j.cscdLevel === "扩展库",
@@ -47,18 +49,23 @@ for (const j of rows) {
   if (!t.dataSource) continue; // 理论上核心刊必有 dataSource
   const oldConf = j.confidence ?? 50;
   const oldDs = j.dataSource ?? "(null)";
+  // 护栏: 绝不降级已有 multi_source_verified 标签(国际交叉语义比 cn_core 强, 即便本次没读到其 provenance)——
+  //   只借核心信号把它的 confidence 顶过 70。其余(legacy/letpub_only/null)用 computeTrust 结果。
+  const newDs = oldDs === "multi_source_verified" ? "multi_source_verified" : t.dataSource;
   dsBefore[oldDs] = (dsBefore[oldDs] ?? 0) + 1;
-  dsAfter[t.dataSource] = (dsAfter[t.dataSource] ?? 0) + 1;
+  dsAfter[newDs] = (dsAfter[newDs] ?? 0) + 1;
   if (oldConf < 70 && t.confidence >= 70) crossed++; else unchanged++;
   const existingProv = ((j.metadata as { fieldProvenance?: Record<string, string> } | null)?.fieldProvenance) ?? {};
-  updates.push({ id: j.id, conf: t.confidence, ds: t.dataSource, prov: { ...existingProv, ...t.fieldProvenance } });
+  updates.push({ id: j.id, conf: t.confidence, ds: newDs, prov: { ...existingProv, ...t.fieldProvenance } });
 }
 
 // 当前国内 verified 池(conf>=70 且 catalogs 非空) 作对照基线
-const [{ pool: verifiedDomBefore }] = await db.execute(sql`
-  SELECT count(*)::int AS pool FROM journals
-  WHERE status='active' AND confidence>=70 AND catalogs IS NOT NULL AND jsonb_array_length(catalogs)>0
-`) as unknown as Array<{ pool: number }>;
+const domPool = await db.select({ pool: sql<number>`count(*)::int` }).from(journals).where(and(
+  eq(journals.status, "active"),
+  sql`${journals.confidence} >= 70`,
+  sql`${journals.catalogs} IS NOT NULL AND jsonb_array_length(${journals.catalogs}) > 0`,
+));
+const verifiedDomBefore = Number(domPool[0]?.pool ?? 0);
 
 console.log(`\n=== task#104 CN 核心目录重评分 ${APPLY ? "【APPLY 写库】" : "【DRY-RUN 只读】"} ===`);
 console.log(`范围(带核心标记 + conf<70): ${rows.length} 条`);
