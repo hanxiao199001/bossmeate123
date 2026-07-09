@@ -66,3 +66,15 @@ describe("computeTrust — 国内核心目录信号", () => {
     expect(r.dataSource).toBe("letpub_only");
   });
 });
+
+describe("客服 journalFacts surface 核心身份(供播报'北大核心'但不编 IF)", () => {
+  it("journalFacts 含'国内核心目录'行(pku/cscd), 且 IF 仍走 null→暂无数据", async () => {
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile(new URL("../services/work-wechat/kf-responder.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/国内核心目录:/);
+    expect(src).toMatch(/北大核心/);
+    expect(src).toMatch(/CSCD \$\{j\.cscdLevel\}/);
+    // IF 行不变(核心身份不影响 IF 数值播报护栏)
+    expect(src).toMatch(/影响因子\(IF\): \$\{j\.impactFactor \?\? na\}/);
+  });
+});

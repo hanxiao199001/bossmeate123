@@ -211,6 +211,8 @@ function journalFacts(j: typeof journals.$inferSelect): string {
   const na = "暂无数据";
   const lines = [
     `期刊名称: ${j.name}${j.nameEn && j.nameEn !== j.name ? `（${j.nameEn}）` : ""}`,
+    // task#104: 国内核心目录身份(cscd/pku 来源, 非数值)。核心刊常无 letpub IF → 可播报"北大核心"但 IF 仍标暂无, 不编数字。
+    `国内核心目录: ${[j.pkuCoreLevel ? "北大核心" : null, j.cscdLevel ? `CSCD ${j.cscdLevel}` : null].filter(Boolean).join("、") || na}`,
     `影响因子(IF): ${j.impactFactor ?? na}`,
     `中科院分区: ${j.casPartition ?? j.casPartitionNew ?? na}`,
     `JCR 分区: ${j.partition ?? na}`,
