@@ -228,6 +228,8 @@ const envSchema = z.object({
   WECHAT_WORK_AES_KEY: z.string().optional(),
   // 企微微信客服「接待链接」(kf/add_contact_way 生成或客服控制台取)，用于公众号欢迎语/被动回复给客户真人客服入口。留空则文案里不含客服链接。
   WECOM_KF_URL: z.string().optional(),
+  // 企微客服接待链接的二维码 PNG(OSS URL, scripts/upload-kf-qr.mjs 生成上传)，混剪片尾 outro 叠加。留空则片尾不叠二维码。
+  WECOM_KF_QR_URL: z.string().optional(),
 
   // 期刊检索小程序：wx.login + getPhoneNumber 登录所需（小程序后台「开发管理-开发设置」）
   WECHAT_MINI_APPID: z.string().optional(),

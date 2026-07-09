@@ -219,6 +219,12 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     const bgmPath = await resolveBgm(seed);
     // ① 片头背景图 + ④ B-roll 素材(全部可缺省, 缺了回退老观感)
     const introBgPath = opts.introBgUrl ? await resolveIntroBg(opts.introBgUrl, workDir) : undefined;
+    // 获客-2: 片尾 outro 叠企微客服二维码(固定素材, env WECOM_KF_QR_URL)。下载失败/未配置 → 不叠, 片尾照旧。
+    let qrPath: string | undefined;
+    if (env.WECOM_KF_QR_URL) {
+      try { const p = join(workDir, "kf-qr.png"); await downloadToFile(env.WECOM_KF_QR_URL, p); qrPath = p; }
+      catch (e) { logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.remix.kf_qr_download_failed"); }
+    }
     const brollFiles = await filterBroll(opts.brollPaths);
     const brollSlots = planBrollSlots(r, dur, off1, brollFiles.length);
     const brolls = brollSlots.map((s, i) => ({ ...s, file: brollFiles[i]! }));
@@ -285,10 +291,22 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
         });
       }
 
+      // ⑤ 片尾 outro: CTA 文字 +(有二维码时)客服二维码。二维码只在增强图叠, 降级图不叠(与其余增强能力同进退)。
+      //   二维码只在纯色片尾帧上, 不在主视频/数字人画面上 → 结构上不可能压口型。lanczos 缩放保清晰不糊。
+      const useQr = enhanced && !!qrPath;
+      const qrSize = even(Math.round(Math.min(w, h) / 3)); // 竖屏/横屏都 ≈ min 边 1/3, 够扫
+      const ctaY = useQr ? `(h-text_h)/2-${Math.round(h * 0.14)}` : `(h-text_h)/2`; // 有二维码则 CTA 上移腾位
+      const outroDraw = `drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 26)}:x=(w-text_w)/2:y=${ctaY}`;
+      const outroChain = useQr
+        ? `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,${outroDraw},settb=AVTB[outrobg];` +
+          `movie='${qrPath!.replace(/:/g, "\\:")}',scale=${qrSize}:${qrSize}:flags=lanczos,format=rgba[kfqr];` +
+          `[outrobg][kfqr]overlay=x=(W-w)/2:y=${Math.round(h * 0.50)}[outro];`
+        : `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,${outroDraw},settb=AVTB[outro];`;
+
       const fc =
         `[0:v]fps=25,scale=iw*${zoom}:ih*${zoom},crop=${w}:${h},setsar=1,format=yuv420p,settb=AVTB[mainv];` +
         introChain +
-        `[2:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,drawtext=fontfile='${FONT}':textfile='${ctaTxt}':fontcolor=white:fontsize=${Math.round(w / 26)}:x=(w-text_w)/2:y=(h-text_h)/2,settb=AVTB[outro];` +
+        outroChain +
         `[intro][mainv]xfade=transition=${t1}:duration=${xf}:offset=${off1}[vx];` +
         `[vx][outro]xfade=transition=${t2}:duration=${xf}:offset=${off2}[vv];` +
         brollChains +
