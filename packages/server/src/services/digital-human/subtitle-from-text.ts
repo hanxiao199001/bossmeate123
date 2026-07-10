@@ -5,8 +5,8 @@
  *   时间轴非逐字精确(无 word-level 对齐), 但按字数比例分配, 对 1 分钟口播足够贴。
  */
 
-/** 把一段口播稿切成字幕 cue: 先按句末标点断句, 过长再按 ~16 字硬切。 */
-function splitCues(text: string): string[] {
+/** 把一段口播稿切成字幕 cue: 先按句末标点断句, 过长再按 ~16 字硬切。导出供测试。 */
+export function splitCues(text: string): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   const sentences = clean.split(/(?<=[。！？!?；;])/).map((s) => s.trim()).filter(Boolean);
   const cues: string[] = [];
@@ -24,7 +24,22 @@ function splitCues(text: string): string[] {
       }
     }
   }
-  return cues.map((c) => c.replace(/[。！？!?；;，、,]+$/g, "")).filter(Boolean);
+  const cleaned = cues.map((c) => c.replace(/[。！？!?；;，、,]+$/g, "")).filter(Boolean);
+  return mergeShortTails(cleaned);
+}
+
+/**
+ * 合并过短碎片幕: 切分后 <4 字的 cue 并进前一条, 防"两个字孤零零闪一下"(如"半月")。
+ * 首条无前驱则保留(避免丢字)。只合短尾, 正常句(≥4 字)不动。
+ */
+function mergeShortTails(cues: string[]): string[] {
+  const SHORT = 4;
+  const out: string[] = [];
+  for (const c of cues) {
+    if (c.length < SHORT && out.length > 0) out[out.length - 1] += c; // 并进前一条
+    else out.push(c);
+  }
+  return out;
 }
 
 function fmtTs(ms: number): string {
