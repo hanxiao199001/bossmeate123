@@ -64,7 +64,7 @@ export async function articlesRoutes(app: FastifyInstance) {
   // POST /articles/:id/generate-dvh-video — 用户手动触发 article → 阿里数字人视频 (PR #140)
   app.post("/:id/generate-dvh-video", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body as { templateId?: string; accountId?: string } | null) || {};
+    const body = (request.body as { templateId?: string; accountId?: string; voiceId?: string } | null) || {};
 
     const [article] = await db
       .select()
@@ -81,14 +81,16 @@ export async function articlesRoutes(app: FastifyInstance) {
 
     const metaTemplateId = (article.metadata as { templateId?: string } | null)?.templateId;
     let templateId = body.templateId || metaTemplateId;
-    let clonedVoiceId: string | undefined; // 6-26 该账号克隆音色
+    // 7-10 音色库: 单次生成临时换音色 — body.voiceId(库内 voice_id) 优先于账号绑定音色
+    const { sanitizeVoiceOverride } = await import("../services/voice/catalog-utils.js");
+    let clonedVoiceId: string | undefined = sanitizeVoiceOverride(body.voiceId); // 6-26 该账号克隆音色 / 7-10 临时覆盖
     // 6-19 防查重: 指定目标账号且该号绑了数字人形象 → 用账号形象(不同号不同形象)。
     if (body.accountId) {
       try {
         const [acc] = await db.select({ dvhTemplate: platformAccounts.dvhTemplate, clonedVoiceId: platformAccounts.clonedVoiceId }).from(platformAccounts)
           .where(and(eq(platformAccounts.id, body.accountId), eq(platformAccounts.tenantId, request.tenantId))).limit(1);
         if (acc?.dvhTemplate) templateId = acc.dvhTemplate;
-        if (acc?.clonedVoiceId) clonedVoiceId = acc.clonedVoiceId; // 6-26 用该号自己的声音
+        if (!clonedVoiceId && acc?.clonedVoiceId) clonedVoiceId = acc.clonedVoiceId; // 6-26 用该号自己的声音(无临时覆盖时)
       } catch { /* 用默认 */ }
     }
     // PR-X2: 改目录解析 — 支持 config 扩展的自定义形象 key

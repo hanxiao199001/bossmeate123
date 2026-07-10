@@ -6,6 +6,7 @@
  * 用法(服务器 packages/server 下):
  *   pnpm sample:dvh --yes                      # 自动挑一篇近期文章, A_academic 形象
  *   pnpm sample:dvh --yes --article <id> --template B_marketing
+ *   pnpm sample:dvh --yes --voice <voice_id>   # 7-10 音色库: 指定音色(克隆 voice_id 或预置名如 Cherry), 需 DVH_AUDIO_DRIVEN=1 才生效
  *
  * ⚠️ 成本: 真实数字人合成按 0.165 元/秒计费(~90 秒约 15 元), 一旦 submit 即扣费。
  *   故必须显式加 --yes 才会真跑; 不加只打印将用的文章/形象, 不花钱。
@@ -31,6 +32,7 @@ async function main() {
   const go = process.argv.includes("--yes");
   const template = arg("template") || "A_academic";
   const aid = arg("article");
+  const voice = arg("voice"); // 7-10 音色库验收: 指定音色(克隆 voice_id / 预置名), 走 voiceOverride 透传链
 
   // 优先挑"带 videoScript 的文章"(数字人脚本质量最好); 否则挑最近一篇文章
   const [art] = aid
@@ -44,11 +46,11 @@ async function main() {
 
   if (!art) { console.error("❌ 库里没有 article 类型内容可用; 先生成一篇文章再来。"); process.exitCode = 1; return; }
   const hasScript = !!((art.metadata as any)?.videoScript);
-  console.log(`\n🎬 数字人样片  文章=《${art.title ?? art.id}》  形象=${template}  ${hasScript ? "(有专用视频脚本✓)" : "(无videoScript, 用标题+正文兜底)"}`);
+  console.log(`\n🎬 数字人样片  文章=《${art.title ?? art.id}》  形象=${template}  音色=${voice ?? "默认(账号绑定/系统)"}  ${hasScript ? "(有专用视频脚本✓)" : "(无videoScript, 用标题+正文兜底)"}`);
 
   if (!go) {
     console.log("\n⏸  这是预览(没花钱)。确认后加 --yes 真跑:");
-    console.log(`   pnpm sample:dvh --yes --article ${art.id} --template ${template}`);
+    console.log(`   pnpm sample:dvh --yes --article ${art.id} --template ${template}${voice ? ` --voice ${voice}` : ""}`);
     console.log("   ⚠️ 真跑会调用阿里云数字人合成, 按 0.165 元/秒计费(~90秒约15元)。\n");
     return;
   }
@@ -57,6 +59,7 @@ async function main() {
   await triggerDvhFromArticle({
     db, tenantId: SYSTEM_RECOMMENDATION_TENANT_ID, userId: SYSTEM_RECOMMENDATION_USER_ID,
     articleContentId: art.id, templateId: template,
+    ...(voice ? { clonedVoiceId: voice } : {}), // 7-10 --voice 指定音色(仅 DVH_AUDIO_DRIVEN=1 音频驱动路径生效)
   });
 
   // 取刚生成的数字人视频

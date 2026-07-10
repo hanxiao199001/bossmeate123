@@ -920,6 +920,23 @@ export const platformAccounts = pgTable(
   ]
 );
 
+// ============ 音色库（7-10 迁移024: 音色成库 — 多条克隆音+预置音色, 账号从库里挑）============
+// tenant_id NULL = 全局共享预置音色(照抄 journals 的 NULL=共享模式); 非 NULL = 该租户自己的克隆音。
+// voice_id 即 platform_accounts.cloned_voice_id 存的同一种字符串(克隆 voice_id 或 qwen-tts 预置音色名), 语义不变。
+export const voiceCatalog = pgTable(
+  "voice_catalog",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 60 }).notNull(), // 如 "韩肖本人" / "芊悦·阳光女声"
+    voiceId: varchar("voice_id", { length: 120 }).notNull(), // 克隆 voice_id(含 -vc-) 或预置音色名(Cherry 等)
+    type: varchar("type", { length: 10 }).notNull().default("cloned"), // cloned | preset
+    sampleUrl: text("sample_url"), // 试听样音(克隆时的试听 mp3), 可空
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("idx_voice_catalog_tenant").on(table.tenantId, table.type)]
+);
+
 // ============ PR Q.2: content_templates 4 系统模板（user 5-5 拍板：A+B+C+E）============
 // 4 套：shunshi-style 学术权威 / marketing-conversion 营销转化 / popular-science 科普轻松 /
 // industry-vertical 行业垂直。D 学术深度推 5-14 后。

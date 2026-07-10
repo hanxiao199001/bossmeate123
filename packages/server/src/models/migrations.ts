@@ -447,4 +447,50 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       ALTER TABLE content_publish_log ALTER COLUMN status TYPE VARCHAR(30);
     `,
   },
+  {
+    version: "024_voice_catalog",
+    description:
+      "7-10 音色库: voice_catalog 表(tenant NULL=全局共享, 照抄 journals 模式) + 种子 4 个 qwen-tts 预置音色(Cherry/Serena/Ethan/Chelsie, env.ts 已确认可用) + 存量 platform_accounts.cloned_voice_id 幂等补录成 catalog 条目(老克隆音在库里可见可选)",
+    sql: `
+      CREATE TABLE IF NOT EXISTS voice_catalog (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+        name VARCHAR(60) NOT NULL,
+        voice_id VARCHAR(120) NOT NULL,
+        type VARCHAR(10) NOT NULL DEFAULT 'cloned',
+        sample_url TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_voice_catalog_tenant ON voice_catalog (tenant_id, type);
+
+      -- 种子: qwen-tts 预置音色(dashscope provider 直接可用; 名字须匹配 /^[A-Z][A-Za-z]+$/ 才会被 tts-service 采纳)
+      INSERT INTO voice_catalog (tenant_id, name, voice_id, type)
+      SELECT NULL, v.name, v.voice_id, 'preset'
+      FROM (VALUES
+        ('芊悦·阳光女声(Cherry)', 'Cherry'),
+        ('苏瑶·温柔女声(Serena)', 'Serena'),
+        ('晨煦·阳光男声(Ethan)', 'Ethan'),
+        ('千雪·轻甜女声(Chelsie)', 'Chelsie')
+      ) AS v(name, voice_id)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM voice_catalog vc
+        WHERE vc.tenant_id IS NULL AND vc.type = 'preset' AND vc.voice_id = v.voice_id
+      );
+
+      -- 兼容补录: 现存账号已绑的克隆音 → catalog 条目(name=备注名/账号名+"的声音"), 幂等可重跑
+      INSERT INTO voice_catalog (tenant_id, name, voice_id, type)
+      SELECT DISTINCT ON (pa.tenant_id, pa.cloned_voice_id)
+        pa.tenant_id,
+        LEFT(COALESCE(NULLIF(TRIM(pa.remark), ''), NULLIF(TRIM(pa.account_name), ''), '账号') || '的声音', 60),
+        pa.cloned_voice_id,
+        'cloned'
+      FROM platform_accounts pa
+      WHERE pa.cloned_voice_id IS NOT NULL AND pa.cloned_voice_id <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM voice_catalog vc
+          WHERE vc.voice_id = pa.cloned_voice_id
+            AND (vc.tenant_id = pa.tenant_id OR vc.tenant_id IS NULL)
+        );
+    `,
+  },
 ];

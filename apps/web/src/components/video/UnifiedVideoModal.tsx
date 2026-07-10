@@ -73,6 +73,18 @@ export default function UnifiedVideoModal({
       })
       .catch(() => { /* 回退默认 */ });
   }, [open]);
+  // 7-10 音色库: 单次生成可临时换音色(空=跟随账号绑定/系统默认, 不改账号绑定)
+  const [voiceSel, setVoiceSel] = useState("");
+  const [voiceOptions, setVoiceOptions] = useState<Array<{ id: string; name: string; voiceId: string; type: string }>>([]);
+  useEffect(() => {
+    if (!open) return;
+    api.get("/voice-catalog")
+      .then((r) => {
+        const list = ((r.data as any)?.voices ?? (r.data as any)?.data?.voices ?? []) as Array<{ id: string; name: string; voiceId: string; type: string }>;
+        if (Array.isArray(list)) setVoiceOptions(list);
+      })
+      .catch(() => { /* 拉不到就不显示下拉 */ });
+  }, [open]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "generating_article" | "triggering_video">("idle");
@@ -118,7 +130,7 @@ export default function UnifiedVideoModal({
           cleanup();
           setPhase("triggering_video");
           try {
-            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar });
+            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) });
             setSubmitting(false);
             onTriggered?.({ mode: "pending_article", batchId, articleId: row.articleId });
             doClose();
@@ -146,7 +158,7 @@ export default function UnifiedVideoModal({
       if (lockedArticleId) {
         setSubmitting(true);
         try {
-          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar });
+          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) });
           toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
           setSubmitting(false);
           onTriggered?.({ mode: "direct", articleId: lockedArticleId });
@@ -167,7 +179,7 @@ export default function UnifiedVideoModal({
       try {
         const res = await api.post<{ mode: "direct" | "pending_article"; articleId?: string; batchId?: string }>(
           "/admin/generate-video",
-          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar }
+          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) }
         );
         const data = res.data as any;
         if (data?.mode === "direct" && data?.articleId) {
@@ -221,6 +233,7 @@ export default function UnifiedVideoModal({
     setPhase("idle");
     setArticleIdInput("");
     setTopic("");
+    setVoiceSel(""); // 7-10 临时音色只作用一次, 关窗即回默认
     setError(null);
     setElapsedMs(0);
     onClose();
@@ -340,6 +353,36 @@ export default function UnifiedVideoModal({
                 ))}
               </div>
             </div>
+
+            {/* 7-10 音色库: 单次生成临时换音色, 不改账号绑定 */}
+            {voiceOptions.length > 0 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">音色(本次生成)</label>
+                <select
+                  value={voiceSel}
+                  onChange={(e) => setVoiceSel(e.target.value)}
+                  disabled={submitting}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
+                >
+                  <option value="">默认(账号绑定音色/系统音色)</option>
+                  {voiceOptions.some((v) => v.type === "cloned") && (
+                    <optgroup label="我的克隆音">
+                      {voiceOptions.filter((v) => v.type === "cloned").map((v) => (
+                        <option key={v.id} value={v.voiceId}>{v.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {voiceOptions.some((v) => v.type === "preset") && (
+                    <optgroup label="预置音色">
+                      {voiceOptions.filter((v) => v.type === "preset").map((v) => (
+                        <option key={v.id} value={v.voiceId}>{v.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-1">只对本次生成生效; 想固定请到"账号管理"给账号绑音色</p>
+              </div>
+            )}
 
             {error && (
               <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>

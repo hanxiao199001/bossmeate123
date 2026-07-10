@@ -75,6 +75,7 @@ const generateVideoSchema = z.object({
   articleId: z.string().uuid().optional(),
   topic: z.string().min(2).max(100).optional(),
   avatarTemplate: z.string().min(1).max(40).default("A_academic"), // 6-19 放开: 支持目录扩展的自定义形象key(接口用 resolveAvatarVoice 校验)
+  voiceId: z.string().min(1).max(120).optional(), // 7-10 音色库: 单次生成临时音色(库内 voice_id), 只对 from_article 立即生效
 }).refine(
   (d) => (d.source === "from_article" ? !!d.articleId : !!d.topic),
   { message: "from_article 需 articleId; from_topic 需 topic" }
@@ -452,6 +453,7 @@ export async function adminRoutes(app: FastifyInstance) {
           templateId,
           conversationId: article.conversationId ?? null,
           journalId: (article.metadata as { journalId?: string } | null)?.journalId,
+          clonedVoiceId: body.voiceId, // 7-10 音色库: 单次生成临时音色
         });
         logger.info({ articleId: body.articleId, templateId, realMode: isRealMode() }, "PR #161 admin generate-video (from_article)");
         return {

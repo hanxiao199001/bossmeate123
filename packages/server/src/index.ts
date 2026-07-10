@@ -197,6 +197,9 @@ async function bootstrap() {
     await protectedApp.register(workflowRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(wechatRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(accountRoutes, { prefix: `${env.API_PREFIX}` });
+    // 7-10 音色库: 多克隆音+预置音色成库, 账号从库里挑, 单次生成可临时换
+    const { voiceCatalogRoutes } = await import("./routes/voice-catalog.js");
+    await protectedApp.register(voiceCatalogRoutes, { prefix: `${env.API_PREFIX}` });
     await protectedApp.register(knowledgeRoutes, { prefix: `${env.API_PREFIX}/knowledge` });
     await protectedApp.register(dashboardRoutes, { prefix: `${env.API_PREFIX}/dashboard` });
     await protectedApp.register(taskRoutes, { prefix: `${env.API_PREFIX}/tasks` });

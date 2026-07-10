@@ -1,6 +1,8 @@
 /**
- * 6-26 自助声音克隆: 账号卡片里点"克隆声音" → 浏览器录音(读一段给定文字)→ 上传 → 百炼建音色 → 绑到该账号。
- *   之后该账号的数字人/卡片视频用它自己的声音。后端 POST /accounts/:id/clone-voice(webm→wav→百炼)。
+ * 6-26 自助声音克隆: 账号卡片里点"克隆声音" → 浏览器录音(读一段给定文字)→ 上传 → 百炼建音色。
+ * 7-10 音色库改造: 克隆成功后存进音色库(voice_catalog, 可起名字), 不再直接覆盖账号绑定 ——
+ *   录多条互不覆盖; 到账号行的"音色"下拉里选用, 生成弹窗里也能单次临时换。
+ *   后端 POST /accounts/:id/clone-voice(webm→wav→百炼→入库)。
  */
 import { useRef, useState } from "react";
 import { api } from "../../utils/api";
@@ -17,14 +19,14 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export default function VoiceCloneRecorder({ accountId, cloned }: { accountId: string; cloned?: boolean }) {
+export default function VoiceCloneRecorder({ accountId, cloned, onSaved }: { accountId: string; cloned?: boolean; onSaved?: () => void }) {
   const [open, setOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [hasVoice, setHasVoice] = useState(!!cloned);
   const [elapsed, setElapsed] = useState(0);
   const [msg, setMsg] = useState("");
   const [preview, setPreview] = useState("");
+  const [voiceName, setVoiceName] = useState(""); // 7-10 入库名字(空=后端默认"账号名的声音 M-D")
   const mrRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -57,13 +59,14 @@ export default function VoiceCloneRecorder({ accountId, cloned }: { accountId: s
     try {
       const blob = new Blob(chunksRef.current);
       const dataUrl = await blobToDataUrl(blob);
-      const r = await api.post<{ voice: string; previewUrl?: string }>(
+      const r = await api.post<{ voice: string; previewUrl?: string; catalogId?: string; name?: string }>(
         `/accounts/${accountId}/clone-voice`,
-        { audioBase64: dataUrl },
+        { audioBase64: dataUrl, ...(voiceName.trim() ? { name: voiceName.trim() } : {}) },
       );
-      setHasVoice(true);
-      setMsg("✅ 克隆成功，已绑定到此账号。以后该号的数字人/视频用你的声音。");
+      // 7-10 音色库: 克隆已入库(不自动绑定), 提示去下拉里选
+      setMsg(`✅ 已克隆入库「${r?.data?.name || voiceName.trim() || "我的声音"}」。到账号行的"音色"下拉里选它即可使用。`);
       if (r?.data?.previewUrl) setPreview(r.data.previewUrl);
+      onSaved?.(); // 刷新音色库下拉
     } catch (e) {
       setMsg("克隆失败：" + ((e as Error)?.message || "请重试，确保读满 15 秒、环境安静"));
     } finally {
@@ -75,16 +78,26 @@ export default function VoiceCloneRecorder({ accountId, cloned }: { accountId: s
     <div className="inline-block">
       <button
         onClick={() => setOpen((o) => !o)}
-        title="录一段自己的声音，克隆成专属音色，该账号的数字人/视频就用你的声音"
-        className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer ${hasVoice ? "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100"}`}
+        title="录一段自己的声音，克隆后存进音色库，账号在音色下拉里选用"
+        className={`text-xs px-2 py-0.5 rounded-full border cursor-pointer ${cloned ? "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100"}`}
       >
-        {hasVoice ? "声音克隆 ✓" : "声音克隆 ▾"}
+        🎤 录音入库 ▾
       </button>
 
       {open && (
         <div className="mt-2 p-3 rounded-lg border border-gray-200 bg-white shadow-sm w-[320px] text-left">
           <div className="text-xs font-medium text-gray-700 mb-1">录一段你的声音(读下面这段，约 30 秒，环境安静)</div>
           <div className="text-xs text-gray-500 leading-relaxed mb-2 max-h-24 overflow-auto bg-gray-50 rounded p-2">{SCRIPT}</div>
+
+          <input
+            type="text"
+            value={voiceName}
+            onChange={(e) => setVoiceName(e.target.value)}
+            maxLength={60}
+            placeholder='音色名字(可空, 默认"账号名的声音+日期")'
+            disabled={busy || recording}
+            className="w-full mb-2 px-2 py-1 border border-gray-200 rounded text-xs focus:outline-none focus:border-blue-400 disabled:bg-gray-50"
+          />
 
           <div className="flex items-center gap-2">
             {!recording ? (

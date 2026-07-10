@@ -360,6 +360,22 @@ const handleScopeChange = async (accountId: string, scope: string) => {
       fetchAccounts();
     } catch { /* 静默 */ }
   };
+
+  // 7-10 音色库: 账号从库里挑音色(克隆音+预置分组), 录音入库后下拉自动多一条
+  interface VoiceEntry { id: string; name: string; voiceId: string; type: string; shared?: boolean }
+  const [voiceCatalog, setVoiceCatalog] = useState<VoiceEntry[]>([]);
+  const fetchVoiceCatalog = useCallback(() => {
+    api.get<{ voices?: VoiceEntry[] }>("/voice-catalog")
+      .then((r) => setVoiceCatalog(((r.data as any)?.voices ?? []) as VoiceEntry[]))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { fetchVoiceCatalog(); }, [fetchVoiceCatalog]);
+  const handleVoiceChange = async (accountId: string, voiceId: string) => {
+    try {
+      await api.patch(`/accounts/${accountId}`, { clonedVoiceId: voiceId || null });
+      fetchAccounts();
+    } catch { /* 静默 */ }
+  };
   const DISC_OPTIONS: Array<[string, string]> = [
     ["medicine", "医学"], ["psychology", "心理"], ["engineering", "工程"], ["economics", "经管"],
     ["biology", "生物"], ["education", "教育"], ["law", "法学"], ["agriculture", "农林"],
@@ -843,8 +859,34 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                               >
                                 {account.persona || account.styleProfile ? "人设·风格 ✓" : "人设·风格 ▾"}
                               </button>
+                              {/* 7-10 音色库: 账号绑定音色下拉(克隆/预置分组, 空=系统默认); 录音入库后这里自动多一条可选 */}
+                              <select
+                                value={account.clonedVoiceId || ""}
+                                onChange={(e) => handleVoiceChange(account.id, e.target.value)}
+                                title="音色 — 该账号数字人/卡片视频的配音声音(从音色库里挑)"
+                                className="text-xs px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 focus:outline-none cursor-pointer max-w-[160px]"
+                              >
+                                <option value="">音色:默认(系统)</option>
+                                {voiceCatalog.some((v) => v.type === "cloned") && (
+                                  <optgroup label="我的克隆音">
+                                    {voiceCatalog.filter((v) => v.type === "cloned").map((v) => (
+                                      <option key={v.id} value={v.voiceId}>音色:{v.name}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {voiceCatalog.some((v) => v.type === "preset") && (
+                                  <optgroup label="预置音色">
+                                    {voiceCatalog.filter((v) => v.type === "preset").map((v) => (
+                                      <option key={v.id} value={v.voiceId}>音色:{v.name}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {account.clonedVoiceId && !voiceCatalog.some((v) => v.voiceId === account.clonedVoiceId) && (
+                                  <option value={account.clonedVoiceId}>音色:当前(未入库 …{account.clonedVoiceId.slice(-6)})</option>
+                                )}
+                              </select>
                               {/* 7-08 老韩"找不到录音按钮": 原来只对抖音/视频号显示, 但公众号账号的文章同样能生成数字人视频(配音跟账号走) — 全平台放开 */}
-                              <VoiceCloneRecorder accountId={account.id} cloned={!!account.clonedVoiceId} />
+                              <VoiceCloneRecorder accountId={account.id} cloned={!!account.clonedVoiceId} onSaved={fetchVoiceCatalog} />
                             </div>
                             {discEditId === account.id && (
                               <div className="flex flex-wrap gap-1.5 my-1.5">

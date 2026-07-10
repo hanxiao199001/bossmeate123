@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import DvhCatalogManager from "../components/settings/DvhCatalogManager";
+import VoiceCatalogManager from "../components/settings/VoiceCatalogManager";
 import MembersManager from "../components/settings/MembersManager";
 import ContactMetaSection from "../components/ContactMetaSection";
 import PageHeader from "../components/ui/PageHeader";
@@ -699,6 +700,9 @@ export default function SettingsPage() {
         </div>
 
         <DvhCatalogManager />
+
+        {/* 7-10 音色库: 克隆音+预置音色管理(列表/改名/删除/试听) */}
+        <VoiceCatalogManager />
 
         {/* T4-3-5: 我的模板偏好（boss_edits 累计 → 加权选副版本模板） */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">

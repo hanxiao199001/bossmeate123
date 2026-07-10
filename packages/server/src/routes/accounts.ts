@@ -12,7 +12,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../models/db.js";
-import { platformAccounts, contentPublishLog, agentDevices } from "../models/schema.js";
+import { platformAccounts, contentPublishLog, agentDevices, voiceCatalog } from "../models/schema.js";
+import { defaultCloneName, inferVoiceType } from "../services/voice/catalog-utils.js";
 import { logger } from "../config/logger.js";
 import { publishToAccounts, verifyAccountCredentials, getSupportedPlatforms } from "../services/publisher/index.js";
 import { encryptCredentials, decryptCredentials } from "../utils/crypto.js";
@@ -47,6 +48,7 @@ const updateAccountSchema = z.object({
   persona: z.string().max(2000).nullable().optional(), // PR-X1 人设画像
   remark: z.string().max(100).nullable().optional(), // 6-19 手动备注名
   dvhTemplate: z.string().max(40).nullable().optional(), // 6-19 数字人形象目录key
+  clonedVoiceId: z.string().max(120).nullable().optional(), // 7-10 音色库: 账号绑定音色(库里的 voice_id; null=清空回系统默认)
 });
 
 const publishSchema = z.object({
@@ -278,6 +280,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.persona !== undefined) updateData.persona = body.persona; // PR-X1 人设
       if (body.remark !== undefined) updateData.remark = body.remark; // 6-19 备注名
       if (body.dvhTemplate !== undefined) updateData.dvhTemplate = body.dvhTemplate; // 6-19 数字人形象
+      if (body.clonedVoiceId !== undefined) updateData.clonedVoiceId = body.clonedVoiceId; // 7-10 音色库绑定(null=清空)
 
       // 如果更新了凭证，先标 false；下面入库后再用"加密-解密"链路重验
       if (body.credentials) {
@@ -594,8 +597,9 @@ export async function accountRoutes(app: FastifyInstance) {
   });
 
   /**
-   * 6-26 声音克隆(自助): 前端录音 → base64 → 百炼建音色 → voice_id 存到账号 → 合成试听。
-   *   之后该账号的数字人/卡片视频用它自己的声音(经合成层 voiceOverride 注入)。
+   * 6-26 声音克隆(自助): 前端录音 → base64 → 百炼建音色 → 合成试听。
+   *   7-10 音色库改造: 克隆结果不再直接覆盖 account.clonedVoiceId, 改为存进 voice_catalog(带名字+试听样音),
+   *   用户到账号行的音色下拉里自选绑定 —— 录多条也不互相覆盖。
    *   bodyLimit 放大到 15MB(录音 base64 会超默认 1MB)。
    */
   app.post("/accounts/:id/clone-voice", { preHandler: requirePermission("accounts.manage"), bodyLimit: 15 * 1024 * 1024 }, async (request, reply) => {
@@ -627,9 +631,17 @@ export async function accountRoutes(app: FastifyInstance) {
         previewUrl = await storage.upload(buf, `voice-clone/${request.tenantId}/${id}-${Date.now()}.mp3`, "audio/mpeg");
       } catch (e) { logger.warn({ err: e instanceof Error ? e.message : e, accountId: id }, "克隆试听合成失败(不阻塞)"); }
 
-      await db.update(platformAccounts).set({ clonedVoiceId: voice, updatedAt: new Date() }).where(eq(platformAccounts.id, id));
-      logger.info({ accountId: id, voice }, "6-26 声音克隆已保存到账号");
-      return { code: "OK", data: { voice, previewUrl } };
+      // 7-10 音色库: 入库(不再覆盖 account.clonedVoiceId), 账号行音色下拉里自选绑定
+      const entryName = (typeof body.name === "string" && body.name.trim() ? body.name.trim() : defaultCloneName(acct.accountName)).slice(0, 60);
+      const [entry] = await db.insert(voiceCatalog).values({
+        tenantId: request.tenantId,
+        name: entryName,
+        voiceId: voice,
+        type: inferVoiceType(voice),
+        sampleUrl: previewUrl ?? null,
+      }).returning({ id: voiceCatalog.id });
+      logger.info({ accountId: id, voice, catalogId: entry?.id, name: entryName }, "7-10 声音克隆已入音色库");
+      return { code: "OK", data: { voice, previewUrl, catalogId: entry?.id, name: entryName } };
     } catch (err) {
       logger.error({ err: err instanceof Error ? err.message : err, accountId: id }, "声音克隆失败");
       return reply.code(500).send({ code: "CLONE_FAILED", message: err instanceof Error ? err.message : "克隆失败" });
