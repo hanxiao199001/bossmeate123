@@ -106,6 +106,24 @@ export async function adminRoutes(app: FastifyInstance) {
   // bulk-distribute / SSE: admin only (大批量影响外部 API, 跨多文章)
 
   /**
+   * GET /admin/matrix-overview — 7-10 矩阵统一工作台：一屏看全部账号的今日状态与健康度。
+   * 纯聚合现有表（platform_accounts / content_publish_log / agent_publish_tasks /
+   * agent_devices / contents / batch_rows），不新建采集链路。?platform= 可选过滤。
+   */
+  app.get("/matrix-overview", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const q = (request.query ?? {}) as { platform?: string };
+      const platform = q.platform && q.platform !== "all" ? q.platform : undefined;
+      const { getMatrixOverview } = await import("../services/metrics/matrix-overview.js");
+      const data = await getMatrixOverview(request.tenantId, platform);
+      return { code: "OK", data };
+    } catch (err) {
+      logger.error({ err }, "矩阵总览聚合失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
    * GET /admin/journals/search — PR #175 期刊实时筛选
    * 从 DB 39+ 期刊中按 7 条件筛选, 返回匹配列表
    */
