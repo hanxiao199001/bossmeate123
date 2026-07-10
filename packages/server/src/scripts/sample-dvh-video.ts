@@ -76,15 +76,18 @@ async function main() {
   console.log("\n⏳ 正在混剪(片头标题卡/缩放/片尾CTA/转场/B-roll)...\n");
   // 素材解析失败返回空对象, 混剪照常跑(样片脚本同样不因素材阻塞)
   const assetsDir = await mkdtemp(join(tmpdir(), "dvh-remix-assets-"));
-  let remix: { videoUrl: string; remixed: boolean };
+  let remix: { videoUrl: string; remixed: boolean; coverUrl?: string };
   try {
     const { journalId, ...assets } = await resolveRemixAssets(vid.id, assetsDir);
-    console.log(`   素材: 期刊=${journalId ?? "未关联"}  片头背景=${assets.introBgUrl ? "✓封面" : "✗纯色"}  B-roll=${assets.brollPaths?.length ?? 0}张`);
-    remix = await remixVideo({ videoUrl: baseUrl, title: art.title ?? "BossMate", seed: Math.floor(Math.random() * 1e6), ...assets });
+    console.log(`   素材: 期刊=${journalId ?? "未关联"}  片头背景=${assets.introBgUrl ? "✓封面" : "✗纯色"}  B-roll=${assets.brollPaths?.length ?? 0}张  数据=${assets.journalStats?.ifText ?? assets.journalStats?.partitionText ?? "无"}`);
+    // 7-10: --style academic|popsci|marketing|data 可指定剪辑风格(片头模板加权+卡点BPM); 不传走中性权重
+    const clipStyle = arg("style");
+    remix = await remixVideo({ videoUrl: baseUrl, title: art.title ?? "BossMate", seed: Math.floor(Math.random() * 1e6), ...(clipStyle ? { clipStyle } : {}), ...assets });
   } finally {
     await rm(assetsDir, { recursive: true, force: true }).catch(() => undefined);
   }
   console.log(`✅ 混剪成片: ${remix.videoUrl}  ${remix.remixed ? "(已混剪)" : "(混剪未生效, 回退原片)"}`);
+  if (remix.coverUrl) console.log(`   自动封面: ${remix.coverUrl}`);
 
   console.log("\n   👉 两条都打开对比看: 数字人形象/口型/配音自不自然; 混剪后片头/转场/CTA 观感; 像不像能直接发的号。\n");
 }

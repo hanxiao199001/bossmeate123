@@ -830,7 +830,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/videos/:id/remix", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const rb = (request.body as { seed?: number; cta?: string } | null) || {};
+      const rb = (request.body as { seed?: number; cta?: string; clipStyle?: string } | null) || {};
       const [c] = await db.select({ id: contents.id, title: contents.title, body: contents.body })
         .from(contents).where(eq(contents.id, id)).limit(1);
       if (!c) return reply.code(404).send({ code: "NOT_FOUND", message: "内容不存在" });
@@ -858,9 +858,14 @@ export async function adminRoutes(app: FastifyInstance) {
       } catch (e) {
         logger.warn({ id, err: e instanceof Error ? e.message : e }, "remix 素材解析失败(忽略, 走无素材混剪)");
       }
-      let result: { videoUrl: string; remixed: boolean };
+      let result: { videoUrl: string; remixed: boolean; coverUrl?: string };
       try {
-        result = await remixVideo({ videoUrl, title: c.title || "", cta: rb.cta, taskUuid: `c${String(id).slice(0, 8)}`, seed, ...assets });
+        // 7-10: clipStyle 透传(片头模板加权+卡点BPM, 非法值 remixVideo 内部忽略); 素材含 journalStats(模板C数据大字)
+        result = await remixVideo({
+          videoUrl, title: c.title || "", cta: rb.cta, taskUuid: `c${String(id).slice(0, 8)}`, seed,
+          ...(typeof rb.clipStyle === "string" ? { clipStyle: rb.clipStyle } : {}),
+          ...assets,
+        });
       } finally {
         if (assetsDir) {
           const { rm } = await import("node:fs/promises");
@@ -868,7 +873,18 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }
       if (!result.remixed) return reply.code(502).send({ code: "REMIX_FAILED", message: "混剪失败(已回退原视频), 看服务端日志 dvh.remix.failed_fallback(多半是字体路径或2核4G超时)" });
-      return { code: "OK", data: { videoUrl: result.videoUrl, remixed: true } };
+      // 7-10 自动封面: 抽帧成功 → 落 content.metadata.coverUrl(发布链路: publisher/index.ts 视频无 <img> 时取它当封面)。
+      //   落库失败只 warn — 封面是增益, 不能反过来把混剪成功报成失败。
+      if (result.coverUrl) {
+        try {
+          const [row] = await db.select({ metadata: contents.metadata }).from(contents).where(eq(contents.id, id)).limit(1);
+          const meta = (row?.metadata as Record<string, unknown>) || {};
+          await db.update(contents).set({ metadata: { ...meta, coverUrl: result.coverUrl } }).where(eq(contents.id, id));
+        } catch (e) {
+          logger.warn({ id, err: e instanceof Error ? e.message : e }, "remix 封面落库失败(忽略)");
+        }
+      }
+      return { code: "OK", data: { videoUrl: result.videoUrl, remixed: true, ...(result.coverUrl ? { coverUrl: result.coverUrl } : {}) } };
     } catch (err) {
       logger.error({ err }, "混剪端点失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "混剪失败" });

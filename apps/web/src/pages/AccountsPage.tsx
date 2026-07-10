@@ -843,9 +843,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                               >
                                 {account.persona || account.styleProfile ? "人设·风格 ✓" : "人设·风格 ▾"}
                               </button>
-                              {(account.platform === "douyin" || account.platform === "wechat_video") && (
-                                <VoiceCloneRecorder accountId={account.id} cloned={!!account.clonedVoiceId} />
-                              )}
+                              {/* 7-08 老韩"找不到录音按钮": 原来只对抖音/视频号显示, 但公众号账号的文章同样能生成数字人视频(配音跟账号走) — 全平台放开 */}
+                              <VoiceCloneRecorder accountId={account.id} cloned={!!account.clonedVoiceId} />
                             </div>
                             {discEditId === account.id && (
                               <div className="flex flex-wrap gap-1.5 my-1.5">
