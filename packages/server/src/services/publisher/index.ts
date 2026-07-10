@@ -200,6 +200,13 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     ? (contentMeta.videoUrl || content.body || "")
     : undefined;
 
+  // 7-10 自动封面: 视频内容 body 是纯 mp4 URL, 上面的 <img> 提取必然落空 → 取混剪时抽的片头帧
+  //   (video-remix.extractCoverFrame → metadata.coverUrl)。公众号 thumb / 抖音 open-api 封面都吃它;
+  //   没有则维持原状(平台自动取首帧)。要求 http(s) 绝对 URL — 适配器要从公网下载。
+  if (!autoCoverUrl && content.type === "video" && typeof contentMeta.coverUrl === "string" && /^https?:\/\//i.test(contentMeta.coverUrl)) {
+    autoCoverUrl = contentMeta.coverUrl;
+  }
+
   // 2. 获取目标账号
   const accounts = await db
     .select()

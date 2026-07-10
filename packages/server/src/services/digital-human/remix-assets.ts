@@ -22,6 +22,8 @@ import { logger } from "../../config/logger.js";
 export interface RemixAssets {
   introBgUrl?: string;   // 片头背景图本地路径(期刊封面)
   brollPaths?: string[]; // B-roll 本地 PNG(数据图表, 竖屏 1080x1920; 封面兜底)
+  // 7-10 片头模板 C(数据大字卡)素材: IF/分区做视觉主角。只取 DB 已核实字段拼文本, 无编造。
+  journalStats?: { ifText?: string; partitionText?: string };
   journalId?: string;    // 命中的期刊(日志用)
 }
 
@@ -93,6 +95,10 @@ export async function resolveRemixAssets(contentId: string, workDir: string): Pr
       coverImageUrl: journals.coverImageUrl,
       ifHistory: journals.ifHistory,
       publicationStats: journals.publicationStats,
+      impactFactor: journals.impactFactor,
+      partition: journals.partition,
+      casPartition: journals.casPartition,
+      casPartitionNew: journals.casPartitionNew,
     }).from(journals).where(eq(journals.id, journalId)).limit(1);
     if (!j) return {};
 
@@ -127,9 +133,20 @@ export async function resolveRemixAssets(contentId: string, workDir: string): Pr
     // 图表不足 2 张时, 封面也顶一张 B-roll(有片头背景重复曝光问题, 但比中段全程无插层观感好)
     if (coverPath && brollPaths.length < 2) brollPaths.push(coverPath);
 
+    // ③ 7-10 片头模板 C 数据文本: IF 保留 1 位小数(real 浮点误差别上屏); 分区优先中科院新锐 > 中科院 > JCR。
+    //    两者都空 → 不给 journalStats, 模板池自动不出 C。
+    const ifText = typeof j.impactFactor === "number" && j.impactFactor > 0
+      ? `IF ${j.impactFactor.toFixed(1)}`
+      : undefined;
+    const partitionText = j.casPartitionNew || j.casPartition || (j.partition ? `JCR ${j.partition}` : undefined) || undefined;
+    const journalStats = ifText || partitionText
+      ? { ...(ifText ? { ifText } : {}), ...(partitionText ? { partitionText } : {}) }
+      : undefined;
+
     const assets: RemixAssets = {
       ...(coverPath ? { introBgUrl: coverPath } : {}),
       ...(brollPaths.length > 0 ? { brollPaths } : {}),
+      ...(journalStats ? { journalStats } : {}),
       journalId,
     };
     logger.info({ contentId, journalId, journal: j.name, cover: !!coverPath, brolls: brollPaths.length }, "dvh.remix_assets.resolved");

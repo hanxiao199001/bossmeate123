@@ -12,6 +12,14 @@
  *   兜底策略: 增强滤镜图任何原因跑挂 → 自动降级重跑老滤镜图(无素材/无 ducking); 再挂才回原片。
  *
  * ffmpeg 管线已在沙盒 4.4.2 验证通过。中文字幕需 CJK 字体(服务器装了 fonts-noto-cjk)。
+ *
+ * 7-10 混剪新意批次(老韩反馈"没有太多新意"):
+ *   ⑥ 片头模板池: 4 套版式(A 现款/B 色块标题条/C 数据大字卡/D 大字报), seed+clipStyle 加权选,
+ *      版式逻辑独立在 intro-templates.ts(零依赖, 可单测/沙盒烧帧)。
+ *   ⑦ 卡点转场: clipStyle 带 bpm(popsci 110/marketing 128)且有 BGM 时, B-roll 起止 + 片尾 xfade
+ *      吸附节拍网格(beat-grid.ts); calm/无 BGM 回退原随机。
+ *   ⑧ 自动封面: 成片渲染完从片头 t=1s 抽一帧 jpg 传 OSS, RemixResult.coverUrl 带回 —
+ *      发布链路(公众号 thumb/抖音 cover)有真封面可用。抽帧失败不影响出片。
  */
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm, readdir, stat } from "node:fs/promises";
@@ -20,6 +28,19 @@ import { join } from "node:path";
 import { storage } from "../storage/index.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { CLIP_STYLES, isClipStyleKey } from "../video/clip-styles.js";
+import {
+  ACCENT_COLORS,
+  buildIntroFilter,
+  pickIntroTemplate,
+  sanitizeDrawtext,
+  wrapTitleForTemplate,
+} from "./intro-templates.js";
+import { planBrollSlots, snapToBeat, type BeatGrid } from "./beat-grid.js";
+
+// 兼容旧引用: 这两个原本在本文件定义, 7-10 拆到零依赖小模块(便于单测/烧帧脚本), 出口保持不变
+export { wrapIntroTitle } from "./intro-templates.js";
+export { planBrollSlots } from "./beat-grid.js";
 
 export interface RemixOptions {
   videoUrl: string;   // DVH 原视频 URL
@@ -29,10 +50,13 @@ export interface RemixOptions {
   seed?: number;      // 随机种子: 不同账号传不同 seed → 不同成片
   introBgUrl?: string;   // ① 片头背景图(URL/本地路径, 如期刊封面); 拿不到/下载失败回退纯色
   brollPaths?: string[]; // ④ B-roll 本地图片路径(1-3 张, 如期刊封面/图表 PNG); 无效路径自动剔除
+  clipStyle?: string;    // ⑦ 剪辑风格 key(clip-styles): 参与片头模板加权 + 卡点 BPM + BGM 子目录; 非法值忽略
+  journalStats?: { ifText?: string; partitionText?: string }; // ⑥ 模板 C 数据大字素材(如 "IF 26.3"/"中科院医学1区")
 }
 export interface RemixResult {
   videoUrl: string;   // 混剪后 URL(失败时回原 URL)
   remixed: boolean;
+  coverUrl?: string;  // ⑧ 片头抽帧封面 URL(仅 remixed=true 且抽帧成功时有)
 }
 
 const FONT = process.env.DVH_REMIX_FONT
@@ -51,29 +75,24 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const escFf = (s: string) => s.replace(/'/g, "").replace(/[\\:]/g, " ").slice(0, 26);
+const escFf = sanitizeDrawtext; // 原地实现搬到 intro-templates(零依赖模块), 本地别名保持下文可读
 
 /**
- * ① 标题断行: 26 字上限保留, 但超过 14 字改成 ~13 字断两行(drawtext textfile 支持真实换行) —
- *    比原来"截 26 字塞一行"更抓人; 单行时长标题字太小/两行都溢出的问题一并解决。
+ * 6-26 混剪 BGM: 从 DVH_BGM_DIR 按 seed 随机选一曲(老韩放曲到该目录); 无目录/无曲则跳过(不阻塞)。
+ * 7-10: 传了 bgmTag(clip-styles 风格子目录, 如 upbeat/energetic)则优先从 DVH_BGM_DIR/<bgmTag>/ 选 —
+ *   卡点吸附用的 bpm 是按风格标称的, 曲子也得来自对应节奏的曲库才踩得准; 子目录不存在回退根目录。
  */
-export function wrapIntroTitle(title: string): string {
-  const t = escFf(title || "");
-  if (t.length <= 14) return t;
-  const head = t.slice(0, 13);
-  const tail = t.slice(13);
-  return `${head}\n${tail}`;
-}
-
-/** 6-26 混剪 BGM: 从 DVH_BGM_DIR 按 seed 随机选一曲(老韩放曲到该目录); 无目录/无曲则跳过(不阻塞)。 */
-async function resolveBgm(seed: number): Promise<string | undefined> {
-  const dir = process.env.DVH_BGM_DIR || process.env.BGM_DIR;
-  if (!dir) return undefined;
-  try {
-    const files = (await readdir(dir)).filter((f) => /\.(mp3|m4a|aac|wav)$/i.test(f));
-    if (files.length === 0) return undefined;
-    return join(dir, files[Math.abs(seed) % files.length]!);
-  } catch { return undefined; }
+async function resolveBgm(seed: number, bgmTag?: string): Promise<string | undefined> {
+  const base = process.env.DVH_BGM_DIR || process.env.BGM_DIR;
+  if (!base) return undefined;
+  const dirs = bgmTag ? [join(base, bgmTag), base] : [base];
+  for (const dir of dirs) {
+    try {
+      const files = (await readdir(dir)).filter((f) => /\.(mp3|m4a|aac|wav)$/i.test(f));
+      if (files.length > 0) return join(dir, files[Math.abs(seed) % files.length]!);
+    } catch { /* 子目录不存在 → 试下一个 */ }
+  }
+  return undefined;
 }
 
 export async function probeVideo(file: string): Promise<{ w: number; h: number; dur: number }> {
@@ -157,32 +176,25 @@ async function filterBroll(paths: string[] | undefined): Promise<string[]> {
   return ok;
 }
 
-interface BrollSlot { start: number; seg: number; }
-
-/**
- * ④ B-roll 排期(seed 驱动): 全部落在主视频 25%~80% 区间(避开片头/片尾 xfade),
- *    每段 2.6~3.2s, 多张互不重叠且间隔 ≥5s(把区间均分成 slot, 抖动上限扣掉段长+最小间隔,
- *    数学上保证任意相邻两段 gap ≥ 5s)。放不下就少放, 一张都放不下返回空。
- */
-export function planBrollSlots(r: () => number, mainDur: number, mainStart: number, count: number): BrollSlot[] {
-  const MIN_GAP = 5, SEG_MIN = 2.6, SEG_MAX = 3.2;
-  const spanStart = mainStart + mainDur * 0.25;
-  const span = mainDur * 0.55; // 25%~80%
-  const n = Math.min(count, 3, Math.floor((span + MIN_GAP) / (SEG_MAX + MIN_GAP)));
-  if (n <= 0) return [];
-  const slot = span / n;
-  const out: BrollSlot[] = [];
-  for (let i = 0; i < n; i++) {
-    const seg = +(SEG_MIN + r() * (SEG_MAX - SEG_MIN)).toFixed(3);
-    const jitterMax = Math.max(0, slot - seg - MIN_GAP);
-    const start = +(spanStart + i * slot + r() * jitterMax).toFixed(3);
-    out.push({ start, seg });
-  }
-  return out;
-}
-
 /** 偶数化(yuv420p 尺寸必须偶数)。 */
 const even = (n: number) => 2 * Math.ceil(n / 2);
+
+/**
+ * ⑧ 自动封面: 从成片(片头段, 默认 t=1.0s — introDur 最短 2.2s, 必落在片头画面内)抽一帧 jpg。
+ *    发布平台(公众号 thumb / 抖音 cover)要封面图, 以前视频内容没封面只能靠平台自动取首帧(黑帧/糊帧居多)。
+ *    任何失败返回 false, 调用方跳过封面 — 绝不影响出片。
+ */
+export async function extractCoverFrame(videoFile: string, outJpg: string, atSec = 1.0): Promise<boolean> {
+  try {
+    // -ss 放 -i 前 = 输入侧粗跳(快); 只解 1 帧, 2核4G 上耗时 <1s
+    await runFFmpeg(["-y", "-ss", atSec.toFixed(2), "-i", videoFile, "-frames:v", "1", "-q:v", "3", outJpg]);
+    await stat(outJpg);
+    return true;
+  } catch (err) {
+    logger.warn({ videoFile, err: err instanceof Error ? err.message : err }, "dvh.remix.cover_extract_failed");
+    return false;
+  }
+}
 
 /** 主入口: 原视频 → 混剪 → OSS。失败回原 URL, 不阻塞。 */
 export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
@@ -206,19 +218,50 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     const xf = 0.6;
     const zoom = (1.0 + r() * 0.03).toFixed(4);  // 1.00~1.03 轻微缩放, 变每帧指纹, 不动音频
     const introCol = pick(INTRO_COLORS), outroCol = pick(OUTRO_COLORS);
+    const accentCol = pick(ACCENT_COLORS);       // ⑥ 片头点缀色(色条/大字)
     const t1 = pick(TRANSITIONS), t2 = pick(TRANSITIONS);
     const off1 = +(introDur - xf).toFixed(3);          // 主视频/音频 t0 落点
     const v1Dur = off1 + dur;
-    const off2 = +(v1Dur - xf).toFixed(3);
-    const total = +(off2 + outroDur).toFixed(3);
     const delayMs = Math.round(off1 * 1000);
 
-    await writeFile(titleTxt, wrapIntroTitle(title));
-    await writeFile(ctaTxt, escFf(cta || "关注我，投稿少踩坑"));
+    // ⑦ 卡点转场: clipStyle 合法且预设带 bpm(popsci/marketing)才建节拍网格; 原点 = 主视频起点 off1。
+    //   calm 风格(academic/data)无强节拍不设 bpm, 无 BGM 更谈不上卡点 → beat 为空 = 完全走老随机。
+    const stylePreset = opts.clipStyle && isClipStyleKey(opts.clipStyle) ? CLIP_STYLES[opts.clipStyle] : undefined;
+    const bgmPath = await resolveBgm(seed, stylePreset?.bgmTag);
+    const beat: BeatGrid | undefined = bgmPath && stylePreset?.bpm
+      ? { origin: off1, beatDur: 60 / stylePreset.bpm }
+      : undefined;
 
-    const bgmPath = await resolveBgm(seed);
-    // ① 片头背景图 + ④ B-roll 素材(全部可缺省, 缺了回退老观感)
+    // 片尾 xfade 时刻吸拍: 只向前吸(floor) — 向后吸会把 offset 推过主视频末尾, ffmpeg 直接报错。
+    //   向前吸意味着片尾转场提前 ≤1 拍盖住主视频最后几帧; 限制 ≤0.35s(半拍多点), 超过就放弃吸附 —
+    //   口型/最后一句话完整 > 卡点(音频主轴完全不动, 只是画面转场提前, 且 outroDur≥1.6s > 提前量+xf, 音频不会被 -t 截断)。
+    let off2 = +(v1Dur - xf).toFixed(3);
+    if (beat) {
+      const snapped = snapToBeat(off2, beat, 1, "floor");
+      if (off2 - snapped <= 0.35) off2 = snapped;
+    }
+    const total = +(off2 + outroDur).toFixed(3);
+
+    // ⑥ 片头模板池: 先解析封面(有无图决定候选池), 再 seed+clipStyle 加权选模板, 标题按模板断行。
     const introBgPath = opts.introBgUrl ? await resolveIntroBg(opts.introBgUrl, workDir) : undefined;
+    const statsBig = opts.journalStats?.ifText || opts.journalStats?.partitionText; // C 的大字: IF 优先, 没 IF 用分区顶
+    const statsSmall = opts.journalStats?.ifText ? opts.journalStats?.partitionText : undefined;
+    const template = pickIntroTemplate(r, { hasCover: !!introBgPath, hasStats: !!statsBig, clipStyle: opts.clipStyle });
+    const titleWrapped = wrapTitleForTemplate(template, title);
+    await writeFile(titleTxt, titleWrapped);
+    await writeFile(ctaTxt, escFf(cta || "关注我，投稿少踩坑"));
+    let statsCtx: { bigFile: string; bigText: string; smallFile?: string; smallText?: string } | undefined;
+    if (statsBig) {
+      const bigFile = join(workDir, "stats-big.txt");
+      await writeFile(bigFile, escFf(statsBig));
+      statsCtx = { bigFile, bigText: escFf(statsBig) };
+      if (statsSmall) {
+        const smallFile = join(workDir, "stats-small.txt");
+        await writeFile(smallFile, escFf(statsSmall));
+        statsCtx.smallFile = smallFile;
+        statsCtx.smallText = escFf(statsSmall);
+      }
+    }
     // 获客-2: 片尾 outro 叠企微客服二维码(固定素材, env WECOM_KF_QR_URL)。下载失败/未配置 → 不叠, 片尾照旧。
     let qrPath: string | undefined;
     if (env.WECOM_KF_QR_URL) {
@@ -226,7 +269,8 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
       catch (e) { logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.remix.kf_qr_download_failed"); }
     }
     const brollFiles = await filterBroll(opts.brollPaths);
-    const brollSlots = planBrollSlots(r, dur, off1, brollFiles.length);
+    // ⑦ beat 非空时 B-roll 起止吸附节拍网格; 空则与原随机行为逐 bit 一致
+    const brollSlots = planBrollSlots(r, dur, off1, brollFiles.length, beat);
     const brolls = brollSlots.map((s, i) => ({ ...s, file: brollFiles[i]! }));
 
     /**
@@ -235,17 +279,18 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
      * 跑挂都不该导致这条片废掉, 降级重跑老图比直接回原片多保住 90% 的混剪价值。
      */
     const buildArgs = (enhanced: boolean) => {
-      const introFontSize = enhanced ? Math.round(w / 14) : Math.round(w / 24);
-      const borderW = Math.max(2, Math.round(w / 270)); // 1080 宽 ≈ 4px 黑描边
-      const titleDraw = enhanced
-        ? `drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${introFontSize}:borderw=${borderW}:bordercolor=black:line_spacing=${Math.round(w / 90)}:x=(w-text_w)/2:y=(h-text_h)/2`
-        : `drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${introFontSize}:line_spacing=8:x=(w-text_w)/2:y=(h-text_h)/2`;
-
-      // ① 片头: 有图 → 铺满(等比放大裁切) + eq 压暗当底; 无图 → 纯色。整段 fade in 0.4s 更抓人。
-      const useIntroImg = enhanced && !!introBgPath;
-      const introChain = useIntroImg
-        ? `[1:v]fps=25,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},eq=brightness=-0.28,setsar=1,format=yuv420p,${titleDraw},fade=t=in:d=0.4,settb=AVTB[intro];`
-        : `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,${titleDraw}${enhanced ? ",fade=t=in:d=0.4" : ""},settb=AVTB[intro];`;
+      // ⑥ 片头: 增强图走模板池(intro-templates 4 套版式); 降级图保持 6-26 老样式(小字居中纯色)。
+      //   只有 A/B 吃封面图输入; C(数据大字卡)/D(大字报) 恒用 lavfi 纯色底(C 特意要深色衬大字)。
+      const useIntroImg = enhanced && !!introBgPath && (template === "A" || template === "B");
+      const titleDraw = `drawtext=fontfile='${FONT}':textfile='${titleTxt}':fontcolor=white:fontsize=${Math.round(w / 24)}:line_spacing=8:x=(w-text_w)/2:y=(h-text_h)/2`;
+      const introChain = enhanced
+        ? buildIntroFilter(template, {
+            w, h, font: FONT,
+            introColor: introCol, accentColor: accentCol,
+            titleFile: titleTxt, titleLines: titleWrapped.split("\n").length,
+            hasImage: useIntroImg, stats: statsCtx,
+          })
+        : `[1:v]fps=25,scale=${w}:${h},setsar=1,format=yuv420p,${titleDraw},settb=AVTB[intro];`;
 
       // ③ BGM: 老图 volume=0.16 死压; 增强图 sidechaincompress — BGM 基线提到 0.30,
       //   人声(delay 对齐后 asplit 一路)当 sidechain 自动压下, 人声停顿/片头片尾自然浮起。
@@ -330,7 +375,11 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     };
 
     logger.info(
-      { taskUuid, seed, dur, total, t1, t2, introBg: !!introBgPath, brolls: brolls.map((b) => ({ start: b.start, seg: b.seg })), ducking: !!bgmPath },
+      {
+        taskUuid, seed, dur, total, t1, t2, template, introBg: !!introBgPath,
+        brolls: brolls.map((b) => ({ start: b.start, seg: b.seg })), ducking: !!bgmPath,
+        beat: beat ? { bpm: stylePreset?.bpm, origin: beat.origin, off2 } : undefined,
+      },
       "dvh.remix.start",
     );
     try {
@@ -344,8 +393,21 @@ export async function remixVideo(opts: RemixOptions): Promise<RemixResult> {
     const buffer = await readFile(outMp4);
     const key = `dvh-videos/remix-${taskUuid || Date.now()}-${seed}.mp4`;
     const newUrl = await storage.upload(buffer, key, "video/mp4");
-    logger.info({ taskUuid, seed, newUrl, bytes: buffer.length }, "dvh.remix.done");
-    return { videoUrl: newUrl, remixed: true };
+
+    // ⑧ 自动封面: 片头 t=1.0s 抽帧 → OSS。整段包 try, 失败只 warn, 出片照常。
+    let coverUrl: string | undefined;
+    try {
+      const coverJpg = join(workDir, "cover.jpg");
+      if (await extractCoverFrame(outMp4, coverJpg)) {
+        const coverBuf = await readFile(coverJpg);
+        coverUrl = await storage.upload(coverBuf, `dvh-videos/cover-${taskUuid || Date.now()}-${seed}.jpg`, "image/jpeg");
+      }
+    } catch (err) {
+      logger.warn({ taskUuid, err: err instanceof Error ? err.message : err }, "dvh.remix.cover_upload_failed");
+    }
+
+    logger.info({ taskUuid, seed, newUrl, coverUrl, bytes: buffer.length }, "dvh.remix.done");
+    return { videoUrl: newUrl, remixed: true, ...(coverUrl ? { coverUrl } : {}) };
   } catch (err) {
     logger.warn({ taskUuid, err: err instanceof Error ? err.message : err }, "dvh.remix.failed_fallback");
     return { videoUrl, remixed: false };

@@ -14,13 +14,16 @@ export interface ClipStylePreset {
   sceneDurationMs: number; // 每幕默认时长(caller 未指定时用)
   bgmTag: string;          // BGM 子目录 data/bgm/<bgmTag>/; 不存在则回退 data/bgm/
   motionZoom: number;      // Ken Burns 缓慢推近上限(1=不动, 1.06=轻微, 1.12=明显)
+  // 7-10 卡点转场: 该风格 BGM 曲库的标称 BPM(老韩往 bgmTag 子目录放曲时按这个节奏挑)。
+  //   有 bpm → 混剪 B-roll 起止/片尾转场吸附节拍网格(beat-grid.ts); calm 类无强节拍 → 不设, 保持随机不卡点。
+  bpm?: number;
   desc: string;
 }
 
 export const CLIP_STYLES: Record<ClipStyleKey, ClipStylePreset> = {
   academic:  { key: "academic",  label: "学术严谨稳重", ttsSpeed: 1.20, sceneDurationMs: 5500, bgmTag: "calm",      motionZoom: 1.06, desc: "沉稳清晰、信息卡/数据图为主，适合医学/国外SCI/严肃学术号" },
-  popsci:    { key: "popsci",    label: "科普轻快卡点", ttsSpeed: 1.28, sceneDurationMs: 3500, bgmTag: "upbeat",    motionZoom: 1.12, desc: "快节奏、口语化，适合泛科普号" },
-  marketing: { key: "marketing", label: "营销转化",     ttsSpeed: 1.20, sceneDurationMs: 4000, bgmTag: "energetic", motionZoom: 1.10, desc: "钩子前置、强CTA，适合引流号" },
+  popsci:    { key: "popsci",    label: "科普轻快卡点", ttsSpeed: 1.28, sceneDurationMs: 3500, bgmTag: "upbeat",    motionZoom: 1.12, bpm: 110, desc: "快节奏、口语化，适合泛科普号" },
+  marketing: { key: "marketing", label: "营销转化",     ttsSpeed: 1.20, sceneDurationMs: 4000, bgmTag: "energetic", motionZoom: 1.10, bpm: 128, desc: "钩子前置、强CTA，适合引流号" },
   data:      { key: "data",      label: "数据流",       ttsSpeed: 1.10, sceneDurationMs: 5000, bgmTag: "calm",      motionZoom: 1.05, desc: "图表/数字为主、中速" },
 };
 
