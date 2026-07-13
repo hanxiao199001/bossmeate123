@@ -23,8 +23,8 @@ export default function CostComparisonPage() {
     <div>
       {/* 5-23 PR #156: 砍 nav (sidebar 提供), 留 1 行简化 header */}
       <div className="px-6 pt-4">
-        <h1 className="text-xl font-medium">💰 价值对比</h1>
-        <p className="text-xs text-gray-500 mt-0.5">假设参数可编辑, 自动保存</p>
+        <h1 className="text-xl font-medium">💰 价值测算</h1>
+        <p className="text-xs text-gray-500 mt-0.5">按你的假设参数测算投入产出（测算工具，非真实发布数据）；真实效果见首页「近 7 天效果」</p>
       </div>
 
       <main className="max-w-5xl mx-auto px-6 py-6 space-y-6">

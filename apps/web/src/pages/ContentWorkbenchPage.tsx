@@ -190,7 +190,7 @@ export default function ContentWorkbenchPage() {
       } else if (ok > 0) {
         toast.success(`${ok} 个成功 / ${fail} 个失败`);
       } else {
-        toast.error(`${fail} 个发布失败 (mock 账号 credentials 空属于预期)`);
+        toast.error(`${fail} 个发布失败：账号未完成授权/登录，请到账号管理检查`);
       }
       if (ok > 0) setTab("published");
     } catch (err) {

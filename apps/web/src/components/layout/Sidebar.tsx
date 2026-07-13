@@ -47,7 +47,7 @@ const DAILY_NAV: NavItem[] = [
 
 // 效果与数据 — 看效果 + 核心数据资产
 const DATA_NAV: NavItem[] = [
-  { to: "/cost-comparison", icon: IconBarChart, label: "效果分析", matchPrefix: "/cost-comparison", anyPerms: ["analytics.read"] }, // 原"ROI演示"
+  { to: "/cost-comparison", icon: IconBarChart, label: "价值测算", matchPrefix: "/cost-comparison", anyPerms: ["analytics.read"] }, // 7-13: 原名"效果分析"误导(此页是ROI测算器非真数据); 真效果数据在首页"近7天效果"面板
   { to: "/admin/journals/audit", icon: IconFileText, label: "期刊审计", matchPrefix: "/admin/journals/audit", adminOnly: true }, // 核心数据资产, 从admin底部提上来
 ];
 

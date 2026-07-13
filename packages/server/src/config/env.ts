@@ -236,7 +236,8 @@ const envSchema = z.object({
   WECHAT_MINI_SECRET: z.string().optional(),
 
   // B.1: 公众号入站 webhook 校验 token（公众号管理后台「开发-基本配置」 token）
-  WECHAT_VERIFY_TOKEN: z.string().default("ai_butler_token_2026"),
+  DVH_MOCK_FIXTURE_BASE: z.string().default(""),                     // 7-13 收尾: DVH兜底样片base URL(空=用OSS占位桶); 生产应开 DVH_REAL_MODE 极少走兜底
+  WECHAT_VERIFY_TOKEN: z.string().default("ai_butler_token_2026"), // 7-13: 保留默认防启动崩, 但生产 .env 必须覆盖真值(见下方 assertProd 校验)
 
   // 抖音开放平台官方 OAuth 代发（6-10 双轨 A 轨, scope video.create.bind）
   // 全局应用凭证（一个 BossMate 企业应用服务所有租户）; 账号级 credentials.clientKey/clientSecret 可覆盖
@@ -309,6 +310,12 @@ function loadEnv(): Env {
     console.warn(
       "⚠️ 开发环境: JWT_SECRET 建议至少 32 位，当前长度: " + data.JWT_SECRET.length
     );
+  }
+
+  // 7-13 收尾: 生产环境微信回调校验 token 不得用仓库硬编码默认值(否则任何读到源码的人都能伪造公众号回调签名)
+  if (data.NODE_ENV === "production" && data.WECHAT_VERIFY_TOKEN === "ai_butler_token_2026") {
+    console.error("❌ 生产环境 WECHAT_VERIFY_TOKEN 仍是仓库默认值，必须在 .env 覆盖为随机值");
+    process.exit(1);
   }
 
   // 检查是否至少有一个可用的 Embedding API Key
