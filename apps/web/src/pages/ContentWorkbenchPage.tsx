@@ -30,6 +30,7 @@ import RecommendationModal from "../components/RecommendationModal";
 import BatchUploadModal from "../components/BatchUploadModal";
 import BulkDistributeCard from "../components/workbench/BulkDistributeCard";
 import BulkDistributeProgressPanel from "../components/workbench/BulkDistributeProgressPanel";
+import ConfirmModal from "../components/ui/ConfirmModal";
 import { useAuthStore } from "../hooks/useAuthStore";
 
 export default function ContentWorkbenchPage() {
@@ -82,8 +83,15 @@ export default function ContentWorkbenchPage() {
   // 5-23 PR #161 — bulk distribute state
   const [bulkBatchId, setBulkBatchId] = useState<string | null>(null);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  // 发布二次确认(防误发): 提交前弹确认框, 列出将发布到的账号 + 篇数
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const requestBulkSubmit = useCallback(() => {
+    if (selectedIds.size === 0 || selectedAccountIds.size === 0) return;
+    setBulkConfirmOpen(true);
+  }, [selectedIds, selectedAccountIds]);
   const handleBulkSubmit = useCallback(async () => {
     if (selectedIds.size === 0 || selectedAccountIds.size === 0) return;
+    setBulkConfirmOpen(false);
     setBulkSubmitting(true);
     try {
       // 手动选号 = 尊重用户明确选择, 直接发到所选账号(不走智能配对/每日上限, 那些只管自动分发)
@@ -307,7 +315,7 @@ export default function ContentWorkbenchPage() {
               accounts={accounts}
               selectedAccountIds={selectedAccountIds}
               onChangeAccountIds={handleAccountIdsChange}
-              onSubmit={handleBulkSubmit}
+              onSubmit={requestBulkSubmit}
               submitting={bulkSubmitting}
             />
           ) : (
@@ -327,6 +335,36 @@ export default function ContentWorkbenchPage() {
           )}
         </aside>
       </div>
+
+      {/* 发布二次确认(防误发) — 列出将发布到的账号 + 篇数, 不可逆提示 */}
+      <ConfirmModal
+        open={bulkConfirmOpen}
+        title="确认批量发布"
+        danger
+        confirmText="确认发布"
+        irreversibleNote="发布到真实平台后不可撤回，请确认账号与内容无误"
+        onCancel={() => setBulkConfirmOpen(false)}
+        onConfirm={handleBulkSubmit}
+        loading={bulkSubmitting}
+        message={
+          <div className="space-y-2">
+            <p>
+              将发布 <span className="font-semibold text-gray-900">{selectedIds.size}</span> 篇内容到{" "}
+              <span className="font-semibold text-gray-900">{selectedAccountIds.size}</span> 个账号：
+            </p>
+            <ul className="list-disc pl-5 space-y-0.5">
+              {accounts
+                .filter((a) => selectedAccountIds.has(a.id))
+                .map((a) => (
+                  <li key={a.id}>
+                    {a.accountName}
+                    <span className="text-gray-400"> · {a.platform}</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        }
+      />
 
       {/* 5-20 P2 风控 modal */}
       <RiskAuditModal

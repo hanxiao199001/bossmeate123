@@ -9,6 +9,7 @@ import RewriteSectionModal from "../components/RewriteSectionModal";
 import EditTimelineDrawer from "../components/EditTimelineDrawer";
 import AccountSelector from "../components/AccountSelector";
 import UnifiedVideoModal from "../components/video/UnifiedVideoModal";
+import ConfirmModal from "../components/ui/ConfirmModal";
 
 // ===== 类型定义 =====
 interface VariantSibling {
@@ -179,6 +180,8 @@ export default function ContentDetailPage() {
   // 发布相关
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState("");
+  // 发布二次确认(防误发): 点「发布」先弹确认, 确认才真发
+  const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [showPublishPanel, setShowPublishPanel] = useState(
     searchParams.get("action") === "publish"
   );
@@ -1078,7 +1081,7 @@ export default function ContentDetailPage() {
                 {/* 发布按钮和结果 */}
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={handlePublish}
+                    onClick={() => setShowPublishConfirm(true)}
                     disabled={
                       publishing ||
                       selectedAccountIds.length === 0
@@ -1606,6 +1609,39 @@ export default function ContentDetailPage() {
           </div>
         )}
       </div>
+
+      {/* 发布二次确认(防误发) — 确认发布《标题》到 N 个账号, 不可逆提示 */}
+      <ConfirmModal
+        open={showPublishConfirm}
+        title="确认发布"
+        danger
+        confirmText="确认发布"
+        irreversibleNote="发布到真实平台后不可撤回，请确认账号与内容无误"
+        loading={publishing}
+        onCancel={() => setShowPublishConfirm(false)}
+        onConfirm={() => {
+          setShowPublishConfirm(false);
+          handlePublish();
+        }}
+        message={
+          <div className="space-y-2">
+            <p>
+              确认发布《<span className="font-semibold text-gray-900">{content.title || "无标题"}</span>》到{" "}
+              <span className="font-semibold text-gray-900">{selectedAccountIds.length}</span> 个账号：
+            </p>
+            <ul className="list-disc pl-5 space-y-0.5">
+              {accounts
+                .filter((a) => selectedAccountIds.includes(a.id))
+                .map((a) => (
+                  <li key={a.id}>
+                    {a.accountName}
+                    <span className="text-gray-400"> · {platformLabel(a.platform)}</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        }
+      />
 
       {/* 6-11 施工包C1-b: 统一生成视频弹窗 (文章锁定为当前内容) */}
       <UnifiedVideoModal

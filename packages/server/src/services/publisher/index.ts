@@ -256,6 +256,40 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     logger.info({ contentId, overrideReason: req.overrideReason, accountIds }, "P2 强制放行发布 (跳过 audit gate)");
   }
 
+  // P1 图片内容审核: 发图文前审封面 + 正文内嵌图(阿里云内容安全 baselineCheck)。
+  //   block→拦截整批(返回 blocked results, 前端可见"因图片违规未发布"); review→警告放行 + 记 metadata(同文本软词);
+  //   审核挂掉走兜底(strict on=拦/off=放行)。图片违规系内容级(与账号无关), 不受 forceOverride 跳过——涉黄/暴恐绝不放行。
+  let imageModNote: { reviews: Array<{ url: string; label: string; score: number }>; fallback?: string } | undefined;
+  try {
+    const { moderateImages, extractImageUrls, IMAGE_MODERATION_ENABLED } = await import("../compliance/image-moderation.js");
+    if (IMAGE_MODERATION_ENABLED) {
+      const imgUrls = extractImageUrls(content.body, autoCoverUrl);
+      if (imgUrls.length > 0) {
+        const mod = await moderateImages(imgUrls);
+        if (mod.blocked) {
+          const bad = [...new Set(mod.results.filter((r) => r.suggestion === "block").map((r) => r.label))];
+          logger.warn({ contentId, bad, fallback: mod.fallback }, "图片内容审核: 拦截发布");
+          return targetAccounts.map((acc): PublishResult => ({
+            accountId: acc.id,
+            accountName: acc.accountName,
+            platform: acc.platform,
+            success: false,
+            status: "blocked",
+            reason: `因图片违规未发布${bad.length ? `: ${bad.join("、")}` : "(审核服务不可用, strict 模式拦截)"}`,
+          }));
+        }
+        const reviews = mod.results.filter((r) => r.suggestion === "review").map((r) => ({ url: r.url, label: r.label, score: r.score }));
+        if (reviews.length > 0 || mod.fallback) {
+          imageModNote = { reviews, fallback: mod.fallback };
+          logger.warn({ contentId, reviews, fallback: mod.fallback }, "图片内容审核: 可疑放行(review)/兜底放行");
+        }
+      }
+    }
+  } catch (err) {
+    // extractImageUrls / import 等前置异常不阻塞发布(moderateImages 内部已对 API 挂掉兜底)
+    logger.warn({ err, contentId }, "图片内容审核前置异常, 跳过审核放行");
+  }
+
   // 6-16: 抖音/视频号登录态在客户本机、服务器无凭证 → 派给本地 Agent(建任务), 不走凭证发布。
   // 拆分下沉到此, 所有调 /publish 的入口(工坊直发/今日/详情/workflow)默认都正确。
   const agentTargets = targetAccounts.filter((a) => AGENT_PLATFORMS.has(a.platform));
@@ -387,6 +421,8 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
             draftUrl: result.draftUrl,
             message: result.message,
             error: result.error,
+            // P1 图片审核可疑放行/兜底放行留痕(同文本软词逻辑, 便于事后人工复核)
+            ...(imageModNote ? { imageModeration: imageModNote.fallback === "skipped_error" ? "skipped_error" : imageModNote } : {}),
           },
         });
 

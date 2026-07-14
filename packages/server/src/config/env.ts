@@ -289,6 +289,26 @@ const envSchema = z.object({
   // OpenAlex polite-pool email（B.2.1.B.2）。配置后请求带 ?mailto=<email>
   // 享受 10K req/day 免费 quota；不配置走 anonymous pool（更低额度）。
   OPENALEX_MAILTO: z.string().email().optional(),
+
+  // 7-14 P1 图片内容审核 (services/compliance/image-moderation.ts) — 阿里云内容安全 ImageModeration(baselineCheck)
+  //   复用 ALIYUN_ACCESS_KEY_ID/SECRET 凭证; 走 openapi-client 通用调用, 不新增 green 专用 SDK。
+  IMAGE_MODERATION_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // 失败兜底策略: false(默认)=审核挂了放行(不因审核抖动发不出内容); true=审核挂了拦截(合规要求高时开)
+  IMAGE_MODERATION_STRICT: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // 内容安全区域 endpoint (green20220302): cn-shanghai / cn-beijing / cn-hangzhou
+  IMAGE_MODERATION_ENDPOINT: z.string().default("green-cloud.cn-shanghai.aliyuncs.com"),
+  // Confidence(0-100) 阈值: ≥block→拦截, ≥review→警告放行, 否则放行
+  IMAGE_MODERATION_BLOCK_SCORE: z.coerce.number().default(90),
+  IMAGE_MODERATION_REVIEW_SCORE: z.coerce.number().default(60),
+  IMAGE_MODERATION_CONCURRENCY: z.coerce.number().int().min(1).default(10), // 批量审核并发上限
+  IMAGE_MODERATION_MAX_IMAGES: z.coerce.number().int().min(1).default(20),  // 单条内容最多审核几张(封面+正文内嵌)
+  IMAGE_MODERATION_TIMEOUT_MS: z.coerce.number().int().default(8000),       // 单图审核读/连超时
 });
 
 export type Env = z.infer<typeof envSchema>;

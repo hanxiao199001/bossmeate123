@@ -145,8 +145,28 @@ export async function videoRoutes(app: FastifyInstance) {
         });
       }
 
-      // TODO: 图片内容审核接口占位（一期不接真实审核）
-      // await moderateImages(body.images.map(i => i.remotePath));
+      // P1 图片内容审核: 视频合成前审图片(阿里云内容安全 baselineCheck)。remotePath→签名URL(公网可达)传审核。
+      //   block→拒绝合成(记原因返回前端); review→放行(仅记 warn); 审核挂掉走兜底(strict on=拦/off=放行)。
+      const { moderateImages, IMAGE_MODERATION_ENABLED } = await import("../services/compliance/image-moderation.js");
+      if (IMAGE_MODERATION_ENABLED) {
+        try {
+          const urls = await Promise.all(body.images.map((i) => storage.getSignedUrl(i.remotePath, 900)));
+          const mod = await moderateImages(urls.filter((u) => /^https?:\/\//i.test(u)));
+          if (mod.blocked) {
+            const bad = mod.results.filter((r) => r.suggestion === "block").map((r) => r.label);
+            logger.warn({ tenantId, bad, fallback: mod.fallback }, "图片内容审核: 拦截视频合成");
+            return reply.code(400).send({
+              code: "IMAGE_MODERATION_BLOCKED",
+              message: `图片内容审核未通过, 已拦截合成${bad.length ? `: ${[...new Set(bad)].join("、")}` : ""}`,
+            });
+          }
+          const reviews = mod.results.filter((r) => r.suggestion === "review");
+          if (reviews.length > 0) logger.warn({ tenantId, reviews }, "图片内容审核: 可疑放行(review)");
+        } catch (err) {
+          // moderateImages 自身已兜底, 这里只兜签名URL等前置异常, 不阻塞合成
+          logger.warn({ err, tenantId }, "图片内容审核前置异常, 跳过审核放行");
+        }
+      }
 
       const jobData: VideoJobData = {
         tenantId,
