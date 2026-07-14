@@ -64,20 +64,32 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   }
   const nameById = new Map(accounts.map((a) => [a.id, a.accountName]));
 
-  // 2. 可发池: 近 7 天、article、status=generated (已过质检 或 人工/AI 采用后都落在 generated)
-  //    自有租户内容 + SYSTEM 共享推荐池 (与今日页/发布链路同口径)
+  // 2. 可发池: 近 7 天、article
+  //    7-13 修复"草稿箱饿死": 草稿箱本身就是运营人工筛选台(推进去还要人工挑+手动发, 非自动群发),
+  //    所以"质检没过但不危险"的文章应带分数流进草稿箱让运营挑 —— 质检门不该在草稿箱前二次拦死。
+  //    纳入: status=generated(已过/人工采用) + needs_review 里"六维偏低"这类质量问题;
+  //    仍排除的红线类(标题数据造假 title_data_fabricated / 标题正文矛盾 title_body_inconsistent)——
+  //    信任事故不进草稿箱, 永远留人工. 判据读 metadata.needsReviewReason。
   const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 3600_000);
-  const pool = await db
-    .select({ id: contents.id, title: contents.title })
+  // 剔除: 红线两类(信任事故)+ 评分降级(分数不可信, 不是"分低"而是"没算准", 该重评不该进草稿箱)
+  const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "sixdim_degraded"];
+  const rawPool = await db
+    .select({ id: contents.id, title: contents.title, status: contents.status, metadata: contents.metadata })
     .from(contents)
     .where(and(
       or(eq(contents.tenantId, tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
       eq(contents.type, "article"),
-      eq(contents.status, "generated"),
+      inArray(contents.status, ["generated", "needs_review"]),
       gte(contents.createdAt, since),
     ))
     .orderBy(desc(contents.createdAt))
-    .limit(300);
+    .limit(500);
+  // needs_review 的文章: 只有非红线(六维偏低等质量问题)才放进草稿箱; 红线类剔除留人工
+  const pool = rawPool.filter((c) => {
+    if (c.status === "generated") return true;
+    const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
+    return !reason || !RED_LINE_REASONS.includes(reason);
+  }).slice(0, 300).map((c) => ({ id: c.id, title: c.title }));
   if (pool.length === 0) {
     report.skippedReason = "可发池为空";
     return report;
