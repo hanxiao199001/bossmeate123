@@ -45,11 +45,13 @@ describe("护栏 wire 防回归", () => {
     expect(guardIdx).toBeLessThan(promptIdx);
   });
 
-  it("daily-cron 自动选刊: 两选择器都 conf≥70 优先", async () => {
+  it("daily-cron 自动选刊: conf≥70 优先", async () => {
     const src = await readSrc("../services/recommendation/daily-cron.ts");
     // verified 条件存在, 且被前置到 pick 首层
+    // 7-14 单一流水线: 退役 A 路后只剩 pickScopedFreshJournal 一个选择器(pickFreshJournalStrict 随 A 路删除),
+    //   conf≥70 门控仍在, 断言随实现演进从 ≥2 调到 ≥1。
     const verifiedMatches = src.match(/confidence\}? >= 70|confidence >= 70/g) || [];
-    expect(verifiedMatches.length).toBeGreaterThanOrEqual(2); // pickScopedFreshJournal + pickFreshJournalStrict
+    expect(verifiedMatches.length).toBeGreaterThanOrEqual(1); // pickScopedFreshJournal
     expect(src).toMatch(/active, verified, sc, disc, fresh/);
   });
 });

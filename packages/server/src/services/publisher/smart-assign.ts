@@ -20,6 +20,8 @@ export interface SmartPair {
 export interface SmartAssignResult {
   pairs: SmartPair[];
   unmatched: Array<{ articleId: string; discipline: string | null; reason: string }>;
+  /** 7-14: 两轮保底后仍未达下限的号 (内容不足信号, 供调用方报告) */
+  shortfalls?: Array<{ accountId: string; assigned: number; target: number }>;
 }
 
 interface AccountLite {
@@ -51,7 +53,7 @@ function inferDisciplineFromName(name: string): string | null {
   return null;
 }
 
-type Scope = "domestic" | "international" | null;
+export type Scope = "domestic" | "international" | null;
 
 // 6-19: 把期刊判成 国内核心/国外期刊 (镜像 journal-scope.ts 的 journalScopeCondition, JS 版)。
 //   国内核心 = 有中文目录标签(catalogs 非空); 国外期刊 = 无中文标签且有 IF 或分区; 其余=未知(不限制)。
@@ -95,14 +97,163 @@ async function resolveArticle(
 }
 
 /**
+ * 7-14 单一流水线·学科相邻表 (第2轮兜底只在相邻集内取, 八竿子打不着的宁缺不硬塞)。
+ *   对称、保守: 医↔生↔化(近药)、生↔农↔环、经↔法(社科)、教↔心 等; 法学文绝不塞给医学号。
+ *   退役 A 路后, 这张表是"相邻兜底"的唯一权威源(原 daily-cron ADJACENT_DISCIPLINES 已随 A 路删除)。
+ */
+export const DISCIPLINE_ADJACENCY: Record<string, string[]> = {
+  medicine:    ["biology", "psychology", "chemistry"], // 医↔生↔心; chem 近药学
+  biology:     ["medicine", "chemistry", "agriculture", "environment"],
+  chemistry:   ["biology", "physics", "environment", "medicine"],
+  physics:     ["engineering", "chemistry", "computer"],
+  engineering: ["computer", "physics", "environment"],
+  computer:    ["engineering", "physics"],
+  psychology:  ["medicine", "education"],
+  education:   ["psychology"],
+  economics:   ["law"],                                // 经↔法/社科
+  law:         ["economics"],
+  environment: ["biology", "agriculture", "chemistry", "engineering"],
+  agriculture: ["biology", "environment"],
+};
+
+/**
+ * 第2轮兜底可否把某学科文章补给某号:
+ *   - 领域不限号(disciplines 空): 接受任意学科(仍受 scope 硬约束) —— 它本就没有领域偏好。
+ *   - 领域号: 文章学科须 ∈ 该号偏好学科的"自身 ∪ 相邻集", 否则宁缺(记 shortfall, 不硬塞无关领域)。
+ *   - 无学科(discipline=null)文章: 不硬塞给领域号(核不出相邻关系), 只可落领域不限号。
+ */
+export function isAdjacentForAccount(acctDisciplines: string[], artDiscipline: string | null): boolean {
+  if (acctDisciplines.length === 0) return true;
+  if (!artDiscipline) return false;
+  for (const d of acctDisciplines) {
+    if (d === artDiscipline) return true;
+    if ((DISCIPLINE_ADJACENCY[d] ?? []).includes(artDiscipline)) return true;
+  }
+  return false;
+}
+
+// ============ 7-14 两轮保底分配 (纯函数, 无 DB, 可单测) ============
+export interface ResolvedArticle {
+  id: string;
+  discipline: string | null;
+  scope: Scope;
+  /** metadata.exclusiveAccountId — 账号驱动保底定向生成时绑定的号 */
+  exclusiveAccountId?: string | null;
+}
+export interface AssignAccountLite {
+  id: string;
+  disciplines: string[];
+  journalScope: string; // domestic | international | both
+}
+export interface TwoRoundResult {
+  pairs: SmartPair[];
+  unmatched: SmartAssignResult["unmatched"];
+  /** 两轮后仍未达保底下限的号 (内容不足的信号, 供调用方明确报告, 不静默) */
+  shortfalls: Array<{ accountId: string; assigned: number; target: number }>;
+}
+
+/**
+ * 两轮保底分配。核心诉求: 每个公众号每天尽量到 target(保底下限) 篇, 不超 cap(上限)。
+ *  第0轮 独家绑定: exclusiveAccountId 的文章直派该号 (≤cap)。
+ *  第1轮 领域优先: 每篇配"领域含该学科(或不限领域)且范围相容"的号, 负载均衡, 每号先填到 target。
+ *  第2轮 相邻兜底: 仍 < target 的号, 从剩余未分配文章补, 但只在【相邻学科集】内取(范围仍严格);
+ *                八竿子打不着的宁缺(法学文绝不塞医学号), 补不到落 shortfalls 告警; 逐轮各号 +1 = 雨露均沾。
+ * 红线一篇一号: assigned 集合全程去重 — 同一 articleId 绝不出现在两个号。
+ */
+export function assignArticlesTwoRound(opts: {
+  articles: ResolvedArticle[]; // 应已按质检分降序 (名额有限时高分先占坑)
+  accounts: AssignAccountLite[];
+  preload?: Map<string, number>; // 今日各号已发数 (load 起点, 让 上限/下限 对"今日已发+本轮"一起生效)
+  target: number; // 保底下限
+  cap: number;    // 每号上限
+}): TwoRoundResult {
+  const cap = Math.max(1, Math.floor(opts.cap));
+  const target = Math.max(0, Math.min(Math.floor(opts.target), cap)); // 夹在 [0, cap]
+  const accounts = opts.accounts;
+  const acctIds = new Set(accounts.map((a) => a.id));
+  const load = new Map<string, number>(accounts.map((a) => [a.id, opts.preload?.get(a.id) ?? 0]));
+  const pairs: SmartPair[] = [];
+  const unmatched: TwoRoundResult["unmatched"] = [];
+  const assigned = new Set<string>();
+  const scopeOk = (a: AssignAccountLite, scope: Scope) => a.journalScope === "both" || !scope || a.journalScope === scope;
+
+  // ---- 第0轮: 独家绑定直派 (≤cap) ----
+  const boundIds = new Set<string>();
+  for (const art of opts.articles) {
+    const ex = art.exclusiveAccountId;
+    if (!ex || !acctIds.has(ex)) continue;
+    boundIds.add(art.id); // 已定向 → 不让别号在后续轮次抢走
+    if ((load.get(ex) ?? 0) < cap) {
+      pairs.push({ articleId: art.id, accountId: ex, discipline: art.discipline });
+      load.set(ex, (load.get(ex) ?? 0) + 1);
+      assigned.add(art.id);
+    } else {
+      unmatched.push({ articleId: art.id, discipline: art.discipline, reason: `已绑定的号今日已达发布上限(${cap}篇/天)` });
+    }
+  }
+  const rest = opts.articles.filter((a) => !boundIds.has(a.id));
+
+  // ---- 第1轮: 领域优先, 负载均衡填到 target ----
+  for (const art of rest) {
+    const pool = accounts.filter((a) => scopeOk(a, art.scope));
+    if (pool.length === 0) {
+      unmatched.push({
+        articleId: art.id, discipline: art.discipline,
+        reason: art.scope ? `没有定位为"${art.scope === "domestic" ? "国内核心" : "国外期刊"}"或不限范围的公众号` : "无可用公众号",
+      });
+      continue;
+    }
+    const matching = pool.filter((a) => art.discipline && a.disciplines.includes(art.discipline));
+    const open = pool.filter((a) => a.disciplines.length === 0);
+    const candAll = matching.length > 0 ? matching : open;
+    const cand = candAll.filter((a) => (load.get(a.id) ?? 0) < target);
+    if (cand.length === 0) continue; // 对口号都已到下限 → 留作第2轮兜底料 (不误报 unmatched)
+    cand.sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0));
+    const picked = cand[0]!;
+    load.set(picked.id, (load.get(picked.id) ?? 0) + 1);
+    pairs.push({ articleId: art.id, accountId: picked.id, discipline: art.discipline });
+    assigned.add(art.id);
+  }
+
+  // ---- 第2轮: 相邻学科兜底 (只在相邻集内补, 范围仍严格; 逐轮各号 +1 雨露均沾) ----
+  //   八竿子打不着的宁缺(法学文绝不塞医学号): 候选文章学科须在该号"自身 ∪ 相邻集"内(领域不限号除外)。
+  //   补不到 → 该号留在当前篇数, 落 shortfalls 告警, 不硬塞无关领域。
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    const below = accounts
+      .filter((a) => (load.get(a.id) ?? 0) < target)
+      .sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0));
+    for (const acc of below) {
+      const art = rest.find(
+        (a) => !assigned.has(a.id) && scopeOk(acc, a.scope) && isAdjacentForAccount(acc.disciplines, a.discipline),
+      );
+      if (!art) continue;
+      pairs.push({ articleId: art.id, accountId: acc.id, discipline: art.discipline });
+      load.set(acc.id, (load.get(acc.id) ?? 0) + 1);
+      assigned.add(art.id);
+      progressed = true;
+    }
+  }
+
+  const shortfalls = accounts
+    .filter((a) => (load.get(a.id) ?? 0) < target)
+    .map((a) => ({ accountId: a.id, assigned: load.get(a.id) ?? 0, target }));
+
+  return { pairs, unmatched, shortfalls };
+}
+
+/**
  * 计算配对。accountIds 为空 = 用租户全部启用的公众号。
  */
 export async function computeSmartPairs(opts: {
   tenantId: string;
   articleIds: string[];
   accountIds?: string[];
-  /** 7-05 ⑤: 覆盖每号每日上限 (草稿箱分发 top-N 用; 缺省走 publishLimits 配置/默认1) */
+  /** 7-05 ⑤: 覆盖每号每日上限 (cap, 草稿箱分发 top-N 用; 缺省走 publishLimits 配置/默认1) */
   dailyCap?: number;
+  /** 7-14: 每号每日保底下限 (target, 两轮保底填到该数; 缺省=cap, 即老行为"填到上限") */
+  target?: number;
 }): Promise<SmartAssignResult> {
   const { tenantId, articleIds } = opts;
   if (articleIds.length === 0) return { pairs: [], unmatched: [] };
@@ -145,13 +296,17 @@ export async function computeSmartPairs(opts: {
     return sb - sa;
   });
 
-  // PR-B1 宁缺毋滥: 每号每日发布上限 (公众号订阅号本就日发1次; 配置可覆盖)
+  // PR-B1/7-14: 每号每日 上限(cap) 与 保底下限(target)。cap 缺省走 publishLimits 配置/默认1; target 缺省=cap。
   const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
   const cfgLimit = Number((t?.config as any)?.publishLimits?.perAccountPerDay);
-  const DAILY_CAP = Number.isFinite(opts.dailyCap) && (opts.dailyCap as number) > 0
+  const CAP = Number.isFinite(opts.dailyCap) && (opts.dailyCap as number) > 0
     ? Math.floor(opts.dailyCap as number)
     : Number.isFinite(cfgLimit) && cfgLimit > 0 ? Math.floor(cfgLimit) : 1; // 公众号默认 1/天
-  // 今日各号已发数 (北京时间当日)
+  const TARGET = Number.isFinite(opts.target) && (opts.target as number) >= 0
+    ? Math.min(CAP, Math.floor(opts.target as number))
+    : CAP; // 缺省=cap → 老行为(填到上限)
+
+  // 今日各号已发数 (北京时间当日) — 作为 load 起点, 让 上限/下限 对"今日已发+本轮分配"一起生效
   const bj = new Date(Date.now() + 8 * 3600_000); bj.setUTCHours(0, 0, 0, 0);
   const since = new Date(bj.getTime() - 8 * 3600_000);
   const pubRows = await db
@@ -159,89 +314,31 @@ export async function computeSmartPairs(opts: {
     .from(contentPublishLog)
     .where(and(eq(contentPublishLog.tenantId, tenantId), gte(contentPublishLog.createdAt, since)))
     .groupBy(contentPublishLog.accountId);
-  const publishedToday = new Map<string, number>(pubRows.map((r) => [r.accountId, Number(r.n)]));
+  const preload = new Map<string, number>(pubRows.map((r) => [r.accountId, Number(r.n)]));
 
-  // load 起点 = 今日已发数, 这样上限对"今日已发+本轮分配"一起生效
-  const load = new Map<string, number>(accounts.map((a) => [a.id, publishedToday.get(a.id) ?? 0]));
-  const pairs: SmartPair[] = [];
-  const unmatched: SmartAssignResult["unmatched"] = [];
+  // 逐篇解析 学科 + 国内/国外范围 + 独家绑定 (async, 同刊缓存); 再交给纯函数做两轮保底分配。
   const journalCache = new Map<string, { discipline: string | null; scope: Scope }>();
-
-  // 6-22 账号驱动·保底定向: 文章若已绑定某号(metadata.exclusiveAccountId)→ 直派该号(在其当日上限内),
-  //   不进按学科重配、也不被空号兜底抢走。解决"锁定领域专号分配不到内容"。
-  const acctIdSet = new Set(accounts.map((a) => a.id));
-  const boundArticleIds = new Set<string>();
-  const restArts: typeof arts = [];
+  const resolved: ResolvedArticle[] = [];
   for (const art of arts) {
-    const ex = (art.metadata as Record<string, any> | null)?.exclusiveAccountId as string | undefined;
-    if (ex && acctIdSet.has(ex)) {
-      const { discipline: disc } = await resolveArticle(art.metadata as Record<string, unknown> | null, journalCache);
-      if ((load.get(ex) ?? 0) < DAILY_CAP) {
-        pairs.push({ articleId: art.id, accountId: ex, discipline: disc });
-        load.set(ex, (load.get(ex) ?? 0) + 1);
-        boundArticleIds.add(art.id);
-      } else {
-        unmatched.push({ articleId: art.id, discipline: disc, reason: `已绑定的号今日已达发布上限(${DAILY_CAP}篇/天)` });
-        boundArticleIds.add(art.id); // 仍算"已定向", 不让别号兜底抢走
-      }
-    } else {
-      restArts.push(art);
-    }
+    const meta = art.metadata as Record<string, any> | null;
+    const { discipline, scope } = await resolveArticle(meta as Record<string, unknown> | null, journalCache);
+    const ex = typeof meta?.exclusiveAccountId === "string" ? (meta.exclusiveAccountId as string) : null;
+    resolved.push({ id: art.id, discipline, scope, exclusiveAccountId: ex });
   }
 
-  for (const art of restArts) {
-    const { discipline: disc, scope } = await resolveArticle(art.metadata as Record<string, unknown> | null, journalCache);
-    // 6-19: 账号"国内/国外"定位过滤 — 账号定 domestic/international 且与文章期刊范围明确冲突时排除;
-    //       账号 both 或文章范围未知 → 不限制(绝不因信息缺失误杀内容)。
-    const scopeOk = (a: AccountLite) => a.journalScope === "both" || !scope || a.journalScope === scope;
-    const pool = accounts.filter(scopeOk);
-    // 领域匹配的号优先; 领域不限的号兜底
-    const matching = pool.filter((a) => disc && a.disciplines.includes(disc));
-    const open = pool.filter((a) => a.disciplines.length === 0);
-    const candidatesAll = matching.length > 0 ? matching : open;
-    // PR-B1: 剔除已达每日上限的号 (今日已发+本轮已分 >= DAILY_CAP)
-    const candidates = candidatesAll.filter((a) => (load.get(a.id) ?? 0) < DAILY_CAP);
-    if (candidatesAll.length === 0) {
-      const why = pool.length === 0 && scope
-        ? `没有定位为"${scope === "domestic" ? "国内核心" : "国外期刊"}"或不限范围的公众号`
-        : `没有领域含"${disc}"或不限领域的公众号`;
-      unmatched.push({ articleId: art.id, discipline: disc, reason: why });
-      continue;
-    }
-    if (candidates.length === 0) {
-      unmatched.push({ articleId: art.id, discipline: disc, reason: `匹配的号今日已达发布上限(${DAILY_CAP}篇/天),宁缺毋滥` });
-      continue;
-    }
-    // 负载均衡: 本轮分到最少的优先
-    candidates.sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0));
-    const picked = candidates[0]!;
-    load.set(picked.id, (load.get(picked.id) ?? 0) + 1);
-    pairs.push({ articleId: art.id, accountId: picked.id, discipline: disc });
-  }
+  const { pairs, unmatched, shortfalls } = assignArticlesTwoRound({
+    articles: resolved, accounts, preload, target: TARGET, cap: CAP,
+  });
 
-  // 6-21 空号兜底: 主配对(按学科)后, 仍"今日空着"的号(已发+本轮分配 < 上限), 用同范围的"未分配剩余文章"兜底,
-  //   放宽学科匹配(范围仍严格)。解决窄定位号(如 国外·教育)当天无对口学科文章时长期空置。
-  //   只动用本会无人认领的剩余文章 → 纯增益: 不浪费内容, 也不让号空着。
-  const assignedIds = new Set(pairs.map((p) => p.articleId));
-  const leftover = arts.filter((a) => !assignedIds.has(a.id) && !boundArticleIds.has(a.id));
-  if (leftover.length > 0) {
-    let filled = 0;
-    for (const acc of accounts) {
-      if ((load.get(acc.id) ?? 0) >= DAILY_CAP) continue; // 今日非空, 跳过
-      for (let i = 0; i < leftover.length; i++) {
-        const { discipline: disc, scope } = await resolveArticle(leftover[i]!.metadata as Record<string, unknown> | null, journalCache);
-        const scopeOk = acc.journalScope === "both" || !scope || acc.journalScope === scope;
-        if (!scopeOk) continue;
-        pairs.push({ articleId: leftover[i]!.id, accountId: acc.id, discipline: disc });
-        load.set(acc.id, (load.get(acc.id) ?? 0) + 1);
-        leftover.splice(i, 1);
-        filled++;
-        break;
-      }
-    }
-    if (filled > 0) logger.info({ tenantId, filled }, "6-21 空号兜底: 同范围剩余文章已补给空号(放宽学科)");
+  if (shortfalls.length > 0) {
+    logger.warn(
+      { tenantId, target: TARGET, cap: CAP, shortfalls, articles: arts.length, accounts: accounts.length },
+      `⚠️ 7-14 保底未达标: ${shortfalls.length} 个号 < ${TARGET} 篇/天 — 内容不足, 需提高生成量或补内容`,
+    );
   }
-
-  logger.info({ tenantId, articles: arts.length, paired: pairs.length, unmatched: unmatched.length }, "PR-W6 smart-assign 配对完成");
-  return { pairs, unmatched };
+  logger.info(
+    { tenantId, articles: arts.length, paired: pairs.length, unmatched: unmatched.length, target: TARGET, cap: CAP },
+    "PR-W6/7-14 smart-assign 两轮保底配对完成",
+  );
+  return { pairs, unmatched, shortfalls };
 }

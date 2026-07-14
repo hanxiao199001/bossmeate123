@@ -782,7 +782,8 @@ export async function adminRoutes(app: FastifyInstance) {
       });
       return { name: a.name, scope, disciplines: ds.map(discLabel), fed };
     });
-    const quotaView = quota ? Object.fromEntries(Object.entries(quota).map(([k, v]) => [k, { count: v.count, disciplines: v.disciplines.map(discLabel) }])) : null;
+    // 7-14: computeAutoQuota 的 disciplines 已按号数加权(含重复), 预览去重只展示"覆盖哪些学科"。
+    const quotaView = quota ? Object.fromEntries(Object.entries(quota).map(([k, v]) => [k, { count: v.count, disciplines: [...new Set(v.disciplines)].map(discLabel) }])) : null;
     return { code: "OK", data: { quota: quotaView, accounts: accountRows, gaps: accountRows.filter((r) => !r.fed).map((r) => r.name) } };
   });
   app.get("/daily-content-config", { preHandler: adminOnlyMiddleware }, async () => {
