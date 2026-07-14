@@ -86,7 +86,14 @@ const envSchema = z.object({
   AI_REVIEWER_DAILY_CAP: z.coerce.number().default(10),
 
   // 7-05 ⑤ 公众号草稿箱分发 (services/publisher/draft-distributor.ts)
-  DRAFT_PUSH_PER_ACCOUNT: z.coerce.number().default(2), // 每号每日推草稿上限 (top-N)
+  DRAFT_PUSH_PER_ACCOUNT: z.coerce.number().default(2), // 每号每日推草稿"上限"(ceiling / top-N)
+  // 7-14 保底分发: 每号每日草稿"下限"(floor)。分发两轮保底填到该数, 生成量也按此×号数动态定。
+  //   语义: DRAFT_TARGET_PER_ACCOUNT(下限) ≤ DRAFT_PUSH_PER_ACCOUNT(上限)。
+  DRAFT_TARGET_PER_ACCOUNT: z.coerce.number().default(2),
+  // 7-14 生成缓冲乘数: 按"号数×下限"提量时留分配损耗(配不上/冷却枯竭/质检剔除)的余量。
+  DRAFT_GEN_BUFFER: z.coerce.number().default(1.3),
+  // 7-14 每日生成硬上限: 账号驱动保底定向生成的总篇数天花板, 防号多时 LLM 调用失控。
+  DAILY_GEN_HARD_CAP: z.coerce.number().int().min(1).default(40),
   DRAFT_PUSH_CRON_HOUR: z.coerce.number().min(0).max(23).default(8), // 每日几点(BJ)推
 
   // 7-06 ① 公众号效果数据回流 (services/metrics/wechat-stats-collector.ts)
