@@ -287,6 +287,14 @@ export async function enrichJournal(
     successFields.push("pku_core_level (wanfang dynamic)");
     realProvenance.pkuCoreLevel = "wanfang";
   }
+  // task#104 阶段2: 万方"中信所核心影响因子"→ composite_impact_factor 列（国内刊影响力指标）。
+  //   仅当 DB 当前 NULL 才填（不覆盖手维/知网值），provenance=wanfang。
+  //   守"数字必须有源"：这是国内复合 IF，绝不并入 impact_factor（那会让 hasWosData 误判成国外刊）。
+  if (typeof wanfangData?.cnImpactFactor === "number" && journal.compositeImpactFactor == null) {
+    updates.compositeImpactFactor = wanfangData.cnImpactFactor;
+    successFields.push("composite_impact_factor (wanfang)");
+    realProvenance.compositeImpactFactor = "wanfang";
+  }
 
   // B.2.1.B.2: publisher 回填（仅当 DB 当前 NULL 才覆盖，避免覆盖手维值）
   if (!journal.publisher) {

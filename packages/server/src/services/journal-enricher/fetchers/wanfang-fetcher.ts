@@ -29,6 +29,14 @@ function pickUa(): string {
   return UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
 }
 
+/**
+ * 共享的万方 SSR 抓取（UA 池 + Referer=baidu + retry：5xx/网络异常重试，4xx return null）。
+ * task#104 阶段2：perioId resolver 复用此函数（红线 #11 复用 > 重写），不再另造反爬逻辑。
+ */
+export async function fetchWanfangHtml(url: string, label: string): Promise<string | null> {
+  return fetchHtmlWithRetry(url, label);
+}
+
 async function fetchHtmlWithRetry(url: string, label: string): Promise<string | null> {
   for (let attempt = 0; attempt <= RETRY_BACKOFF_MS.length; attempt++) {
     const controller = new AbortController();
