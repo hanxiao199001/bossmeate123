@@ -47,6 +47,8 @@ async function sleep(ms: number) {
 
 async function main() {
   const apply = process.argv.includes("--apply");
+  // 7-16 A方案: 万方仅覆盖医学刊(实测非医学刊 0 命中) → --medical-only 只处理医学国内刊(疑医学刊池 ~635)。
+  const medicalOnly = process.argv.includes("--medical-only");
   const limit = parseInt(argVal("--limit") ?? (apply ? "100000" : "30"), 10);
   const baseDelay = parseInt(argVal("--delay") ?? "10000", 10); // 10s 基准（合规）
   const jitter = parseInt(argVal("--jitter") ?? "3000", 10); // ±3s 抖动
@@ -73,6 +75,10 @@ async function main() {
           OR ${journals.cscdLevel} IS NOT NULL
           OR ${journals.pkuCoreLevel} IS NOT NULL
         )`,
+        // --medical-only: 只留医学国内刊(discipline=medicine 或 刊名含医学词根)。万方医学网只收医学刊, 非医学刊白抓。
+        ...(medicalOnly
+          ? [sql`(${journals.discipline} = 'medicine' OR ${journals.name} ~ '医|药|护理|临床|外科|内科|眼|口腔|中医')`]
+          : []),
       ),
     )) as WanfangCandidateRow[];
 
