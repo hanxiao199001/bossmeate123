@@ -25,6 +25,7 @@ import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
 import SalesRadarPage from "./pages/SalesRadarPage";
 import KfServicePage from "./pages/KfServicePage"; // 7-2 B-kf 企微微信客服管理页
 import MatrixOverviewPage from "./pages/MatrixOverviewPage"; // 7-10 矩阵总览(全账号今日状态+健康度, admin)
+import EffectDashboardPage from "./pages/EffectDashboardPage"; // 7-18 效果分析(真实回流数据看板, admin)
 import PlatformPage from "./pages/PlatformPage"; // 7-05 平台管理(客户开通, 白名单手机号)
 // 5-21 P3 全局 chat 抽屉 (mount 在登录后所有 protected 页可见)
 import { useState } from "react";
@@ -221,6 +222,18 @@ export default function App() {
           <ProtectedAdminRoute>
             <MainLayout>
               <SettingsPage />
+            </MainLayout>
+          </ProtectedAdminRoute>
+        }
+      />
+
+      {/* 7-18: 效果分析 — 真实公众号回流数据看板 (admin only), 与 /cost-comparison(测算器)区分 */}
+      <Route
+        path="/effect-dashboard"
+        element={
+          <ProtectedAdminRoute>
+            <MainLayout>
+              <EffectDashboardPage />
             </MainLayout>
           </ProtectedAdminRoute>
         }

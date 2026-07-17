@@ -125,6 +125,25 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /**
+   * GET /admin/effect-dashboard — 7-18 效果看板：把真实回流的 content_metrics 聚合成
+   * 总览卡 / 每账号表现 / 内容排行榜 / 趋势 / 学科维度。?days=7|30|90 (默认30)。
+   * 全部真实聚合, 无数据维度返回空 + emptyDimensions 标记 (不编数)。
+   */
+  app.get("/effect-dashboard", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    try {
+      const q = (request.query ?? {}) as { days?: string };
+      const parsed = Number(q.days);
+      const rangeDays = (parsed === 7 || parsed === 90 ? parsed : 30) as 7 | 30 | 90;
+      const { buildEffectDashboard } = await import("../services/metrics/effect-dashboard.js");
+      const data = await buildEffectDashboard(request.tenantId, rangeDays);
+      return { success: true, data };
+    } catch (err) {
+      logger.error({ err }, "效果看板聚合失败");
+      return reply.code(500).send({ success: false, error: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
    * GET /admin/journals/search — PR #175 期刊实时筛选
    * 从 DB 39+ 期刊中按 7 条件筛选, 返回匹配列表
    */
