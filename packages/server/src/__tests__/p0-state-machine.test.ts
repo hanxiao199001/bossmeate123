@@ -36,12 +36,13 @@ beforeEach(() => {
 });
 
 describe("P0 state machine: ALLOWED_TRANSITIONS 表完整性", () => {
-  it("6 个状态全覆盖", () => {
+  it("7 个状态全覆盖", () => {
     expect(ARTICLE_STATUSES).toEqual([
       "draft",
       "generating",
       "failed",
       "generated",
+      "needs_review", // PR-U2: 质检未过, 待人工复核
       "published",
       "archived",
     ]);
@@ -53,14 +54,17 @@ describe("P0 state machine: ALLOWED_TRANSITIONS 表完整性", () => {
   it("draft → [generating, archived]", () => {
     expect(ALLOWED_TRANSITIONS.draft).toEqual(["generating", "archived"]);
   });
-  it("generating → [generated, failed]", () => {
-    expect(ALLOWED_TRANSITIONS.generating).toEqual(["generated", "failed"]);
+  it("generating → [generated, failed, needs_review]（PR-U2 质检未过→复核）", () => {
+    expect(ALLOWED_TRANSITIONS.generating).toEqual(["generated", "failed", "needs_review"]);
   });
   it("failed → [generating, archived]（重试 / 放弃）", () => {
     expect(ALLOWED_TRANSITIONS.failed).toEqual(["generating", "archived"]);
   });
   it("generated → [published, draft, archived]（发布 / 回退编辑 / 归档）", () => {
     expect(ALLOWED_TRANSITIONS.generated).toEqual(["published", "draft", "archived"]);
+  });
+  it("needs_review → [generated, draft, archived]（PR-U2 人工采用 / 退回编辑 / 弃）", () => {
+    expect(ALLOWED_TRANSITIONS.needs_review).toEqual(["generated", "draft", "archived"]);
   });
   it("published → [archived]", () => {
     expect(ALLOWED_TRANSITIONS.published).toEqual(["archived"]);

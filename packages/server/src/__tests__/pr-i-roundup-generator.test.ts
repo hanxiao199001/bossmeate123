@@ -42,7 +42,10 @@ describe("PR-I2: 盘点生成器", () => {
     expect(d.title).toContain("核心");
   });
   it("LLM 抛错 → 规则兜底, 仍产出条目", async () => {
-    chatMock.mockRejectedValue(new Error("llm down"));
+    // 7-15 测试跟进: mockRejectedValue 留持久"拒绝工厂", 被 vitest 误报为 unhandled-rejection(挂本条 it)。
+    //   兜底功能本身完好(probe 实证: chat 拒绝→generateRoundup 走 try/catch→ruleFallback→return 2 条),
+    //   改 mockRejectedValueOnce(单次消费即止, 无残留拒绝)消除误报。生产代码不动。
+    chatMock.mockRejectedValueOnce(new Error("llm down"));
     const d = await generateRoundup({ tenantId: "t1", journalIds: ["j1", "j2"], audience: "县域教师" });
     expect(d.items.length).toBe(2);
     expect(d.items[0].name).toContain("教育发展研究");

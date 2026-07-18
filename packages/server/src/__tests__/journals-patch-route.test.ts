@@ -53,6 +53,8 @@ vi.mock("../models/schema.js", () => ({
 vi.mock("drizzle-orm", () => ({
   eq: (a: unknown, b: unknown) => ({ kind: "eq", a, b }),
   and: (...xs: unknown[]) => ({ kind: "and", xs }),
+  or: (...xs: unknown[]) => ({ kind: "or", xs }), // journals.ts GET/:id 用 or(isNull(tenantId), eq(...))
+  isNull: (a: unknown) => ({ kind: "isNull", a }),
   sql: () => ({}), gte: () => ({}), lte: () => ({}), ilike: () => ({}), desc: () => ({}), asc: () => ({}),
 }));
 

@@ -35,7 +35,7 @@ describe("PR B.10: shunshi-style 4 SVG chart 槽位 + V12 raw 透传", () => {
     const j = {
       ...baseJournal,
       ifHistoryRaw: { data: [{ year: 2020, if: 3.0 }, { year: 2021, if: 3.5 }, { year: 2022, if: 4.2 }, { year: 2023, if: 5.0 }] },
-      carIndexHistory: { data: [{ year: 2020, carIndex: 0.45 }, { year: 2021, carIndex: 0.52 }, { year: 2022, carIndex: 0.58 }], riskLevel: "mid" },
+      carIndexHistory: { source: "jcarindex", data: [{ year: 2020, carIndex: 0.45 }, { year: 2021, carIndex: 0.52 }, { year: 2022, carIndex: 0.58 }], riskRankText: "低", riskLevel: "mid" },
       publicationStats: { frequency: "月刊", annualVolumeHistory: [{ year: 2020, count: 800 }, { year: 2021, count: 900 }, { year: 2022, count: 1000 }] },
       citingJournalsTop10: { topJournals: [{ name: "Cell", percent: 12 }, { name: "Nature", percent: 10 }, { name: "Lancet", percent: 8 }] },
     };
