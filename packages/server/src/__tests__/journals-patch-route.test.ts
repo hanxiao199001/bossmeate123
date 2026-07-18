@@ -122,10 +122,13 @@ describe("PATCH /journals/:id — Day 2 PR B", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ code: "ok" });
-    // tenantId scoping: where 是 and(eq(id, j-1), eq(tenantId, tenant-A))
+    // tenantId scoping: where 是 and(eq(id, j-1), or(eq(tenantId, tenant-A), isNull(tenantId)))
+    //   — 允许改本租户或全局(tenantId=null)刊, 仍禁跨租户(tenant-B)写。租户谓词现嵌在 or 里。
     const whereCond = lastWhereArg[0];
     expect(whereCond.kind).toBe("and");
-    const tenantPredicate = whereCond.xs.some((c: any) => c?.kind === "eq" && c?.b === "tenant-A");
+    const orCond = whereCond.xs.find((c: any) => c?.kind === "or");
+    expect(orCond).toBeTruthy();
+    const tenantPredicate = orCond.xs.some((c: any) => c?.kind === "eq" && c?.b === "tenant-A");
     expect(tenantPredicate).toBe(true);
     // set 仅含白名单字段（+ updatedAt）
     expect(lastSetArg[0].discipline).toBe("medicine");

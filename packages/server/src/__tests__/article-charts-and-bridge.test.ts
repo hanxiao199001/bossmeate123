@@ -45,7 +45,7 @@ describe("PR B.10: shunshi-style 4 SVG chart 槽位 + V12 raw 透传", () => {
     expect(html).toContain("近 10 年影响因子");
     expect(html).toContain("CAR 指数");
     expect(html).toContain("近 10 年发文量");
-    expect(html).toMatch(/引用前\s*\d+\s*期刊分布/);
+    // 引用前10期刊饼图已被 PR #210 关停(OpenAlex 引用抽样不准) → renderCitingJournalsPie 恒返回 ""，不再断言其标题。
     // 真数据数字落到 HTML（不是占位"数据采集中"）
     expect(html).not.toMatch(/近 10 年影响因子[\s\S]{0,200}数据采集中/);
   });
