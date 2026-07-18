@@ -43,6 +43,31 @@ async function loadKfCredential(): Promise<KfCredential | null> {
   }
 }
 
+/**
+ * 「测试连接」探针（管理页企微设置用）：读指定租户 kf 凭证 → gettoken 验证 corpId + kfSecret 对不对。
+ * 只读、不落库、不缓存 token（避免污染正常缓存），失败返回可读原因。
+ */
+export async function pingKfCredential(tenantId: string): Promise<{ ok: boolean; error?: string }> {
+  const [cfg] = await db.select().from(workWechatConfigs).where(eq(workWechatConfigs.tenantId, tenantId)).limit(1);
+  if (!cfg) return { ok: false, error: "尚未配置企微" };
+  if (!cfg.kfSecretEnc) return { ok: false, error: "未配置微信客服 Secret，无法验证" };
+  let kfSecret: string;
+  try {
+    kfSecret = decryptCredentials(cfg.kfSecretEnc);
+  } catch {
+    return { ok: false, error: "微信客服 Secret 解密失败（可能加密密钥已变更，请重新保存）" };
+  }
+  try {
+    const url = `${QY_API}/cgi-bin/gettoken?corpid=${encodeURIComponent(cfg.corpId)}&corpsecret=${encodeURIComponent(kfSecret)}`;
+    const res = await fetch(url);
+    const data = (await res.json()) as { errcode?: number; errmsg?: string; access_token?: string };
+    if (data.access_token && !data.errcode) return { ok: true };
+    return { ok: false, error: `企微返回错误：${data.errcode ?? "?"} ${data.errmsg ?? ""}`.trim() };
+  } catch (err) {
+    return { ok: false, error: `网络请求失败：${err instanceof Error ? err.message : "未知错误"}` };
+  }
+}
+
 // access_token 内存缓存：key=corpId。7200s 有效，提前 5 分钟刷新
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 

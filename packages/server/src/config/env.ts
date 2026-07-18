@@ -237,6 +237,10 @@ const envSchema = z.object({
   WECOM_KF_URL: z.string().optional(),
   // 企微客服接待链接的二维码 PNG(OSS URL, scripts/upload-kf-qr.mjs 生成上传)，混剪片尾 outro 叠加。留空则片尾不叠二维码。
   WECOM_KF_QR_URL: z.string().optional(),
+  // B-kf 自助化: FAQ 批量导入单次上限（防误粘超大文本）
+  KF_FAQ_IMPORT_MAX: z.coerce.number().int().min(1).default(200),
+  // B-kf 自助化:「从历史对话生成建议」单次扫描会话数上限（成本护栏，每次一趟 LLM）
+  KF_SUGGEST_MAX_CONVERSATIONS: z.coerce.number().int().min(1).default(30),
 
   // 期刊检索小程序：wx.login + getPhoneNumber 登录所需（小程序后台「开发管理-开发设置」）
   WECHAT_MINI_APPID: z.string().optional(),
