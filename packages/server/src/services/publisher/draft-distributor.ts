@@ -42,12 +42,21 @@ export interface DraftDistributeReport {
   pushed: number;
   failed: number;
   skippedReason?: string;
+  /** 7-14: 每号保底下限/上限, 供运营核对 */
+  targetPerAccount?: number;
+  capPerAccount?: number;
+  /** 7-14: 两轮保底后仍未达下限的号 (内容不足信号, 明确报告不静默) */
+  shortfalls?: Array<{ accountId: string; accountName: string | null; assigned: number; target: number }>;
 }
 
 /** 单租户跑一轮 */
 export async function distributeDraftsForTenant(tenantId: string): Promise<DraftDistributeReport> {
   const report: DraftDistributeReport = { tenantId, perAccount: [], poolSize: 0, pushed: 0, failed: 0 };
+  // 7-14: cap=每号上限(DRAFT_PUSH_PER_ACCOUNT); target=每号保底下限(DRAFT_TARGET_PER_ACCOUNT), 夹 ≤ cap。
   const perAccount = Math.max(1, Math.floor(env.DRAFT_PUSH_PER_ACCOUNT));
+  const target = Math.max(1, Math.min(perAccount, Math.floor(env.DRAFT_TARGET_PER_ACCOUNT)));
+  report.targetPerAccount = target;
+  report.capPerAccount = perAccount;
 
   // 1. 该租户启用中的公众号
   const accounts = await db
@@ -115,12 +124,21 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   const titleById = new Map(fresh.map((p) => [p.id, p.title]));
 
   // 4. 领域/定位匹配 (复用 smart-assign; dailyCap=每号 top-N; 内部已按质检分排序=top 候选先占坑)
-  const { pairs, unmatched } = await computeSmartPairs({
+  const { pairs, unmatched, shortfalls } = await computeSmartPairs({
     tenantId,
     articleIds: fresh.map((p) => p.id),
     accountIds: accounts.map((a) => a.id),
-    dailyCap: perAccount,
+    dailyCap: perAccount, // 上限
+    target,               // 7-14 保底下限: 两轮保底填到该数
   });
+  // 7-14: 未达保底下限的号 — 明确报告(带号名), 不静默。内容不足时供运营/运维决定提量或补内容。
+  if (shortfalls && shortfalls.length > 0) {
+    report.shortfalls = shortfalls.map((s) => ({ ...s, accountName: nameById.get(s.accountId) ?? null }));
+    logger.warn(
+      { tenantId, target, cap: perAccount, pool: fresh.length, accounts: accounts.length, shortfalls: report.shortfalls },
+      `⚠️ 草稿分发: ${shortfalls.length}/${accounts.length} 个号未达保底(${target}篇/天) — 内容不足, 需提高生成量或补内容`,
+    );
+  }
   if (pairs.length === 0) {
     report.skippedReason = `无可配对内容 (unmatched=${unmatched.length})`;
     return report;
