@@ -5,20 +5,21 @@
  * 完成后 worker INSERT content_publish_log (ON CONFLICT UPDATE).
  */
 import { Queue, QueueEvents } from "bullmq";
-import { getRedisConnection } from "../task/queue.js";
+import { getRedisConnection, lazyQueue } from "../task/queue.js";
 
-export const bulkDistributeQueue = new Queue("bulk-distribute", {
+// 7-18 架构审计 A2: 惰性化, 避免 import 即开 Redis 连接(见 task/queue.ts 说明)
+export const bulkDistributeQueue = lazyQueue("bulkDistributeQueue", () => new Queue("bulk-distribute", {
   connection: getRedisConnection(),
   defaultJobOptions: {
     attempts: 1, // 不自动重试 (失败入 log 等手动重发)
     removeOnComplete: 1000,
     removeOnFail: 1000,
   },
-});
+}));
 
-export const bulkDistributeQueueEvents = new QueueEvents("bulk-distribute", {
+export const bulkDistributeQueueEvents = lazyQueue("bulkDistributeQueueEvents", () => new QueueEvents("bulk-distribute", {
   connection: getRedisConnection(),
-});
+}));
 
 /** 并发上限 — 多 platform 同时发但单 batch 串行避免 API rate limit */
 export const BULK_DISTRIBUTE_CONCURRENCY = 3;

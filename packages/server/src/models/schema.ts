@@ -1229,7 +1229,7 @@ export const userSkipLog = pgTable(
   "user_skip_log",
   {
     tenantId: uuid("tenant_id").notNull(),
-    contentId: uuid("content_id").notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(), // 7-18 审计: 补外键防孤儿(migration 025)
     skippedAt: timestamp("skipped_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -1269,7 +1269,7 @@ export const contentPublishLog = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
-    contentId: uuid("content_id").notNull(),
+    contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(), // 7-18 审计: 补外键防孤儿(migration 025)
     accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
     // 7-06 ② 扩到 30 (migration 023): success | failed | skipped | draft | draft_pushed | dispatched
     //   | published_by_operator (推的草稿被运营群发 = 市场选择正信号) | draft_expired (推了7天没发 = 负信号)

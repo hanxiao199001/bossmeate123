@@ -493,4 +493,37 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         );
     `,
   },
+  {
+    version: "025_fk_orphan_guard",
+    description:
+      "7-18 架构审计补外键(审计 B13): content_publish_log.content_id + user_skip_log.content_id 缺外键→删内容留孤儿, 补 FK ON DELETE CASCADE(先清孤儿再加约束)。幂等: 约束存在则跳过。注: 审计 B14 的 6 处 userId 无级联本次不动 — 改 SET NULL 需列 nullable, 会涟漪 TS 类型到读取方代码, 风险>收益(删单用户才留残留, tenantId 有 cascade 兜底=影响可控), 标记已知债暂不动。",
+    sql: `
+      -- ① content_publish_log.content_id: 先清孤儿(指向已删 contents 的行), 再加 CASCADE 外键
+      DELETE FROM content_publish_log cpl
+      WHERE cpl.content_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM contents c WHERE c.id = cpl.content_id);
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cpl_content_id_fk') THEN
+          ALTER TABLE content_publish_log
+            ADD CONSTRAINT cpl_content_id_fk
+            FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE;
+        END IF;
+      END $$;
+
+      -- ①b user_skip_log.content_id 同样缺外键(审计同类), 先清孤儿再补 CASCADE
+      DELETE FROM user_skip_log usl
+      WHERE usl.content_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM contents c WHERE c.id = usl.content_id);
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usl_content_id_fk') THEN
+          ALTER TABLE user_skip_log
+            ADD CONSTRAINT usl_content_id_fk
+            FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `,
+  },
 ];
