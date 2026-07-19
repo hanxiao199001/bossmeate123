@@ -83,6 +83,16 @@
 
 ---
 
+## 效果看板已知限制 — 手填指标不带 accountId（老韩 2026-07-19 拍板：接受，不修）
+
+**背景**：效果看板"每号表现"对**手填**指标无法做账号级归因。根因在数据采集端：`TodayPage.tsx:197` 运营手填 ROI 指标时 `accountId: ""` 写死（录入表单只让选**平台**，不选账号），`today.ts:246` 落库入 `content_metrics.metadata.accountId=""`。
+
+**现状（codex review 后已修到"诚实聚合"）**：`effect-dashboard.ts` 把空串 accountId 归一为 null → 按 `platform:{平台}` 兜底分桶（`fix 649d89e`）。**效果**：① 跨平台不再串（原空串 key 会把 wechat/douyin 手填挤成一行，已修）② 同平台多个账号的手填数仍合并成一个"平台级"聚合行（accountId=null，名字=平台）——**这是数据本身没带账号，看板不能凭空造，属诚实展示不是 bug**。
+
+**判定**：API 自动回流的账号有真实 per-account 行；手填走平台级聚合。**不加账号选择器**（多数运营单平台单号手填，per-account 手填不值那几次多点击）。若日后运营普遍一平台多号且要手填账号级数据，再在 `TodayPage` 录入表单加账号 `<select>`（后端 `today.ts` 已收 accountId，改动仅前端一处）。codex 复审 6/7 RESOLVED + no new issues，此条 P1 是数据采集限制、非看板 bug，本条即结论。
+
+---
+
 ## 部署 + verify 标准流程（红线 #5）
 
 ```
