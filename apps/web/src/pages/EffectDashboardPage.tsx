@@ -8,7 +8,7 @@
  *       趋势折线(内联 SVG, 无图表库) → 学科维度(CSS bar)。
  * 反造假: 无回流数据时显示"T+1 回流"引导, 不满屏 0。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import PageHeader from "../components/ui/PageHeader";
@@ -97,16 +97,20 @@ export default function EffectDashboardPage() {
   const [error, setError] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("totalViews");
 
+  const reqSeq = useRef(0);
   const load = useCallback(async (d: RangeDays) => {
+    const seq = ++reqSeq.current; // codex P2: 快速切区间会并发多请求, 慢的后到会覆盖新的 → 只认最新一次, 丢弃陈旧响应
     setError(false);
     try {
       const res = await api.get<EffectDashboard>(`/admin/effect-dashboard?days=${d}`);
+      if (seq !== reqSeq.current) return;
       if (res.data) setData(res.data);
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       console.error("效果看板加载失败", err);
       setError(true);
     } finally {
-      setLoading(false);
+      if (seq === reqSeq.current) setLoading(false);
     }
   }, []);
 
@@ -252,7 +256,7 @@ export default function EffectDashboardPage() {
                 ) : (
                   <ol className="space-y-1.5">
                     {data.ranking.map((c, i) => (
-                      <li key={c.contentId}>
+                      <li key={`${c.contentId}-${c.platform}`}>
                         <Link
                           to={`/content/${c.contentId}`}
                           className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-slate-50 transition-colors"

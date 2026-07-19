@@ -138,7 +138,9 @@ export async function buildEffectDashboard(tenantId: string, rangeDays: RangeDay
     followers: Number(r.followers ?? 0),
     inquiries: Number(r.inquiries ?? 0),
     source: r.source ?? null,
-    account_id: r.account_id ?? null,
+    // 归一: metadata->>'accountId' 缺省=null, 但 TodayPage 手填会写空串 "" —— 空串等同"无账号",
+    //   否则下游按账号分组时所有空串行会挤成一个合成账号(codex P1)。统一转 null 走平台兜底桶。
+    account_id: r.account_id || null,
     title: r.title ?? null,
     content_created_at: r.content_created_at ?? null,
     journal_id: r.journal_id ?? null,
@@ -162,12 +164,17 @@ export async function buildEffectDashboard(tenantId: string, rangeDays: RangeDay
   const hasTrendData = trendRaw.some((t) => t.reads > 0);
 
   // 3) 覆盖率: 期内已发布篇数 (成功群发 / 运营手动群发)
+  //   窗口对齐 base/trend 的 rangeDays-1 (codex P2: 原 -rangeDays 多算一天, 覆盖率被低估)。
+  //   published_by_operator 是 draft_pushed 后被 wechat-stats-collector 检测升级的, created_at 仍是草稿时间、
+  //   真实发布时间在 updated_at(转移时刷新); 只按 created_at 过滤会漏掉期内实际发布的旧草稿(codex P2)。
   const pubRes = await db.execute(sql`
     SELECT COUNT(DISTINCT cpl.content_id) AS c
     FROM content_publish_log cpl
     WHERE cpl.tenant_id = ${tenantId}
-      AND cpl.status IN ('success', 'published_by_operator')
-      AND cpl.created_at >= (CURRENT_DATE - ${rangeDays}::int)
+      AND (
+        (cpl.status = 'success' AND cpl.created_at >= (CURRENT_DATE - ${rangeDays - 1}::int))
+        OR (cpl.status = 'published_by_operator' AND cpl.updated_at >= (CURRENT_DATE - ${rangeDays - 1}::int))
+      )
   `);
   const publishedCount = Number((((pubRes as any).rows ?? [])[0]?.c) ?? 0);
 

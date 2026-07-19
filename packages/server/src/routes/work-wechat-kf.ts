@@ -353,9 +353,13 @@ export async function workWechatKfRoutes(app: FastifyInstance) {
       const tenantId = request.tenantId;
       const maxConv = env.KF_SUGGEST_MAX_CONVERSATIONS;
 
-      // 取最近人工接管过的会话（mode=manual 说明 AI 没答上来、有人工介入 = 有真实答案可学）
+      // 取"有人工答过"的会话(codex P2): 原按 mode=manual 过滤会漏——运营答完把会话恢复自动模式后 mode≠manual,
+      //   但对话里确实留了人工答案(正是该学的)。改按"存在人工回复消息"选, 不看当前模式(与 conversationHasHumanAnswer 同口径)。
       const convs = await db.select({ id: kfConversations.id }).from(kfConversations)
-        .where(and(eq(kfConversations.tenantId, tenantId), eq(kfConversations.mode, "manual")))
+        .where(and(
+          eq(kfConversations.tenantId, tenantId),
+          sql`EXISTS (SELECT 1 FROM ${kfMessages} WHERE ${kfMessages.conversationId} = ${kfConversations.id} AND ${kfMessages.direction} = 'out' AND ${kfMessages.aiAction} IN ('manual', 'human_wecom') AND ${kfMessages.msgType} = 'text')`,
+        ))
         .orderBy(desc(sql`coalesce(${kfConversations.lastMsgAt}, ${kfConversations.createdAt})`))
         .limit(maxConv);
 
@@ -370,8 +374,9 @@ export async function workWechatKfRoutes(app: FastifyInstance) {
           direction: kfMessages.direction, content: kfMessages.content,
           aiAction: kfMessages.aiAction, msgType: kfMessages.msgType,
         }).from(kfMessages).where(eq(kfMessages.conversationId, c.id))
-          .orderBy(asc(kfMessages.createdAt)).limit(60);
-        const msgs = rows as KfMsgLite[];
+          .orderBy(desc(kfMessages.createdAt)).limit(60);
+        // codex P2: 长会话(>60条)人工答案往往在后段, 原 asc+limit(60) 只取最旧 60 条会漏掉 → 取最新 60 条再转回时间正序
+        const msgs = (rows as KfMsgLite[]).reverse();
         if (!conversationHasHumanAnswer(msgs)) continue;
         const text = formatConversationForLlm(msgs);
         if (text) conversationTexts.push(text);
