@@ -9,6 +9,7 @@
  * 5. 将内容存入知识库 domain_knowledge 子库
  */
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
@@ -424,7 +425,12 @@ export async function collectJournalContent(params: {
       || cnNumber
       || (!journal.impactFactor && /[\u4e00-\u9fa5]/.test(journal.name));
 
-    if (isDomestic) {
+    // 7-20 合规红线熔断: 知网抓取默认关闭(env CNKI_SCRAPE_ENABLED 未配 = false)。
+    //   关闭后走的是"本就没有知网数据"的状态 —— 库里 provenance/metadata/source_url/data_source
+    //   四处 cnki 痕迹均为 0, 说明这条路从未成功产出过数据, 关掉零功能损失。
+    //   下方所有 cnkiDetail 派生字段(cnNumber/compositeIF/coreSubjects/organizer…)保持原有的
+    //   "无知网数据"分支, 由后续 万方/LetPub/OpenAlex 等合规源填充。
+    if (isDomestic && env.CNKI_SCRAPE_ENABLED) {
       try {
         const cnkiDetail = await scrapeCnkiJournal(journal.name, journal.issn || undefined);
         if (cnkiDetail) {

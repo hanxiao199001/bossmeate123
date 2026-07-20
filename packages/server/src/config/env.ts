@@ -290,6 +290,17 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
+  // 7-20 合规红线：知网(CNKI)抓取总开关，**默认 false（关闭）**。
+  //   背景：journal-content-collector 在国内刊分支上会调 scrapeCnkiJournal 打 navi.cnki.net，
+  //   但库里零知网数据痕迹（field_provenance/metadata/source_url/data_source 全 0），
+  //   且失败只打 logger.debug（线上 LOG_LEVEL=info 看不见）→ 静默发请求、拿不到数据。
+  //   老韩 7-20 拍板：知网是合规红线，立即熔断。生产 .env 不配置此项 = 永久关闭。
+  //   ⚠️ 不要为了补数据打开它。万方(wanfangdata)不受此开关影响，是允许的源。
+  CNKI_SCRAPE_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   // OpenAlex polite-pool email（B.2.1.B.2）。配置后请求带 ?mailto=<email>
   // 享受 10K req/day 免费 quota；不配置走 anonymous pool（更低额度）。
   OPENALEX_MAILTO: z.string().email().optional(),

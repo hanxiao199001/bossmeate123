@@ -1,15 +1,27 @@
 /**
- * 知网（CNKI）期刊导航爬虫
+ * ⚠️⚠️ 本文件住着两个打**不同数据源**的函数，别搞混（7-20 标注）：
+ *
+ *   ❌ scrapeCnkiJournal   → navi.cnki.net（知网）  —— **合规红线，默认禁用，勿启用**
+ *   ✅ scrapeWanfangJournal → s.wanfangdata.com.cn（万方）—— 允许使用
+ *
+ * 文件名叫 cnki-journal-scraper 是历史遗留，**不代表整个模块都是知网**。
+ * 从本文件 import 时务必确认拿的是哪一个 —— 一个 import 之差就踩红线。
+ *
+ * ── 知网部分（scrapeCnkiJournal / searchCnkiJournal / parseCnkiHtml）──
+ *
+ * 🚫 **合规红线：知网抓取默认关闭，不得为补数据而启用。**
+ *    老韩 2026-07-20 拍板熔断。唯一调用点 journal-content-collector.ts 已加
+ *    `env.CNKI_SCRAPE_ENABLED` 守卫（默认 false，生产 .env 不配置 = 永久关闭）。
+ *    熔断依据：库里知网数据痕迹为 0（field_provenance / metadata / source_url /
+ *    data_source 四处查 cnki 全为 0），即这条路从未成功产出过数据，关掉零功能损失；
+ *    而失败只打 logger.debug（线上 LOG_LEVEL=info 不可见）→ 属于"静默发请求"。
+ *    代码保留仅为历史可追溯，**不要新增调用点，也不要在生产 .env 里打开开关**。
+ *    国内刊数据请走：万方（本文件的 wanfang 函数 / services/journal-enricher/wanfang-*）、
+ *    LetPub、OpenAlex（受源可信度约束，见 CLAUDE.md）。
  *
  * 数据源：https://navi.cnki.net/knavi/journals/searchbaseinfo
- *
- * 抓取内容：
- * - 期刊基本信息：刊名、CN 刊号、ISSN、主办单位、主管单位、刊期
- * - 影响因子：复合影响因子、综合影响因子
- * - 核心收录：北大核心、CSSCI、CSCD、CSTPCD 等
- * - 期刊主页 URL
- *
- * 注意：知网有反爬机制，需要控制频率
+ * 抓取内容：刊名 / CN 刊号 / ISSN / 主办单位 / 主管单位 / 刊期、复合与综合影响因子、
+ *          核心收录（北大核心 / CSSCI / CSCD / CSTPCD）、期刊主页 URL
  */
 
 import { logger } from "../../config/logger.js";
@@ -55,6 +67,7 @@ export interface CnkiJournalDetail {
  * @param journalName - 期刊名称（中文）
  * @param issn - ISSN（可选，用于精确匹配）
  */
+/** 🚫 合规红线：默认禁用。调用方必须先判 `env.CNKI_SCRAPE_ENABLED`（默认 false）。见文件头。 */
 export async function scrapeCnkiJournal(
   journalName: string,
   issn?: string
@@ -316,7 +329,9 @@ export interface WanfangJournalDetail {
 }
 
 /**
- * 搜索万方期刊数据库，作为知网的补充数据源
+ * ✅ 万方期刊搜索（s.wanfangdata.com.cn）—— **允许使用**，不受 CNKI_SCRAPE_ENABLED 影响。
+ *    国内刊的合规数据源。scripts/backfill-wanfang-issn.ts 补 ISSN 走的就是这个。
+ *    注意：万方封数据中心 IP，服务器上跑会 ECONNREFUSED，需在桌面真实网络跑。
  */
 export async function scrapeWanfangJournal(
   journalName: string,
