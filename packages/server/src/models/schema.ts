@@ -265,7 +265,11 @@ export const journals = pgTable(
     nameEn: varchar("name_en", { length: 300 }), // 英文名
     issn: varchar("issn", { length: 20 }),
     publisher: varchar("publisher", { length: 200 }), // 出版社/主办方
-    discipline: varchar("discipline", { length: 100 }), // 学科领域
+    discipline: varchar("discipline", { length: 100 }), // 学科领域(原始值: 国内刊为中文分类名, 国际刊为英文码)
+    // 7-20 学科码归一(migration 026): discipline 归一成 ALL_DISC_CODES 之一或 'generic'。
+    //   **Postgres 生成列, 只读** — 不要 insert/update 这一列, DB 会随 discipline 自动重算。
+    //   规则源: services/recommendation/discipline-mapping.ts
+    disciplineCode: varchar("discipline_code", { length: 20 }),
     partition: varchar("partition", { length: 20 }), // 分区: Q1 | Q2 | Q3 | Q4
     impactFactor: real("impact_factor"), // 影响因子
     annualVolume: integer("annual_volume"), // 年发文量

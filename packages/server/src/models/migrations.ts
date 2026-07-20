@@ -9,6 +9,8 @@
  *   ⚠️ 不要修改 / 删除已发布的条目 (已应用的不会重跑; 改了也不生效, 只会让新库行为不一致)。
  *   ⚠️ sql 尽量幂等 (IF NOT EXISTS), 万一同条在不同库状态不一仍安全。
  */
+import { buildDisciplineCodeSql } from "../services/recommendation/discipline-mapping.js";
+
 export interface Migration {
   version: string;
   description: string;
@@ -524,6 +526,25 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
             FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE;
         END IF;
       END $$;
+    `,
+  },
+  {
+    version: "026_journals_discipline_code",
+    description:
+      "7-20 学科码归一(生成列): journals 加 discipline_code, 表达式由 discipline-mapping.ts 的 RULES 生成。" +
+      "治'国内刊 discipline 存中文(临床医学/综合性人文、社会科学…)、选刊器按英文码 ILIKE 匹配'的错配 —— " +
+      "生产实测国内 verified 刊仅 137/2379(5.8%) 能被学科匹配到, 其余只能靠不带学科的兜底层选出, " +
+      "近30天全库只用到 231 本不同刊。归一后 2379 本全部可进学科匹配层(1920 具体学科 + 459 generic 通吃)。" +
+      "用生成列而非普通列回填: crawler 新插刊/enricher 改 discipline 时 DB 自动重算, 无需在写入点手工调用, 永不漂。" +
+      "⚠️ 改 RULES 不会自动生效 — 必须新加 migration 走 DROP COLUMN + 重建 ADD COLUMN GENERATED。",
+    sql: `
+      ALTER TABLE journals DROP COLUMN IF EXISTS discipline_code;
+      ALTER TABLE journals ADD COLUMN discipline_code varchar(20)
+        GENERATED ALWAYS AS (${buildDisciplineCodeSql("discipline")}) STORED;
+
+      -- 选刊热路径: pickScopedFreshJournal 按 (status, discipline_code) 过滤 + conf 门槛
+      CREATE INDEX IF NOT EXISTS idx_journals_disc_code ON journals (discipline_code);
+      CREATE INDEX IF NOT EXISTS idx_journals_pick ON journals (status, discipline_code, confidence);
     `,
   },
 ];

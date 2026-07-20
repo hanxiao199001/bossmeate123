@@ -24,6 +24,7 @@ import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
 import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
 import { journalScopeCondition } from "./journal-scope.js";
+import { GENERIC_DISCIPLINE_CODE } from "./discipline-mapping.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
   SYSTEM_RECOMMENDATION_TENANT_ID,
@@ -326,7 +327,10 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 }
 
 // ============ PR-O3: 每日内容生成(按类型) ============
-const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics"];
+// 7-20: 加 humanities —— 国内核心刊里文史哲艺新闻类有 328 本(第二大具体学科), 原先只能塞进
+//   law 桶(法学), 选出《文学评论》却按"法学"生成 = 对口度错。拆出来单独成码。
+//   与 discipline-mapping.ts 的 DISCIPLINE_CODES 保持一致。
+const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics", "humanities"];
 
 const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
 
@@ -409,7 +413,17 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
     // 6-20: 开了"按账号自动配齐"→ 用账号定位反推配额(忽略手动篇数); 没账号则回退手动配置。
     if ((t?.config as { automationConfig?: { autoQuotaFromAccounts?: boolean } } | null)?.automationConfig?.autoQuotaFromAccounts === true) {
       const aq = await computeAutoQuota();
-      if (aq) { logger.info({ quota: aq }, "6-20 用账号自动配齐配额"); return aq; }
+      if (aq) {
+        // 7-20 修 roundup 归零: computeAutoQuota 只按账号定位推 domestic/international,
+        //   不含 roundup(多刊盘点不绑账号定位, 是独立内容形态)。7-19 开自动配齐后 roundup
+        //   直接从 2 篇/天掉到 0 停产。这里把手配的 roundup 并回来 —— 账号能推的用推的,
+        //   推不出来的(roundup)沿用运营手配值, 不硬编码篇数。
+        const manual = (t?.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)?.automationConfig?.contentQuota;
+        const rc = Math.floor(Number(manual?.roundup?.count)) || 0;
+        if (rc > 0) aq.roundup = { count: rc, disciplines: Array.isArray(manual?.roundup?.disciplines) ? manual!.roundup!.disciplines!.map(String) : [] };
+        logger.info({ quota: aq }, "6-20 用账号自动配齐配额(7-20: roundup 沿用手配值)");
+        return aq;
+      }
     }
     const raw = (t?.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)?.automationConfig?.contentQuota;
     if (raw && typeof raw === "object") {
@@ -436,7 +450,10 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
   //   verified 池枯竭再回退原逻辑, 保证每日篇数不因严选而空名额。
   const verified = sql`(${journals.confidence} >= 70)`;
   const sc = journalScopeCondition(scope); // SQL | null
-  const disc = sql`${journals.discipline} ILIKE ${"%" + discipline + "%"}`;
+  // 7-20 学科码归一(migration 026): 原本 `discipline ILIKE '%medicine%'` 匹配不上国内刊的
+  //   中文分类名("临床医学"/"外科学"), 国内 verified 刊只有 137/2379 能进这一层。改打生成列
+  //   discipline_code 后 2379 本全可进。'generic'(综合刊/学报/规则未覆盖)在任何学科槽位都算命中。
+  const disc = sql`(${journals.disciplineCode} = ${discipline} OR ${journals.disciplineCode} = ${GENERIC_DISCIPLINE_CODE})`;
   const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
   // 去冷却的层级按"最久未用"优先, 保证轮换(而非反复用同几本)
   const lru = sql`(SELECT max(ju.used_at) FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId}) ASC NULLS FIRST`;

@@ -34,6 +34,7 @@ export const ALL_DISCIPLINES = [
   { code: "biology", label: "生物" },
   { code: "chemistry", label: "化学" },
   { code: "physics", label: "物理" },
+  { code: "humanities", label: "人文社科" }, // 7-20: 文史哲/艺术/新闻传播 — 国内核心刊 328 本, 原先误塞 law 桶
 ] as const;
 
 /** 学科 → 受众和标题模板 */
@@ -50,6 +51,7 @@ const DISCIPLINE_TEMPLATES: Record<string, { audience: string; titleSuffix: stri
   biology:     { audience: "生物学科研究人员", titleSuffix: "前沿发现与机制解析" },
   chemistry:   { audience: "化学领域研究者", titleSuffix: "合成方法与应用研究" },
   physics:     { audience: "物理学科研究人员", titleSuffix: "理论突破与实验验证" },
+  humanities:  { audience: "人文社科研究者及高校师生", titleSuffix: "研究动向与学术争鸣" },
 };
 const DEFAULT_TEMPLATE = { audience: "学术研究者及科研工作者", titleSuffix: "研究进展与发展趋势" };
 

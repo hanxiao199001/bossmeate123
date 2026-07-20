@@ -380,6 +380,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
     ["medicine", "医学"], ["psychology", "心理"], ["engineering", "工程"], ["economics", "经管"],
     ["biology", "生物"], ["education", "教育"], ["law", "法学"], ["agriculture", "农林"],
     ["computer", "计算机"], ["environment", "环境"], ["chemistry", "化学"], ["physics", "物理"],
+    ["humanities", "人文社科"], // 7-20: 与后端 ALL_DISC_CODES 同步; 老账号存旧 12 码不受影响
   ];
   const discLabel = (v: string) => DISC_OPTIONS.find(([k]) => k === v)?.[1] ?? v;
 

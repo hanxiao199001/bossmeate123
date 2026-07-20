@@ -68,6 +68,7 @@ const ALL_DISCIPLINES = [
   { code: "biology", label: "生物" },
   { code: "chemistry", label: "化学" },
   { code: "physics", label: "物理" },
+  { code: "humanities", label: "人文社科" }, // 7-20: 与后端 topic-recommender.ts 的 ALL_DISCIPLINES 同步
 ];
 
 export default function SettingsPage() {
