@@ -363,6 +363,18 @@ export function checkHtmlIntegrity(body: string): QualityCheckV2Result["htmlInte
  * 每维的"8 分什么样"照抄《内容质量评分标准-80分线.md》，让 LLM 有锚可打。
  * 兜底：LLM 挂/解析失败 → degraded=true 且 passed=true（跳过该 pass 不阻塞生成，
  * 也不会让垃圾默认分触发无意义的重写循环）。
+ *
+ * ⚠️ 7-20 修「示例锚定」bug：输出 JSON 模板里原本写着具体分数 6/7/6/7/6/7，
+ *   模型大面积照抄。生产实测（近30天 213 篇有评分的文章）：
+ *     - 打分组合 `6/7/6/7/6/7` 占 **62%**，排名 2-8 的组合全是它只改一两维的变体
+ *     - 总分恰好 65 的：国际刊 96/137(70%)、国内刊 39/76(51%)
+ *     - 逐维均分国内 vs 国际几乎一致（数据准确 6.43 vs 6.98，其余差 <0.1）
+ *   → 65 分天花板不是"内容只值 65"，也不是"用 SCI 标准评国内刊"，
+ *     而是**评分器在复读 prompt 里的示例数字**。
+ *   故模板改为 `<0-10整数>` 占位符 + 显式打分纪律（禁止六维分数雷同、别用 6/7 和稀泥）。
+ *
+ *   注：`data-collection/quality-check-engine.ts` 的 prompt 有同类问题（示例全是 "score": 0），
+ *   是另一条独立评分链路，本次刻意不动 —— 一次只改一个变量，保证分布变化可归因。
  */
 export async function sixDimQualityCheck(params: {
   tenantId: string;
@@ -414,14 +426,19 @@ ${scorerView}
 
 对每一维输出：score（0-10 整数）、weakestSection（拖后腿最严重的一节，必须从章节列表选，或写"开头"/"结尾"/"全文"）、fixHint（一句话怎么修，要具体可执行）、justification（一句评分理由）。
 
-直接输出 JSON（不要 markdown 包裹）:
+⚠️ **打分纪律**：下面只是**字段格式示例**，其中的分数占位符不是参考答案，更不是默认值。
+每一维必须独立评估、给出你自己的判断分。六个维度的质量本来就参差不齐，**分数理应有高有低**；
+如果你给出的六个分数高度接近或呈规律排列，说明你没有逐维真评，而是在套模板 —— 这是不合格的评分。
+好的地方就给 8-9，差的地方就给 3-4，别用 6、7 和稀泥。
+
+直接输出 JSON（不要 markdown 包裹，把 <> 占位符替换成真实值）:
 {
-  "topicHook": {"score": 6, "weakestSection": "开头", "fixHint": "…", "justification": "…"},
-  "dataAccuracy": {"score": 7, "weakestSection": "…", "fixHint": "…", "justification": "全文约X字，硬数据N个，约Y字/个；…"},
-  "structureDensity": {"score": 6, "weakestSection": "…", "fixHint": "…", "justification": "…"},
-  "formatting": {"score": 7, "weakestSection": "…", "fixHint": "…", "justification": "…"},
-  "practicality": {"score": 6, "weakestSection": "…", "fixHint": "…", "justification": "…"},
-  "originalityCompliance": {"score": 7, "weakestSection": "…", "fixHint": "…", "justification": "…"}
+  "topicHook": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
+  "dataAccuracy": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "全文约<X>字，硬数据<N>个，约<Y>字/个；<理由>"},
+  "structureDensity": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
+  "formatting": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
+  "practicality": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
+  "originalityCompliance": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"}
 }`,
       skillType: "quality_check",
     });
