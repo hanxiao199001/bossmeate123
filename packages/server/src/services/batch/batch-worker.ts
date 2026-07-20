@@ -258,13 +258,14 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           const { checkTitleBodyConsistency, checkTitleDataConsistency } = await import("../compliance/content-check.js");
           const [fin] = await db.select({ title: contents.title, body: contents.body }).from(contents).where(eq(contents.id, content.id)).limit(1);
           // 7-05: 取 DB 审稿周期/录用率做硬校验(字段空→标题该数字必是编造, 治行4 一致编造绕过正文复现)
-          let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+          let dbFields: import("../compliance/content-check.js").TitleDataDbFields | undefined;
           let unverifiedSrc: { confidence: number | null; dataSource: string | null } | null = null;
           if (row.journalId) {
             const { journals: journalsTbl } = await import("../../models/schema.js");
-            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate, confidence: journalsTbl.confidence, dataSource: journalsTbl.dataSource }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
+            // 7-20: 多取 IF/复合IF/分区 供标题编造校验(国内刊这些字段常空 → 标题里出现即编造)
+            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate, impactFactor: journalsTbl.impactFactor, compositeImpactFactor: journalsTbl.compositeImpactFactor, partition: journalsTbl.partition, casPartition: journalsTbl.casPartition, casPartitionNew: journalsTbl.casPartitionNew, jcrFull: journalsTbl.jcrFull, confidence: journalsTbl.confidence, dataSource: journalsTbl.dataSource }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
             if (jr) {
-              dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+              dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate, impactFactor: jr.impactFactor, compositeImpactFactor: jr.compositeImpactFactor, partition: jr.partition, casPartition: jr.casPartition, casPartitionNew: jr.casPartitionNew, jcrFull: jr.jcrFull };
               // PR B 未核实源护栏: daily-cron(系统租户)回退选中的 conf<70/legacy_unknown 刊生成的内容 →
               //   标 needs_review, 走 PR#200 发布期硬闸 + 工坊人工复核后才对外(国际 scope 结构上不回退, 不受影响)。
               if (tenantId === SYSTEM_RECOMMENDATION_TENANT_ID && isUnverifiedJournal(jr)) {

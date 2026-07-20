@@ -102,14 +102,15 @@ async function runDeterministicChecks(c: {
   const tc = checkTitleBodyConsistency(c.title, c.body);
   if (!tc.ok) return { ok: false, detail: `标题-正文矛盾: 标题[${tc.titleHits.join("/")}] vs 正文风险信号[${tc.riskSignal}]` };
 
-  let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+  let dbFields: import("../compliance/content-check.js").TitleDataDbFields | undefined;
   const journalId = c.metadata?.journalId;
   if (typeof journalId === "string" && journalId) {
     try {
+      // 7-20: 多取 IF/复合IF/分区 供标题编造校验
       const [jr] = await db
-        .select({ reviewCycle: journals.reviewCycle, acceptanceRate: journals.acceptanceRate })
+        .select({ reviewCycle: journals.reviewCycle, acceptanceRate: journals.acceptanceRate, impactFactor: journals.impactFactor, compositeImpactFactor: journals.compositeImpactFactor, partition: journals.partition, casPartition: journals.casPartition, casPartitionNew: journals.casPartitionNew, jcrFull: journals.jcrFull })
         .from(journals).where(eq(journals.id, journalId)).limit(1);
-      if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+      if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate, impactFactor: jr.impactFactor, compositeImpactFactor: jr.compositeImpactFactor, partition: jr.partition, casPartition: jr.casPartition, casPartitionNew: jr.casPartitionNew, jcrFull: jr.jcrFull };
     } catch { /* 查库失败按无 DB 字段兜底 (仅正文复现校验) */ }
   }
   const td = checkTitleDataConsistency(c.title, c.body, dbFields);

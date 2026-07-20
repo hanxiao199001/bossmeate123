@@ -109,18 +109,42 @@ export function checkTitleBodyConsistency(
 
 // 7-05 脏点清理(行1 教训): 标题的"审稿周期/录用率"具体数字必须在正文复现。
 // 正文由核验过的期刊库派生 → 正文没有 = DB 没有 = 标题编造(行1 标题"审稿60天/录用率35%", DB两者皆空, 正文写"3-4个月/较低")。
-// 只查 审稿周期(天/周/月) + 录用率(%) 这两个 DB 常缺、最易被 LLM 编造吸睛的字段; IF/分区等几乎必复现, 不查以免误伤。
 const TITLE_DATA_CLAIM = /(?:审稿|外审|见刊|接收|录用率|命中率)[约仅低于\s]*\d+(?:\.\d+)?\s*(?:天|周|个月|月|%)/g;
+
+// 7-20 补 IF/分区两维(信任红线)。原注释写"IF/分区等几乎必复现, 不查以免误伤" ——
+//   这个前提**只对国际刊成立**: 国际刊 DB 有 IF, LLM 写的数字正文能复现, 所以不查没事;
+//   国内刊 DB 根本没有 IF/分区(2746 本国内核心刊中 有IF 213 本=7.8%、有分区 8 本=0.3%),
+//   LLM 只能凭空编, 而校验对它完全睁眼瞎。
+//   生产实测(近30天): 国内刊 185 篇里 57 篇(31%)标题写了 DB 没有的 IF, 其中 40 篇 status=generated
+//   可发布、6 篇已推送草稿/已发出。故补这两维, 走与审稿/录用率完全相同的机制, 不新造闸门。
+// IF: "IF 2.0+" / "影响因子 3.5" / "IF：2.3" / "impact factor 4.1"
+const TITLE_IF_CLAIM = /(?:IF|影响因子|impact\s*factor)\s*[:：]?\s*[约仅低于＜<]?\s*\d+(?:\.\d+)?\s*\+?/gi;
+// 分区: "中科院1区" / "JCR Q2" / "Q1" / "一区" / "3区"
+const TITLE_PARTITION_CLAIM = /(?:中科院\s*|JCR\s*)?(?:Q\s*[1-4]|[1-4一二三四]\s*区)/gi;
 /**
  * 标题的审稿周期/录用率具体数字校验。两道:
  *  ① DB 硬校验(最强): 传 db 时, 审稿数字要求 db.reviewCycle 非空、录用率数字要求 db.acceptanceRate 非空;
  *     字段 DB 为空 = 该数字必是编造(行4: 标题+正文都写"审稿60天/录用率35%"一致编造, 但 DB 两者皆空)。
  *  ② 正文复现(兜底, 未传 db 时): 标题数字须在正文出现(治标题-正文脱节, 行1)。
  */
+/** 标题数字校验用的 DB 字段。7-20 扩 IF/分区两维(原仅 reviewCycle/acceptanceRate)。 */
+export interface TitleDataDbFields {
+  reviewCycle?: string | null;
+  acceptanceRate?: number | null;
+  impactFactor?: number | null;
+  compositeImpactFactor?: number | null;
+  /** 分区证据。⚠️ 实测(7-20)真正有数据的是 casPartitionNew(国际刊 2182 本)与 jcrFull(4158 本);
+   *  partition 仅 32 本、casPartition **整列为空(0 行)** —— 只查前两者会把大量国际刊误判编造。 */
+  partition?: string | null;
+  casPartition?: string | null;
+  casPartitionNew?: string | null;
+  jcrFull?: unknown;
+}
+
 export function checkTitleDataConsistency(
   title: string | null | undefined,
   body: string | null | undefined,
-  db?: { reviewCycle?: string | null; acceptanceRate?: number | null },
+  db?: TitleDataDbFields,
 ): { ok: boolean; mismatches: string[] } {
   const plainBody = (body || "").replace(/<[^>]+>/g, "");
   const claims = [...new Set((title || "").match(TITLE_DATA_CLAIM) || [])];
@@ -139,6 +163,32 @@ export function checkTitleDataConsistency(
     const unitAlt = unit === "月" || unit === "个月" ? "(?:个月|月)" : unit === "%" ? "%" : unit;
     if (!new RegExp(num.replace(".", "\\.") + "\\s*" + unitAlt).test(plainBody)) mismatches.push(`${c}(正文未复现)`);
   }
+
+  // 7-20 IF/分区两维: **只做 DB 有无校验, 不做正文复现**。
+  //   理由: 一致编造(标题正文都写 IF 2.0)对国内刊是常态 —— 正文本身就是 LLM 写的, 复现校验拦不住;
+  //   而 DB 空 = 该刊客观没有这个指标 = 标题里的数字必然无源。不传 db 时跳过(退化为原行为, 不误伤)。
+  //   ⚠️ 用"键是否存在"而非"值是否为 null"决定要不要查 —— 调用方若只传了
+  //   { reviewCycle, acceptanceRate }（IF 字段整个缺席），说明它没提供 IF 信息，
+  //   此时必须跳过，不能当成"DB 无 IF"去判编造，否则会把所有带 IF 的标题全误伤。
+  //   (这些字段类型上都是可选的，TS 拦不住漏传；显式 in 判断是唯一可靠护栏。)
+  if (db) {
+    if ("impactFactor" in db || "compositeImpactFactor" in db) {
+      const hasIf = db.impactFactor != null || db.compositeImpactFactor != null;
+      if (!hasIf) {
+        for (const c of [...new Set((title || "").match(TITLE_IF_CLAIM) || [])]) {
+          mismatches.push(`${c.trim()}(DB无影响因子数据)`);
+        }
+      }
+    }
+    if ("partition" in db || "casPartition" in db || "casPartitionNew" in db || "jcrFull" in db) {
+      const hasPartition = !!(db.partition || db.casPartition || db.casPartitionNew || db.jcrFull);
+      if (!hasPartition) {
+        for (const c of [...new Set((title || "").match(TITLE_PARTITION_CLAIM) || [])]) {
+          mismatches.push(`${c.trim()}(DB无分区数据)`);
+        }
+      }
+    }
+  }
   return { ok: mismatches.length === 0, mismatches };
 }
 
@@ -153,7 +203,7 @@ export function fabricationPublishGate(opts: {
   hasWarnings?: boolean;
   title?: string | null;
   body?: string | null;
-  dbFields?: { reviewCycle?: string | null; acceptanceRate?: number | null };
+  dbFields?: TitleDataDbFields;
   forceOverride?: boolean;
 }): { action: "pass" | "block" | "override"; mismatches: string[] } {
   const flagged = opts.status === "needs_review" || opts.hasWarnings === true;

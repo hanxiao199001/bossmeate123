@@ -162,11 +162,12 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   if (content.status === "needs_review" || _cMeta.hasWarnings === true) {
     const { fabricationPublishGate } = await import("../compliance/content-check.js");
     // 取该刊 DB 字段做硬校验(字段空=标题该数字必编造); 无 journalId 则不传, 退化为标题-正文复现校验
-    let dbFields: { reviewCycle?: string | null; acceptanceRate?: number | null } | undefined;
+    let dbFields: import("../compliance/content-check.js").TitleDataDbFields | undefined;
     if (_cMeta.journalId) {
-      const [jr] = await db.select({ reviewCycle: journals.reviewCycle, acceptanceRate: journals.acceptanceRate })
+      // 7-20: 多取 IF/复合IF/分区 供标题编造校验
+      const [jr] = await db.select({ reviewCycle: journals.reviewCycle, acceptanceRate: journals.acceptanceRate, impactFactor: journals.impactFactor, compositeImpactFactor: journals.compositeImpactFactor, partition: journals.partition, casPartition: journals.casPartition, casPartitionNew: journals.casPartitionNew, jcrFull: journals.jcrFull })
         .from(journals).where(eq(journals.id, _cMeta.journalId)).limit(1);
-      if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate };
+      if (jr) dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate, impactFactor: jr.impactFactor, compositeImpactFactor: jr.compositeImpactFactor, partition: jr.partition, casPartition: jr.casPartition, casPartitionNew: jr.casPartitionNew, jcrFull: jr.jcrFull };
     }
     const gate = fabricationPublishGate({
       status: content.status, hasWarnings: _cMeta.hasWarnings === true,
