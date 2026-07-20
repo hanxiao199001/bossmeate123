@@ -380,8 +380,18 @@ export async function sixDimQualityCheck(params: {
   tenantId: string;
   title: string;
   body: string;
+  /**
+   * 7-20 反"奖励编造": 传该刊 DB 事实, 正文出现无据的 IF/分区 → dataAccuracy 压到红线分。
+   * 不传 = 完全退回原行为(零回归)。复用 compliance/content-check 的同一套判断, 不新造标准。
+   */
+  journalFacts?: import("../compliance/content-check.js").TitleDataDbFields;
 }): Promise<SixDimResult> {
-  const { tenantId, title, body } = params;
+  const { tenantId, title, body, journalFacts } = params;
+  // 7-20 反"奖励编造"(信任红线): 确定性前置扫描, 不靠 LLM 自觉。
+  //   标题侧编造已由 batch-worker/ai-reviewer 的 checkTitleDataConsistency 转 needs_review;
+  //   正文侧这里压分 —— 两侧合起来才是闭环。命中即 dataAccuracy 封顶 FABRICATION_CAP。
+  const { findBodyFabrication } = await import("../compliance/content-check.js");
+  const fabHits = findBodyFabrication(body, journalFacts);
   const plain = body.replace(/<[^>]+>/g, "");
   const plainLen = plain.replace(/\s+/g, "").length;
   // 7-03 评分视图去噪: shunshi 模板 HTML ~92% 是内联 <svg> 图表 + style 样式(32k HTML vs 2.5k 正文)。
@@ -458,6 +468,21 @@ ${scorerView}
       };
     }
 
+    // 7-20 反"奖励编造": 正文有无据 IF/分区 → dataAccuracy 硬压到 ≤3, 覆盖 LLM 给的分。
+    //   编造不是"数据准确"而是数据造假 —— 编出来的数字恰恰会让密度/准确看起来达标(实测那篇
+    //   编造 IF9.0+1区 的国内刊拿了 78 分, 全样本第二高), 所以必须由代码罚, 不能指望 LLM 自罚。
+    //   只降不升: 若 LLM 本就给了 ≤3, 保持原分。
+    if (fabHits.length > 0 && dims.dataAccuracy.score > FABRICATION_CAP) {
+      const llmScore = dims.dataAccuracy.score;
+      dims.dataAccuracy = {
+        ...dims.dataAccuracy,
+        score: FABRICATION_CAP,
+        fixHint: `删除正文中无数据来源的指标: ${fabHits.join("、")}（该刊库内无此数据，写了即编造）`,
+        justification: `【数据造假红线】正文出现 ${fabHits.length} 处无据指标(${fabHits.join("、")})，LLM 原评 ${llmScore} 分已压至 ${FABRICATION_CAP} 分。${dims.dataAccuracy.justification}`,
+      };
+      logger.warn({ tenantId, title: title.slice(0, 40), fabHits, llmScore }, "六维: 正文编造指标, dataAccuracy 压至红线分");
+    }
+
     // 加权总分：每维 score(0-10) × 权重(%)，除以 10 → 0-100
     // 例：全维 8 分 → 8×100/10 = 80 分（正好压在发布线上）
     const total = Math.round(
@@ -503,6 +528,11 @@ function degradedSixDim(): SixDimResult {
   }
   return { dims, totalScore: 0, passed: false, dataDensity: "评分服务降级，无统计", degraded: true };
 }
+
+/** 7-20 编造红线封顶分: 正文出现无据 IF/分区 时 dataAccuracy 的上限。
+ *  取 3 是因为发布线要求"总分≥80 且无维度<6" —— 压到 3 必然挡住发布, 且在重写闭环里
+ *  会成为最弱维度被优先修(fixHint 直接告诉它删掉哪几个无据数字)。 */
+const FABRICATION_CAP = 3;
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(Number.isFinite(v) ? v : 0, min), max);

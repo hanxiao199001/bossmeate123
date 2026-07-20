@@ -122,6 +122,43 @@ const TITLE_IF_CLAIM = /(?:IF|影响因子|impact\s*factor)\s*[:：]?\s*[约仅�
 // 分区: "中科院1区" / "JCR Q2" / "Q1" / "一区" / "3区"
 const TITLE_PARTITION_CLAIM = /(?:中科院\s*|JCR\s*)?(?:Q\s*[1-4]|[1-4一二三四]\s*区)/gi;
 /**
+ * 7-20 正文编造检测（评分器用）。
+ *
+ * 缺口背景: 今早补了**标题**编造校验(无据数字 → needs_review), 但**正文**编造无人管,
+ *   而六维评分器反而在**奖励**它 —— 实测重打分时, 一篇标题写"IF9.0+1个月光速审稿、管理学报1区"
+ *   的国内刊文章拿到 78 分(全样本第二高), 正因为编出来的数字让"数据准确/信息密度"看起来达标。
+ *   → 校验拦它转人工, 评分器却给它高分, 闭环是漏的。本函数补上正文这一侧。
+ *
+ * 判据与标题侧**完全一致**(复用同三条正则 + 同一套 DB 有无判断, 不新造标准):
+ *   DB 该字段为空 = 该刊客观没有这个指标 = 正文里出现的数字必然无源。
+ *   同样用"键是否存在"决定要不要查, 调用方没提供该字段就跳过, 不臆断。
+ *
+ * ⚠️ 只查 IF / 分区 两类。**刻意不查正文里的审稿周期/录用率数字** ——
+ *   正文常有"中文核心审稿普遍 6-12 个月"这类**行业通论**(不是对本刊的断言), 查了会大量误伤;
+ *   而 IF / 分区 是刊级专属指标, 正文里出现就是在说这本刊, 无源即编造, 判定干净。
+ *   标题侧仍然全查四类(标题短、必然指向本刊, 无此歧义)。
+ */
+export function findBodyFabrication(
+  body: string | null | undefined,
+  db?: TitleDataDbFields,
+): string[] {
+  if (!db || !body) return [];
+  const plain = body.replace(/<svg[\s\S]*?<\/svg>/gi, " ").replace(/<[^>]+>/g, " ");
+  const hits: string[] = [];
+  if ("impactFactor" in db || "compositeImpactFactor" in db) {
+    if (db.impactFactor == null && db.compositeImpactFactor == null) {
+      for (const c of [...new Set(plain.match(TITLE_IF_CLAIM) || [])]) hits.push(`${c.trim()}(DB无影响因子)`);
+    }
+  }
+  if ("partition" in db || "casPartition" in db || "casPartitionNew" in db || "jcrFull" in db) {
+    if (!(db.partition || db.casPartition || db.casPartitionNew || db.jcrFull)) {
+      for (const c of [...new Set(plain.match(TITLE_PARTITION_CLAIM) || [])]) hits.push(`${c.trim()}(DB无分区)`);
+    }
+  }
+  return hits;
+}
+
+/**
  * 标题的审稿周期/录用率具体数字校验。两道:
  *  ① DB 硬校验(最强): 传 db 时, 审稿数字要求 db.reviewCycle 非空、录用率数字要求 db.acceptanceRate 非空;
  *     字段 DB 为空 = 该数字必是编造(行4: 标题+正文都写"审稿60天/录用率35%"一致编造, 但 DB 两者皆空)。

@@ -100,12 +100,21 @@ export async function runArticleQualityPasses(params: {
 
   // 7-03 B-②: 查期刊真实硬数据 → 定向重写补数上下文(查不到/无id 就不带, 退回原行为)
   let journalContext: string | undefined;
+  let journalFacts: import("../compliance/content-check.js").TitleDataDbFields | undefined;
   let journalRow: Record<string, unknown> | undefined; // 7-03 ②: 图位替换要用完整 row（jsonb 图表字段 + 封面）
   if (journalId) {
     try {
       const [jr] = await db.select().from(journals).where(eq(journals.id, journalId)).limit(1);
       journalRow = jr as Record<string, unknown> | undefined;
       journalContext = buildJournalDataContext(journalRow);
+      // 7-20 反"奖励编造": 抽该刊 DB 事实喂给六维评分器, 正文无据 IF/分区 → dataAccuracy 压红线分
+      const jf = journalRow as Record<string, any>;
+      journalFacts = {
+        reviewCycle: jf.reviewCycle ?? null, acceptanceRate: jf.acceptanceRate ?? null,
+        impactFactor: jf.impactFactor ?? null, compositeImpactFactor: jf.compositeImpactFactor ?? null,
+        partition: jf.partition ?? null, casPartition: jf.casPartition ?? null,
+        casPartitionNew: jf.casPartitionNew ?? null, jcrFull: jf.jcrFull ?? null,
+      };
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err, journalId }, "B-② 期刊数据查询失败, 重写不带硬数据");
     }
@@ -169,7 +178,7 @@ export async function runArticleQualityPasses(params: {
   if (env.ARTICLE_SIXDIM_QC === "false") {
     loop.skippedReason = "disabled";
   } else {
-    sixDim = await sixDimQualityCheck({ tenantId, title, body });
+    sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts });
     llmCalls += 1;
 
     const maxRounds = Math.max(0, env.ARTICLE_QUALITY_REWRITE_MAX);
@@ -196,7 +205,7 @@ export async function runArticleQualityPasses(params: {
           }
           body = newBody;
           // 重新六维质检（重写后的效果要用同一把尺子验证）
-          sixDim = await sixDimQualityCheck({ tenantId, title, body });
+          sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts });
           llmCalls += 1;
           loop.rounds = roundNo;
           if (sixDim.degraded) break;
