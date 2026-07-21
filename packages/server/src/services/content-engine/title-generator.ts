@@ -34,6 +34,8 @@ export interface TitleJournalData {
   discipline?: string | null;
   yearPublished?: number | string | null; // 年发文量
   extra?: string | null;        // 其它卖点(国人友好/创刊年等)
+  catalogs?: string[] | null;   // 7-21: 中文核心目录标签(pku-core/cssci/cscd..) — 判国内刊 + 身份卖点
+  cscdLevel?: string | null;    // CSCD 核心库/扩展库
 }
 
 const TITLE_DNA = `你是"Paper咨询与发表-SCI期刊推荐"公众号的标题手。你的标题是一张"利益清单",不卖文采,卖"投这本能得到什么"的确定性。
@@ -72,15 +74,28 @@ export async function generateTitles(opts: {
 }): Promise<string[]> {
   const { tenantId, userId, journal } = opts;
   const count = opts.count ?? 5;
-  const data =
-    fmt("期刊名称", journal.name) + fmt("英文名", journal.nameEn) + fmt("出版社", journal.publisher) +
-    fmt("中科院分区", journal.casPartition) + fmt("JCR分区", journal.jcrPartition) +
-    fmt("影响因子", journal.impactFactor) + fmt("IF趋势", journal.ifTrend) +
-    fmt("审稿周期", journal.reviewCycle) + fmt("录用率", journal.acceptanceRate) +
-    // 7-03 选B: 自引率(OpenAlex派生)PR#210已从正文下线为不可靠 → 标题也不再用, 避免标题吹正文兑现不了的数
-    fmt("版面费", journal.apc) +
-    fmt("预警情况", journal.warning) + fmt("领域", journal.discipline) +
-    fmt("年发文量", journal.yearPublished) + fmt("其它卖点", journal.extra);
+  // 7-21 改动3: 国内刊 = 有中文核心目录标签 且 无国际 IF。国际刊完全不进此分支。
+  const cats = journal.catalogs || [];
+  const hasIf = journal.impactFactor != null && journal.impactFactor !== "" && !String(journal.impactFactor).includes("未知");
+  const isDomestic = cats.length > 0 && !hasIf;
+
+  // 国内刊: 只喂身份/学科(它真有的), 不喂 IF/分区/审稿/录用率(它没有, 喂了标题就编)
+  const idTags: string[] = [];
+  if (cats.includes("pku-core")) idTags.push("北大核心");
+  if (cats.includes("cssci")) idTags.push("CSSCI来源期刊");
+  if (cats.includes("cssci-ext")) idTags.push("CSSCI扩展版");
+  if (cats.includes("cscd")) idTags.push(`CSCD${journal.cscdLevel ? journal.cscdLevel : ""}`);
+  const data = isDomestic
+    ? fmt("期刊名称", journal.name) + fmt("核心收录身份", idTags.join("、")) +
+      fmt("学科", journal.discipline) + fmt("出版社", journal.publisher) + fmt("其它卖点", journal.extra)
+    : fmt("期刊名称", journal.name) + fmt("英文名", journal.nameEn) + fmt("出版社", journal.publisher) +
+      fmt("中科院分区", journal.casPartition) + fmt("JCR分区", journal.jcrPartition) +
+      fmt("影响因子", journal.impactFactor) + fmt("IF趋势", journal.ifTrend) +
+      fmt("审稿周期", journal.reviewCycle) + fmt("录用率", journal.acceptanceRate) +
+      // 7-03 选B: 自引率(OpenAlex派生)PR#210已从正文下线为不可靠 → 标题也不再用, 避免标题吹正文兑现不了的数
+      fmt("版面费", journal.apc) +
+      fmt("预警情况", journal.warning) + fmt("领域", journal.discipline) +
+      fmt("年发文量", journal.yearPublished) + fmt("其它卖点", journal.extra);
 
   // 7-03 ④: 人设分级 + 批次内措辞轮换
   const tone = classifyPersonaTone(opts.persona);
@@ -96,7 +111,12 @@ export async function generateTitles(opts: {
       toneSuffix = `\n\n【措辞轮换】以下夸张措辞今天本批次已用满, 本次标题严禁出现: ${banned.join("、")}。换其它卖点表述, 别的规则不变。`;
     }
   }
-  const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + toneSuffix;
+  // 7-21 改动3: 国内刊标题禁用 IF/分区/录用率钩子(它没有这些数据), 改用真钩子: 权威身份+学科+投稿友好
+  const domesticTitleRule = isDomestic ? `\n\n## ⚠️ 本刊是国内核心期刊 — 标题口径特殊
+本刊**没有** IF、中科院分区、JCR分区、精确录用率、精确审稿天数。🚫 标题里**绝对禁止**出现 IF 数字、"X区"/"中科院X区"/"JCR Qx"、录用率百分比、审稿天数 —— 这些本刊没有, 写了就是编造, 会被校验拦下转人工, 这个标题白做。
+国内核心刊标题用**真钩子**: ①权威身份(${idTags.join("、") || "国内核心"}, 是评职称/毕业的硬通货) ②学科对口(${journal.discipline || "本学科"}方向) ③投稿友好(适合谁投/毕业评职称适用)。
+公式仍是"痛点/身份切入 → 硬卖点 → 身份召唤 → 行动指令", 只是硬卖点换成身份+学科, 不用数字。` : "";
+  const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + domesticTitleRule + toneSuffix;
   const message = `期刊真实数据(只用这些, 缺的不写):\n${data}\n请按上述风格产 ${count} 个候选标题, 严格 JSON 数组输出。`;
 
   const resp = await chat({ tenantId, userId, conversationId: `title-gen-${Date.now()}`, message, skillType: "content_generation", systemPrompt: system } as any);

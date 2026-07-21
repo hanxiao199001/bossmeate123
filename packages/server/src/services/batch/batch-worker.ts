@@ -176,6 +176,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
                 casPartition: journals.casPartitionNew, jcrSubjects: journals.jcrSubjects,
                 impactFactor: journals.impactFactor, reviewCycle: journals.reviewCycle,
                 acceptanceRate: journals.acceptanceRate, selfCitationRate: journals.selfCitationRate, discipline: journals.discipline,
+                catalogs: journals.catalogs, cscdLevel: journals.cscdLevel, // 7-21: 判国内刊 + 身份卖点
               }).from(journals).where(eq(journals.id, row.journalId)).limit(1);
               let styleProfile: string | undefined;
               let acctPersona: string | undefined; // 7-03 ④: 人设分级(编辑号禁狠话/营销号放开)
@@ -194,6 +195,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
                     casPartition: jr.casPartition, jcrPartition: jr.jcrSubjects,
                     impactFactor: jr.impactFactor, reviewCycle: jr.reviewCycle,
                     acceptanceRate: jr.acceptanceRate, selfCitationRate: jr.selfCitationRate, discipline: jr.discipline,
+                    catalogs: jr.catalogs as string[] | null, cscdLevel: jr.cscdLevel, // 7-21: 国内刊标题口径
                   },
                 });
                 if (titles[0]) {
