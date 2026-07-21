@@ -1334,20 +1334,7 @@ export class ArticleSkill implements ISkill {
     //   动机(生产实测): 主 prompt 的"每200字1个硬数据(IF/分区/审稿/录用率)"+"标题会挑数字做噱头"
     //   对国内刊是逼编造的死循环 —— 国内核心刊 IF 覆盖 7.8%、分区 0.3%, 根本没有这些数, LLM 只能编。
     //   7-21 那批 11 篇国内刊里 6 篇(54.5%)正文编造被评分器压到红线分。治本 = 换一套国内刊真正有的卖点。
-    //   7-21 收紧: 走国内刊口径 = 有真正的中文核心标签(北大核心/CSCD/CSSCI, 不含 sci-core) 且 无 IF。
-    //   sci-core(科技核心)很多是有分区的准国际刊, 只是分区未入库 —— 它不该被当纯国内刊。
-    //   但"无据分区/IF 禁写"这条对它照样生效(见下方全局约束), 所以带 sci-core 的骑墙刊
-    //   即使不走国内刊卖点分支, 也不会编分区。
-    const CN_CORE_TAGS = ["pku-core", "cssci", "cssci-ext", "cscd"];
-    const hasCnCore = cats.some((c) => CN_CORE_TAGS.includes(c));
-    const isDomesticJournal = hasCnCore && !cats.includes("sci-core") && !(ifText && !ifText.includes("未知"));
-
-    // 7-21 全局约束(不分国内外): 该刊 DB 到底有没有分区/IF。
-    //   把"无据分区/IF 禁写"从国内刊分支的规则提升为**所有刊的通用红线** ——
-    //   骑墙刊(带 sci-core 但分区未入库)走的是国际刊分支, 之前只在国内刊分支加约束,
-    //   于是"地理科学进展"编了"2区"。补成全局后, 无论走哪个分支都不会编无据分区/IF。
-    const noPartitionData = !(journal.casPartition || journal.partition || (journal as any).casPartitionNew || (journal as any).jcrFull || (journal as any).promptJcrFull);
-    const noIfData = !(ifText && !ifText.includes("未知") && !ifText.includes("N/A"));
+    const isDomesticJournal = cats.length > 0 && !(ifText && !ifText.includes("未知"));
     // 身份组合区分度: 三核心 > 北大+CSSCI > 纯 CSCD (与库内分布一致, 让 LLM 拿捏权威分量)
     const idTags: string[] = [];
     if (cats.includes("pku-core")) idTags.push("北大核心");
@@ -1411,13 +1398,6 @@ ${isDomesticJournal ? `1. 【密度—国内刊口径】把上方"国内核心�
 任何 "分区" / "Q1" / "Q2" / "Q3" / "Q4" / "X区顶刊" 等表述,
 必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.
 若两个字段都 NULL → 文章中**禁止提分区**, 也禁止说"顶刊" / "X区刊"。
-${noPartitionData ? `\n🚫🚫 【本刊无分区数据 — 最高优先级红线, 不分国内外一律生效】
-本刊在 BossMate 数据库里**没有任何分区数据**(中科院分区、新锐分区、JCR分区全为空)。
-标题与正文里**绝对禁止**出现 "X区" / "中科院X区" / "一区/二区/三区/四区" / "JCR Qx" / "顶刊" / "X区刊"。
-不要因为"这类刊通常有分区"就自行推测填一个 —— 没有就是没有, 写了 = 编造 = 生成后校验会揪出来压分/转人工。
-` : ""}${noIfData ? `🚫🚫 【本刊无影响因子数据 — 最高优先级红线, 不分国内外一律生效】
-本刊在 BossMate 数据库里**没有影响因子(IF)数据**。标题与正文里**绝对禁止**出现任何 "IF X.X" / "影响因子 X.X" 的具体数字。没有就是没有, 严禁推测或编造。
-` : ""}
 
 ## 标题硬约束 (PR #180 + #183 + #184)
 1. 【期刊名可选】期刊名(${journalName})可放标题也可不放; 若期刊名超过 20 个字符, **优先不放标题**(避免吞掉噱头), 改放副标题/正文。标题要先吸引人, 不是先报刊名。
