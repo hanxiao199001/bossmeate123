@@ -158,6 +158,53 @@ export function findBodyFabrication(
   return hits;
 }
 
+const CN_CORE_TAGS_GATE = ["pku-core", "cssci", "cssci-ext", "cscd"];
+
+/**
+ * 7-21 发布前编造硬闸(确定性兜底) — draft-distributor / publishToAccounts 共用。
+ *
+ * 定位: "prompt 降低 + 确定性兜底"里的确定性那半。生成侧 prompt 已把纯国内刊正文编造从 56% 压到
+ *   ~13%, 但 prompt 有天花板(LLM 在卖点诱导下仍偶尔编 IF/分区)。这道闸让漏网的 13% 即使
+ *   分数侥幸过线, 也**发不出去** —— 对外零编造。
+ *
+ * 只对**纯国内刊 + DB 无 IF/分区**生效:
+ *   - 骑墙刊(catalogs 含 sci-core)**豁免** —— 它们分区可能是 enrichment 从 LetPub 抓的真数据(backlog-C),
+ *     误挡有据内容正是 6577b9a 被回滚的原因。
+ *   - 无中文核心标签的国际刊也不进(它们本就该有 IF/分区)。
+ *   复用 findBodyFabrication(同一套判断), 不新写检测逻辑。
+ *
+ * @returns 命中的无据指标列表; 空 = 放行。调用方据此决定是否拦下 + 标 needs_review/body_fabrication。
+ */
+export async function checkBodyFabricationForPublish(content: {
+  body?: string | null;
+  journalId?: string | null;
+}): Promise<string[]> {
+  if (!content.body || !content.journalId) return [];
+  const { journals } = await import("../../models/schema.js");
+  const [j] = await db
+    .select({
+      catalogs: journals.catalogs,
+      impactFactor: journals.impactFactor,
+      compositeImpactFactor: journals.compositeImpactFactor,
+      partition: journals.partition,
+      casPartition: journals.casPartition,
+      casPartitionNew: journals.casPartitionNew,
+      jcrFull: journals.jcrFull,
+    })
+    .from(journals)
+    .where(eq(journals.id, content.journalId))
+    .limit(1);
+  if (!j) return [];
+  const cats = (j.catalogs as string[] | null) || [];
+  // 骑墙豁免 + 只管纯国内刊
+  const isPureDomestic = cats.some((c) => CN_CORE_TAGS_GATE.includes(c)) && !cats.includes("sci-core");
+  if (!isPureDomestic) return [];
+  return findBodyFabrication(content.body, {
+    impactFactor: j.impactFactor, compositeImpactFactor: j.compositeImpactFactor,
+    partition: j.partition, casPartition: j.casPartition, casPartitionNew: j.casPartitionNew, jcrFull: j.jcrFull,
+  });
+}
+
 /**
  * 标题的审稿周期/录用率具体数字校验。两道:
  *  ① DB 硬校验(最强): 传 db 时, 审稿数字要求 db.reviewCycle 非空、录用率数字要求 db.acceptanceRate 非空;

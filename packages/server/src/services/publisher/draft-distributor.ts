@@ -83,7 +83,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   // 剔除: 红线两类(信任事故)+ 评分降级(分数不可信, 不是"分低"而是"没算准", 该重评不该进草稿箱)
   const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "sixdim_degraded"];
   const rawPool = await db
-    .select({ id: contents.id, title: contents.title, status: contents.status, metadata: contents.metadata })
+    .select({ id: contents.id, title: contents.title, body: contents.body, status: contents.status, metadata: contents.metadata })
     .from(contents)
     .where(and(
       or(eq(contents.tenantId, tenantId), eq(contents.tenantId, SYSTEM_RECOMMENDATION_TENANT_ID)),
@@ -94,11 +94,28 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     .orderBy(desc(contents.createdAt))
     .limit(500);
   // needs_review 的文章: 只有非红线(六维偏低等质量问题)才放进草稿箱; 红线类剔除留人工
-  const pool = rawPool.filter((c) => {
+  const reasonPassed = rawPool.filter((c) => {
     if (c.status === "generated") return true;
     const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
     return !reason || !RED_LINE_REASONS.includes(reason);
-  }).slice(0, 300).map((c) => ({ id: c.id, title: c.title }));
+  }).slice(0, 300);
+
+  // 7-21 发布前编造硬闸(确定性兜底): 纯国内刊正文出现 DB 无据的 IF/分区 → 不进草稿箱, 标 needs_review/body_fabrication。
+  //   即使生成侧 prompt 漏网、六维分侥幸过线, 也发不出去。骑墙刊(含sci-core)豁免。复用 checkBodyFabrication。
+  const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
+  const pool: Array<{ id: string; title: string | null }> = [];
+  for (const c of reasonPassed) {
+    const journalId = (c.metadata as { journalId?: string } | null)?.journalId ?? null;
+    const fab = await checkBodyFabricationForPublish({ body: c.body, journalId });
+    if (fab.length > 0) {
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "body_fabrication", bodyFabrication: fab })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, c.id));
+      logger.warn({ contentId: c.id, journalId, fab }, "草稿分发硬闸: 正文编造无据IF/分区, 剔除不进草稿箱, 转 needs_review");
+      continue;
+    }
+    pool.push({ id: c.id, title: c.title });
+  }
   if (pool.length === 0) {
     report.skippedReason = "可发池为空";
     return report;

@@ -7,7 +7,7 @@
 
 import { db } from "../../models/db.js";
 import { platformAccounts, contents, distributionRecords, journals } from "../../models/schema.js";
-import { eq, and, or } from "drizzle-orm";
+import { eq, and, or, sql } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { transitionToStatus, InvalidTransitionError } from "../articles/state-machine.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
@@ -182,6 +182,21 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
         audit: "PUBLISH_FABRICATION_OVERRIDE", who: req.userId ?? "unknown", tenantId, contentId,
         status: content.status, mismatches: gate.mismatches, overrideReason: req.overrideReason ?? null, at: new Date().toISOString(),
       }, "发布期数据编造硬闸: forceOverride 强发, 审计留底");
+    }
+  }
+
+  // 7-21 发布前编造硬闸(确定性兜底, 最后一道): 纯国内刊正文出现 DB 无据 IF/分区 → 拒发。
+  //   与草稿分发那道同源(checkBodyFabricationForPublish, 复用 findBodyFabrication)。骑墙刊(含sci-core)豁免。
+  //   不受 forceOverride 影响 —— 编造是数据造假硬红线, 不给强发口子(区别于六维低分那种可 override 的软闸)。
+  if (content.type !== "video") {
+    const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
+    const bodyFab = await checkBodyFabricationForPublish({ body: content.body, journalId: _cMeta.journalId });
+    if (bodyFab.length > 0) {
+      logger.warn({ contentId, journalId: _cMeta.journalId, bodyFab }, "发布硬闸: 正文编造无据IF/分区, 拒发");
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "body_fabrication", bodyFabrication: bodyFab })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, contentId));
+      throw new Error(`内容正文含无 DB 支撑的编造指标(${bodyFab.join("、")}), 已拦截发布并转人工复核。`);
     }
   }
 
