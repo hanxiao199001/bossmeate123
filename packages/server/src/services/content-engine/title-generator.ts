@@ -74,10 +74,15 @@ export async function generateTitles(opts: {
 }): Promise<string[]> {
   const { tenantId, userId, journal } = opts;
   const count = opts.count ?? 5;
-  // 7-21 改动3: 国内刊 = 有中文核心目录标签 且 无国际 IF。国际刊完全不进此分支。
+  // 7-21 改动3: 国内刊 = 有真正的中文核心标签(北大核心/CSCD/CSSCI, 不含 sci-core) 且 无 IF。
+  //   收紧: sci-core(科技核心)骑墙刊不走国内刊卖点分支; 但"无据分区/IF 禁写"对它照样生效(见下)。
   const cats = journal.catalogs || [];
   const hasIf = journal.impactFactor != null && journal.impactFactor !== "" && !String(journal.impactFactor).includes("未知");
-  const isDomestic = cats.length > 0 && !hasIf;
+  const hasCnCore = cats.some((c) => ["pku-core", "cssci", "cssci-ext", "cscd"].includes(c));
+  const isDomestic = hasCnCore && !cats.includes("sci-core") && !hasIf;
+  // 全局(不分国内外): 无分区数据 → 标题禁写 X区; 无 IF → 标题禁写 IF 数字
+  const noPartition = !(journal.casPartition || journal.jcrPartition);
+  const noIf = !hasIf;
 
   // 国内刊: 只喂身份/学科(它真有的), 不喂 IF/分区/审稿/录用率(它没有, 喂了标题就编)
   const idTags: string[] = [];
@@ -116,7 +121,11 @@ export async function generateTitles(opts: {
 本刊**没有** IF、中科院分区、JCR分区、精确录用率、精确审稿天数。🚫 标题里**绝对禁止**出现 IF 数字、"X区"/"中科院X区"/"JCR Qx"、录用率百分比、审稿天数 —— 这些本刊没有, 写了就是编造, 会被校验拦下转人工, 这个标题白做。
 国内核心刊标题用**真钩子**: ①权威身份(${idTags.join("、") || "国内核心"}, 是评职称/毕业的硬通货) ②学科对口(${journal.discipline || "本学科"}方向) ③投稿友好(适合谁投/毕业评职称适用)。
 公式仍是"痛点/身份切入 → 硬卖点 → 身份召唤 → 行动指令", 只是硬卖点换成身份+学科, 不用数字。` : "";
-  const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + domesticTitleRule + toneSuffix;
+  // 7-21 全局红线(不分国内外): DB 无据的分区/IF 标题一律禁写。根治骑墙刊(带sci-core但分区未入库)编分区。
+  const globalNoFabRule = (!isDomestic && (noPartition || noIf))
+    ? `\n\n## 🚫 无据指标禁写(硬红线)\n${noPartition ? "本刊数据库无分区数据 → 标题禁止出现 \"X区\"/\"中科院X区\"/\"JCR Qx\"/\"顶刊\"(没有就是没有, 别推测)。\n" : ""}${noIf ? "本刊数据库无影响因子 → 标题禁止出现任何 \"IF X.X\"/\"影响因子 X.X\" 数字。\n" : ""}`
+    : "";
+  const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + domesticTitleRule + globalNoFabRule + toneSuffix;
   const message = `期刊真实数据(只用这些, 缺的不写):\n${data}\n请按上述风格产 ${count} 个候选标题, 严格 JSON 数组输出。`;
 
   const resp = await chat({ tenantId, userId, conversationId: `title-gen-${Date.now()}`, message, skillType: "content_generation", systemPrompt: system } as any);
