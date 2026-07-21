@@ -952,6 +952,9 @@ export async function adminRoutes(app: FastifyInstance) {
         ...(typeof e.backgroundUrl === "string" && e.backgroundUrl ? { backgroundUrl: e.backgroundUrl.slice(0, 500) } : {}),
         ...(typeof e.preview === "string" && e.preview ? { preview: e.preview.slice(0, 500) } : {}), // 6-26 形象预览图
       }));
+    // 7-21: avatarCode 格式软校验(阿里云 2D 公模为 CH_2d_ 前缀) — 只警告不拦, 防阿里云格式变更误伤。
+    const oddCodes = clean.filter((e) => !e.avatarCode.startsWith("CH_2d_")).map((e) => e.avatarCode);
+    if (oddCodes.length) logger.warn({ oddCodes }, "DVH 形象目录含非 CH_2d_ 前缀的 avatarCode(已放行, 请人工确认)");
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
     const cfg = (t?.config as Record<string, unknown>) || {};
     const auto = (cfg.automationConfig as Record<string, unknown>) || {};

@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../utils/api";
+import DvhBatchImportModal, { type DvhImportEntry } from "./DvhBatchImportModal";
 
 const DEFAULT_KEYS = ["A_academic", "B_marketing", "C_popular", "E_industry"];
 const VOICE_SUGGESTIONS = ["aixia", "maoxiaomei", "aiyuan"]; // 已用过的阿里云音色, 也可填其它
@@ -35,6 +36,7 @@ export default function DvhCatalogManager() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [manual, setManual] = useState({ avatarCode: "", avatarLabel: "", voiceCode: "aixia", preview: "" });
+  const [importOpen, setImportOpen] = useState(false);
 
   const loadCatalog = useCallback(() => {
     api.get<{ catalog?: CatalogEntry[] }>("/admin/dvh-catalog")
@@ -97,6 +99,16 @@ export default function DvhCatalogManager() {
     } finally { setSaving(false); }
   };
 
+  // 批量导入 = 追加不覆盖: 现有 extras + 新条目(按 avatarCode 去重, 现有优先) → PATCH 整体, 绝不冲掉已有形象。
+  const handleBatchImport = async (newEntries: DvhImportEntry[]) => {
+    const existingByCode = new Set(catalog.map((c) => c.avatarCode));
+    const toAdd = newEntries.filter((e) => !existingByCode.has(e.avatarCode));
+    const merged = [...extras, ...toAdd];
+    await api.patch("/admin/dvh-catalog", { entries: merged });
+    setMsg({ ok: true, text: `已追加 ${toAdd.length} 个形象，自定义目录共 ${merged.length} 个` });
+    loadCatalog();
+  };
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
       <div className="flex items-center gap-3 mb-1">
@@ -151,6 +163,10 @@ export default function DvhCatalogManager() {
         <button onClick={() => void pull()} disabled={pulling}
           className="px-4 py-2 text-sm rounded-lg border border-fuchsia-300 text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50">
           {pulling ? "拉取中…" : "从阿里云拉取形象"}
+        </button>
+        <button onClick={() => setImportOpen(true)}
+          className="px-4 py-2 text-sm rounded-lg border border-fuchsia-300 text-fuchsia-700 hover:bg-fuchsia-50">
+          批量粘贴导入
         </button>
         <button onClick={() => void save()} disabled={saving}
           className="px-5 py-2 text-sm rounded-lg bg-fuchsia-600 text-white font-medium hover:bg-fuchsia-700 disabled:opacity-50">
@@ -207,6 +223,14 @@ export default function DvhCatalogManager() {
           )}
         </div>
       )}
+
+      <DvhBatchImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        existingCodes={catalog.map((c) => c.avatarCode)}
+        existingCount={catalog.length}
+        onConfirm={handleBatchImport}
+      />
     </div>
   );
 }
