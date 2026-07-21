@@ -126,6 +126,18 @@ interface QualityReport {
 
 // ============ 图文线 Skill ============
 
+/**
+ * 7-21 纯国内核心刊判定 — 决定是否注入"正文分区/IF 禁写"红线。
+ *   纯国内刊 = 有中文核心标签(北大核心/CSSCI/CSSCI扩展/CSCD) 且 **不含 sci-core**。
+ *   严格排除骑墙刊(含 sci-core): 它们分区可能是 enrichment 有据的(backlog-C), 禁写会误伤 ——
+ *   这正是 6577b9a 全局禁写被回滚的原因。纯国内刊不在 SCI 分区体系, 禁写 100% 安全。
+ */
+const CN_CORE_TAGS = ["pku-core", "cssci", "cssci-ext", "cscd"];
+export function isPureDomesticJournal(catalogs: string[] | null | undefined): boolean {
+  const cats = catalogs || [];
+  return cats.some((c) => CN_CORE_TAGS.includes(c)) && !cats.includes("sci-core");
+}
+
 export class ArticleSkill implements ISkill {
   readonly name = "article";
   readonly displayName = "智能图文";
@@ -1345,6 +1357,13 @@ export class ArticleSkill implements ISkill {
       : (cats.includes("pku-core") && cats.includes("cssci")) ? "北大核心 + CSSCI 双核心（国内社科顶配）"
       : cats.includes("pku-core") ? "北大核心（评职称/毕业最认的硬通货）"
       : "国内核心收录";
+
+    // 7-21 纯国内刊 = 有中文核心标签(北大核心/CSCD/CSSCI) 且 **不含 sci-core**。
+    //   独立于 isDomesticJournal(卖点分支): 后者靠 ifText, enrichment 会给骑墙刊填 IF 让它走国际分支;
+    //   本判定纯看 catalogs, 只为下面"正文无据分区禁写"强约束定范围。
+    //   严格排除骑墙刊(含 sci-core): 它们分区可能是 enrichment 有据的(backlog-C), 误伤它们正是 6577b9a 被回滚的原因。
+    //   纯国内刊本就不在 LetPub 的 SCI 分区体系里, enrichment 也补不到分区 → 禁写分区 100% 正确、零副作用。
+    const isPureDomestic = isPureDomesticJournal(cats);
     const domesticGuidance = isDomesticJournal ? `
 
 ## ⚠️ 本刊是【国内核心期刊】—— 按国内口径写，别套 SCI 那一套
@@ -1398,6 +1417,11 @@ ${isDomesticJournal ? `1. 【密度—国内刊口径】把上方"国内核心�
 任何 "分区" / "Q1" / "Q2" / "Q3" / "Q4" / "X区顶刊" 等表述,
 必须来自 ##已知期刊数据## 中的 partition 或 jifSubjects[].zone.
 若两个字段都 NULL → 文章中**禁止提分区**, 也禁止说"顶刊" / "X区刊"。
+${isPureDomestic ? `\n🚫🚫🚫 【纯国内核心刊 — 正文分区/IF 禁写红线, 最高优先级】
+本刊是纯国内核心期刊(北大核心/CSSCI/CSCD, 非 SCI), **客观上没有中科院分区、没有 JCR 分区、没有影响因子**。
+**正文里一个分区字、一个 IF 数字都不许出现** —— 严禁写 "1区"/"2区"/"3区"/"4区"/"一区/二区/三区/四区"/"中科院X区"/"JCR Qx"/"X区顶刊"/"IF X.X"/"影响因子 X.X"。
+不要因为"这类刊感觉该有个分区"就顺手编一个 —— 没有就是没有。写了 = 编造 = 生成后校验立刻揪出来把这篇打成红线分转人工 = 白写一篇还占产能。
+（7-21 实测: 人口研究/中国科学物理学 两篇纯国内刊正文各编了个"1区"/"2区", 就栽在这。本刊分区数据栏是空的, 正文提分区必是你编的。）` : ""}
 
 ## 标题硬约束 (PR #180 + #183 + #184)
 1. 【期刊名可选】期刊名(${journalName})可放标题也可不放; 若期刊名超过 20 个字符, **优先不放标题**(避免吞掉噱头), 改放副标题/正文。标题要先吸引人, 不是先报刊名。
