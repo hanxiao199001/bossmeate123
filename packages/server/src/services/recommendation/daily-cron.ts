@@ -452,8 +452,14 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
   const sc = journalScopeCondition(scope); // SQL | null
   // 7-20 学科码归一(migration 026): 原本 `discipline ILIKE '%medicine%'` 匹配不上国内刊的
   //   中文分类名("临床医学"/"外科学"), 国内 verified 刊只有 137/2379 能进这一层。改打生成列
-  //   discipline_code 后 2379 本全可进。'generic'(综合刊/学报/规则未覆盖)在任何学科槽位都算命中。
-  const disc = sql`(${journals.disciplineCode} = ${discipline} OR ${journals.disciplineCode} = ${GENERIC_DISCIPLINE_CODE})`;
+  //   discipline_code 后 2379 本全可进。
+  // 7-21 分层收窄(修"generic 桶淹没目标学科"): 原 disc 是 `= discipline OR = generic`,
+  //   一层里目标学科与综合刊平权随机选。但 generic 桶(328本, 多是理工医综合刊)远大于单个学科池,
+  //   导致教育号配了 education(132本)却 80% 选到理工综合刊(实测教育对口率仅 29%)。
+  //   改: 先只选**目标学科对口刊**(discExact), 对口刊+相邻枯竭再放开 generic 兜底。
+  //   generic '综合刊/学报/规则未覆盖'仍在任何学科槽位可命中, 只是降到"目标学科不够时才用"。
+  const discExact = sql`(${journals.disciplineCode} = ${discipline})`;
+  const discOrGeneric = sql`(${journals.disciplineCode} = ${discipline} OR ${journals.disciplineCode} = ${GENERIC_DISCIPLINE_CODE})`;
   const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
   // 去冷却的层级按"最久未用"优先, 保证轮换(而非反复用同几本)
   const lru = sql`(SELECT max(ju.used_at) FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId}) ASC NULLS FIRST`;
@@ -463,15 +469,24 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
     const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
     return j?.id ?? null;
   };
+  // 分层(从严到宽, 命中即返回):
+  //   ①② 纯目标学科对口刊(discExact) verified — 教育号优先吃教育刊
+  //   ③④ 放开综合刊(discOrGeneric) — 目标学科刊枯竭(15天冷却耗尽)才回退, 日志标"因学科枯竭回退"
+  //   ⑤⑥ 仅 scope(丢 disc) — 保产量红线: 综合刊也枯竭时宁发不对口也不空名额(草稿池饿死比不对口更糟)
   // 6-19 修"国外槽位漏国内刊": 兜底绝不丢 scope —— 只放宽 学科/冷却, 国内/国外定位始终保留。
-  //   国外刊池用尽时返回 null(该槽位跳过/空着), 也不退回国内刊(否则国内刊被当国外内容生成又错发到国外号)。
-  //   7-09: verified(conf≥70) 优先两层, 枯竭再回退原不设 conf 门槛的层级。
-  return (await pick([active, verified, sc, disc, fresh], rnd))
-    ?? (await pick([active, verified, sc, disc], lru))
-    ?? (await pick([active, sc, disc, fresh], rnd))
-    ?? (await pick([active, sc, disc], lru))
-    ?? (await pick([active, sc, fresh], rnd))
+  const byExact = (await pick([active, verified, sc, discExact, fresh], rnd))
+    ?? (await pick([active, verified, sc, discExact], lru));
+  if (byExact) return byExact;
+  const byGeneric = (await pick([active, verified, sc, discOrGeneric, fresh], rnd))
+    ?? (await pick([active, verified, sc, discOrGeneric], lru))
+    ?? (await pick([active, sc, discOrGeneric, fresh], rnd))
+    ?? (await pick([active, sc, discOrGeneric], lru));
+  if (byGeneric) { logger.info({ scope, discipline }, "选刊: 目标学科对口刊已枯竭, 回退综合刊(generic)兜底"); return byGeneric; }
+  // 保产量最后两层: 学科+综合刊都枯竭, 仅按 scope 选(宁不对口不空名额)
+  const byScope = (await pick([active, sc, fresh], rnd))
     ?? (await pick([active, sc], lru));
+  if (byScope) logger.warn({ scope, discipline }, "选刊: 学科+综合刊池均枯竭, 仅按 scope 兜底(内容可能不对口)");
+  return byScope;
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
