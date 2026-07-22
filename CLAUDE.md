@@ -105,6 +105,11 @@
 
 deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
 
+**⚠️ deploy 前服务器工作区必须干净（否则 git 操作 abort，整条部署失败）**：
+- deploy:smart 走 `git fetch + merge/reset`，服务器工作区有**已跟踪文件的本地改动**时 git 会 abort（报 `Aborting`/`ELIFECYCLE`），部署起不来。`.env.bak-*` 等 untracked 不影响，只有 `M`（modified tracked）会卡。
+- **两个已知脏源，别再踩**：① **绝不 `scp` 单文件到服务器**改代码——会弄脏工作区，一律走 git commit+deploy（2026-07-21 教训，scp daily-cron.ts 卡了 deploy）。② SVG 图表快照曾每跑一次 vitest 就被 `svg-charts.test.ts` 的 writeFileSync 重写、产生 diff 卡 deploy（abort 两次）——已于 2026-07-22 `git rm --cached` + gitignore 根治（`snapshots/*.svg` 不再跟踪），若再见类似"测试输出产物被跟踪导致每跑必脏"，同样处理：确认它是**测试输出而非输入 fixture**（无人 readFileSync 它）后 untrack + gitignore，别用"deploy 前 checkout 还原"治标。
+- 万一 deploy 被 abort：`ssh ... 'cd /home/projects/bossmate && git status --short'` 找到 `M` 文件，确认是快照/被 scp 弄脏的代码后 `git checkout -- <file>` 还原，再重跑 deploy:smart。
+
 **唯一部署入口 = `pnpm deploy:smart`。其余任何部署脚本一律不得手跑（包括 AI）。** 历史遗留的 `deploy.sh` / `deploy-v4*.sh` / `deploy-*.py` 等脚本硬编码指向已弃用服务器（106.53.163.120 等），手跑 = 部署到死机。已于 2026-07-03 清理三个 .sh 孤儿；2026-07-06 排雷三个 .py 死脚本（deploy-crawlers/deploy-topic/deploy-v2，base64 打包旧源码直写生产的应急通道，从未入 git，已移入 .review-stash/demined-deploy-py-20260706/ 封存）；若日后从 git 历史翻出旧脚本，**只可读不可跑**。
 
 **依赖锁文件铁律（红线 #7）**：改 `package.json` 依赖（加/删/升）必须**同一 commit** 更新 `pnpm-lock.yaml`。服务器 `pnpm install` 走 frozen-lockfile，manifest 与锁文件 specifier 不一致 → 安装报错 → 部署整条失败（build 都到不了）。
