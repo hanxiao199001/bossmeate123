@@ -239,7 +239,8 @@ export async function notifyStaff(text: string): Promise<boolean> {
   try {
     const cred = await loadAgentCredential();
     if (!cred) {
-      logger.debug({}, "agent_secret 未配置，跳过 handoff 运营通知");
+      // warn 级（线上 info 级日志可见）：漏配 agentSecret 的后果必须让人看到，而非 debug 静默吞掉
+      logger.warn({}, "agent_secret 未配置，handoff 通知未发送 —— 客户已进企微「待接入池」等待但运营收不到提醒，请到 AI 客服→企微设置 配置自建应用 Secret");
       return false;
     }
     const touser = cred.notifyUserids

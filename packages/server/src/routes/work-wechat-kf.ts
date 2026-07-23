@@ -2,6 +2,7 @@
  * B-kf 管理端 API（挂 /admin 前缀，JWT 保护区内 + adminOnlyMiddleware）
  *
  *   PUT    /admin/work-wechat/config            — 保存企微配置（含微信客服 Secret，加密落库）
+ *   GET    /admin/kf/stats                      — 概览统计（今日/近N天聚合 + 按天序列 + "没答上"清单）
  *   GET    /admin/kf/conversations              — 会话列表（分页 + 最后一条消息摘要）
  *   GET    /admin/kf/conversations/:id/messages — 消息流
  *   POST   /admin/kf/conversations/:id/mode     — 切 auto/manual
@@ -18,6 +19,7 @@ import { workWechatConfigs, kfConversations, kfMessages, kfFaqs } from "../model
 import { adminOnlyMiddleware } from "../middleware/admin-only.js";
 import { encryptCredentials } from "../utils/crypto.js";
 import { sendKfText, pingKfCredential } from "../services/work-wechat/kf-client.js";
+import { getKfStats } from "../services/work-wechat/kf-stats.js";
 import { chat } from "../services/ai/chat-service.js";
 import { env } from "../config/env.js";
 import { normalizeImportItems, parseFaqText, dedupWithinBatch, faqDedupKey } from "../services/work-wechat/kf-faq-import.js";
@@ -132,6 +134,23 @@ export async function workWechatKfRoutes(app: FastifyInstance) {
       return reply.send({ code: "ok", data: result });
     } catch (err) {
       logger.error({ err }, "企微测试连接失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  /**
+   * GET /admin/kf/stats?days=7 — 概览统计（运营每天第一眼）。
+   * 返回：今日/近 N 天聚合数卡 + 按天序列（柱状图）+ "AI 没答上"清单（补 FAQ 依据）+ agentSecretConfigured 布尔。
+   * 权限同本文件其余接口（外层 auth+tenant + adminOnlyMiddleware），聚合查询全部经 kf_conversations.tenant_id 隔离。
+   */
+  app.get("/kf/stats", async (request, reply) => {
+    try {
+      const q = request.query as { days?: string };
+      const days = Math.max(1, Math.min(30, parseInt(q.days ?? "7") || 7));
+      const data = await getKfStats(request.tenantId, days);
+      return reply.send({ code: "ok", data });
+    } catch (err) {
+      logger.error({ err }, "kf 概览统计查询失败");
       return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
   });

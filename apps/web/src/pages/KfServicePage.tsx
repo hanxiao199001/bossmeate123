@@ -1,8 +1,10 @@
 /**
  * 7-2 B-kf — 「AI 客服」管理页（企微微信客服，admin only）。
- * 布局照 SalesRadarPage 风格：tab 切换「会话」/「FAQ 管理」。
- *  - 会话：左列表（manual 标红）| 右消息流 + 人工回复 + auto/manual 切换
+ * 布局照 SalesRadarPage 风格：tab 切换「概览」/「会话」/「FAQ 管理」/「企微设置」。
+ *  - 概览（默认打开，运营每天第一眼）：今日数卡 + 近7天柱条 + "AI 没答上"清单 + agentSecret 漏配警示
+ *  - 会话：左列表（manual 置顶标红 + 只看待人工筛选）| 右消息流 + 人工回复 + auto/manual 切换
  *  - FAQ：表格 CRUD（问题/答案/启用/排序）
+ *  - 企微设置：配置表单 + agentSecret 漏配警示条
  * 后端：/admin/kf/*（routes/work-wechat-kf.ts）
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -39,6 +41,33 @@ interface KfFaq {
   sort: number;
 }
 
+/* —— 概览统计（GET /admin/kf/stats）—— */
+interface KfStatBucket {
+  conversations: number;
+  customerMessages: number;
+  aiReplies: number;
+  handoffs: number;
+  manualReplies: number;
+}
+interface KfDailyStat extends KfStatBucket { date: string }
+interface KfUnansweredItem {
+  conversationId: string;
+  externalUserid: string;
+  question: string | null;
+  transferredAt: string | null;
+}
+interface KfStatsData {
+  days: number;
+  today: KfDailyStat;
+  period: KfStatBucket;
+  daily: KfDailyStat[];
+  unanswered: KfUnansweredItem[];
+  agentSecretConfigured: boolean;
+}
+
+/** 从概览跳会话 tab 的初始态（只看待人工 / 直接打开某会话） */
+interface ConvInit { manualOnly?: boolean; conversationId?: string }
+
 const INTENT_LABEL: Record<string, string> = {
   journal_query: "期刊查询", service_faq: "服务FAQ", chitchat: "闲聊", handoff: "转人工",
 };
@@ -56,16 +85,142 @@ function relTime(t: string | null): string {
   return `${Math.floor(h / 24)}d 前`;
 }
 
+/* ============ 概览 tab（运营每天第一眼：客服活着没 + 哪些没答上） ============ */
+function OverviewTab({ manualTotal, onGoManual, onOpenConversation, onGoConfig }: {
+  manualTotal: number;
+  onGoManual: () => void;
+  onOpenConversation: (id: string) => void;
+  onGoConfig: () => void;
+}) {
+  const [stats, setStats] = useState<KfStatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get<KfStatsData>("/admin/kf/stats?days=7")
+      .then((r) => setStats(r.data ?? null))
+      .catch(() => setStats(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <p className="py-12 text-center text-sm text-gray-400">统计加载中…</p>;
+  if (!stats) return <p className="py-12 text-center text-sm text-gray-400">统计加载失败，请刷新重试</p>;
+
+  const { today, period, daily, unanswered } = stats;
+  const maxMsg = Math.max(...daily.map((d) => d.customerMessages), 1);
+
+  const cards: Array<{ label: string; value: number; sub: string; danger?: boolean; onClick?: () => void }> = [
+    { label: "今日会话", value: today.conversations, sub: `客户消息 ${today.customerMessages} 条` },
+    { label: "今日 AI 答", value: today.aiReplies, sub: `近 ${stats.days} 天共 ${period.aiReplies} 条` },
+    { label: "今日转人工", value: today.handoffs, sub: manualTotal > 0 ? `${manualTotal} 个会话待人工处理，点击查看` : "点击查看会话", danger: true, onClick: onGoManual },
+    { label: "今日人工答", value: today.manualReplies, sub: `近 ${stats.days} 天共 ${period.manualReplies} 条` },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* agentSecret 漏配 + 近7天有转人工 → 运营最可能在这里看到的警示 */}
+      {!stats.agentSecretConfigured && period.handoffs > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-center gap-3">
+          <p className="flex-1 text-sm text-amber-800">
+            近 {stats.days} 天发生过 <b>{period.handoffs} 次转人工</b>，但尚未配置企业应用 Secret ——
+            客户转人工时<b>不会推送通知给运营</b>，客户会一直在企微「待接入池」等待。强烈建议现在配置。
+          </p>
+          <button onClick={onGoConfig} className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm hover:bg-amber-600">
+            去配置
+          </button>
+        </div>
+      )}
+
+      {/* 4 张数卡 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {cards.map((c) => (
+          <button
+            key={c.label}
+            onClick={c.onClick}
+            disabled={!c.onClick}
+            className={`text-left bg-white rounded-2xl border p-4 transition-colors ${
+              c.onClick ? "border-gray-200 hover:border-red-300 hover:bg-red-50/40 cursor-pointer" : "border-gray-200 cursor-default"
+            }`}
+          >
+            <p className="text-xs text-gray-500">{c.label}</p>
+            <p className={`text-2xl font-semibold mt-1 ${c.danger && c.value > 0 ? "text-red-600" : "text-gray-900"}`}>{c.value}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{c.sub}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* 近 7 天趋势（纯 div 柱条，不引图表库） */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-medium text-gray-800">近 {stats.days} 天趋势</p>
+          <p className="text-[11px] text-gray-400">柱高 = 客户消息条数；日期标红 = 当天有转人工</p>
+        </div>
+        <div className="flex items-end gap-2 h-28 pt-2">
+          {daily.map((d) => (
+            <div
+              key={d.date}
+              className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0"
+              title={`${d.date}\n会话 ${d.conversations} · 客户消息 ${d.customerMessages}\nAI答 ${d.aiReplies} · 转人工 ${d.handoffs} · 人工答 ${d.manualReplies}`}
+            >
+              <span className="text-[10px] text-gray-400">{d.customerMessages > 0 ? d.customerMessages : ""}</span>
+              <div
+                className={`w-full max-w-[40px] rounded-t ${d.customerMessages > 0 ? "bg-indigo-500/80" : "bg-gray-100"}`}
+                style={{ height: `${d.customerMessages > 0 ? Math.max((d.customerMessages / maxMsg) * 72, 6) : 2}px` }}
+              />
+              <span className={`text-[10px] ${d.handoffs > 0 ? "text-red-500 font-medium" : "text-gray-400"}`}>
+                {d.date.slice(5)}{d.handoffs > 0 ? ` (${d.handoffs})` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* AI 没答上的问题（转人工前客户原话）→ 补 FAQ 的直接依据 */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <header className="px-4 py-3 border-b border-gray-100">
+          <p className="text-sm font-medium text-gray-800">AI 没答上的问题（最近转人工）</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">这些是转人工前客户的原话 —— 把常见的补进「FAQ 管理」，下次 AI 就能自己答</p>
+        </header>
+        {unanswered.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-gray-400">AI 都答上了，近 {stats.days} 天暂无转人工</p>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {unanswered.map((u, i) => (
+              <li key={`${u.conversationId}-${i}`} className="px-4 py-2.5 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-800 truncate">{u.question ?? "（客户未发文本消息，可能是图片/语音）"}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">客户 {u.externalUserid.slice(0, 12)}… · {relTime(u.transferredAt)}</p>
+                </div>
+                <button
+                  onClick={() => onOpenConversation(u.conversationId)}
+                  className="shrink-0 text-xs text-indigo-600 hover:underline"
+                >
+                  查看会话
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ============ 会话 tab ============ */
-function ConversationsTab() {
+function ConversationsTab({ init, onManualChanged }: { init: ConvInit | null; onManualChanged: () => void }) {
   const [convs, setConvs] = useState<KfConversation[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [manualOnly, setManualOnly] = useState(!!init?.manualOnly);
+  const [activeId, setActiveId] = useState<string | null>(init?.conversationId ?? null);
   const [messages, setMessages] = useState<KfMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const active = convs.find((c) => c.id === activeId) ?? null;
+  const manualCount = convs.filter((c) => c.mode === "manual").length;
+  // manual 置顶（sort 稳定，组内保持服务端"最近消息在前"顺序）；可选只看待人工
+  const displayed = (manualOnly ? convs.filter((c) => c.mode === "manual") : convs)
+    .slice()
+    .sort((a, b) => (a.mode === "manual" ? 0 : 1) - (b.mode === "manual" ? 0 : 1));
 
   const loadConvs = useCallback(() => {
     api.get<{ items: KfConversation[] }>("/admin/kf/conversations?pageSize=100")
@@ -90,6 +245,7 @@ function ConversationsTab() {
       await api.post(`/admin/kf/conversations/${active.id}/mode`, { mode });
       toast.success(mode === "manual" ? "已切换为人工接管，AI 停止自动回复" : "已恢复 AI 自动回复");
       loadConvs();
+      onManualChanged(); // 刷新 tab 标题上的待处理角标
     } catch { /* api 层已 toast */ }
   };
 
@@ -107,13 +263,24 @@ function ConversationsTab() {
 
   return (
     <div className="flex gap-4" style={{ height: "calc(100vh - 180px)" }}>
-      {/* 左：会话列表 */}
+      {/* 左：会话列表（manual 置顶 + 待处理计数 + 只看待人工筛选） */}
       <aside className="w-72 shrink-0 bg-white rounded-2xl border border-gray-200 overflow-y-auto">
-        {convs.length === 0 && (
-          <p className="p-4 text-sm text-gray-400">暂无会话。客户通过微信客服发消息后会出现在这里。</p>
+        <div className="sticky top-0 bg-white px-4 py-2 border-b border-gray-100 flex items-center justify-between gap-2 text-xs">
+          {manualCount > 0
+            ? <span className="text-red-600 font-medium">待人工处理 {manualCount}</span>
+            : <span className="text-gray-400">暂无待人工</span>}
+          <label className="flex items-center gap-1 text-gray-500 shrink-0">
+            <input type="checkbox" checked={manualOnly} onChange={(e) => setManualOnly(e.target.checked)} />
+            只看待人工
+          </label>
+        </div>
+        {displayed.length === 0 && (
+          <p className="p-4 text-sm text-gray-400">
+            {manualOnly ? "没有待人工处理的会话" : "暂无会话。客户通过微信客服发消息后会出现在这里。"}
+          </p>
         )}
         <ul className="divide-y divide-gray-100">
-          {convs.map((c) => (
+          {displayed.map((c) => (
             <li key={c.id}>
               <button
                 onClick={() => setActiveId(c.id)}
@@ -664,6 +831,16 @@ function ConfigTab() {
 
   return (
     <div className="max-w-2xl space-y-4">
+      {/* agentSecret 漏配警示：不配则转人工无通知，客户在待接入池干等 */}
+      {status && !status.hasAgentSecret && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3">
+          <p className="text-sm text-amber-800">
+            <b>未配置企业应用 Secret：</b>客户转人工时<b>不会推送通知给运营</b>，客户会在企微「待接入池」一直等待、无人知晓。
+            强烈建议在下方「自建应用 Secret」填入并保存。
+          </p>
+        </div>
+      )}
+
       {/* 配置状态 */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4">
         <div className="flex items-center justify-between">
@@ -723,8 +900,25 @@ function ConfigTab() {
 }
 
 /* ============ 页面骨架 ============ */
+type TabKey = "overview" | "conversations" | "faqs" | "config";
+
 export default function KfServicePage() {
-  const [tab, setTab] = useState<"conversations" | "faqs" | "config">("conversations");
+  const [tab, setTab] = useState<TabKey>("overview"); // 概览默认打开：运营每天第一眼
+  const [manualTotal, setManualTotal] = useState(0);  // 待人工处理会话总数（tab 角标）
+  const [convInit, setConvInit] = useState<ConvInit | null>(null);
+
+  const refreshManualTotal = useCallback(() => {
+    api.get<{ total: number }>("/admin/kf/conversations?mode=manual&pageSize=1")
+      .then((r) => setManualTotal(r.data?.total ?? 0))
+      .catch(() => { /* 角标失败不打扰 */ });
+  }, []);
+  useEffect(() => { refreshManualTotal(); }, [refreshManualTotal, tab]);
+
+  /** 从概览跳会话 tab（带初始筛选/定位） */
+  const openConversations = (init: ConvInit | null) => {
+    setConvInit(init);
+    setTab("conversations");
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -735,20 +929,35 @@ export default function KfServicePage() {
         </div>
 
         <div className="flex items-center gap-1 border-b border-gray-200">
-          {([["conversations", "会话"], ["faqs", "FAQ 管理"], ["config", "企微设置"]] as const).map(([key, label]) => (
+          {([["overview", "概览"], ["conversations", "会话"], ["faqs", "FAQ 管理"], ["config", "企微设置"]] as Array<[TabKey, string]>).map(([key, label]) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => { if (key === "conversations") setConvInit(null); setTab(key); }}
               className={`px-4 py-2 text-sm transition-colors border-b-2 -mb-px ${
                 tab === key ? "border-indigo-600 text-indigo-600 font-medium" : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
             >
               {label}
+              {key === "conversations" && manualTotal > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] align-middle">
+                  {manualTotal > 99 ? "99+" : manualTotal}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
-        {tab === "conversations" ? <ConversationsTab /> : tab === "faqs" ? <FaqTab /> : <ConfigTab />}
+        {tab === "overview" && (
+          <OverviewTab
+            manualTotal={manualTotal}
+            onGoManual={() => openConversations({ manualOnly: true })}
+            onOpenConversation={(id) => openConversations({ conversationId: id })}
+            onGoConfig={() => setTab("config")}
+          />
+        )}
+        {tab === "conversations" && <ConversationsTab init={convInit} onManualChanged={refreshManualTotal} />}
+        {tab === "faqs" && <FaqTab />}
+        {tab === "config" && <ConfigTab />}
       </main>
     </div>
   );
