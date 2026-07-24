@@ -48,6 +48,7 @@ interface KfStatBucket {
   aiReplies: number;
   handoffs: number;
   manualReplies: number;
+  blockedSensitive: number;
 }
 interface KfDailyStat extends KfStatBucket { date: string }
 interface KfUnansweredItem {
@@ -55,6 +56,7 @@ interface KfUnansweredItem {
   externalUserid: string;
   question: string | null;
   transferredAt: string | null;
+  sensitiveBlocked?: boolean;
 }
 interface KfStatsData {
   days: number;
@@ -73,6 +75,7 @@ const INTENT_LABEL: Record<string, string> = {
 };
 const ACTION_LABEL: Record<string, string> = {
   answered: "AI已答", transferred: "已转人工", skipped: "跳过", manual: "人工", human_wecom: "企微端人工",
+  blocked_sensitive: "敏感词拦截·未外发",
 };
 
 function relTime(t: string | null): string {
@@ -148,6 +151,13 @@ function OverviewTab({ manualTotal, onGoManual, onOpenConversation, onGoConfig }
         ))}
       </div>
 
+      {/* 敏感词出站拦截：N=0 不显示（多数租户永远看不到这行才是常态） */}
+      {period.blockedSensitive > 0 && (
+        <p className="text-[11px] text-red-500 px-1">
+          其中敏感词拦截 {period.blockedSensitive} 次（今日 {today.blockedSensitive} 次）—— AI 回复命中敏感词库被拦下未外发，已自动转人工，可在下方清单查看对应会话
+        </p>
+      )}
+
       {/* 近 7 天趋势（纯 div 柱条，不引图表库） */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4">
         <div className="flex items-center justify-between mb-2">
@@ -190,6 +200,9 @@ function OverviewTab({ manualTotal, onGoManual, onOpenConversation, onGoConfig }
                   <p className="text-sm text-gray-800 truncate">{u.question ?? "（客户未发文本消息，可能是图片/语音）"}</p>
                   <p className="text-[11px] text-gray-400 mt-0.5">客户 {u.externalUserid.slice(0, 12)}… · {relTime(u.transferredAt)}</p>
                 </div>
+                {u.sensitiveBlocked && (
+                  <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200">触发敏感词拦截</span>
+                )}
                 <button
                   onClick={() => onOpenConversation(u.conversationId)}
                   className="shrink-0 text-xs text-indigo-600 hover:underline"

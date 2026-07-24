@@ -50,7 +50,7 @@ function daysAgo(n: number): string {
 }
 
 const bucket = (over: Record<string, number> = {}) => ({
-  conversations: 0, customerMessages: 0, aiReplies: 0, handoffs: 0, manualReplies: 0, ...over,
+  conversations: 0, customerMessages: 0, aiReplies: 0, handoffs: 0, manualReplies: 0, blockedSensitive: 0, ...over,
 });
 
 // getKfStats 内 db.select 调用顺序：① period 总量 ② daily 序列 ③ unanswered ④ config
@@ -103,8 +103,8 @@ describe("getKfStats", () => {
     queue({
       period: bucket({ handoffs: 1 }),
       unanswered: [
-        { conversationId: "conv-1", externalUserid: "wx-u1", question: "你们加急服务多少钱？", transferredAt: "2026-07-23T02:00:00.000Z" },
-        { conversationId: "conv-2", externalUserid: "wx-u2", question: null, transferredAt: "2026-07-22T02:00:00.000Z" },
+        { conversationId: "conv-1", externalUserid: "wx-u1", question: "你们加急服务多少钱？", transferredAt: "2026-07-23T02:00:00.000Z", sensitiveBlocked: false },
+        { conversationId: "conv-2", externalUserid: "wx-u2", question: null, transferredAt: "2026-07-22T02:00:00.000Z", sensitiveBlocked: true },
       ],
       config: [{ agentSecretEnc: "enc-xxx" }],
     });
@@ -113,6 +113,7 @@ describe("getKfStats", () => {
     expect(res.unanswered).toHaveLength(2);
     expect(res.unanswered[0]).toMatchObject({ conversationId: "conv-1", question: "你们加急服务多少钱？" });
     expect(res.unanswered[1].question).toBeNull(); // 非文本消息触发的转人工
+    expect(res.unanswered[1].sensitiveBlocked).toBe(true); // 敏感词拦截触发的转人工打标直通
     expect(res.agentSecretConfigured).toBe(true);
     // 绝不回 Secret 本身
     expect(JSON.stringify(res)).not.toContain("enc-xxx");

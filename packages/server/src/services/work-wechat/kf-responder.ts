@@ -9,6 +9,8 @@
  *   3. 一次 LLM 调用做意图分类（JSON 输出），按 intent 分流
  *   4. journal_query 只用 journals 表真实字段作事实源，缺字段说"暂无数据"，禁止编造
  *   5. 全链路降级：AI/DB 任何异常 → 转人工，绝不向上抛（保回调 200）
+ *   6. 敏感词出站硬闸：所有 AI 出站文本在唯一收口点 replyAndRecord 过 DFA 词库，
+ *      命中 → 不发 + ai_action=blocked_sensitive 打标 + 转人工（详见 replyAndRecord 注释）
  *
  * 运营通知：handoff 时通过企微自建应用（kf-client.notifyStaff）给运营推消息；
  * agent_secret 未配置则静默跳过，通知失败只 warn —— 通知是旁路，绝不影响主流程。
@@ -21,6 +23,7 @@ import { sendKfText, transferServiceState, syncKfMessages, notifyStaff } from ".
 import type { KfSyncedMsg } from "./kf-client.js";
 import { logger } from "../../config/logger.js";
 import { isUnverifiedJournal } from "../journals/verification.js";
+import { matchSensitive } from "./sensitive-filter.js";
 
 export { isUnverifiedJournal }; // 客服播报护栏用; 从 verification.js 单一事实源导入并转出(测试仍从本模块 import)
 
@@ -111,8 +114,34 @@ async function loadHistoryContext(conversationId: string, excludeMessageId?: str
   }
 }
 
-/** 出站消息：发企微 + 落库（ai_action 记录 answered/transferred 等） */
-async function replyAndRecord(conv: { id: string; openKfid: string; externalUserid: string }, text: string, intent: Intent | null, action: string) {
+/**
+ * 出站消息唯一收口点：发企微 + 落库（ai_action 记录 answered/transferred 等）。
+ *
+ * 敏感词出站硬闸（合规，同 findUnsourcedNumbers 的"确定性防线"哲学）：
+ *   AI 生成/拼接的文本先过 DFA 词库（sensitive-filter），命中 → 这条绝不外发，
+ *   落一条 ai_action=blocked_sensitive 审计记录（content 存被拦原文，仅内部可见）→ 转人工。
+ *   - HANDOFF_REPLY 是人工维护的固定安全话术，跳过匹配：既杜绝"命中→handoff→再检查"递归，
+ *     也保证兜底转接话术永远发得出去。
+ *   - 只闸 AI 自动回复；人工回复（路由 /kf/conversations/:id/reply 直调 sendKfText）不经此闸。
+ *   - 命中词只进服务端日志/落库，绝不能出现在发给客户的任何文案里。
+ */
+async function replyAndRecord(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, text: string, intent: Intent | null, action: string) {
+  if (text !== HANDOFF_REPLY) {
+    const sens = matchSensitive(text);
+    if (sens.hit) {
+      logger.warn({ conversationId: conv.id, intent, action, words: sens.words }, "kf 出站回复命中敏感词，已拦截未外发，转人工");
+      await db.insert(kfMessages).values({
+        conversationId: conv.id,
+        direction: "out",
+        msgType: "text",
+        content: text, // 被拦原文留档供合规审计（未外发；前端标"敏感词拦截·未外发"）
+        aiIntent: intent ?? undefined,
+        aiAction: "blocked_sensitive",
+      });
+      await handoffToHuman(conv, intent, "AI 回复命中敏感词，已拦截未外发");
+      return;
+    }
+  }
   await sendKfText(conv.openKfid, conv.externalUserid, text);
   await db.insert(kfMessages).values({
     conversationId: conv.id,

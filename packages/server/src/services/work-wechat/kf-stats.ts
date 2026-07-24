@@ -10,6 +10,9 @@
  *   aiReplies        = AI 回复条数（direction=out & ai_action=answered）
  *   handoffs         = 转人工次数（direction=out & ai_action=transferred）
  *   manualReplies    = 人工回复条数（direction=out & ai_action in (manual, human_wecom)，系统内人工 + 企微端人工）
+ *   blockedSensitive = 敏感词出站拦截次数（direction=out & ai_action=blocked_sensitive，未外发的审计记录）
+ * 敏感词拦截事件会同时产生 blocked_sensitive（审计）+ transferred（兜底转接话术）两条出站记录，
+ * 故 handoffs 已含拦截触发的转人工；"没答上"清单按 transferred 出，用 sensitiveBlocked 布尔标注来源，不重复列。
  * 按天分桶用 Asia/Shanghai（运营时区，与 scheduler cron 同约定）。
  */
 import { and, desc, eq, gte, sql } from "drizzle-orm";
@@ -22,6 +25,7 @@ export interface KfStatBucket {
   aiReplies: number;
   handoffs: number;
   manualReplies: number;
+  blockedSensitive: number;
 }
 export interface KfDailyStat extends KfStatBucket {
   date: string; // YYYY-MM-DD（Asia/Shanghai）
@@ -32,6 +36,8 @@ export interface KfUnansweredItem {
   /** 触发转人工前客户最后一条文本消息原文 —— 运营补 FAQ 的最直接依据 */
   question: string | null;
   transferredAt: Date | string | null;
+  /** 本次转人工是否由敏感词出站拦截触发（同会话 1 分钟内有 blocked_sensitive 审计记录） */
+  sensitiveBlocked: boolean;
 }
 export interface KfStatsResult {
   days: number;
@@ -46,7 +52,7 @@ export interface KfStatsResult {
 const TZ = "Asia/Shanghai";
 const dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }); // → YYYY-MM-DD
 
-const ZERO: KfStatBucket = { conversations: 0, customerMessages: 0, aiReplies: 0, handoffs: 0, manualReplies: 0 };
+const ZERO: KfStatBucket = { conversations: 0, customerMessages: 0, aiReplies: 0, handoffs: 0, manualReplies: 0, blockedSensitive: 0 };
 const DAY_MS = 86_400_000;
 
 /** 近 N 天窗口起点：上海时区今天 0 点往前推 N-1 天（中国无夏令时，毫秒运算安全） */
@@ -67,6 +73,7 @@ export async function getKfStats(tenantId: string, daysRaw = 7, unansweredLimit 
     aiReplies: sql<number>`count(*) filter (where ${kfMessages.direction} = 'out' and ${kfMessages.aiAction} = 'answered')::int`,
     handoffs: sql<number>`count(*) filter (where ${kfMessages.direction} = 'out' and ${kfMessages.aiAction} = 'transferred')::int`,
     manualReplies: sql<number>`count(*) filter (where ${kfMessages.direction} = 'out' and ${kfMessages.aiAction} in ('manual', 'human_wecom'))::int`,
+    blockedSensitive: sql<number>`count(*) filter (where ${kfMessages.direction} = 'out' and ${kfMessages.aiAction} = 'blocked_sensitive')::int`,
   };
   const scope = and(eq(kfConversations.tenantId, tenantId), gte(kfMessages.createdAt, since));
 
@@ -92,7 +99,7 @@ export async function getKfStats(tenantId: string, daysRaw = 7, unansweredLimit 
     const d = dayFmt.format(new Date(since.getTime() + i * DAY_MS));
     const row = byDate.get(d);
     daily.push(row
-      ? { date: d, conversations: row.conversations, customerMessages: row.customerMessages, aiReplies: row.aiReplies, handoffs: row.handoffs, manualReplies: row.manualReplies }
+      ? { date: d, conversations: row.conversations, customerMessages: row.customerMessages, aiReplies: row.aiReplies, handoffs: row.handoffs, manualReplies: row.manualReplies, blockedSensitive: row.blockedSensitive }
       : { date: d, ...ZERO });
   }
   const today: KfDailyStat = daily.find((x) => x.date === todayStr) ?? { date: todayStr, ...ZERO };
@@ -108,6 +115,15 @@ export async function getKfStats(tenantId: string, daysRaw = 7, unansweredLimit 
         AND m2.direction = 'in' AND m2.msg_type = 'text' AND m2.content <> ''
         AND m2.created_at <= ${kfMessages.createdAt}
       ORDER BY m2.created_at DESC LIMIT 1
+    )`,
+    // 敏感词拦截打标：拦截流程先落 blocked_sensitive 审计记录再落本条 transferred（同事务序毫秒级相邻），
+    // 用"同会话、transferred 之前 1 分钟内存在 blocked_sensitive"识别，前端标注"触发敏感词拦截"
+    sensitiveBlocked: sql<boolean>`EXISTS (
+      SELECT 1 FROM ${kfMessages} m3
+      WHERE m3.conversation_id = ${kfMessages.conversationId}
+        AND m3.direction = 'out' AND m3.ai_action = 'blocked_sensitive'
+        AND m3.created_at <= ${kfMessages.createdAt}
+        AND m3.created_at > ${kfMessages.createdAt} - interval '1 minute'
     )`,
   })
     .from(kfMessages)
@@ -126,7 +142,7 @@ export async function getKfStats(tenantId: string, daysRaw = 7, unansweredLimit 
     days,
     today,
     period: periodRow
-      ? { conversations: periodRow.conversations, customerMessages: periodRow.customerMessages, aiReplies: periodRow.aiReplies, handoffs: periodRow.handoffs, manualReplies: periodRow.manualReplies }
+      ? { conversations: periodRow.conversations, customerMessages: periodRow.customerMessages, aiReplies: periodRow.aiReplies, handoffs: periodRow.handoffs, manualReplies: periodRow.manualReplies, blockedSensitive: periodRow.blockedSensitive }
       : { ...ZERO },
     daily,
     unanswered,
