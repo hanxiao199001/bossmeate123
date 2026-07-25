@@ -402,7 +402,13 @@ export async function journalRoutes(app: FastifyInstance) {
         return reply.status(400).send({ code: "BAD_REQUEST", message: "keywords 不能为空" });
       }
 
-    const conditions: any[] = [eq(journals.tenantId, tenantId)];
+    // 7-25 修(第四重坏死, 上线验证时发现): 原来是 `eq(journals.tenantId, tenantId)` 严格相等,
+    //   而 8743 本期刊池的 tenant_id 是 **NULL**(共享池, 只有租户自建刊才带 tenant_id) —— NULL
+    //   等不上任何 uuid, 所以本端点对**任何租户、任何入参**都返回 0 条, 上面三重学科码修复全被
+    //   这一行挡住看不见。同文件 GET /journals/:id (L259/L290) 早就是 `isNull OR eq` 的口径,
+    //   daily-cron 的 pickScopedFreshJournal 也只拿 tenantId 做冷却/LRU、不拿它过滤期刊表 ——
+    //   本行是唯一的例外, 对齐即可。写操作(seed / enrich / patch)保持严格租户隔离, 不动。
+    const conditions: any[] = [or(isNull(journals.tenantId), eq(journals.tenantId, tenantId))];
 
     // 按学科筛选
     // 7-25 修: 原来是本文件私有的 disciplineMap + `eq(journals.discipline, ...)` 对**原始列**全等匹配,

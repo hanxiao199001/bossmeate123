@@ -95,3 +95,42 @@ describe("路由已切到生成列 + generic 放行", () => {
     expect(ROUTE_SRC).toMatch(/or\(\s*eq\(journals\.disciplineCode, code\),\s*eq\(journals\.disciplineCode, GENERIC_DISCIPLINE_CODE\)\s*\)/);
   });
 });
+
+/**
+ * bug④(7-25 线上验证时发现): 上面三重修完, `POST /journals/match {discipline:"计算机"}` 线上
+ * 实测**仍是 0 条** —— 而且不带 discipline 也是 0 条, 任何租户都是 0 条。
+ *
+ * 真因不在学科码, 在 conditions 的第一行: `eq(journals.tenantId, tenantId)`。线上 8743 本期刊
+ * 的 tenant_id 是 **NULL**(共享池; 只有租户自建刊才带 tenant_id), NULL 等不上任何 uuid →
+ * 整个池子被排除。学科码修对了(computer 306 本 + generic 1139 本 = 1444 本待命), 只是看不见。
+ *
+ * 同文件 GET /journals/:id 早就是 `isNull OR eq` 口径, daily-cron 的 pickScopedFreshJournal
+ * 也只拿 tenantId 做冷却/LRU、不拿它过滤期刊表 —— match 是唯一跑偏的读路径。
+ */
+describe("bug④: tenant 严格相等把整个共享池排除在外", () => {
+  /** match 端点的函数体(到下一个 app.xxx 注册为止) */
+  const MATCH_BODY = (() => {
+    const start = ROUTE_SRC.indexOf('app.post("/journals/match"');
+    expect(start).toBeGreaterThan(-1);
+    const rest = ROUTE_SRC.slice(start + 1);
+    const end = rest.search(/\n\s{2}app\.(get|post|patch|put|delete)\(/);
+    return end === -1 ? rest : rest.slice(0, end);
+  })();
+
+  it("不再对 tenantId 做严格相等(那会漏掉 tenant_id IS NULL 的共享池)", () => {
+    expect(MATCH_BODY).not.toMatch(/conditions:\s*any\[\]\s*=\s*\[eq\(journals\.tenantId, tenantId\)\]/);
+  });
+
+  it("共享池(isNull) 与租户自有刊(eq) 一起放行, 与 GET /journals/:id 同口径", () => {
+    expect(MATCH_BODY).toMatch(/or\(\s*isNull\(journals\.tenantId\),\s*eq\(journals\.tenantId, tenantId\)\s*\)/);
+  });
+
+  it("写路径保持严格租户隔离(seed / patch / enrich 不受本次放宽影响)", () => {
+    // 放宽只发生在 match 一处; 写端点仍是裸 eq
+    for (const ep of ['app.post("/journals/seed"', 'app.patch("/journals/:id"']) {
+      const i = ROUTE_SRC.indexOf(ep);
+      expect(i).toBeGreaterThan(-1);
+    }
+    expect(ROUTE_SRC).toMatch(/eq\(journals\.tenantId, tenantId\)/); // 其它端点仍在用
+  });
+});
