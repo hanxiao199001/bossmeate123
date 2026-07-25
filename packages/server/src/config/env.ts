@@ -100,8 +100,12 @@ const envSchema = z.object({
   WECHAT_STATS_CRON_HOUR: z.coerce.number().min(0).max(23).default(9), // 每日几点(BJ)拉"昨日"getarticlesummary (T+1)
 
   // 模型直映射（T2）— TaskType → 具体模型名
-  DEEPSEEK_MODEL_CHAT: z.string().default("deepseek-chat"),
-  DEEPSEEK_MODEL_REASONER: z.string().default("deepseek-reasoner"),
+  // ⚠️ 7-25: DeepSeek 官方下线了 deepseek-chat / deepseek-reasoner, API 现在只认
+  //   deepseek-v4-pro / deepseek-v4-flash, 传旧名一律 400 invalid_request_error。
+  //   7-24 晚起线上整条生成链路因此在产废稿(标题落成"抱歉，AI暂时无法响应")—— 400 属客户端
+  //   错误、不触发 qwen-plus 兜底, 直接吐占位文。默认值改成还活着的模型名, 服务器 .env 也已显式覆盖。
+  DEEPSEEK_MODEL_CHAT: z.string().default("deepseek-v4-pro"),
+  DEEPSEEK_MODEL_REASONER: z.string().default("deepseek-v4-pro"),
   QWEN_MODEL_PLUS: z.string().default("qwen-plus"),
   QWEN_MODEL_MAX: z.string().default("qwen-max"),
 

@@ -11,6 +11,7 @@
 import { logger } from "../config/logger.js";
 import { getAccessToken } from "./wechat.js";
 import { getProvider } from "./ai/provider-factory.js";
+import { env } from "../config/env.js";
 
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -410,7 +411,7 @@ ${contentSamples.length > 0 ? `【文章内容样本】\n${contentSamples.join("
   try {
     const result = await provider.chat({
       messages: [{ role: "user", content: prompt }],
-      model: "deepseek-chat",
+      model: env.DEEPSEEK_MODEL_CHAT,
       temperature: 0.3,
     });
 
@@ -480,7 +481,7 @@ ${stylesSummary}
   try {
     const result = await provider.chat({
       messages: [{ role: "user", content: prompt }],
-      model: "deepseek-chat",
+      model: env.DEEPSEEK_MODEL_CHAT,
       temperature: 0.5,
     });
 

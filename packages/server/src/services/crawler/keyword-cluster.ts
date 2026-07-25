@@ -22,6 +22,7 @@
 
 import { getProvider } from "../ai/provider-factory.js";
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 
 // ===== 类型定义 =====
 
@@ -306,7 +307,7 @@ ${keywordList}
 
     try {
       const response = await provider.chat({
-        model: "deepseek-chat",
+        model: env.DEEPSEEK_MODEL_CHAT,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },

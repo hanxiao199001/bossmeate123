@@ -14,6 +14,7 @@ import { eq, and, ilike, sql, desc } from "drizzle-orm";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../services/crawler/journal-image-crawler.js";
 import { fetchOwnArticles, fetchPeerArticles, analyzeStyle, generateTemplates } from "../services/style-learner.js";
 import { retrieveForWorkflow } from "../services/knowledge/rag-retriever.js";
+import { env } from "../config/env.js";
 
 export async function workflowRoutes(app: FastifyInstance) {
   /**
@@ -279,7 +280,7 @@ ${stylePrompt ? `\n# 风格指令（来自AI学习的模版，请严格遵循）
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt + ragSection },
         ],
-        model: "deepseek-chat",
+        model: env.DEEPSEEK_MODEL_CHAT,
       });
 
       // === 优化2: 数据槽位填充 — 程序自动修正AI可能写错的数值 ===
@@ -403,7 +404,7 @@ ${stylePrompt ? `\n# 风格指令（来自AI学习的模版，请严格遵循）
           title,
           keywords,
           template,
-          model: "deepseek-chat",
+          model: env.DEEPSEEK_MODEL_CHAT,
           journalImages,
           heroImage,
         },
@@ -454,7 +455,7 @@ ${content}`;
 
       const extractResult = await provider.chat({
         messages: [{ role: "user", content: extractPrompt }],
-        model: "deepseek-chat",
+        model: env.DEEPSEEK_MODEL_CHAT,
         temperature: 0.1,
       });
 
@@ -759,7 +760,7 @@ confidence是你对文章准确性的信心分数（0-100）。如果没有问�
         try {
           const reviewResult = await provider.chat({
             messages: [{ role: "user", content: reviewPrompt }],
-            model: "deepseek-chat",
+            model: env.DEEPSEEK_MODEL_CHAT,
             temperature: 0.2,
           });
 
@@ -791,7 +792,7 @@ ${fixedContent}
 
             const fixResult = await provider.chat({
               messages: [{ role: "user", content: fixPrompt }],
-              model: "deepseek-chat",
+              model: env.DEEPSEEK_MODEL_CHAT,
               temperature: 0.3,
             });
 

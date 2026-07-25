@@ -10,6 +10,7 @@
 
 import { getProvider } from "../ai/provider-factory.js";
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 
 interface JournalInfo {
   name: string;
@@ -85,7 +86,7 @@ export async function findHooks(journal: JournalInfo): Promise<HookResult> {
 只返回JSON，不要其他内容。`;
 
   const response = await provider.chat({
-    model: "deepseek-chat",
+    model: env.DEEPSEEK_MODEL_CHAT,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -144,7 +145,7 @@ export async function generateTitles(
 只返回JSON。`;
 
   const response = await provider.chat({
-    model: "deepseek-chat",
+    model: env.DEEPSEEK_MODEL_CHAT,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -208,7 +209,7 @@ export async function generateArticle(
 请直接输出Markdown格式的文章正文（不要再重复标题），最后一行输出关键词（用逗号分隔）。`;
 
   const response = await provider.chat({
-    model: "deepseek-chat",
+    model: env.DEEPSEEK_MODEL_CHAT,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },

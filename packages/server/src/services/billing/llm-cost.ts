@@ -28,6 +28,12 @@ const DEFAULT_PRICES: Record<string, ModelPrice> = {
   "deepseek-chat": { in: 200, out: 800 },
   "deepseek-reasoner": { in: 400, out: 1600 },
   "qwen-plus": { in: 80, out: 200 },
+  // ⚠️ 7-25 暂定价, 未经账单核实: DeepSeek 下线 chat/reasoner 换成 v4-pro/v4-flash 后, 新模型
+  //   名不在价目表 → computeLlmCostCents 记 0 分 → 预算闸和运维简报的花费告警一起失明。
+  //   这里先沿用旧 deepseek-chat 的 ¥2/¥8 占位(错的量级也好过 0), **拿到百炼/DeepSeek 账单后
+  //   务必用 LLM_PRICE_OVERRIDES 或本表改成真单价**。
+  "deepseek-v4-pro": { in: 200, out: 800 },
+  "deepseek-v4-flash": { in: 200, out: 800 },
 };
 
 let priceTable: Record<string, ModelPrice> | null = null;
