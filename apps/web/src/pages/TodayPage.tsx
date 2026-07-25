@@ -52,6 +52,20 @@ interface TodayData {
   publishHealth?: { stuckPending: number; loginExpired: number; failed: number }; // 6-17 #1 发布健康
 }
 
+/** 7-25 运维简报 — 每天 09:30 自动生成; 企微推送失败时这张卡就是唯一能看到告警的地方 */
+interface OpsBriefing {
+  date: string;
+  level: "ok" | "warn" | "alert";
+  text: string;
+  pushed: boolean;
+  pushError: string | null;
+  createdAt: string;
+  summary?: {
+    platform?: { items?: Array<{ level: string; text: string }> };
+    tenant?: { items?: Array<{ level: string; text: string }> };
+  };
+}
+
 const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号", wechat: "公众号" };
 const CONTENT_STATUS: Record<string, { label: string; cls: string }> = {
   draft: { label: "草稿", cls: "bg-gray-100 text-gray-600" },
@@ -203,6 +217,27 @@ export default function TodayPage() {
     } finally { setMSaving(false); }
   };
 
+  // 7-25 运维简报卡片 + 手动补跑
+  const [brief, setBrief] = useState<OpsBriefing | null>(null);
+  const [briefRunning, setBriefRunning] = useState(false);
+  const loadBrief = useCallback(() => {
+    api.get("/today/ops-briefing")
+      .then((r) => setBrief(((r.data as any)?.data ?? r.data) as OpsBriefing | null))
+      .catch(() => { /* 还没跑过简报, 不显示卡片 */ });
+  }, []);
+  useEffect(() => { loadBrief(); }, [loadBrief]);
+  const runBriefNow = async () => {
+    setBriefRunning(true);
+    try {
+      await api.post("/today/ops-briefing/run", {});
+      loadBrief();
+    } catch (e) {
+      alert("生成简报失败：" + ((e as { message?: string })?.message ?? "未知错误"));
+    } finally {
+      setBriefRunning(false);
+    }
+  };
+
   // PR-FW3: 资产效果榜
   const [assets, setAssets] = useState<{ templates: Array<{ key: string; label: string; count: number; avgViews: number }>; avatars: Array<{ key: string; label: string; count: number; avgViews: number }> } | null>(null);
   useEffect(() => {
@@ -350,6 +385,69 @@ export default function TodayPage() {
     <div className="p-6 max-w-5xl mx-auto space-y-5">
       <Greeting userName={user?.name} />
       <OnboardingChecklist />
+
+      {/* 7-25 运维简报: 系统自己喊救命的地方。企微推送失败时这里是唯一能看到告警的入口, 故置顶。 */}
+      {(() => {
+        const items = [
+          ...(brief?.summary?.platform?.items ?? []),
+          ...(brief?.summary?.tenant?.items ?? []),
+        ];
+        const alerts = items.filter((i) => i.level === "alert");
+        const warns = items.filter((i) => i.level === "warn");
+        const isAlert = brief?.level === "alert";
+        const isWarn = brief?.level === "warn";
+        const box = isAlert
+          ? "bg-rose-50 border-rose-200"
+          : isWarn
+            ? "bg-amber-50 border-amber-200"
+            : "bg-gray-50 border-gray-200";
+        return (
+          <div className={`border rounded-xl p-4 ${box}`}>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className={`text-sm font-semibold ${isAlert ? "text-rose-700" : isWarn ? "text-amber-800" : "text-gray-600"}`}>
+                {isAlert ? "🔴" : isWarn ? "🟡" : "✅"} 运维简报
+                {brief && <span className="ml-2 font-normal text-xs opacity-70">{brief.date}</span>}
+              </h2>
+              <button
+                onClick={() => void runBriefNow()}
+                disabled={briefRunning}
+                title="立刻重新体检一次系统并生成简报（同时会尝试推送企业微信）"
+                className="text-xs px-2 py-0.5 rounded-lg border border-gray-300 text-gray-600 bg-white hover:border-gray-400 disabled:opacity-50 shrink-0"
+              >
+                {briefRunning ? "检查中…" : "立即体检"}
+              </button>
+            </div>
+
+            {!brief && (
+              <p className="text-xs text-gray-500 mt-1.5">
+                还没有生成过简报。系统每天 09:30 自动体检一次并推送到企业微信；也可以点右上角「立即体检」先跑一次。
+              </p>
+            )}
+
+            {brief && alerts.length === 0 && warns.length === 0 && (
+              <p className="text-sm text-gray-600 mt-1.5">系统一切正常，没有需要你动手的事。</p>
+            )}
+
+            {brief && (alerts.length > 0 || warns.length > 0) && (
+              <div className="mt-2 space-y-1 text-sm">
+                {alerts.map((it, i) => (
+                  <div key={`a${i}`} className="text-rose-700">· {it.text}</div>
+                ))}
+                {warns.map((it, i) => (
+                  <div key={`w${i}`} className="text-amber-800/90">· {it.text}</div>
+                ))}
+              </div>
+            )}
+
+            {brief && !brief.pushed && (
+              <p className="text-xs text-gray-500 mt-2 border-t border-black/5 pt-2">
+                ⚠️ 这份简报<b>没能推送到企业微信</b>（{brief.pushError || "原因未知"}）。修好之前，只能在这一页看到告警 —— 请到「AI 客服 → 企微设置」补齐自建应用 Secret 与接收人。
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
       {/* 头部: 日期 + 花费 + 预算 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>

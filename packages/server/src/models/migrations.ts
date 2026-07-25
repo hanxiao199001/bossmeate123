@@ -547,4 +547,37 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_journals_pick ON journals (status, discipline_code, confidence);
     `,
   },
+  {
+    version: "027_ops_alerting",
+    description:
+      "7-25 运维告警三件套: ops_incidents(异常事件流水 — 记账失败/LLM额度不足/零产出/简报推送失败, " +
+      "这些点原先只有 logger.error 运营看不见) + ops_briefings(每日运营简报快照, 推送成功与否都落库, " +
+      "保证企微挂了也能在今日驾驶舱看到)。tenant_id 在 incidents 可空(LLM 额度是平台级故障, 不属任何租户)。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS ops_incidents (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+        kind VARCHAR(40) NOT NULL,
+        severity VARCHAR(10) NOT NULL DEFAULT 'error',
+        message VARCHAR(500) NOT NULL,
+        detail JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ops_incidents_time ON ops_incidents (created_at);
+      CREATE INDEX IF NOT EXISTS idx_ops_incidents_kind_time ON ops_incidents (kind, created_at);
+
+      CREATE TABLE IF NOT EXISTS ops_briefings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        brief_date DATE NOT NULL,
+        level VARCHAR(10) NOT NULL DEFAULT 'ok',
+        summary JSONB NOT NULL,
+        text TEXT NOT NULL,
+        pushed BOOLEAN NOT NULL DEFAULT FALSE,
+        push_error VARCHAR(300),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ops_briefings_tenant_date ON ops_briefings (tenant_id, brief_date);
+    `,
+  },
 ];

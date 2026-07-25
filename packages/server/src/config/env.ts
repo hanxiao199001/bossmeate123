@@ -324,6 +324,32 @@ const envSchema = z.object({
   IMAGE_MODERATION_CONCURRENCY: z.coerce.number().int().min(1).default(10), // 批量审核并发上限
   IMAGE_MODERATION_MAX_IMAGES: z.coerce.number().int().min(1).default(20),  // 单条内容最多审核几张(封面+正文内嵌)
   IMAGE_MODERATION_TIMEOUT_MS: z.coerce.number().int().default(8000),       // 单图审核读/连超时
+
+  // ============ 7-25 运维告警三件套 (services/ops/*) ============
+  // 每日运营简报: 每天固定时间汇总"过去 24h 的异常 + 要人动手的事", 企微推给运营。
+  //   正常也发(不发就分不清"没事"还是"简报本身挂了"); 推送失败会降级落库 + 今日驾驶舱展示。
+  OPS_BRIEFING_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  OPS_BRIEFING_PUSH_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"), // 只落库不推企微时设 false
+  OPS_BRIEFING_CRON_HOUR: z.coerce.number().int().min(0).max(23).default(9),    // 每日几点(BJ)发简报
+  OPS_BRIEFING_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(30), // 默认 09:30 — 生成(03:00)/分发(07:00)/草稿(08:00)/数据回流(09:10) 都跑完之后
+  // 阈值: 今日生成低于该篇数 → 黄色; 等于 0 → 红色
+  OPS_MIN_DAILY_CONTENT: z.coerce.number().int().min(0).default(5),
+  // 预算使用率超该百分比 → 黄色; ≥100% → 红色(预算闸已在拒绝花钱动作)
+  OPS_BUDGET_WARN_PCT: z.coerce.number().int().min(1).max(100).default(80),
+  // AI 客服今日转人工达到该次数 → 黄色(提醒补 FAQ)
+  OPS_HANDOFF_WARN_COUNT: z.coerce.number().int().min(1).default(5),
+
+  // 供应商余额监控 — 阿里云 BSS OpenAPI QueryAccountBalance。
+  //   ⚠️ 默认关闭: 需 AK 具备 bss:QueryAccountBalance(AliyunBSSReadOnlyAccess), 子账号还须主账号授"财务权限"。
+  //   查不到也不影响简报 — 自动退回"消耗速率异常检测"(纯自有 cost_ledger 数据, 不依赖任何外部 API)。
+  OPS_ALIYUN_BALANCE_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  OPS_ALIYUN_BSS_ENDPOINT: z.string().default("business.aliyuncs.com"),
+  OPS_BALANCE_WARN_YUAN: z.coerce.number().min(0).default(200),  // 余额低于此 → 黄色
+  OPS_BALANCE_ALERT_YUAN: z.coerce.number().min(0).default(50),  // 余额低于此 → 红色
+  // 消耗骤降判定: 今日消耗 / 近7日日均 < 该比例 → 黄色; 今日 = 0 → 红色(疑似欠费/额度耗尽)
+  OPS_SPEND_DROP_RATIO: z.coerce.number().min(0).max(1).default(0.2),
+  // 近7日日均消耗低于此(分)不做骤停判定 — 本来就不怎么花钱, 一天没花很正常, 别误报
+  OPS_SPEND_MIN_AVG_CENTS: z.coerce.number().int().min(0).default(100),
 });
 
 export type Env = z.infer<typeof envSchema>;

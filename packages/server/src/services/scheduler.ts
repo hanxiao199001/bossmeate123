@@ -50,7 +50,8 @@ export type SchedulerJobType =
   | "journal-topic-mining"     // 6-19: 每日从期刊库 LLM 衍生选题入库(选题库自动扩充, 按学科表现加权)
   | "ai-review-scan"           // 7-05 ④: 每小时 AI 审稿员扫灰区待审(影子模式记建议/live 自动裁决)
   | "draft-distribute"         // 7-05 ⑤: 每日早晨公众号草稿箱分发(每号 top-N 候选)
-  | "wechat-stats-collect";    // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
+  | "wechat-stats-collect"     // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
+  | "ops-daily-briefing";      // 7-25: 每日运营简报(异常汇总→企微推送, 推失败降级落库+今日驾驶舱)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -471,6 +472,18 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       };
     }
 
+    case "ops-daily-briefing": {
+      // 7-25: 每日运营简报 — 汇总过去 24h 异常 + 要人动手的事, 企微推运营。
+      // 总开关 OPS_BRIEFING_ENABLED(默认 true); 关掉时空转, 不落库不推送。
+      if (!env.OPS_BRIEFING_ENABLED) {
+        logger.info("ops-daily-briefing skipped (OPS_BRIEFING_ENABLED=false)");
+        return { skipped: true, reason: "OPS_BRIEFING_ENABLED=false" };
+      }
+      const { runDailyBriefing } = await import("./ops/daily-briefing.js");
+      const r = await runDailyBriefing();
+      return { date: r.date, level: r.level, pushed: r.pushed, tenantsProcessed: r.tenantsProcessed };
+    }
+
     case "login-keepalive": {
       // 串行慢巡检(账号间8-20s), 不要与推草稿/扫码并发跑浏览器 — keepalive 内部有 running 互斥
       const { runLoginKeepalive } = await import("./publisher/login-keepalive.js");
@@ -734,6 +747,15 @@ async function registerCronJobs() {
     "wechat-stats-collect-schedule",
     { pattern: `10 ${env.WECHAT_STATS_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
     { name: "wechat-stats-collect", data: { type: "wechat-stats-collect" as SchedulerJobType } }
+  );
+
+  // 7-25: 每日 OPS_BRIEFING_CRON_HOUR:MINUTE(默认 09:30 BJ) 运营简报。
+  // 排在最后 — 生成(03:00)/期刊补全(05:30)/分发(07:00)/草稿箱(08:00)/公众号数据回流(09:10) 全跑完再汇总,
+  // 否则会把"还没跑到"误报成"零产出"。
+  await crawlerQueue.upsertJobScheduler(
+    "ops-daily-briefing-schedule",
+    { pattern: `${env.OPS_BRIEFING_CRON_MINUTE} ${env.OPS_BRIEFING_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
+    { name: "ops-daily-briefing", data: { type: "ops-daily-briefing" as SchedulerJobType } }
   );
 
   // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）

@@ -13,6 +13,7 @@ import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenan
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { writeCalibrationSample } from "../services/content-engine/calibration-sample.js"; // 7-05 ③
+import { computePublishHealth } from "../services/metrics/matrix-health.js"; // 7-25 发布健康判定(与运维简报同源)
 import { logger } from "../config/logger.js";
 
 /** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
@@ -105,13 +106,8 @@ export async function todayRoutes(app: FastifyInstance) {
 
     // 6-17 #1 发布健康: 暴露"派了却发不出"的信号。核心是 stuckPending —
     // Agent 每 15s 轮询领单, pending 超 10 分钟仍没被领 = 客户端 Agent 没开/掉线(任务石沉大海)。
-    const STUCK_PENDING_MS = 10 * 60 * 1000;
-    const nowMs = Date.now();
-    const stuckPending = tasks.filter(
-      (t) => t.status === "pending" && nowMs - new Date(t.createdAt as unknown as string).getTime() > STUCK_PENDING_MS,
-    ).length;
-    const loginExpired = tasks.filter((t) => t.status === "login_expired").length;
-    const failedTasks = tasks.filter((t) => t.status === "failed").length;
+    // 7-25: 判定抽到 matrix-health.computePublishHealth, 与每日运维简报同一份口径(免两处漂)。
+    const { stuckPending, loginExpired, failed: failedTasks } = computePublishHealth(tasks);
 
     const budget: BudgetConfig =
       ((tenant?.config as { budgetConfig?: BudgetConfig } | null)?.budgetConfig) ?? {};
@@ -226,6 +222,29 @@ export async function todayRoutes(app: FastifyInstance) {
       return { code: "OK", data: { started: true } };
     } catch (err) {
       return reply.code(500).send({ code: "TRIGGER_FAILED", message: err instanceof Error ? err.message : "触发失败" });
+    }
+  });
+
+  /**
+   * GET /today/ops-briefing — 7-25 运维简报卡片(最近一次)。
+   * 企微推送挂了也能在这看到 —— 这是"告警本身不静默失败"的兜底展示口。
+   */
+  app.get("/today/ops-briefing", async (request) => {
+    const { getLatestBriefing } = await import("../services/ops/daily-briefing.js");
+    return { code: "OK", data: await getLatestBriefing(request.tenantId) };
+  });
+
+  /**
+   * POST /today/ops-briefing/run — 手动跑一次简报(验收/补发用)。
+   * 同步执行(采集只有十来条聚合查询, 秒级), 直接把渲染文本回给前端方便肉眼核对。
+   */
+  app.post("/today/ops-briefing/run", async (_request, reply) => {
+    try {
+      const { runDailyBriefing } = await import("../services/ops/daily-briefing.js");
+      const r = await runDailyBriefing();
+      return { code: "OK", data: r };
+    } catch (err) {
+      return reply.code(500).send({ code: "BRIEFING_FAILED", message: err instanceof Error ? err.message : "简报生成失败" });
     }
   });
 

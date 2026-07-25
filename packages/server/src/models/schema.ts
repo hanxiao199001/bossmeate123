@@ -1378,3 +1378,47 @@ export const agentPublishTasks = pgTable(
     index("idx_apt_content").on(table.contentId),
   ]
 );
+
+// ============ 7-25 运维告警三件套: 事件流水 + 每日简报快照 ============
+// 设计原则: 系统失败必须"喊出来", 不能只躺日志里静默。
+//   ops_incidents  = 原子异常事件流水(记账失败 / LLM 额度不足 / 零产出 / 推送失败…)
+//                    这些点原先只有 logger.error, 运营看不见; 落库后进每日简报 + 今日驾驶舱。
+//   ops_briefings  = 每日运营简报快照(推送成功与否都落库), 保证"告警本身挂了也看得到"。
+export const opsIncidents = pgTable(
+  "ops_incidents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // 可为空: LLM 额度不足这类"平台级"故障不属于任何租户
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+    // ledger_write_failed | llm_quota | zero_output | briefing_push_failed | supplier_balance_low ...
+    kind: varchar("kind", { length: 40 }).notNull(),
+    severity: varchar("severity", { length: 10 }).notNull().default("error"), // error | warn
+    message: varchar("message", { length: 500 }).notNull(),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ops_incidents_time").on(table.createdAt),
+    index("idx_ops_incidents_kind_time").on(table.kind, table.createdAt),
+  ],
+);
+
+export const opsBriefings = pgTable(
+  "ops_briefings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
+    briefDate: date("brief_date").notNull(), // 北京时间日期 YYYY-MM-DD
+    level: varchar("level", { length: 10 }).notNull().default("ok"), // ok | warn | alert
+    /** 结构化快照(BriefingSnapshot), 前端卡片直接渲染 */
+    summary: jsonb("summary").notNull(),
+    /** 渲染好的企微纯文本(推送失败时前端也能原样展示) */
+    text: text("text").notNull(),
+    pushed: boolean("pushed").notNull().default(false),
+    pushError: varchar("push_error", { length: 300 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_ops_briefings_tenant_date").on(table.tenantId, table.briefDate),
+  ],
+);

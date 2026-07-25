@@ -55,6 +55,37 @@ export function idleWindowStart(startOfToday: Date): Date {
   return new Date(startOfToday.getTime() - 2 * 86_400_000);
 }
 
+// ============ 7-25 发布健康(任务侧) — 今日驾驶舱与每日简报共用, 免两处各写一套判定 ============
+
+/** Agent 每 15s 轮询领单; pending 超 10 分钟还没被领 = 客户端没开机/掉线, 任务石沉大海 */
+export const STUCK_PENDING_MS = 10 * 60 * 1000;
+
+export interface PublishHealth {
+  stuckPending: number;
+  loginExpired: number;
+  failed: number;
+}
+
+/**
+ * 从"今日 agent 发布任务"算发布健康。纯函数(无 IO), 判定口径的唯一出处。
+ * 原实现内联在 routes/today.ts, 7-25 加每日简报时抽出复用(红线 #11)。
+ */
+export function computePublishHealth(
+  tasks: Array<{ status: string; createdAt: Date | string }>,
+  now: Date = new Date(),
+): PublishHealth {
+  const nowMs = now.getTime();
+  let stuckPending = 0;
+  let loginExpired = 0;
+  let failed = 0;
+  for (const t of tasks) {
+    if (t.status === "pending" && nowMs - new Date(t.createdAt).getTime() > STUCK_PENDING_MS) stuckPending++;
+    if (t.status === "login_expired") loginExpired++;
+    if (t.status === "failed") failed++;
+  }
+  return { stuckPending, loginExpired, failed };
+}
+
 export interface HealthInput {
   /** platform_accounts.status: active | disabled | expired */
   accountStatus: string;

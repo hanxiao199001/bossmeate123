@@ -1,6 +1,10 @@
 /**
  * OpenAI 兼容接口提供商
  * 支持：OpenAI、DeepSeek、通义千问、Kimi 等所有兼容 OpenAI 格式的模型
+ *
+ * 7-25 运维告警: API 失败分支加"额度不足/欠费"识别 —— 这是"该充值了"的最硬信号,
+ * 比等消耗曲线掉到 0 早一步。命中 → 落 ops_incidents(kind=llm_quota) → 进每日运营简报。
+ * 仍照旧抛错(调用方重试/降级逻辑不变), 告警只是旁路。
  */
 
 import { logger } from "../../../config/logger.js";
@@ -27,6 +31,23 @@ export class OpenAICompatibleProvider implements AIProvider {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.defaultModel = defaultModel;
+  }
+
+  /** 额度不足/欠费类失败 → 落 ops_incidents(旁路, 绝不影响原有抛错行为) */
+  private reportQuotaIfNeeded(status: number, body: string): void {
+    void (async () => {
+      try {
+        const { isQuotaLikeError, recordIncident } = await import("../../ops/incidents.js");
+        if (!isQuotaLikeError(status, body)) return;
+        await recordIncident({
+          kind: "llm_quota",
+          message: `${this.name} 返回额度不足/欠费 (HTTP ${status}): ${body.slice(0, 200)}`,
+          detail: { provider: this.name, status },
+        });
+      } catch {
+        /* 告警旁路失败不影响主流程 */
+      }
+    })();
   }
 
   async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
@@ -63,6 +84,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         { provider: this.name, status: response.status, error },
         "API 错误"
       );
+      this.reportQuotaIfNeeded(response.status, error);
       throw new Error(`${this.name} API 错误: ${response.status} - ${error}`);
     }
 
@@ -128,6 +150,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
     if (!response.ok) {
       const error = await response.text();
+      this.reportQuotaIfNeeded(response.status, error);
       throw new Error(
         `${this.name} Stream 错误: ${response.status} - ${error}`
       );

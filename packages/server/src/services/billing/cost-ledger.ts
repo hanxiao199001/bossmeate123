@@ -36,10 +36,20 @@ export async function recordCost(input: RecordCostInput): Promise<void> {
       note: input.note?.slice(0, 300) ?? null,
     });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     logger.error(
-      { err: err instanceof Error ? err.message : err, ...input },
+      { err: msg, ...input },
       "cost_ledger.record_failed — 扣费已发生但没记上账, 需人工核对",
     );
+    // 7-25 运维告警: 此前记账失败只有这条日志(没人天天看)。落 ops_incidents → 进每日简报。
+    // recordIncident 自身绝不抛错; DB 整个不通时它也只会再记一条日志, 不会让 recordCost 破功。
+    const { recordIncident } = await import("../ops/incidents.js");
+    await recordIncident({
+      kind: "ledger_write_failed",
+      tenantId: input.tenantId,
+      message: `扣费 ${(input.amountCents / 100).toFixed(2)} 元(${input.kind})未记上账: ${msg}`,
+      detail: { kind: input.kind, amountCents: input.amountCents, contentId: input.contentId ?? null },
+    });
   }
 }
 
