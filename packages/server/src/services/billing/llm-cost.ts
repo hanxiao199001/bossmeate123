@@ -28,12 +28,13 @@ const DEFAULT_PRICES: Record<string, ModelPrice> = {
   "deepseek-chat": { in: 200, out: 800 },
   "deepseek-reasoner": { in: 400, out: 1600 },
   "qwen-plus": { in: 80, out: 200 },
-  // ⚠️ 7-25 暂定价, 未经账单核实: DeepSeek 下线 chat/reasoner 换成 v4-pro/v4-flash 后, 新模型
-  //   名不在价目表 → computeLlmCostCents 记 0 分 → 预算闸和运维简报的花费告警一起失明。
-  //   这里先沿用旧 deepseek-chat 的 ¥2/¥8 占位(错的量级也好过 0), **拿到百炼/DeepSeek 账单后
-  //   务必用 LLM_PRICE_OVERRIDES 或本表改成真单价**。
-  "deepseek-v4-pro": { in: 200, out: 800 },
-  "deepseek-v4-flash": { in: 200, out: 800 },
+  // 7-26 校正(取代 7-25 的暂定值): 按 DeepSeek 官方价目表 v4-pro $0.435/$0.87、
+  //   v4-flash $0.14/$0.28 每 1M token, 按 ~7.14 汇率折人民币 ≈ ¥3.1/¥6.2 与 ¥1/¥2。
+  //   阿里云百炼上的同名模型**与官网同价**(百炼公告), 所以走哪个账户单价一样, 这张表通用。
+  "deepseek-v4-pro": { in: 310, out: 620 },
+  "deepseek-v4-flash": { in: 100, out: 200 },
+  // qwen-max 之前不在表里 —— 一旦有人把主力切成它, 成本会记 0 分(预算闸失明), 先补上。
+  "qwen-max": { in: 240, out: 960 },
 };
 
 let priceTable: Record<string, ModelPrice> | null = null;
