@@ -190,9 +190,14 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
   //   不受 forceOverride 影响 —— 编造是数据造假硬红线, 不给强发口子(区别于六维低分那种可 override 的软闸)。
   if (content.type !== "video") {
     const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
-    const bodyFab = await checkBodyFabricationForPublish({ body: content.body, journalId: _cMeta.journalId });
+    // 7-25: roundup 多刊盘点的 metadata 存 journalIds(数组), 补进来 —— 否则整类内容对硬闸隐形。
+    const bodyFab = await checkBodyFabricationForPublish({
+      body: content.body,
+      journalId: _cMeta.journalId,
+      journalIds: Array.isArray(_cMeta.journalIds) ? _cMeta.journalIds : null,
+    });
     if (bodyFab.length > 0) {
-      logger.warn({ contentId, journalId: _cMeta.journalId, bodyFab }, "发布硬闸: 正文编造无据IF/分区, 拒发");
+      logger.warn({ contentId, journalId: _cMeta.journalId, journalIds: _cMeta.journalIds, bodyFab }, "发布硬闸: 正文编造无据IF/分区, 拒发");
       await db.update(contents)
         .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "body_fabrication", bodyFabrication: bodyFab })}::jsonb`, updatedAt: new Date() })
         .where(eq(contents.id, contentId));

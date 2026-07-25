@@ -1151,7 +1151,9 @@ export async function adminRoutes(app: FastifyInstance) {
         title,
         body: html,
         ...initialStatusFields("draft"),
-        metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds: b.journalIds ?? null, discipline: b.discipline ?? null, journalCovers },
+        // 7-25: journalIds 存**实际选中**的刊(原来只存用户手填的 b.journalIds, 自动选刊时为 null
+        //   → 发布期编造硬闸查不到期刊, 整类内容隐形放行)。
+        metadata: { source: "roundup", templateId: "journal-roundup", audience, journalIds, discipline: b.discipline ?? null, journalCovers },
       }).returning({ id: contents.id });
       // PR-N: 记录本次用到的刊 → "15天不重复"冷却
       if (row?.id && journalIds.length > 0) {

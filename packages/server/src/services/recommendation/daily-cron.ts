@@ -545,11 +545,32 @@ export async function runDailyContentByType(
       try {
         if (type === "roundup") {
           const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: 3, audience: "普通院校教师" });
+          // 7-25: 盘点补编造闸。此前 roundup 是**唯一一条零校验产线** —— 既不过 checkCompliance,
+          //   也没有编造检测(它不走 batch-worker / quality-pipeline, 那两处的闸门够不着),
+          //   而它每天在产、又是"一次说 3 本刊的 IF/分区"的最高危形态。
+          //   多刊没有单一 journalId → 用 journalIds 全集做并集判定(见 checkRoundupFabrication)。
+          const { checkRoundupFabrication, checkCompliance: checkComplianceRoundup } = await import("../compliance/content-check.js");
+          const fab = await checkRoundupFabrication({ title, body: html, journalIds });
+          const comp = await checkComplianceRoundup(`${title}\n${html}`);
+          const roundupOk = fab.ok && !comp.blocked;
+          if (!roundupOk) {
+            logger.warn({ discipline, journalIds, mismatches: fab.mismatches, hardHits: comp.hardHits }, "7-25 盘点编造/合规命中, 转 needs_review");
+          }
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article", title, body: html,
             // 多刊盘点是成品文章, 直接 generated 进批量发布(原误存 draft 导致进不了内容工坊批量导入)
-            ...initialStatusFields("generated"),
-            metadata: { source: "roundup", templateId: "journal-roundup", discipline, journalCovers },
+            ...initialStatusFields(roundupOk ? "generated" : "needs_review"),
+            metadata: {
+              source: "roundup", templateId: "journal-roundup", discipline, journalCovers,
+              // 7-25: 落 journalIds —— 发布期闸门(draft-distributor / publishToAccounts)靠它
+              //   才能查到本篇涉及哪些刊; 原来只存 journalCovers, 发布侧一律当"无期刊"放行。
+              journalIds,
+              ...(roundupOk ? {} : {
+                needsReview: true,
+                needsReviewReason: fab.ok ? "compliance" : "body_fabrication",
+                ...(fab.mismatches.length ? { bodyFabrication: fab.mismatches } : {}),
+              }),
+            },
           }).returning({ id: contents.id });
           if (row?.id && journalIds.length) {
             await db.insert(journalUsage).values(journalIds.map((jid) => ({ tenantId: SYS, journalId: jid, contentId: row.id })));
@@ -623,6 +644,8 @@ export async function runDailyContentByType(
   if (totalProduced === 0) {
     // 零产出告警: 别再静默停摆几天没人发现。失败明细一并打出, 便于定位(余额/冷却/候选枯竭)。
     logger.error({ tenant: SYS, failures, types: Object.keys(cq) }, "⚠️ 每日生成零产出! 请检查 LLM 余额 / 期刊冷却 / 候选词。详见 failures");
+    // 7-25 运维告警: 光有日志没人看。落 ops_incidents → 次日 09:30 运营简报里红色置顶。
+    void import("../ops/incidents.js").then((m) => m.recordIncident({ kind: "zero_output", message: `每日生成零产出(失败 ${failures.length} 项)`, detail: { failures: failures.slice(0, 5), types: Object.keys(cq) } })).catch(() => { /* 告警旁路, 不影响生成流程 */ });
   }
   logger.info({ roundupCount, articles: batchIds.length, failures: failures.length, totalProduced }, "PR-O3 每日内容(按类型)生成完成");
   return {

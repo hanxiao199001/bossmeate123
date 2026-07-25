@@ -6,7 +6,7 @@
  *    (SYSTEM config.automationConfig.aiLabel: false 可关, 默认开)。
  * 注: 词库为技术兜底, 不构成法律意见; 客户行业(医学学术)广告法红线建议请专业人士复核扩充。
  */
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { tenants } from "../../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
@@ -158,7 +158,61 @@ export function findBodyFabrication(
   return hits;
 }
 
+/**
+ * 7-25 多刊事实并集 —— roundup(多刊盘点)编造检测用。
+ *
+ * 语义: 把 N 本刊的 DB 事实压成"一本虚拟刊", 再交给 findBodyFabrication 判 ——
+ *   **不新造判据**, 完全复用单刊那套(与全系统一致的"键存在才查, 值为空才算编造")。
+ *
+ * 两条规则:
+ *   ① **键的存在性取并集**: 只要有一本刊提供了该键, 结果就带这个键(=可以查);
+ *      没有任何一本提供 → 键缺席 → 校验跳过(不臆断)。
+ *   ② **值取"任一非空"**: 只要有一本刊有真 IF/分区, 并集就算"有" → 正文里的
+ *      IF/分区数字视为有源, 放行。
+ *
+ * 为什么是"任一"而不是"逐刊就近匹配": 盘点正文里"XX刊 IF 3.2"与刊名的绑定关系,
+ *   经 LLM 改写 + HTML 模板重排后已不可靠(刊名被 《》 包裹/简称/改写), 就近匹配会产生
+ *   大量误判 —— 而误判正是 6577b9a 被回滚的原因。"任一"是保守侧: 绝不新增误伤,
+ *   只抓最高危也最干净的一类 —— **全部相关刊都没有 IF/分区, 正文却写了数字**
+ *   (纯国内刊盘点的典型编造形态)。代价是混合刊单里针对某一本的编造抓不到(见已知限制)。
+ */
+export function mergeJournalFacts(
+  facts: Array<TitleDataDbFields | null | undefined>,
+): TitleDataDbFields | undefined {
+  const list = facts.filter((f): f is TitleDataDbFields => !!f);
+  if (list.length === 0) return undefined;
+  const KEYS = [
+    "reviewCycle", "acceptanceRate", "impactFactor", "compositeImpactFactor",
+    "partition", "casPartition", "casPartitionNew", "jcrFull",
+  ] as const;
+  const out: Record<string, unknown> = {};
+  for (const k of KEYS) {
+    const provided = list.filter((f) => k in f);
+    if (provided.length === 0) continue; // 无人提供该键 → 保持缺席, 校验跳过
+    const hit = provided.find((f) => {
+      const v = (f as Record<string, unknown>)[k];
+      return v !== null && v !== undefined && v !== "";
+    });
+    out[k] = hit ? (hit as Record<string, unknown>)[k] : null;
+  }
+  return out as TitleDataDbFields;
+}
+
+/** 多刊版正文编造检测(roundup)。等价于"把 N 本刊并成一本"后跑 findBodyFabrication。 */
+export function findBodyFabricationMulti(
+  body: string | null | undefined,
+  facts: Array<TitleDataDbFields | null | undefined>,
+): string[] {
+  return findBodyFabrication(body, mergeJournalFacts(facts));
+}
+
 const CN_CORE_TAGS_GATE = ["pku-core", "cssci", "cssci-ext", "cscd"];
+
+/** 纯国内刊判定(与 article-skill 的 isPureDomesticJournal 同口径): 有中文核心标签且不含 sci-core。 */
+function isPureDomesticCatalogs(catalogs: unknown): boolean {
+  const cats = (catalogs as string[] | null) || [];
+  return cats.some((c) => CN_CORE_TAGS_GATE.includes(c)) && !cats.includes("sci-core");
+}
 
 /**
  * 7-21 发布前编造硬闸(确定性兜底) — draft-distributor / publishToAccounts 共用。
@@ -173,15 +227,26 @@ const CN_CORE_TAGS_GATE = ["pku-core", "cssci", "cssci-ext", "cscd"];
  *   - 无中文核心标签的国际刊也不进(它们本就该有 IF/分区)。
  *   复用 findBodyFabrication(同一套判断), 不新写检测逻辑。
  *
+ * 7-25 扩多刊(roundup 多刊盘点): 传 journalIds 即可。语义是单刊那套的保守推广 ——
+ *   ① 只要**任一**相关刊不是纯国内刊(骑墙/国际) → 整篇豁免(沿用骑墙豁免, 绝不新增误挡);
+ *   ② 全是纯国内刊时, 用 mergeJournalFacts 并集判(任一刊有真 IF/分区就放行)。
+ *   单刊调用行为与 7-21 完全一致(rows 只有一行时 every === 原 isPureDomestic 判定)。
+ *
  * @returns 命中的无据指标列表; 空 = 放行。调用方据此决定是否拦下 + 标 needs_review/body_fabrication。
  */
 export async function checkBodyFabricationForPublish(content: {
   body?: string | null;
   journalId?: string | null;
+  /** 7-25 多刊盘点(roundup): 本篇涉及的全部刊。与 journalId 可同时传, 内部去重。 */
+  journalIds?: string[] | null;
 }): Promise<string[]> {
-  if (!content.body || !content.journalId) return [];
+  const ids = [...new Set([
+    ...(Array.isArray(content.journalIds) ? content.journalIds : []),
+    ...(content.journalId ? [content.journalId] : []),
+  ].filter((x): x is string => typeof x === "string" && x.length > 0))];
+  if (!content.body || ids.length === 0) return [];
   const { journals } = await import("../../models/schema.js");
-  const [j] = await db
+  const rows = await db
     .select({
       catalogs: journals.catalogs,
       impactFactor: journals.impactFactor,
@@ -192,17 +257,14 @@ export async function checkBodyFabricationForPublish(content: {
       jcrFull: journals.jcrFull,
     })
     .from(journals)
-    .where(eq(journals.id, content.journalId))
-    .limit(1);
-  if (!j) return [];
-  const cats = (j.catalogs as string[] | null) || [];
-  // 骑墙豁免 + 只管纯国内刊
-  const isPureDomestic = cats.some((c) => CN_CORE_TAGS_GATE.includes(c)) && !cats.includes("sci-core");
-  if (!isPureDomestic) return [];
-  return findBodyFabrication(content.body, {
+    .where(inArray(journals.id, ids));
+  if (rows.length === 0) return [];
+  // 骑墙豁免 + 只管纯国内刊(多刊: 有一本骑墙/国际就整篇豁免)
+  if (!rows.every((r) => isPureDomesticCatalogs(r.catalogs))) return [];
+  return findBodyFabricationMulti(content.body, rows.map((j) => ({
     impactFactor: j.impactFactor, compositeImpactFactor: j.compositeImpactFactor,
     partition: j.partition, casPartition: j.casPartition, casPartitionNew: j.casPartitionNew, jcrFull: j.jcrFull,
-  });
+  })));
 }
 
 /**
@@ -274,6 +336,66 @@ export function checkTitleDataConsistency(
     }
   }
   return { ok: mismatches.length === 0, mismatches };
+}
+
+/**
+ * 7-25 多刊盘点(roundup)编造检测 —— 生成期用。
+ *
+ * 缺口: roundup 不走 batch-worker / quality-pipeline(那两处才有 journalId → journalFacts 的接线),
+ *   于是三道编造闸对它**全部空转**: findBodyFabrication 无 facts 直接 return []、
+ *   checkTitleDataConsistency 无 dbFields 退化成"正文复现"(而正文也是同一个 LLM 写的, 拦不住
+ *   一致编造)、发布期硬闸查不到 journalId 直接放行。而 roundup 每天在产, 一篇说 3 本刊,
+ *   是编 IF/分区风险最高的形态之一。
+ *
+ * 判定 = 单刊那套的多刊保守推广, **不新造标准**:
+ *   ① 骑墙豁免(与发布硬闸同口径): 任一相关刊不是纯国内刊 → 整篇跳过。
+ *      roundup 选刊直接读 DB、**不跑 enrichment**, 所以骑墙刊在这里必然是"DB 空但实际有数据",
+ *      查了就是 6577b9a 的覆辙(把有据当编造)。宁可漏, 不可误伤。
+ *   ② 全纯国内刊时: 用 mergeJournalFacts 并集 → 复用 checkTitleDataConsistency(标题四维)
+ *      + findBodyFabrication(正文 IF/分区两维)。
+ */
+export async function checkRoundupFabrication(content: {
+  title?: string | null;
+  body?: string | null;
+  journalIds?: string[] | null;
+}): Promise<{ ok: boolean; mismatches: string[]; checked: boolean }> {
+  const ids = [...new Set((content.journalIds ?? []).filter((x): x is string => typeof x === "string" && x.length > 0))];
+  if (ids.length === 0 || !content.body) return { ok: true, mismatches: [], checked: false };
+  try {
+    const { journals } = await import("../../models/schema.js");
+    const rows = await db
+      .select({
+        catalogs: journals.catalogs,
+        reviewCycle: journals.reviewCycle,
+        acceptanceRate: journals.acceptanceRate,
+        impactFactor: journals.impactFactor,
+        compositeImpactFactor: journals.compositeImpactFactor,
+        partition: journals.partition,
+        casPartition: journals.casPartition,
+        casPartitionNew: journals.casPartitionNew,
+        jcrFull: journals.jcrFull,
+      })
+      .from(journals)
+      .where(inArray(journals.id, ids));
+    if (rows.length === 0) return { ok: true, mismatches: [], checked: false };
+    // ① 骑墙豁免
+    if (!rows.every((r) => isPureDomesticCatalogs(r.catalogs))) return { ok: true, mismatches: [], checked: false };
+    // ② 并集判定
+    const facts = rows.map((r) => ({
+      reviewCycle: r.reviewCycle, acceptanceRate: r.acceptanceRate,
+      impactFactor: r.impactFactor, compositeImpactFactor: r.compositeImpactFactor,
+      partition: r.partition, casPartition: r.casPartition, casPartitionNew: r.casPartitionNew, jcrFull: r.jcrFull,
+    }));
+    const merged = mergeJournalFacts(facts);
+    const mismatches = [
+      ...checkTitleDataConsistency(content.title, content.body, merged).mismatches,
+      ...findBodyFabrication(content.body, merged),
+    ];
+    return { ok: mismatches.length === 0, mismatches: [...new Set(mismatches)], checked: true };
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "roundup 编造检测异常, 放行(不阻塞每日生成)");
+    return { ok: true, mismatches: [], checked: false };
+  }
 }
 
 /**

@@ -81,7 +81,9 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   //    信任事故不进草稿箱, 永远留人工. 判据读 metadata.needsReviewReason。
   const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 3600_000);
   // 剔除: 红线两类(信任事故)+ 评分降级(分数不可信, 不是"分低"而是"没算准", 该重评不该进草稿箱)
-  const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "sixdim_degraded"];
+  // 7-25 补 body_fabrication: 它是下方硬闸自己打的标(:112), 却不在红线名单里 —— 被拦下标记过的内容
+  //   下一轮又能进池、再被同一道闸拦一次(白跑 + 日志刷屏)。编造是数据造假红线, 与标题编造同级。
+  const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "sixdim_degraded", "body_fabrication"];
   const rawPool = await db
     .select({ id: contents.id, title: contents.title, body: contents.body, status: contents.status, metadata: contents.metadata })
     .from(contents)
@@ -105,8 +107,11 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
   const pool: Array<{ id: string; title: string | null }> = [];
   for (const c of reasonPassed) {
-    const journalId = (c.metadata as { journalId?: string } | null)?.journalId ?? null;
-    const fab = await checkBodyFabricationForPublish({ body: c.body, journalId });
+    const cMeta = (c.metadata as { journalId?: string; journalIds?: string[] } | null) ?? {};
+    const journalId = cMeta.journalId ?? null;
+    // 7-25: 多刊盘点(roundup)的 metadata 带 journalIds 而非 journalId, 原来这里一律当"无期刊"放行。
+    const journalIds = Array.isArray(cMeta.journalIds) ? cMeta.journalIds : null;
+    const fab = await checkBodyFabricationForPublish({ body: c.body, journalId, journalIds });
     if (fab.length > 0) {
       await db.update(contents)
         .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "body_fabrication", bodyFabrication: fab })}::jsonb`, updatedAt: new Date() })

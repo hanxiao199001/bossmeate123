@@ -885,7 +885,13 @@ export class ArticleSkill implements ISkill {
             discipline: journal.discipline,
             publisher: journal.publisher,
           },
-          this.provider
+          this.provider,
+          // 7-25 backlog-C 治本: enrichment 抓到的**可信源**指标同步回写 journals 表, 让
+          //   "喂给 LLM 的数据"与"事后校验读的 DB"变成同一份 —— 骑墙刊(sci-core 标签 + DB 空
+          //   + LetPub 有真数据)不再被三道编造闸误判。只填空/不覆盖/打 provenance, 见
+          //   persistTrustedJournalFacts。同步执行是必需的: 本次生成后续的六维评分与发布闸
+          //   都现查 DB, 异步入队就赶不上这一轮, 误判照旧。
+          { writeBackJournalId: (journal as { id?: string }).id ?? null },
         );
         // 合并补充数据到 journal 对象
         if (enriched.abbreviation) journal.abbreviation = enriched.abbreviation;

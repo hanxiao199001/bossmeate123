@@ -12,6 +12,9 @@
  *   npx tsx src/scripts/journals-reenrich.ts --min-confidence 40 --max-confidence 60
  *   npx tsx src/scripts/journals-reenrich.ts --never-verified --limit 50
  *   npx tsx src/scripts/journals-reenrich.ts --ids <uuid1>,<uuid2>
+ *   npx tsx src/scripts/journals-reenrich.ts --fence-sitters --dry-run   # 7-25 backlog-C: 骑墙刊存量回填
+ *     (骑墙刊 = catalogs 含 sci-core 但 IF/分区全空 —— 被三道编造闸误判的就是这批;
+ *      ⚠️ 手动执行, 先 --dry-run 看清单再跑, 注意 LetPub 反爬节奏, 别与列表爬同时跑)
  *   选填 --throttle-ms 8000 (默认 8000±3000, 对齐 LetPub 反爬节奏)
  * 留痕: 控制台逐条 diff + 追加写 ./journals-reenrich-log.jsonl
  */
@@ -60,6 +63,10 @@ async function main() {
   const minConf = arg("min-confidence") !== undefined ? Number(arg("min-confidence")) : undefined;
   const maxConf = arg("max-confidence") !== undefined ? Number(arg("max-confidence")) : undefined;
   const neverVerified = flag("never-verified");
+  // 7-25 backlog-C 存量回填: 只挑"骑墙刊" —— catalogs 含 sci-core(准国际刊) 但 IF/分区全空。
+  //   这批正是被三道编造闸误判的那批: LetPub 有真数据、库里是空的。走 orchestrator 正规富化
+  //   (provenance=letpub, confidence 正常重算), 不用新写脚本。
+  const fenceSitters = flag("fence-sitters");
   const idsRaw = arg("ids");
   const dryRun = flag("dry-run");
   const throttleMs = Number(arg("throttle-ms") ?? 8000);
@@ -71,6 +78,19 @@ async function main() {
   if (idsRaw) {
     const ids = idsRaw.split(",").map((s) => s.trim()).filter(Boolean);
     where = inArray(journals.id, ids);
+  } else if (fenceSitters) {
+    // 骑墙刊专用选集: 不套 confidence 门槛(它们 confidence 可能不低, 缺的是 IF/分区本身)
+    where = and(
+      eq(journals.status, "active"),
+      sql`${journals.catalogs} @> '["sci-core"]'::jsonb`,
+      isNull(journals.impactFactor),
+      isNull(journals.compositeImpactFactor),
+      isNull(journals.partition),
+      isNull(journals.casPartition),
+      isNull(journals.casPartitionNew),
+      isNull(journals.jcrFull),
+    );
+    console.warn("🎯 --fence-sitters: 只处理骑墙刊(含 sci-core 且 IF/分区全空), backlog-C 存量回填。");
   } else {
     const conds: SQL[] = [eq(journals.status, "active")];
     if (minConf !== undefined || maxConf !== undefined) {

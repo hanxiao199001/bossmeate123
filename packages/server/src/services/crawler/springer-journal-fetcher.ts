@@ -219,6 +219,112 @@ ${journal.publisher ? `出版商：${journal.publisher}` : ""}
   }
 }
 
+// ============ 7-25 backlog-C: enrichment 可信数据回写 journals 表 ============
+
+/**
+ * **信任字段**回写白名单 —— 精确等于事后校验器(content-check 的 findBodyFabrication /
+ *   checkTitleDataConsistency / quality-check-v2 的 journalFacts)会读的那几列。
+ *
+ * 选这个集合而不是"能抓到的都写"的理由: backlog-C 的病根是**供数源(enrichment 实时抓)
+ *   与校验源(DB 快照)不一致**, 治病只需让这两个集合对齐; 回写面每多一列, 污染面就多一分。
+ *   其余列(annualVolume / selfCitationRate / isWarningList / scopeDescription …)不在
+ *   校验器视野内, 不属于本问题域, 留给 journal-enricher orchestrator 的正规富化路径写。
+ *
+ * ⚠️ casPartitionNew **故意不在**白名单: scraplingToSpringerData() 根本不产这个字段,
+ *   SpringerJournalData.casPartitionNew 的唯一来源是 enrichJournalWithAI() —— 即 AI 猜的。
+ *   写它 = 把 AI 幻觉洗成"DB 权威值", 会让校验器反过来给编造背书, 比现在的误判严重得多。
+ */
+const TRUSTED_FACT_FIELDS = [
+  "impactFactor", "partition", "casPartition", "acceptanceRate", "reviewCycle",
+] as const;
+type TrustedFactField = (typeof TRUSTED_FACT_FIELDS)[number];
+
+/** DB 侧对应列(drizzle camelCase key 与 TRUSTED_FACT_FIELDS 同名, 这里只做类型收敛)。 */
+const TRUSTED_FACT_COLUMNS = {
+  impactFactor: journals.impactFactor,
+  partition: journals.partition,
+  casPartition: journals.casPartition,
+  acceptanceRate: journals.acceptanceRate,
+  reviewCycle: journals.reviewCycle,
+} as const;
+
+/** 回写来源标记(写进 field_provenance)。区别于 orchestrator 的 "letpub"(离线正规富化)。 */
+export const INLINE_ENRICH_PROVENANCE = "letpub_inline_enrich";
+
+export interface TrustedFactsWriteBackResult {
+  /** 实际写入的字段(空数组 = 全部已有值/无新数据, 无 UPDATE 发生) */
+  written: TrustedFactField[];
+  /** 因 DB 已有值而跳过的字段(用于日志观察, 证明"不覆盖") */
+  skippedExisting: TrustedFactField[];
+}
+
+/**
+ * 把 enrichment 抓到的**可信源**指标回写 journals 表(backlog-C 治本)。
+ *
+ * 三条铁律:
+ *   ① **只收可信源**: 入参必须是 scrapling(LetPub/Springer) 那一层的原始结果, 调用方负责
+ *      在 merge AI 兜底数据**之前**取快照。AI 猜的值一律不得进来(见 TRUSTED_FACT_FIELDS 注释)。
+ *      OpenAlex 同理不走这条路 —— 它的近似 IF/分区按老韩 7-09 判定禁入信任字段。
+ *   ② **只填空, 绝不覆盖**: 逐字段读当前 DB 值, 非空即跳过。人工核实值 / manual_seed /
+ *      multi_source_verified / orchestrator 写过的值全都动不了。天然幂等(第二次跑写 0 字段)。
+ *   ③ **打来源标记**: field_provenance.<字段> = "letpub_inline_enrich", 与 orchestrator 的
+ *      "letpub" 区分, 事后可审计/可回滚。**不动 dataSource / confidence** —— 本路径只有单源,
+ *      写 dataSource 会把 multi_source_verified 降级成 letpub_only, 那是污染不是治理。
+ *
+ * 失败不抛(生成链路绝不能被回写拖挂), 返回写了什么。
+ */
+export async function persistTrustedJournalFacts(
+  journalId: string,
+  trusted: SpringerJournalData | null | undefined,
+): Promise<TrustedFactsWriteBackResult> {
+  const empty: TrustedFactsWriteBackResult = { written: [], skippedExisting: [] };
+  if (!journalId || journalId === "skip-cache" || !trusted) return empty;
+
+  // 先看这次抓到了哪些候选值(非空才算)
+  const candidates = TRUSTED_FACT_FIELDS.filter((f) => {
+    const v = (trusted as Record<string, unknown>)[f];
+    return v !== null && v !== undefined && v !== "";
+  });
+  if (candidates.length === 0) return empty;
+
+  try {
+    const [existing] = await db
+      .select({ ...TRUSTED_FACT_COLUMNS, fieldProvenance: journals.fieldProvenance })
+      .from(journals)
+      .where(eq(journals.id, journalId))
+      .limit(1);
+    if (!existing) return empty;
+
+    const written: TrustedFactField[] = [];
+    const skippedExisting: TrustedFactField[] = [];
+    const updateFields: Record<string, unknown> = {};
+    for (const f of candidates) {
+      const cur = (existing as Record<string, unknown>)[f];
+      // 铁律②: 只填空。0 视为"有值"(录用率 0 也是数据), 只有 null/undefined/"" 算空。
+      if (cur !== null && cur !== undefined && cur !== "") { skippedExisting.push(f); continue; }
+      updateFields[f] = (trusted as Record<string, unknown>)[f];
+      written.push(f);
+    }
+    if (written.length === 0) return { written, skippedExisting };
+
+    const provenance = {
+      ...((existing.fieldProvenance as Record<string, string> | null) ?? {}),
+      ...Object.fromEntries(written.map((f) => [f, INLINE_ENRICH_PROVENANCE])),
+    };
+    await db.update(journals)
+      .set({ ...updateFields, fieldProvenance: provenance, updatedAt: new Date() })
+      .where(eq(journals.id, journalId));
+    logger.info(
+      { journalId, written, skippedExisting, provenance: INLINE_ENRICH_PROVENANCE },
+      "backlog-C 回写: enrichment 可信指标已入库(只填空/不覆盖)"
+    );
+    return { written, skippedExisting };
+  } catch (err) {
+    logger.warn({ err, journalId }, "backlog-C 回写失败(不阻塞生成)");
+    return empty;
+  }
+}
+
 /**
  * 补充并缓存期刊数据到 DB
  *
@@ -228,6 +334,9 @@ ${journal.publisher ? `出版商：${journal.publisher}` : ""}
  *   3. AI 知识补充（兜底）
  *
  * @param journalId - journals 表的 UUID，传 "skip-cache" 跳过 DB 写入
+ * @param options.writeBackJournalId - 7-25 backlog-C: 传真实 journalId 时, 把**可信源**(scrapling,
+ *   不含 AI 兜底)抓到的 IF/分区/录用率/审稿周期以"只填空"方式回写该刊。生成热路径专用 ——
+ *   article-skill 仍传 journalId="skip-cache"(不走上面那条全量覆盖式老缓存), 只开这条窄回写。
  */
 export async function ensureJournalEnriched(
   journalId: string,
@@ -240,7 +349,8 @@ export async function ensureJournalEnriched(
     discipline?: string | null;
     publisher?: string | null;
   },
-  provider?: any
+  provider?: any,
+  options?: { writeBackJournalId?: string | null }
 ): Promise<SpringerJournalData> {
   let data: SpringerJournalData | null = null;
 
@@ -255,11 +365,21 @@ export async function ensureJournalEnriched(
     }
   }
 
+  // 7-25 backlog-C: **在 AI 兜底 merge 之前**扣下可信源快照。
+  //   AI 那一步会往同一个对象里塞 casPartition 等猜测值, merge 后就再也分不出哪些是爬来的、
+  //   哪些是编的 —— 回写只认这份快照。
+  const trusted: SpringerJournalData = { ...(data || {}) };
+
   // 第三优先：AI 补充（abbreviation、foundingYear 等 Scrapling 拿不到的字段）
   if (provider && (!data || !data.abbreviation)) {
     const aiData = await enrichJournalWithAI(provider, journal);
     // AI 数据优先级最低——只补充空缺字段
     data = { ...aiData, ...(data || {}) };
+  }
+
+  // 7-25 backlog-C 回写(骑墙刊治本): 只写可信源、只填空、打 provenance。失败不阻塞。
+  if (options?.writeBackJournalId) {
+    await persistTrustedJournalFacts(options.writeBackJournalId, trusted);
   }
 
   if (!data || Object.keys(data).length === 0) return {};
@@ -280,19 +400,22 @@ export async function ensureJournalEnriched(
         if (!existing?.website) updateFields.website = data.website;
       }
       if (data.apcFee) updateFields.apcFee = data.apcFee;
-      if (data.selfCitationRate) updateFields.selfCitationRate = data.selfCitationRate;
-      if (data.casPartition) updateFields.casPartition = data.casPartition;
-      if (data.casPartitionNew) updateFields.casPartitionNew = data.casPartitionNew;
       if (data.jcrSubjects) updateFields.jcrSubjects = data.jcrSubjects;
       if (data.topInstitutions) updateFields.topInstitutions = data.topInstitutions;
       if (data.scopeDescription) updateFields.scopeDescription = data.scopeDescription;
+      // 7-25 排雷: 指标类字段一律只认可信源 trusted, 不认 AI 兜底的 data ——
+      //   casPartition / casPartitionNew / selfCitationRate 在 AI 分支里是"模型猜的",
+      //   老写法把它们直写信任列 = 用幻觉污染唯一真相源。
+      //   (当前唯一调用方传的是 "skip-cache", 这段是历史遗留的哑弹, 顺手拆掉引信。)
+      if (trusted.selfCitationRate) updateFields.selfCitationRate = trusted.selfCitationRate;
+      if (trusted.casPartition) updateFields.casPartition = trusted.casPartition;
       // Scrapling 可能拿到更新的 IF/分区/录用率，也回写
-      if (data.impactFactor) updateFields.impactFactor = data.impactFactor;
-      if (data.partition) updateFields.partition = data.partition;
-      if (data.acceptanceRate) updateFields.acceptanceRate = data.acceptanceRate;
-      if (data.reviewCycle) updateFields.reviewCycle = data.reviewCycle;
-      if (data.annualVolume) updateFields.annualVolume = data.annualVolume;
-      if (data.isWarningList !== undefined) updateFields.isWarningList = data.isWarningList;
+      if (trusted.impactFactor) updateFields.impactFactor = trusted.impactFactor;
+      if (trusted.partition) updateFields.partition = trusted.partition;
+      if (trusted.acceptanceRate) updateFields.acceptanceRate = trusted.acceptanceRate;
+      if (trusted.reviewCycle) updateFields.reviewCycle = trusted.reviewCycle;
+      if (trusted.annualVolume) updateFields.annualVolume = trusted.annualVolume;
+      if (trusted.isWarningList !== undefined) updateFields.isWarningList = trusted.isWarningList;
 
       await db.update(journals).set(updateFields).where(eq(journals.id, journalId));
       logger.info(

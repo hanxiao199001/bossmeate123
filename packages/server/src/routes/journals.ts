@@ -16,6 +16,8 @@ import { eq, and, sql, gte, lte, ilike, desc, asc, isNull, or } from "drizzle-or
 import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
+// 7-25: 学科码唯一真相源(同时也是 journals.discipline_code 生成列的规则源), 别再另立映射表
+import { toDisciplineCode, GENERIC_DISCIPLINE_CODE } from "../services/recommendation/discipline-mapping.js";
 
 /**
  * Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单。
@@ -400,31 +402,26 @@ export async function journalRoutes(app: FastifyInstance) {
         return reply.status(400).send({ code: "BAD_REQUEST", message: "keywords 不能为空" });
       }
 
-    // 学科中文 → 英文映射
-    const disciplineMap: Record<string, string> = {
-      "医学": "medicine",
-      "教育": "education",
-      "工程技术": "engineering",
-      "计算机": "engineering",
-      "经济管理": "economics",
-      "法学": "law",
-      "心理学": "psychology",
-      "生物": "biology",
-      "化学": "chemistry",
-      "物理": "physics",
-      "能源": "energy",
-      "环境科学": "environment",
-      "农林": "agriculture",
-      "材料科学": "materials",
-      "数学": "math",
-    };
-
     const conditions: any[] = [eq(journals.tenantId, tenantId)];
 
     // 按学科筛选
+    // 7-25 修: 原来是本文件私有的 disciplineMap + `eq(journals.discipline, ...)` 对**原始列**全等匹配,
+    //   三重坏死:
+    //     ① 原始列国内刊存中文分类名("临床医学"/"综合性理工农医"), 全等匹配 "medicine" 永远 0 结果
+    //        —— 2379 本国内刊对小程序全部不可见(与 7-20 选刊器修的是同一个病, 分发侧当时没跟);
+    //     ② 那份私有映射里 materials / energy / math **不是合法学科码**(DISCIPLINE_CODES 里没有),
+    //        映射出来的值在任何列里都查不到;
+    //     ③ "计算机" → "engineering" 是错映射(应为 computer)。
+    //   改法: 直接复用 discipline-mapping.ts 的 toDisciplineCode(全项目唯一真相源, 也是生成列
+    //   discipline_code 的规则源) + 查生成列。**不再维护第二套映射表**。
+    //   generic(综合刊/学报)一并放行, 与 daily-cron 选刊器 `code = X OR code = generic` 同口径。
     if (discipline) {
-      const enDiscipline = disciplineMap[discipline] || discipline;
-      conditions.push(eq(journals.discipline, enDiscipline));
+      const code = toDisciplineCode(discipline);
+      conditions.push(
+        code === GENERIC_DISCIPLINE_CODE
+          ? eq(journals.disciplineCode, GENERIC_DISCIPLINE_CODE)
+          : or(eq(journals.disciplineCode, code), eq(journals.disciplineCode, GENERIC_DISCIPLINE_CODE))
+      );
     }
 
     // 按业务线筛选影响因子范围（国内核心客户一般投IF<10的期刊）
