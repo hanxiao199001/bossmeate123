@@ -14,6 +14,7 @@ import {
   type ResolvedArticle,
   type AssignAccountLite,
 } from "../services/publisher/smart-assign.js";
+import { DISCIPLINE_CODES, GENERIC_DISCIPLINE_CODE } from "../services/recommendation/discipline-mapping.js";
 
 const art = (id: string, discipline: string | null, scope: ResolvedArticle["scope"] = null, exclusiveAccountId?: string): ResolvedArticle =>
   ({ id, discipline, scope, exclusiveAccountId });
@@ -159,6 +160,52 @@ describe("⑥ isAdjacentForAccount 相邻判定纯函数", () => {
   it("相邻表对称性抽查", () => {
     expect(DISCIPLINE_ADJACENCY.medicine).toContain("biology");
     expect(DISCIPLINE_ADJACENCY.biology).toContain("medicine");
+  });
+
+  // 7-25: humanities(7-20 新增码)当初漏进相邻表 → 人文社科号第2轮兜底恒 false, 一篇补不到。
+  it("humanities 在表内且相邻教育/法政/经管", () => {
+    expect(isAdjacentForAccount(["humanities"], "education")).toBe(true);
+    expect(isAdjacentForAccount(["humanities"], "law")).toBe(true);
+    expect(isAdjacentForAccount(["education"], "humanities")).toBe(true);
+    expect(isAdjacentForAccount(["humanities"], "physics")).toBe(false); // 文↔物 仍宁缺
+  });
+
+  it("相邻表覆盖 discipline-mapping 全部 13 码, 且双向对称(缺一个码 = 该领域号兜底恒失效)", () => {
+    for (const code of DISCIPLINE_CODES) {
+      expect(Object.keys(DISCIPLINE_ADJACENCY)).toContain(code);
+    }
+    for (const [code, neighbors] of Object.entries(DISCIPLINE_ADJACENCY)) {
+      for (const n of neighbors) {
+        expect(DISCIPLINE_ADJACENCY[n], `${code}→${n} 缺反向`).toContain(code);
+      }
+    }
+  });
+
+  // 7-25 值域统一: 期刊学科改读 discipline_code 生成列后, 综合刊/学报会带 generic 码。
+  //   generic 在【第2轮兜底】对任何领域号都算命中(综合刊通吃), 但第1轮仍按学科精确配。
+  it("generic(综合刊)第2轮兜底对任何领域号都命中", () => {
+    expect(isAdjacentForAccount(["medicine"], GENERIC_DISCIPLINE_CODE)).toBe(true);
+    expect(isAdjacentForAccount(["law"], GENERIC_DISCIPLINE_CODE)).toBe(true);
+    expect(isAdjacentForAccount([], GENERIC_DISCIPLINE_CODE)).toBe(true);
+  });
+});
+
+describe("⑦ 7-25 学科码值域统一: generic 综合刊的分配层级", () => {
+  it("第1轮精确配不被 generic 淹没: 对口 medicine 文优先占 med 号, generic 落兜底轮", () => {
+    const accounts = [acc("med", ["medicine"])];
+    const articles = [art("g1", GENERIC_DISCIPLINE_CODE), art("m1", "medicine")];
+    const { pairs } = assignArticlesTwoRound({ articles, accounts, target: 1, cap: 1 });
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.articleId).toBe("m1"); // 综合刊没抢走对口名额
+  });
+
+  it("对口料不足时 generic 可兜底补满领域号(不再空置)", () => {
+    const accounts = [acc("med", ["medicine"])];
+    const articles = [art("m1", "medicine"), art("g1", GENERIC_DISCIPLINE_CODE)];
+    const { pairs, shortfalls } = assignArticlesTwoRound({ articles, accounts, target: 2, cap: 2 });
+    expect(loadOf(pairs, "med")).toBe(2);
+    expect(shortfalls).toHaveLength(0);
+    assertOneArticleOneAccount(pairs);
   });
 });
 

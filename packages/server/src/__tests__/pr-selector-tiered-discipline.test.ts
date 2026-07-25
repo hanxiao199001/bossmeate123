@@ -60,8 +60,25 @@ describe("未配学科号不受误伤(disciplines 空 → ALL_DISC_CODES 全学�
   it("cfg.disciplines 空时回退 ALL_DISC_CODES, 逐学科进选刊器(分层收窄对每个学科同样生效)", async () => {
     const src = await readSrc();
     expect(src).toMatch(/const discs\s*=\s*cfg\.disciplines\.length\s*\?\s*cfg\.disciplines\s*:\s*ALL_DISC_CODES/);
-    // ALL_DISC_CODES 含 13 学科
-    expect(src).toMatch(/ALL_DISC_CODES\s*=\s*\[[^\]]*"education"[^\]]*"humanities"[^\]]*\]/);
+    // 7-25: ALL_DISC_CODES 不再手抄 13 码副本(靠注释人工同步, 漏过一次), 直接引用 discipline-mapping 唯一真相源
+    expect(src).toMatch(/import\s*\{[^}]*DISCIPLINE_CODES[^}]*\}\s*from\s*"\.\/discipline-mapping\.js"/);
+    expect(src).toMatch(/ALL_DISC_CODES[^=]*=\s*DISCIPLINE_CODES/);
+    // 真相源本身: 13 个具体学科码(含 7-20 新增 humanities), 且不含 generic(generic 只在选刊兜底, 不作生成目标)
+    const { DISCIPLINE_CODES, GENERIC_DISCIPLINE_CODE } = await import("../services/recommendation/discipline-mapping.js");
+    expect(DISCIPLINE_CODES).toHaveLength(13);
+    expect(DISCIPLINE_CODES).toContain("education");
+    expect(DISCIPLINE_CODES).toContain("humanities");
+    expect(DISCIPLINE_CODES as readonly string[]).not.toContain(GENERIC_DISCIPLINE_CODE);
+  });
+});
+
+// 7-25 交接护栏: 学科码在库里还有一份"带中文标签"的副本(topic-recommender.ALL_DISCIPLINES,
+//   被 admin 配额校验 + 前端下拉复用)。两份码集必须一致, 否则前端能选、后端选刊选不出(或反之)。
+describe("学科码单一真相源: ALL_DISCIPLINES(带标签) 与 DISCIPLINE_CODES 码集一致", () => {
+  it("码集完全相同(新增/改码必须两处同改)", async () => {
+    const { DISCIPLINE_CODES } = await import("../services/recommendation/discipline-mapping.js");
+    const { ALL_DISCIPLINES } = await import("../services/content-engine/topic-recommender.js");
+    expect([...ALL_DISCIPLINES.map((d) => d.code)].sort()).toEqual([...DISCIPLINE_CODES].sort());
   });
 });
 

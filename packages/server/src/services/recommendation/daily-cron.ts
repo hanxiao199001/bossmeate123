@@ -24,7 +24,7 @@ import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
 import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
 import { journalScopeCondition } from "./journal-scope.js";
-import { GENERIC_DISCIPLINE_CODE } from "./discipline-mapping.js";
+import { DISCIPLINE_CODES, GENERIC_DISCIPLINE_CODE } from "./discipline-mapping.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
   SYSTEM_RECOMMENDATION_TENANT_ID,
@@ -329,8 +329,10 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 // ============ PR-O3: 每日内容生成(按类型) ============
 // 7-20: 加 humanities —— 国内核心刊里文史哲艺新闻类有 328 本(第二大具体学科), 原先只能塞进
 //   law 桶(法学), 选出《文学评论》却按"法学"生成 = 对口度错。拆出来单独成码。
-//   与 discipline-mapping.ts 的 DISCIPLINE_CODES 保持一致。
-const ALL_DISC_CODES = ["medicine", "education", "economics", "engineering", "computer", "agriculture", "environment", "law", "psychology", "biology", "chemistry", "physics", "humanities"];
+// 7-25: 原先是手抄一份 13 码副本(靠注释"保持一致"人工同步, 已经漏同步过一次) → 直接引用
+//   discipline-mapping 的唯一真相源。语义一致: DISCIPLINE_CODES 只含 13 个【具体学科码】,
+//   不含 generic —— 这里是"轮转生成哪些学科的内容", 综合刊(generic)只在选刊阶段兜底, 不作生成目标。
+const ALL_DISC_CODES: readonly string[] = DISCIPLINE_CODES;
 
 const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
 

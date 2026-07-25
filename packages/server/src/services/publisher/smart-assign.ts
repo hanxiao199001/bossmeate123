@@ -1,7 +1,8 @@
 /**
  * PR-W6: 智能配对 — 推荐池文章 → 公众号, 按"文章学科 ↔ 账号领域"配对, 取代笛卡尔积同文多发。
  * 规则:
- *   1. 文章学科: metadata.discipline 优先, 没有则查关联期刊的 discipline, 都没有=不限。
+ *   1. 文章学科: metadata.discipline 优先, 没有则查关联期刊的 discipline_code(学科码), 都没有=不限。
+ *      7-25 值域统一: 全链路只用 discipline-mapping 的 13 个学科码 + generic, 与账号 disciplines 同源。
  *   2. 候选账号: 领域含该学科的号 + 领域不限的号 (前者优先)。
  *   3. 每篇只配一个号 (独家), 同轮负载均衡 — 谁分到的少给谁。
  *   4. 配不上的文章返回 unmatched, 由调用方决定跳过或提示。
@@ -10,6 +11,7 @@ import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, contentPublishLog, journals, platformAccounts, tenants } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { GENERIC_DISCIPLINE_CODE, toDisciplineCode } from "../recommendation/discipline-mapping.js";
 
 export interface SmartPair {
   articleId: string;
@@ -30,29 +32,6 @@ interface AccountLite {
   journalScope: string; // domestic | international | both — 账号"国内核心/国外期刊"定位
 }
 
-// 6-17 #2: 期刊名→学科 兜底推导(镜像 scripts/backfill-discipline.ts 的 inferDisciplineFromName)。
-// journals.discipline 列对国内刊大面积为空, 直接查列会拿不到 → 配对退化成"领域不限/空置"。
-// 这里在列为空时按期刊名现场推导, 不依赖空列、也不写库, 让独家/领域配对真正生效。
-function inferDisciplineFromName(name: string): string | null {
-  const lower = (name || "").toLowerCase();
-  if (!lower.trim()) return null;
-  if (/\b(lancet|jama|bmj|nejm|medicine|medical|clinical|cancer|cardio|surg|nurs|pharm|immun|infect|epidem|oncol|pathol|radiol|anesthes|dermat|gastro|hepat|nephro|neurol|ophthal|otolar|pediatr|psychiat|urol)\b/.test(lower)) return "medicine";
-  if (/\b(psychol|cognit|behav|mental)\b/.test(lower)) return "psychology";
-  if (/\b(educ|teach|learn|pedagog|curricul)\b/.test(lower)) return "education";
-  if (/\b(econom|financ|business|manag|account|market)\b/.test(lower)) return "economics";
-  if (/\b(engineer|material|energy|electr|mechan|autom)\b/.test(lower)) return "engineering";
-  if (/\b(comput|inform|software|artificial|intellig|data sci|cyber|robot)\b/.test(lower)) return "computer";
-  if (/\b(biolog|biochem|genetic|molecul|cell|microb|ecolog|zoolog|botan)\b/.test(lower)) return "biology";
-  if (/\b(chem|catalys|polym)\b/.test(lower)) return "chemistry";
-  if (/\b(physic|astron|quantum|optic)\b/.test(lower)) return "physics";
-  if (/\b(agric|plant|crop|soil|food|horti|veterina|animal|aqua|forest)\b/.test(lower)) return "agriculture";
-  if (/\b(environ|earth|climat|geolog|ocean|atmosph|sustain)\b/.test(lower)) return "environment";
-  if (/\b(law|legal|juris|crimin)\b/.test(lower)) return "law";
-  if (/\b(social|sociol|polit|commun|anthropo|geograph)\b/.test(lower)) return "economics";
-  // 名字推不出明确学科时返回 null(而非硬塞 multidisciplinary), 让其落"领域不限"兜底号
-  return null;
-}
-
 export type Scope = "domestic" | "international" | null;
 
 // 6-19: 把期刊判成 国内核心/国外期刊 (镜像 journal-scope.ts 的 journalScopeCondition, JS 版)。
@@ -67,13 +46,26 @@ function classifyScope(j: { catalogs: unknown; impactFactor: number | null; part
   return null;
 }
 
+/**
+ * 7-25 值域统一: 分发侧学科一律用【学科码】(discipline-mapping 的 13 码 + generic)。
+ *   - 期刊学科取 journals.discipline_code (migration 026 生成列), 不再读 discipline 原始列 ——
+ *     国内刊 discipline 存的是中文分类名("临床医学"), 与账号 disciplines:["medicine"] 永不相等,
+ *     领域配对全落空(生成侧 daily-cron 早在 7-20 就切了 disciplineCode, 分发侧一直没跟)。
+ *   - metadata.discipline(roundup 等生成侧写的, 本就是码)再过一次 toDisciplineCode 兜底,
+ *     防历史脏值(中文/大小写)混入 —— 保证进入配对逻辑的值永远是码。
+ */
+function normalizeDisciplineValue(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  return toDisciplineCode(raw);
+}
+
 // 6-19: 一次取出文章的 学科 + 国内/国外范围。同刊缓存, 避免循环里重复查库。
 async function resolveArticle(
   meta: Record<string, unknown> | null,
   cache: Map<string, { discipline: string | null; scope: Scope }>,
 ): Promise<{ discipline: string | null; scope: Scope }> {
   if (!meta) return { discipline: null, scope: null };
-  const metaDisc = typeof meta.discipline === "string" && meta.discipline ? meta.discipline : null;
+  const metaDisc = normalizeDisciplineValue(meta.discipline);
   const jid = typeof meta.journalId === "string" ? meta.journalId : null;
   if (!jid) return { discipline: metaDisc, scope: null };
   if (cache.has(jid)) {
@@ -84,11 +76,12 @@ async function resolveArticle(
   let scope: Scope = null;
   try {
     const [j] = await db.select({
-      discipline: journals.discipline, name: journals.name, nameEn: journals.nameEn,
+      // 学科码(生成列): 国内中文分类名已由 DB 归一成码, 与账号 disciplines 同一值域
+      disciplineCode: journals.disciplineCode, name: journals.name, nameEn: journals.nameEn,
       catalogs: journals.catalogs, impactFactor: journals.impactFactor, partition: journals.partition,
     }).from(journals).where(eq(journals.id, jid)).limit(1);
     if (j) {
-      jDisc = j.discipline || inferDisciplineFromName(j.nameEn || j.name || "");
+      jDisc = j.disciplineCode || null; // 生成列理论上永不为空; 真为空按"无学科"处理
       scope = classifyScope(j as any);
     }
   } catch { /* noop */ }
@@ -98,8 +91,10 @@ async function resolveArticle(
 
 /**
  * 7-14 单一流水线·学科相邻表 (第2轮兜底只在相邻集内取, 八竿子打不着的宁缺不硬塞)。
- *   对称、保守: 医↔生↔化(近药)、生↔农↔环、经↔法(社科)、教↔心 等; 法学文绝不塞给医学号。
+ *   对称、保守: 医↔生↔化(近药)、生↔农↔环、经↔法↔文(社科)、教↔心 等; 法学文绝不塞给医学号。
  *   退役 A 路后, 这张表是"相邻兜底"的唯一权威源(原 daily-cron ADJACENT_DISCIPLINES 已随 A 路删除)。
+ *   ⚠️ 键必须覆盖 discipline-mapping.DISCIPLINE_CODES 全部 13 码 —— 缺键 = 该领域号第2轮兜底恒 false
+ *   (7-20 新增的 humanities 就漏过一次, 人文社科号一直补不到料)。有测试守住"全码在表 + 对称"。
  */
 export const DISCIPLINE_ADJACENCY: Record<string, string[]> = {
   medicine:    ["biology", "psychology", "chemistry"], // 医↔生↔心; chem 近药学
@@ -109,9 +104,10 @@ export const DISCIPLINE_ADJACENCY: Record<string, string[]> = {
   engineering: ["computer", "physics", "environment"],
   computer:    ["engineering", "physics"],
   psychology:  ["medicine", "education"],
-  education:   ["psychology"],
-  economics:   ["law"],                                // 经↔法/社科
-  law:         ["economics"],
+  education:   ["psychology", "humanities"],           // 教↔文史(师范/语文/艺术类相近读者)
+  economics:   ["law", "humanities"],                  // 经↔法↔人文社科
+  law:         ["economics", "humanities"],
+  humanities:  ["education", "law", "economics"],      // 7-25 补: 文史哲艺/新闻传播 ↔ 教育/法政/经管(同为社科读者盘)
   environment: ["biology", "agriculture", "chemistry", "engineering"],
   agriculture: ["biology", "environment"],
 };
@@ -119,11 +115,15 @@ export const DISCIPLINE_ADJACENCY: Record<string, string[]> = {
 /**
  * 第2轮兜底可否把某学科文章补给某号:
  *   - 领域不限号(disciplines 空): 接受任意学科(仍受 scope 硬约束) —— 它本就没有领域偏好。
+ *   - generic(综合刊/学报)文章: 任何领域号都算命中 —— 综合刊本就通吃(见 discipline-mapping)。
+ *     只在【第2轮兜底】通吃; 第1轮仍按学科精确配, 与 7-21 选刊器"generic 降为兜底"同一口径,
+ *     不让综合刊淹没对口学科的名额。
  *   - 领域号: 文章学科须 ∈ 该号偏好学科的"自身 ∪ 相邻集", 否则宁缺(记 shortfall, 不硬塞无关领域)。
  *   - 无学科(discipline=null)文章: 不硬塞给领域号(核不出相邻关系), 只可落领域不限号。
  */
 export function isAdjacentForAccount(acctDisciplines: string[], artDiscipline: string | null): boolean {
   if (acctDisciplines.length === 0) return true;
+  if (artDiscipline === GENERIC_DISCIPLINE_CODE) return true;
   if (!artDiscipline) return false;
   for (const d of acctDisciplines) {
     if (d === artDiscipline) return true;

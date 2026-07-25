@@ -153,9 +153,23 @@ async function replyAndRecord(conv: { id: string; tenantId: string; openKfid: st
   });
 }
 
-/** 转人工：回复 + mode 置 manual + 调企微转接（state=2 待接入池）+ 尽力通知运营 */
-async function handoffToHuman(conv: { id: string; tenantId: string; openKfid: string; externalUserid: string }, intent: Intent | null, reason: string) {
-  await replyAndRecord(conv, HANDOFF_REPLY, intent, "transferred");
+/**
+ * 转人工：回复 + mode 置 manual + 调企微转接（state=2 待接入池）+ 尽力通知运营。
+ *
+ * 这四件事必须捆在一起 —— 少任何一件都是事故:
+ *   漏 mode=manual → AI 继续抢答；漏 transferServiceState → 客户进不了待接入池；
+ *   漏 notifyStaff → 客户在池里干等、运营零提醒（7-25 修的就是这个: 期刊未收录/未核实
+ *   两条最高频路径当初手工复刻了前三件却漏了通知）。
+ * @param replyText 自定义转接话术（如"该刊未收录"）。缺省用通用 HANDOFF_REPLY。
+ *   自定义话术仍走 replyAndRecord 的敏感词硬闸（只有固定的 HANDOFF_REPLY 免检）。
+ */
+async function handoffToHuman(
+  conv: { id: string; tenantId: string; openKfid: string; externalUserid: string },
+  intent: Intent | null,
+  reason: string,
+  replyText?: string,
+) {
+  await replyAndRecord(conv, replyText ?? HANDOFF_REPLY, intent, "transferred");
   await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
   await transferServiceState(conv.openKfid, conv.externalUserid, 2); // 2=进待接入池等人工认领
   logger.warn({ conversationId: conv.id, tenantId: conv.tenantId, reason }, "kf 会话已转人工，请运营尽快跟进");
@@ -260,21 +274,25 @@ async function answerJournalQuery(conv: { id: string; tenantId: string; openKfid
 
   const journal = await findJournal(conv.tenantId, name);
   if (!journal) {
-    // 诚实说没收录 + 转人工（不走 handoffToHuman 是为了发定制文案而非通用转接语）
-    await replyAndRecord(conv, `抱歉，「${name}」暂未收录在我们的期刊数据库中，无法给您准确数据。已为您转接人工顾问进一步查询～`, "journal_query", "transferred");
-    await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
-    await transferServiceState(conv.openKfid, conv.externalUserid, 2);
+    // 诚实说没收录 + 转人工。7-25: 改走 handoffToHuman(传定制话术) —— 原先手工复刻了
+    //   回复/manual/transfer 三件事却漏了 notifyStaff, 客户在待接入池干等没人知道。
     logger.warn({ conversationId: conv.id, journalName: name }, "kf 期刊未收录，已转人工");
+    await handoffToHuman(
+      conv, "journal_query", `期刊「${name}」未收录在期刊库`,
+      `抱歉，「${name}」暂未收录在我们的期刊数据库中，无法给您准确数据。已为您转接人工顾问进一步查询～`,
+    );
     return;
   }
 
   // 未核实期刊护栏: conf<70 或 legacy_unknown 的刊, 其 IF/分区/预警/录用率等是未多源核实的历史数据,
   //   绝不当"权威事实"播报给客户(否则等于把未核实数据当真回复)。走"未核实/以官网为准/转顾问"口径, 不发数值。
   if (isUnverifiedJournal(journal)) {
-    await replyAndRecord(conv, `「${journal.name}」我们已收录，但该刊的影响因子、分区、审稿周期等数据尚未完成多源核实。为避免给您不准确的信息，建议以期刊官网公布为准，我已为您转接顾问进一步核实后回复～`, "journal_query", "transferred");
-    await db.update(kfConversations).set({ mode: "manual" }).where(eq(kfConversations.id, conv.id));
-    await transferServiceState(conv.openKfid, conv.externalUserid, 2);
+    // 7-25: 同上, 改走 handoffToHuman(定制话术) 以带上 notifyStaff 运营提醒。
     logger.warn({ conversationId: conv.id, journalName: name, confidence: journal.confidence, dataSource: journal.dataSource }, "kf 命中未核实期刊(conf<70/legacy_unknown), 未播报数值, 转人工");
+    await handoffToHuman(
+      conv, "journal_query", `期刊「${journal.name}」数据未完成多源核实(未播报数值)`,
+      `「${journal.name}」我们已收录，但该刊的影响因子、分区、审稿周期等数据尚未完成多源核实。为避免给您不准确的信息，建议以期刊官网公布为准，我已为您转接顾问进一步核实后回复～`,
+    );
     return;
   }
 

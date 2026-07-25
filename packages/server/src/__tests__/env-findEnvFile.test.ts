@@ -55,10 +55,24 @@ describe("findEnvFile (task #1 root cause fix)", () => {
   });
 
   it("treats empty string ENV_FILE_PATH as unset (fallback to default)", () => {
-    // 空 ENV_FILE_PATH 走 DEFAULT_ENV_PATH，但 default 在测试环境也不存在 → throw
-    // 验证 fallback 行为（不直接用空值作路径）
-    expect(() => findEnvFile("")).toThrow(/\.env file not found/);
-    expect(() => findEnvFile("   ")).toThrow(/\.env file not found/);
+    // 7-25 修: 老写法硬断言"一定 throw", 前提是"monorepo 根 .env 不存在"。
+    //   在**开发者本机**(根目录当然有 .env)这条永远红 —— 与被测行为无关的假失败。
+    //   改成断言"空串/纯空白 ≡ 未设置": 两种情况走同一条 DEFAULT_ENV_PATH 分支,
+    //   根 .env 在不在都成立(在 → 同一个绝对路径; 不在 → 同一条 not found 报错)。
+    const call = (arg?: string) => {
+      try {
+        return { ok: true as const, value: findEnvFile(arg) };
+      } catch (err: any) {
+        return { ok: false as const, value: err.message as string };
+      }
+    };
+    delete process.env.ENV_FILE_PATH;
+    const baseline = call(); // 未设置时的行为
+    for (const blank of ["", "   "]) {
+      expect(call(blank)).toEqual(baseline);
+    }
+    // 兜底: 绝不能把空串本身当路径用(那会解析成 cwd 之类)
+    expect(baseline.value).not.toMatch(/not found at\s*$/);
   });
 
   it("default fallback resolves to monorepo root .env (absolute path 4 levels up from src/config)", () => {
