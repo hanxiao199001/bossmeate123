@@ -26,8 +26,14 @@ const ALLOWED = [
   "services/billing/llm-cost.ts", // 价目表的键必须是字面模型名
 ];
 
-/** 认得出的模型名字面量(带引号, 避免误伤注释里的散文) */
-const MODEL_LITERAL = /["'](deepseek-[a-z0-9.-]+|qwen-(?:plus|max|turbo)[a-z0-9.-]*)["']/;
+/**
+ * 认得出的**对话/推理**模型名字面量(带引号, 避免误伤注释里的散文)。
+ *
+ * 刻意排除 embedding 模型: services/knowledge/embedding-service.ts 有自己一套后端选择
+ * (DashScope text-embedding-v3 优先 → DeepSeek → 本地 hash), 模型名与维度表强绑定, 且线上
+ * 实际走 DashScope、DeepSeek 那条是冷分支 —— 与本次 chat 模型下线事故无关, 不在守卫范围。
+ */
+const MODEL_LITERAL = /["'](deepseek-(?!embedding)[a-z0-9.-]+|qwen-(?:plus|max|turbo)[a-z0-9.-]*)["']/;
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
