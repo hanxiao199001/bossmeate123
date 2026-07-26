@@ -69,6 +69,27 @@ async function main() {
     console.log(`  ${(r.model || "(未知)").padEnd(20)} ¥${yuan(r.cents).padStart(8)}  ${String(r.tokens).padStart(10)} tok  ${String(r.calls).padStart(5)} 次`);
   }
 
+  // 7-26 按"真实扣费账户"细分(note 里的 billing=deepseek|bailian)。
+  //   同一个 deepseek 模型可能走 DeepSeek 官方账户, 也可能走阿里云百炼(DEEPSEEK_VIA=bailian),
+  //   provider 名一样、单价一样, 但扣的是两家的余额 —— 要对账/看该给谁充值就看这一栏。
+  //   (unknown = 本功能上线前的老记录, 那时只走 DeepSeek 官方)
+  const billingExpr = sql<string>`COALESCE(substring(${costLedger.note} from 'billing=([a-z]+)'), 'unknown')`;
+  const perBilling = await db
+    .select({
+      account: billingExpr,
+      cents: sql<string>`SUM(${costLedger.amountCents})`,
+      calls: sql<string>`COUNT(*)`,
+    })
+    .from(costLedger)
+    .where(and(eq(costLedger.kind, "llm"), gte(costLedger.createdAt, since)))
+    .groupBy(billingExpr)
+    .orderBy(sql`SUM(${costLedger.amountCents}) DESC`);
+
+  console.log(`\n---------- 按扣费账户(近 ${days} 天) ----------`);
+  for (const r of perBilling) {
+    console.log(`  ${r.account.padEnd(20)} ¥${yuan(r.cents).padStart(8)}  ${String(r.calls).padStart(5)} 次`);
+  }
+
   // 本月合计(按租户)
   const monthStart = new Date();
   monthStart.setDate(1);

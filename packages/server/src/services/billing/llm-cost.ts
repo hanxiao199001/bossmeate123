@@ -18,6 +18,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { getBillingAccount } from "../ai/llm-endpoints.js";
 import { recordCost } from "./cost-ledger.js";
 
 /** 单价: 分 / 1M token */
@@ -118,12 +119,16 @@ export async function recordLlmUsage(p: {
     if (!priced) {
       logger.warn({ model: p.model }, "llm_cost.unpriced — 模型不在价目表, 金额记 0(用 LLM_PRICE_OVERRIDES 补价)");
     }
+    // 7-26: 记上"钱从哪个账户扣"。同一个 deepseek 模型既可能走 DeepSeek 官方账户,
+    //   也可能走阿里云百炼(DEEPSEEK_VIA=bailian) —— provider 名都叫 deepseek, 只看它会把账记串。
+    //   注意 note 首个 token 仍是 "provider/model", 成本日报的 split_part 解析不受影响。
+    const billing = getBillingAccount(p.provider);
     await recordCost({
       tenantId,
       kind: "llm",
       amountCents: cents, // recordCost 内 Math.round 到整数分
       quantity: p.inputTokens + p.outputTokens,
-      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens}${priced ? "" : " unpriced"}`,
+      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens} billing=${billing}${priced ? "" : " unpriced"}`,
     });
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : err }, "llm_cost.record_failed(已忽略, 不影响业务)");

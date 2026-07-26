@@ -26,7 +26,8 @@
     "journals:schedule-refresh": "tsx src/scripts/journals-schedule-refresh.ts",
     "review:ai": "tsx src/scripts/ai-review.ts",
     "review:report": "tsx src/scripts/ai-reviewer-report.ts",
-    "cost:report": "tsx src/scripts/llm-cost-report.ts"
+    "cost:report": "tsx src/scripts/llm-cost-report.ts",
+    "llm:check": "tsx src/scripts/llm-endpoint-check.ts"
   },
   "dependencies": {
     "@alicloud/avatar20220130": "^2.5.2",

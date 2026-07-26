@@ -35,6 +35,7 @@ import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
 import { getProviders } from "./services/ai/provider-factory.js";
+import { assertLlmEndpointConfig } from "./services/ai/llm-endpoints.js";
 import { initializeSkills } from "./services/skills/index.js";
 import { startContentWorker } from "./services/task/content-worker.js";
 import { startJournalEnrichWorker } from "./services/task/journal-enrich-worker.js";
@@ -213,6 +214,11 @@ async function bootstrap() {
     await protectedApp.register(agentAdminRoutes, { prefix: env.API_PREFIX });
     await protectedApp.register(todayRoutes, { prefix: env.API_PREFIX }); // PR-W2 今日驾驶舱
   });
+
+  // 7-26 启动期自检: LLM baseURL 与 API Key 必须成对(DEEPSEEK_VIA 一个开关切两者)。
+  //   纯静态校验, 不发任何网络/计费请求; 生产遇 error 级配错直接 exit(别带病产废稿)。
+  //   要联网确认接入点能通, 手跑 `pnpm --filter @bossmate/server llm:check`(只调免费的 /models)。
+  assertLlmEndpointConfig();
 
   // 初始化 AI 提供商
   const providers = getProviders();

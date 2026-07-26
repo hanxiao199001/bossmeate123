@@ -9,6 +9,7 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import type { AIProvider } from "./providers/base.js";
+import { getLlmEndpoint } from "./llm-endpoints.js";
 import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 
 interface ProviderRegistry {
@@ -27,30 +28,37 @@ export function getProviders(): ProviderRegistry {
   const expensive: AIProvider[] = [];
   const cheap: AIProvider[] = [];
 
-  // expensive = DeepSeek
-  if (env.DEEPSEEK_API_KEY) {
+  // 7-26: baseURL/key 统一由 llm-endpoints 解析(DEEPSEEK_VIA 一个开关成对切换), 不再硬编码。
+  const deepseekEp = getLlmEndpoint("deepseek");
+  const qwenEp = getLlmEndpoint("qwen");
+
+  // expensive = DeepSeek 模型(官方账户 或 阿里云百炼, 同模型同价)
+  if (deepseekEp) {
     expensive.push(
       new OpenAICompatibleProvider(
         "deepseek",
-        env.DEEPSEEK_API_KEY,
-        "https://api.deepseek.com/v1",
+        deepseekEp.apiKey,
+        deepseekEp.baseUrl,
         env.DEEPSEEK_MODEL_CHAT
       )
     );
-    logger.info({ model: env.DEEPSEEK_MODEL_CHAT }, "✅ DeepSeek 已加载");
+    logger.info(
+      { model: env.DEEPSEEK_MODEL_CHAT, baseUrl: deepseekEp.baseUrl, billing: deepseekEp.billingAccount },
+      "✅ DeepSeek 已加载"
+    );
   }
 
   // cheap = Qwen
-  if (env.QWEN_API_KEY) {
+  if (qwenEp) {
     cheap.push(
       new OpenAICompatibleProvider(
         "qwen",
-        env.QWEN_API_KEY,
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        qwenEp.apiKey,
+        qwenEp.baseUrl,
         env.QWEN_MODEL_PLUS
       )
     );
-    logger.info({ model: env.QWEN_MODEL_PLUS }, "✅ 通义千问 已加载");
+    logger.info({ model: env.QWEN_MODEL_PLUS, baseUrl: qwenEp.baseUrl }, "✅ 通义千问 已加载");
   }
 
   // 任一层级空时降级（保留原有兜底语义）

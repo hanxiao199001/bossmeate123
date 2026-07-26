@@ -65,6 +65,17 @@ const envSchema = z.object({
   DEEPSEEK_API_KEY: z.string().optional(),
   QWEN_API_KEY: z.string().optional(),
 
+  // 7-26 LLM 接入点可配置(services/ai/llm-endpoints.ts 是唯一真相源)
+  //   DEEPSEEK_VIA 是**唯一该动的开关**: official=DeepSeek 官方账户(默认, 现状不变);
+  //   bailian=阿里云百炼(同一个 deepseek-v4-pro, 百炼公告与官网同价, 质量零变化, 扣阿里云的钱)。
+  //   ⚠️ 它同时决定 baseURL **和** API Key 来源(bailian 用 QWEN_API_KEY, 不是 DEEPSEEK_API_KEY) ——
+  //   两者必须成对, 配错 = 每次调用 401, 而 401 不触发 qwen 兜底(7-24 静默产废稿事故的成因)。
+  DEEPSEEK_VIA: z.enum(["official", "bailian"]).default("official"),
+  // 逃生口: 显式覆盖 baseURL(百炼换域名/走专线时用)。留空 = 按 DEEPSEEK_VIA 自动取。
+  //   手改它而不改 DEEPSEEK_VIA 会被启动期自检拦下(assertLlmEndpointConfig)。
+  DEEPSEEK_BASE_URL: z.string().optional(),
+  QWEN_BASE_URL: z.string().optional(),
+
   // 模型路由
   DEFAULT_EXPENSIVE_MODEL: z.string().default("deepseek-chat"),
   DEFAULT_CHEAP_MODEL: z.string().default("deepseek-chat"),

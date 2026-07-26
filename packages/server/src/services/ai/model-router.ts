@@ -15,6 +15,7 @@
 
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { getLlmEndpoint } from "./llm-endpoints.js";
 
 export type FallbackStrategy = "serial" | "race";
 
@@ -65,15 +66,16 @@ function buildTaskRoute(): Record<TaskType, { primary: ModelChoice; fallback: Mo
   };
 }
 
-/** Provider 基础信息（API Key / baseUrl）按 providerName 查 */
+/**
+ * Provider 基础信息（API Key / baseUrl）按 providerName 查。
+ *
+ * 7-26: baseURL 与 key 不再硬编码在这里 —— 统一由 services/ai/llm-endpoints.ts 解析
+ * （DEEPSEEK_VIA 一个开关同时切 baseURL 与 key，避免"只改一半"导致全量 401）。
+ * 默认值与改造前完全一致：deepseek → api.deepseek.com/v1，qwen → 百炼 compatible-mode。
+ */
 function getProviderMeta(name: "deepseek" | "qwen"): { apiKey: string; baseUrl: string } | null {
-  if (name === "deepseek" && env.DEEPSEEK_API_KEY) {
-    return { apiKey: env.DEEPSEEK_API_KEY, baseUrl: "https://api.deepseek.com/v1" };
-  }
-  if (name === "qwen" && env.QWEN_API_KEY) {
-    return { apiKey: env.QWEN_API_KEY, baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" };
-  }
-  return null;
+  const ep = getLlmEndpoint(name);
+  return ep ? { apiKey: ep.apiKey, baseUrl: ep.baseUrl } : null;
 }
 
 /** 把 ModelChoice 物化为 ModelProvider（含 apiKey/baseUrl）；缺 Key 时返回 null */
