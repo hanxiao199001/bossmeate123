@@ -183,7 +183,11 @@ export async function journalRoutes(app: FastifyInstance) {
       } = request.query as Record<string, string>;
 
       const tenantId = request.tenantId;
-      const conditions: any[] = [eq(journals.tenantId, tenantId)];
+      // 7-25 修(与 POST /journals/match 同一个病, 第二处): 8743 本期刊的 tenant_id 是 **NULL**
+      //   (共享池, 只有租户自建刊才带 tenant_id), `eq(tenantId)` 严格相等等不上 NULL → 期刊列表
+      //   对任何租户都是空的。改成 isNull OR eq, 与本文件 GET /journals/:id、daily-cron 选刊器
+      //   同口径。**只放宽读**, 写路径(seed / patch / enrich)保持严格租户隔离。
+      const conditions: any[] = [or(isNull(journals.tenantId), eq(journals.tenantId, tenantId))];
 
       if (discipline) conditions.push(eq(journals.discipline, discipline));
       if (partition) conditions.push(eq(journals.partition, partition));
@@ -323,7 +327,10 @@ export async function journalRoutes(app: FastifyInstance) {
           partition: journals.partition,
         })
         .from(journals)
-        .where(and(eq(journals.id, id), eq(journals.tenantId, tenantId)))
+        // 7-25 修(**第四处**, 全文件扫出来的): 与 GET /journals/:id 是同一本刊的同一次查看,
+        //   那边早就是 isNull OR eq, 这边还是严格相等 → 详情页能打开、点"预警检查"却 404。
+        //   同样只放宽读。
+        .where(and(eq(journals.id, id), or(isNull(journals.tenantId), eq(journals.tenantId, tenantId))))
         .limit(1);
 
       if (result.length === 0) {
@@ -377,7 +384,9 @@ export async function journalRoutes(app: FastifyInstance) {
           count: sql<number>`COUNT(*)`,
         })
         .from(journals)
-        .where(eq(journals.tenantId, tenantId))
+        // 7-25 修(同一个病, 第三处): 共享池 tenant_id IS NULL → 严格相等让学科下拉框恒为空,
+        //   前端筛选器直接不可用。与 GET /journals 列表同口径, 否则下拉框和列表还会对不上。
+        .where(or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)))
         .groupBy(journals.discipline)
         .orderBy(sql`COUNT(*) DESC`);
 
@@ -567,6 +576,9 @@ export async function journalRoutes(app: FastifyInstance) {
       const body = (request.body as { dryRun?: boolean; skipLetpub?: boolean; skipDoaj?: boolean }) || {};
 
       // 验期刊属于本租户
+      // 7-25 全文件扫查结论: 这里的严格相等是**故意保留**的 —— enrich 是写操作(worker 会把
+      //   富化结果写回该刊), 共享池的 8743 本刊不该由任意租户点一下就触发改写。共享池的富化走
+      //   `pnpm journals:reenrich` 脚本 / 批量任务, 不走租户 API。同理下面的 enrich-all。
       const rows = await db
         .select({ id: journals.id, name: journals.name })
         .from(journals)
