@@ -20,7 +20,8 @@ export type IncidentKind =
   | "zero_output"           // 每日生成零产出
   | "briefing_push_failed"  // 每日简报企微推送失败
   | "supplier_balance_low"  // 供应商余额低于阈值
-  | "spend_flatline";       // 消耗骤降到 0(疑似欠费/额度耗尽)
+  | "spend_flatline"        // 消耗骤降到 0(疑似欠费/额度耗尽)
+  | "enrich_writeback_rejected"; // 期刊回写被合理性护栏拒绝(多为上游 LetPub 解析漂移)
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -29,6 +30,7 @@ export const KIND_LABEL: Record<string, string> = {
   briefing_push_failed: "简报推送失败",
   supplier_balance_low: "供应商余额偏低",
   spend_flatline: "消耗骤停(疑似欠费)",
+  enrich_writeback_rejected: "期刊数据回写被拒(疑似上游解析失效)",
 };
 
 export interface RecordIncidentInput {

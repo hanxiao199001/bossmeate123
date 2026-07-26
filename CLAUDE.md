@@ -52,6 +52,26 @@
 
 ---
 
+## LLM 接入点：baseURL 与 API Key **成对配置**（2026-07-26）
+
+**一句话**：同一个 `deepseek-v4-pro` 模型，既能走 DeepSeek 官方账户，也能走阿里云百炼（Model Studio）——**百炼与官网同价、同模型、质量零变化**，区别只是扣谁的余额。切换靠**一个开关**：
+
+| DEEPSEEK_VIA | baseURL | API Key 来源 | 扣费账户 |
+|---|---|---|---|
+| `official`（默认，现状） | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` | DeepSeek 官方 |
+| `bailian` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `QWEN_API_KEY` | 阿里云百炼 |
+
+**铁律**：baseURL 与 key 必须成对，**只改一半 = 每次调用 401**；而 401 是客户端错误、**不触发 qwen 兜底**，系统会"看起来在跑"却整天产废稿（"抱歉，AI暂时无法响应"，7-24 事故原型）。所以：
+
+- 切换**只设 `DEEPSEEK_VIA`**，别手改 `DEEPSEEK_BASE_URL`（那是逃生口，改错会被启动期自检拦）。
+- 真相源 = `packages/server/src/services/ai/llm-endpoints.ts`（model-router / provider-factory 都从它取，**不得再在别处硬编码 baseURL**）。
+- 启动期 `assertLlmEndpointConfig()` 做**纯静态**配对校验（不发任何网络/计费请求），生产遇 error 级配错直接 `exit(1)`。
+- 联网确认接入点：`pnpm --filter @bossmate/server llm:check`（只调**不计费**的 `/models`；401=key 不配套，404=路径写成了原生 `/api/v1`）。
+- **别把 `DASHSCOPE_BASE_URL` 当 LLM 的 baseURL**：那是百炼**原生**接口（`/api/v1`，给 qwen-tts / 声音克隆），OpenAI 兼容端点是 `/compatible-mode/v1`。
+- 记账：`cost_ledger.note` 带 `billing=deepseek|bailian`（`services/ai/llm-endpoints.ts#getBillingAccount`），否则 provider 名都叫 deepseek，切百炼后账会串。
+
+---
+
 ## chart 数据存储真相（防"chart_configs 表"谣言重现）
 
 **误区**: 以为有 `chart_configs` 表存 chart 配置。**真相**: 该表项目从未存在。
@@ -79,6 +99,8 @@
   - 🟡 **backlog-B：万方 detail URL 格式过时** — `services/journal-enricher/fetchers/wanfang-fetcher.ts:109` 仍拼 `/Periodical/Detail/${perioId}`，**现网真实格式是 `/Periodical/${perioId}`（短码，无 /Detail/）**。resolver（`wanfang-perioid-resolver.ts`）已于 7-16 校准改对，但 orchestrator 用的 detail fetcher **未改** → orchestrator 万方 detail 抓取路径已失效。**修对或标注勿用**。committed `enrich-wanfang-batch.ts`（跑 orchestrator+急切 worker 会卡死）本次未用、已被聚焦脚本取代——别当能跑的脚本留仓库。
   - 🟡 **backlog-C：enrichment 供数 vs DB 校验 数据源不一致（2026-07-21 发现，碰数据链路核心，需专门一轮）** — 生成时 `article-skill.ts` 调 `ensureJournalEnriched`（`crawler/springer-journal-fetcher.ts:232`）**实时从 LetPub/springer 抓 IF/分区喂给 LLM，但抓到的值不回写 `journals` 表**（DB 仍为空）。后果：事后所有以 DB 为准的校验都把"enrichment 补了真数据、LLM 据实写"的内容误判为编造 —— ①7-20 部署的评分器反编造压分（`quality-check-v2` 调 `findBodyFabrication`）②标题编造校验（`checkTitleDataConsistency`）③正文编造检测。**受影响面 = 骑墙刊**：带 `sci-core` 标签、`journals` 表 IF/分区全空、但 LetPub 有真实数据的刊（实例：地理科学进展，DB 全 null，enrichment 抓到 IF 4.3/中科院1-2区，标题正文据实写"1区/IF4.3"却被三道校验当编造）。**当时的"改动3 骑墙刊编2区"结论是误判**——不是编造，是有据但未回写。**根治方向（二选一）**：① enrichment 抓到的 IF/分区**回写 `journals` 表**（让 DB 成为唯一真相源，校验就对了；注意 provenance 记 letpub，遵守 OpenAlex 源约束）② 或让三道校验也走 enrichment 后的 `journal` 对象而非 DB 快照。7-21 曾试"收紧国内刊判定排除 sci-core + 全局无据禁写红线"（commit `6577b9a`），对纯国内刊无害但对骑墙刊反而更糟（把有数据的刊当无数据），已 `git revert`（`11cb31d`）退回改动3 主体 `c930b00`。**纯国内刊（不含 sci-core，2379 本里绝大多数）的改动3 完全有效，此 backlog 只影响少数骑墙刊。**
     > ✅ **2026-07-25 已按方向①收口**：新增 `persistTrustedJournalFacts()`（`crawler/springer-journal-fetcher.ts`），`article-skill` 的 `ensureJournalEnriched` 新增 `{ writeBackJournalId }` 选项，把 **scrapling/LetPub 可信源**抓到的 `impactFactor / partition / casPartition / acceptanceRate / reviewCycle` **同步**回写 journals 表。三条铁律：**只收可信源**（AI 兜底那层的 `casPartitionNew` 等一律拦掉——它唯一来源是 `enrichJournalWithAI`，写进去等于给幻觉发权威背书）、**只填空绝不覆盖**（天然幂等，人工/多源核实值动不了）、**打 `field_provenance.<字段> = "letpub_inline_enrich"` 但不动 `dataSource`/`confidence`**（单源回写无权把 `multi_source_verified` 降级）。同步而非入队是必需的：本轮生成后续的六维评分与发布闸都现查 DB。回写面**精确等于校验器读的字段集**——病根是供数源与校验源不一致，对齐这两个集合即可，多写一列多一分污染。顺手拆了老 `ensureJournalEnriched` 里"AI 猜的 casPartition 直写信任列"的哑弹。**存量骑墙刊**用 `npx tsx src/scripts/journals-reenrich.ts --fence-sitters --dry-run` 手动回填（走 orchestrator 正规富化路径）。单测 `backlog-c-trusted-writeback.test.ts` 13 例锁死三条铁律。
+    > 🔴 **2026-07-25 当天试启用即出事故 → 回写已改为"代码在但默认不启用"**。上线试跑发现**上游 LetPub 页面已改版**，`scripts/journal_scraper.py` 的选择器全部错位：抓回 `impactFactor=2026`（页面上的**年份**）、`name="按研究方向查看:"`（**侧边导航文案**）。而回写会把这些假值**永久钉进 `journals` 表**——一旦入库，三道防编造闸（`findBodyFabrication` / `checkTitleDataConsistency` / `quality-check-v2`）**全部失效**，因为它们都以 DB 为唯一真相源，DB 与喂给 LLM 的提示词"**一致地错**"，校验器反过来给假数据背书。已产出一篇《2026 逆天影响因子》。污染已回滚，scrapling 已卸载。**教训（比这条 backlog 本身更值钱）：回写把"一次抓取失败"升级成了"永久数据污染 + 校验体系失效"。抓取失败是常态（上游随时改版），所以写入侧必须有一道不依赖上游/不依赖 LLM/不联网的确定性闸门；而"多道校验闸"只要都读同一份 DB，就不是三道闸，是一道闸抄了三遍。****本轮加固**：① 新增纯函数 `validateTrustedFacts()`（`crawler/trusted-facts-validator.ts`）——IF 上界 300（一刀切死 1900-2100 年份区间）+ 年份型整数探针（真 IF 带小数，`2.026` 不误伤）、分区必须 Q1-Q4/1-4区、中科院分区必须 `[学科]N区[TOP]`、录用率 0-1 比值、审稿周期折算 0-1000 天、刊名导航文案探针（`sourceName`，只探测不入库）；任一不合理 → **整条拒写**（绝不部分写入）+ `logger.error` + 落 `ops_incidents`（`kind=enrich_writeback_rejected`）进次日简报；**多字段同时异常或命中年份/导航文案 → 判定"解析漂移"，告警升到 error**。② 开关 `ENRICH_WRITEBACK_ENABLED` **默认 false**（`isWriteBackEnabled()`，与 `ENRICH_SKIP_LETPUB` 同族直读 env）；**校验跑在开关之前**（影子模式）——关着也照样校验并告警，这样"上游到底修好没有"由日常运行自动探出来，而不是等哪天有人壮着胆子打开开关才发现还是坏的。③ 老 `ensureJournalEnriched` 缓存路径（直接覆盖、连"只填空"都没有的第二扇门）同样过护栏。**要真正启用回写还差什么**：(a) 重写 `journal_scraper.py` 的 LetPub 选择器并用真实期刊逐字段验证（IF/分区/中科院分区/录用率/审稿周期/刊名）；(b) 跑 `trusted-facts-guardrail.test.ts` 确认护栏拦得住；(c) 先只开一天，观察 `ops_incidents` 里 `enrich_writeback_rejected` 是否为 0，再常开。单测：`trusted-facts-guardrail.test.ts`（23 例，用事故真实脏值）+ `backlog-c-trusted-writeback.test.ts`（24 例，含护栏与开关）。
+  - 🟢 **共享期刊池的 tenant 口径（2026-07-25 收口，同一个病犯了四次）** — 线上 8743 本期刊的 `tenant_id` 是 **NULL**（全局共享参考数据，只有租户自建刊才带 tenant_id）。SQL 里 `NULL = 'uuid'` 求值为 NULL（既不真也不假），所以 `eq(journals.tenantId, tenantId)` 会把**整个共享池排除**，端点对任何租户都返 0 条。发病四处并已全部修为 `or(isNull(tenantId), eq(tenantId, current))`：`POST /journals/match`（小程序选刊恒空，commit `7eb5e77`）、`GET /journals`（列表页恒空）、`GET /journals/meta/disciplines`（学科下拉恒空）、`GET /journals/:id/warning-check`（详情页能开、点预警检查却 404）。**规则：读放宽（共享池 + 自有刊），写严格（seed / enrich / enrich-all 只认自己的刊；`PATCH /journals/:id` 是显式授权的例外——owner/admin 角色闸在前，为的是改重点期刊）。**共享池的富化走 `pnpm journals:reenrich` 脚本，不走租户 API。回归锁：`journals-tenant-shared-pool.test.ts`（14 例，含写路径不许放宽）。
 - **LetPub 反爬代理（2026-07-08，7-09 修正）** — 代理**不是全删**：**列表爬 Python 侧**（`journal_scraper.py --proxy` / `scrapling-bridge proxy`）的 proxy 支持已移除；**enrich TS 侧** `letpub-detail-scraper.ts` 的 `LETPUB_PROXY`（undici ProxyAgent，PR #189）**仍在、仍可用**。PR #260 实际只是接上了全局熔断（`ENRICH_SKIP_LETPUB`）+ "列表爬与 enrich 进程隔离"约定，**没删 enrich 侧代理**。**影响**：遇 LetPub 封 IP 时可 `ENRICH_SKIP_LETPUB=true` 熔断（停爬、无新数据、损新鲜度/覆盖率，但不产假数据），或挂 `LETPUB_PROXY` 换 IP 续爬。若数据陈旧成问题再评估扩代理池/换源。
 
 **OpenAlex 源可信度约束（老韩 2026-07-09 判定）**：OpenAlex 与 LetPub 数据出入大，**禁用于 IF / 分区 / 预警 / 录用率等信任字段的核验或写入**；只可用于**官网(website) / ISSN / 出版社(publisher) / 发文量(publicationStats)等非争议元数据**。现状核实（7-09 审计）符合此约束：orchestrator 里 `impactFactor`/`ifHistory`/`jcrFull`/预警 全部 provenance=`letpub`/中科院，OpenAlex 只写 website/publisher/publicationCosts/publicationStats；openalex_ingest 24 行 has_if=0、has_partition=0、is_warning=0（仅 website 19 行）。**日后接 OpenAlex 数据时不得把它的近似 IF/分区写进信任字段。**

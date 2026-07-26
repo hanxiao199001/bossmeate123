@@ -14,6 +14,7 @@ import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
 import { eq } from "drizzle-orm";
 import { scrapeJournal, type ScraplingResult } from "./scrapling-bridge.js";
+import { validateTrustedFacts, type TrustedFactsValidation } from "./trusted-facts-validator.js";
 
 export interface SpringerJournalData {
   abbreviation?: string;
@@ -34,6 +35,12 @@ export interface SpringerJournalData {
   reviewCycle?: string;
   annualVolume?: number;
   isWarningList?: boolean;
+  /**
+   * 7-25 加固: 抓取源给出的刊名。**只做解析健康度探针, 永不入库**
+   * (不在 TRUSTED_FACT_FIELDS 白名单, 也不在老缓存写的 updateFields 里)。
+   * 事故里 name="按研究方向查看:" 是"整页选择器错位"最灵敏的指示器。
+   */
+  sourceName?: string;
 }
 
 /**
@@ -88,6 +95,8 @@ function scraplingToSpringerData(data: ScraplingResult): SpringerJournalData {
     reviewCycle: data.reviewCycle || undefined,
     annualVolume: data.annualVolume || undefined,
     isWarningList: data.isWarningList,
+    // 7-25: 带上刊名做解析健康度探针(不入库), 见 SpringerJournalData.sourceName
+    sourceName: data.name || undefined,
   };
 }
 
@@ -252,10 +261,42 @@ const TRUSTED_FACT_COLUMNS = {
 export const INLINE_ENRICH_PROVENANCE = "letpub_inline_enrich";
 
 export interface TrustedFactsWriteBackResult {
-  /** 实际写入的字段(空数组 = 全部已有值/无新数据, 无 UPDATE 发生) */
+  /** 实际写入的字段(空数组 = 全部已有值/无新数据/被拒/开关关闭, 无 UPDATE 发生) */
   written: TrustedFactField[];
   /** 因 DB 已有值而跳过的字段(用于日志观察, 证明"不覆盖") */
   skippedExisting: TrustedFactField[];
+  /** 没写的原因(写成功时不带此字段): disabled=开关未开; rejected=护栏拒写 */
+  skipped?: "disabled" | "rejected";
+  /** skipped="rejected" 时带上完整校验结果, 便于调用方/测试断言 */
+  validation?: TrustedFactsValidation;
+}
+
+/**
+ * 7-25 事故后的**默认关闭**开关。
+ *
+ * ⚠️ **上游 LetPub 选择器 2026-07 已失效**(journal_scraper.py 抓回 impactFactor=2026 的年份、
+ *    name="按研究方向查看:" 的导航文案), scrapling 也已卸载。**重写并验证选择器之前不要打开。**
+ *    打开前先确认 validateTrustedFacts 能拦住异常值(单测: trusted-facts-guardrail.test.ts)。
+ *
+ * 为什么用"代码留着 + 默认关"而不是删掉: backlog-C(供数源与校验源不一致 → 骑墙刊被三道闸误判)
+ *   是真问题, 回写是正确解法; 错的只是"在上游已经坏了的时候启用它"。删了下次还得重写一遍, 留着
+ *   并锁死开关, 等 LetPub 抓取重写验证通过后一行 env 即可启用。
+ *
+ * 与 ENRICH_SKIP_LETPUB 同族: 运行时直读 process.env, **不进 env.ts 的 zod schema**
+ *   (见 .env.example 第 17 节的说明与其代价)。每次调用现读, 便于测试与线上热改后重启生效。
+ */
+export function isWriteBackEnabled(): boolean {
+  return process.env.ENRICH_WRITEBACK_ENABLED === "true";
+}
+
+/** 拒写告警的进程内节流窗口(见 persistTrustedJournalFacts 里的用法) */
+const REJECT_ALERT_COOLDOWN_MS = 10 * 60_000;
+let lastRejectAlertAt = 0;
+let suppressedRejectAlerts = 0;
+/** 仅供单测重置节流状态(线上没有调用方) */
+export function __resetWriteBackAlertThrottle(): void {
+  lastRejectAlertAt = 0;
+  suppressedRejectAlerts = 0;
 }
 
 /**
@@ -270,6 +311,14 @@ export interface TrustedFactsWriteBackResult {
  *   ③ **打来源标记**: field_provenance.<字段> = "letpub_inline_enrich", 与 orchestrator 的
  *      "letpub" 区分, 事后可审计/可回滚。**不动 dataSource / confidence** —— 本路径只有单源,
  *      写 dataSource 会把 multi_source_verified 降级成 letpub_only, 那是污染不是治理。
+ *
+ * 7-25 事故后追加的**第 4、5 条**(它们比上面三条更靠前, 是能不能启用回写的前提):
+ *   ④ **合理性护栏**: 写之前跑 validateTrustedFacts。任一字段不合理 → **整条拒写**(绝不部分
+ *      写入) + logger.error + 落 ops_incidents(kind=enrich_writeback_rejected) 让次日简报报出来。
+ *      理由: 抓取失败是常态, 而回写会把"一次抓取失败"升级成"永久数据污染"并让三道防编造闸失效。
+ *   ⑤ **默认关闭**: isWriteBackEnabled() 为假时只校验不落笔(影子模式)。
+ *      注意顺序 —— **校验在开关之前**: 开关关着也照样跑校验并告警, 这样"上游到底修好没有"能被
+ *      日常运行自动探出来, 而不是等哪天有人壮着胆子打开开关才发现还是坏的。
  *
  * 失败不抛(生成链路绝不能被回写拖挂), 返回写了什么。
  */
@@ -286,6 +335,52 @@ export async function persistTrustedJournalFacts(
     return v !== null && v !== undefined && v !== "";
   });
   if (candidates.length === 0) return empty;
+
+  // ④ 护栏: 不合理 → 整条拒写 + 告警。sourceName 探针也参与判定(它本身不入库)。
+  const validation = validateTrustedFacts(trusted as Parameters<typeof validateTrustedFacts>[0]);
+  if (!validation.ok) {
+    logger.error(
+      {
+        journalId,
+        rejected: validation.rejected,
+        checked: validation.checked,
+        drift: validation.drift,
+        writeBackEnabled: isWriteBackEnabled(),
+      },
+      validation.drift
+        ? "疑似上游解析漂移, 已拒绝回写(整条, 不部分写入) —— 多字段同时异常, LetPub 选择器很可能已失效"
+        : "字段值不合理, 已拒绝回写(整条, 不部分写入)",
+    );
+    // 告警旁路: 落 ops_incidents → 次日 09:30 运营简报。绝不阻塞、绝不抛。
+    // 节流: 上游一旦坏掉, 每篇生成都会命中 —— 不限速会把 ops_incidents 刷屏, 把别的告警淹了。
+    //   进程内 10 分钟一条, 并把这期间被压掉的次数带上(信息不丢, 只是不逐条落库)。
+    const now = Date.now();
+    if (now - lastRejectAlertAt < REJECT_ALERT_COOLDOWN_MS) {
+      suppressedRejectAlerts += 1;
+    } else {
+      const suppressed = suppressedRejectAlerts;
+      lastRejectAlertAt = now;
+      suppressedRejectAlerts = 0;
+      void import("../ops/incidents.js")
+        .then((m) => m.recordIncident({
+          kind: "enrich_writeback_rejected",
+          severity: validation.drift ? "error" : "warn",
+          message: `期刊回写被护栏拒绝(${validation.drift ? "疑似解析漂移" : "单字段异常"}): ${validation.reason}`.slice(0, 500),
+          detail: { journalId, rejected: validation.rejected, checked: validation.checked, drift: validation.drift, suppressedSinceLastAlert: suppressed },
+        }))
+        .catch(() => { /* 告警链路自己挂了不能反过来搞挂生成 */ });
+    }
+    return { written: [], skippedExisting: [], skipped: "rejected", validation };
+  }
+
+  // ⑤ 开关: 默认 false。校验已在上面跑过(影子模式), 这里只是不落笔。
+  if (!isWriteBackEnabled()) {
+    logger.debug(
+      { journalId, candidates },
+      "回写开关未开(ENRICH_WRITEBACK_ENABLED != true), 数据校验通过但不入库",
+    );
+    return { written: [], skippedExisting: [], skipped: "disabled" };
+  }
 
   try {
     const [existing] = await db
@@ -337,6 +432,8 @@ export async function persistTrustedJournalFacts(
  * @param options.writeBackJournalId - 7-25 backlog-C: 传真实 journalId 时, 把**可信源**(scrapling,
  *   不含 AI 兜底)抓到的 IF/分区/录用率/审稿周期以"只填空"方式回写该刊。生成热路径专用 ——
  *   article-skill 仍传 journalId="skip-cache"(不走上面那条全量覆盖式老缓存), 只开这条窄回写。
+ *   ⚠️ 传了也未必写: 回写受 ENRICH_WRITEBACK_ENABLED(**默认 false**) + validateTrustedFacts
+ *   护栏双重把关, 见 isWriteBackEnabled / persistTrustedJournalFacts 的注释。
  */
 export async function ensureJournalEnriched(
   journalId: string,
@@ -407,15 +504,26 @@ export async function ensureJournalEnriched(
       //   casPartition / casPartitionNew / selfCitationRate 在 AI 分支里是"模型猜的",
       //   老写法把它们直写信任列 = 用幻觉污染唯一真相源。
       //   (当前唯一调用方传的是 "skip-cache", 这段是历史遗留的哑弹, 顺手拆掉引信。)
-      if (trusted.selfCitationRate) updateFields.selfCitationRate = trusted.selfCitationRate;
-      if (trusted.casPartition) updateFields.casPartition = trusted.casPartition;
-      // Scrapling 可能拿到更新的 IF/分区/录用率，也回写
-      if (trusted.impactFactor) updateFields.impactFactor = trusted.impactFactor;
-      if (trusted.partition) updateFields.partition = trusted.partition;
-      if (trusted.acceptanceRate) updateFields.acceptanceRate = trusted.acceptanceRate;
-      if (trusted.reviewCycle) updateFields.reviewCycle = trusted.reviewCycle;
-      if (trusted.annualVolume) updateFields.annualVolume = trusted.annualVolume;
-      if (trusted.isWarningList !== undefined) updateFields.isWarningList = trusted.isWarningList;
+      // 7-25 事故后再加固: 这条**老路径**是第二扇门 —— 它比 persistTrustedJournalFacts 还粗暴
+      //   (直接覆盖, 连"只填空"都没有)。同样过一遍护栏, 不合理就整块指标不写, 只留 website /
+      //   scopeDescription 这类非指标字段。否则将来谁传个真 journalId 进来, 假 IF 照样进库。
+      const legacyCheck = validateTrustedFacts(trusted as Parameters<typeof validateTrustedFacts>[0]);
+      if (!legacyCheck.ok) {
+        logger.error(
+          { journalId, rejected: legacyCheck.rejected, drift: legacyCheck.drift },
+          "疑似上游解析漂移, 已拒绝回写(老缓存路径的指标字段整块跳过)",
+        );
+      } else if (isWriteBackEnabled()) {
+        if (trusted.selfCitationRate) updateFields.selfCitationRate = trusted.selfCitationRate;
+        if (trusted.casPartition) updateFields.casPartition = trusted.casPartition;
+        // Scrapling 可能拿到更新的 IF/分区/录用率，也回写
+        if (trusted.impactFactor) updateFields.impactFactor = trusted.impactFactor;
+        if (trusted.partition) updateFields.partition = trusted.partition;
+        if (trusted.acceptanceRate) updateFields.acceptanceRate = trusted.acceptanceRate;
+        if (trusted.reviewCycle) updateFields.reviewCycle = trusted.reviewCycle;
+        if (trusted.annualVolume) updateFields.annualVolume = trusted.annualVolume;
+        if (trusted.isWarningList !== undefined) updateFields.isWarningList = trusted.isWarningList;
+      }
 
       await db.update(journals).set(updateFields).where(eq(journals.id, journalId));
       logger.info(
