@@ -12,7 +12,10 @@
 export const REDLINE_REVIEW_REASONS = new Set([
   "title_body_inconsistent", // 标题-正文矛盾 (标题喊保录, 正文有风险信号)
   "title_data_fabricated",   // 标题数字 DB 无据 (疑编造审稿周期/录用率)
-  "sixdim_degraded",         // 评分器降级 (分数本身不可信, 复审无锚)
+  "sixdim_degraded",         // 评分器降级 (分数本身不可信, 复审无锚) — 7-27 前旧名, 库里有存量
+  "quality_check_unavailable", // 7-27 新名: 主+降级模型均失败, 这篇**没评上分** — 无分数锚, AI 复审无从下手, 留人工
+  "body_fabrication",        // 正文编造 IF/分区 (7-21 发布硬闸打的标, 数据造假红线)
+  "output_unhealthy",        // 7-27 出稿健康闸: 占位文/截断/复读 —— 不是"质量灰区"而是废稿, 复审毫无意义
 ]);
 
 /** 灰区分数带: 六维总分 60-79 (80 是发布线; <60 太差没有复审价值, 直接留人) */

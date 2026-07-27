@@ -28,8 +28,9 @@ describe("isEligibleForAiReview 入池过滤", () => {
     expect(isEligibleForAiReview(base({ sixDimTotal: 0 })).eligible).toBe(false);
   });
 
-  it("红线类待审原因永远不碰 (标题矛盾/数字编造/评分降级)", () => {
-    for (const reason of ["title_body_inconsistent", "title_data_fabricated", "sixdim_degraded"]) {
+  it("红线类待审原因永远不碰 (标题矛盾/数字编造/评分降级/没评上分/废稿)", () => {
+    // 7-27 补 quality_check_unavailable(没评上分, 无分数锚) 与 output_unhealthy(健康闸拦下的废稿)
+    for (const reason of ["title_body_inconsistent", "title_data_fabricated", "sixdim_degraded", "quality_check_unavailable", "body_fabrication", "output_unhealthy"]) {
       const r = isEligibleForAiReview(base({ sixDimTotal: 70, needsReviewReason: reason }));
       expect(r.eligible).toBe(false);
       expect(r.reason).toContain("红线");

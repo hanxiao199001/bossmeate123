@@ -28,6 +28,30 @@ import { publishToAccounts } from "./index.js";
 
 const POOL_WINDOW_DAYS = 7; // 可发池回看窗口: 太老的文章时效性差, 不推
 
+// ============ 7-27 可发池准入判据(模块级导出, 供单测锁行为) ============
+
+/**
+ * 红线类待审原因(信任事故/废稿) — 永不进草稿箱, 留人工。
+ * 7-25 补 body_fabrication(下方硬闸自己打的标, 不进名单会被反复重拦); 7-27 补 output_unhealthy(同理)。
+ * ⚠️ 7-27 把"未评上分"(旧名 sixdim_degraded)从这里**移出去了** —— 当天零产出的直接死因:
+ *   质检 LLM 一超时, 20/25 条内容全被当"信任事故"剔除。"评分器挂了"≠"内容有问题"。
+ */
+export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy"];
+
+/**
+ * "没评上分"的 reason(不是"分低")。sixdim_degraded 是 7-27 前的旧名, 库里有存量, 一并识别。
+ * 这类内容: ① 允许进草稿箱(草稿箱本身就是人工筛选台, 推进去还要人工挑+手动发, 不是自动群发)
+ *          ② 但排在**队尾**, 只在有分的内容不够保底下限时才被取用
+ *          ③ 仍要过所有确定性闸(出稿健康闸/正文编造闸)与发布期的合规+敏感词闸
+ */
+export const UNSCORED_REASONS = new Set(["quality_check_unavailable", "sixdim_degraded"]);
+
+/** 纯函数: 该 status/待审原因能否进可发池(红线剔除, 其余包括"未评上分"放行) */
+export function passesReasonGate(status: string | null, needsReviewReason: string | null | undefined): boolean {
+  if (status === "generated") return true;
+  return !needsReviewReason || !RED_LINE_REASONS.includes(needsReviewReason);
+}
+
 export interface DraftPushAccountReport {
   accountId: string;
   accountName: string;
@@ -80,10 +104,20 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   //    仍排除的红线类(标题数据造假 title_data_fabricated / 标题正文矛盾 title_body_inconsistent)——
   //    信任事故不进草稿箱, 永远留人工. 判据读 metadata.needsReviewReason。
   const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 3600_000);
-  // 剔除: 红线两类(信任事故)+ 评分降级(分数不可信, 不是"分低"而是"没算准", 该重评不该进草稿箱)
+  // 剔除: 红线两类(信任事故)
   // 7-25 补 body_fabrication: 它是下方硬闸自己打的标(:112), 却不在红线名单里 —— 被拦下标记过的内容
   //   下一轮又能进池、再被同一道闸拦一次(白跑 + 日志刷屏)。编造是数据造假红线, 与标题编造同级。
-  const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "sixdim_degraded", "body_fabrication"];
+  // 7-27 补 output_unhealthy: 出稿健康闸打的标(:118 附近), 同 body_fabrication 的道理 ——
+  //   被拦下标记过的废稿(占位文/截断/复读)下一轮又能进池、再被同一道闸拦一次(白跑 + 日志刷屏)。
+  //   而且它是"这稿子根本不是内容"级别的问题, 比六维分低严重得多, 必须留人工。
+  //
+  // ⚠️ 7-27 把"未评上分"从红线里**移出来** —— 这是当天零产出的直接死因。
+  //   原来 sixdim_degraded 在红线名单里, 于是质检 LLM 一超时, 20/25 条内容全被当"信任事故"剔除,
+  //   整天零条进草稿箱, 而且**没有任何告警**。可"没评上分"和"标题造假"根本不是一回事:
+  //   前者是我们自己的评分器挂了, 内容本身没有任何已知问题。
+  //   新策略见 UNSCORED_REASONS: 不剔除, 但排到队尾 —— 有分的内容优先, 分不够时才用它顶上,
+  //   既不静默停产, 也不让未经评分的内容抢掉正常内容的名额。
+  //   (判据常量与纯函数已提到模块级导出: RED_LINE_REASONS / UNSCORED_REASONS / passesReasonGate)
   const rawPool = await db
     .select({ id: contents.id, title: contents.title, body: contents.body, status: contents.status, metadata: contents.metadata })
     .from(contents)
@@ -96,17 +130,35 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     .orderBy(desc(contents.createdAt))
     .limit(500);
   // needs_review 的文章: 只有非红线(六维偏低等质量问题)才放进草稿箱; 红线类剔除留人工
-  const reasonPassed = rawPool.filter((c) => {
-    if (c.status === "generated") return true;
-    const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
-    return !reason || !RED_LINE_REASONS.includes(reason);
-  }).slice(0, 300);
+  const reasonPassed = rawPool.filter((c) =>
+    passesReasonGate(c.status, (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason),
+  ).slice(0, 300);
 
   // 7-21 发布前编造硬闸(确定性兜底): 纯国内刊正文出现 DB 无据的 IF/分区 → 不进草稿箱, 标 needs_review/body_fabrication。
   //   即使生成侧 prompt 漏网、六维分侥幸过线, 也发不出去。骑墙刊(含sci-core)豁免。复用 checkBodyFabrication。
   const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
+  // 7-27 出稿健康闸(确定性兜底, 零 LLM/零 DB): 占位文/空/截断/复读 → 不进草稿箱, 标 needs_review/output_unhealthy。
+  //   ⚠️ 关键: 这道闸放在**不看 status** 的位置 —— 上面的 reasonPassed 对 status=generated 是**无条件放行**的,
+  //   7-27 那篇标题="抱歉，AI暂时无法响应，请稍后重试。"、六维 80 分、status=generated 的废稿正是从这个口子溜进草稿箱的。
+  const { checkOutputHealth, OUTPUT_UNHEALTHY_REASON } = await import("./output-health.js");
   const pool: Array<{ id: string; title: string | null }> = [];
+  const unscoredIds = new Set<string>(); // 7-27: 没评上分的, 排队尾(见 UNSCORED_REASONS)
   for (const c of reasonPassed) {
+    const health = checkOutputHealth({ title: c.title, body: c.body, type: "article" });
+    if (!health.healthy) {
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: OUTPUT_UNHEALTHY_REASON, outputHealth: { codes: health.codes, issues: health.issues } })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, c.id));
+      logger.warn({ contentId: c.id, status: c.status, codes: health.codes, summary: health.summary }, "草稿分发硬闸: 出稿不健康(废稿特征), 剔除不进草稿箱, 转 needs_review");
+      void import("../ops/incidents.js").then((m) => m.recordIncident({
+        kind: "output_unhealthy",
+        severity: "error",
+        tenantId,
+        message: `草稿分发拦下废稿(${health.codes.join("/")}): ${health.summary}`.slice(0, 500),
+        detail: { contentId: c.id, stage: "draft_distribute", status: c.status, codes: health.codes, issues: health.issues },
+      })).catch(() => { /* 告警旁路, 不阻塞分发 */ });
+      continue;
+    }
     const cMeta = (c.metadata as { journalId?: string; journalIds?: string[] } | null) ?? {};
     const journalId = cMeta.journalId ?? null;
     // 7-25: 多刊盘点(roundup)的 metadata 带 journalIds 而非 journalId, 原来这里一律当"无期刊"放行。
@@ -119,7 +171,20 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       logger.warn({ contentId: c.id, journalId, fab }, "草稿分发硬闸: 正文编造无据IF/分区, 剔除不进草稿箱, 转 needs_review");
       continue;
     }
+    const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
+    if (c.status === "needs_review" && reason && UNSCORED_REASONS.has(reason)) unscoredIds.add(c.id);
     pool.push({ id: c.id, title: c.title });
+  }
+  // 7-27: 有分的排前面, 没评上分的垫底(stable, 组内仍保持 createdAt desc)。
+  //   正常日子 unscoredIds 是空的, 排序等于没发生; 只有质检大面积挂掉那天才轮到它们顶上,
+  //   把"零产出"换成"产出里混了几篇未评分的" —— 后者运营在草稿箱里一眼能认出来(有 needs_review 标),
+  //   前者只会被无声吞掉。
+  if (unscoredIds.size > 0) {
+    const scored = pool.filter((p) => !unscoredIds.has(p.id));
+    const unscored = pool.filter((p) => unscoredIds.has(p.id));
+    pool.length = 0;
+    pool.push(...scored, ...unscored);
+    logger.info({ tenantId, scored: scored.length, unscored: unscored.length }, "7-27 可发池: 未评上分的内容排队尾(有分的优先)");
   }
   if (pool.length === 0) {
     report.skippedReason = "可发池为空";

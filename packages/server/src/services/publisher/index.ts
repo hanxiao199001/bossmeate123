@@ -145,6 +145,33 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
     throw new Error("内容标题和正文不能为空");
   }
 
+  // 7-27 出稿健康闸(确定性兜底, 零 LLM/零网络/零 DB, 最先跑因为最便宜):
+  //   占位文("抱歉，AI暂时无法响应…")/空/异常短/明显截断/段落复读 = 明显的失败产物, 一律拒发。
+  //   ⚠️ **刻意不看 status、不给 forceOverride 口子**:
+  //     - 不看 status: 7-27 事故里那篇废稿是 status=generated + 六维 80 分, 所有"只查 needs_review"
+  //       的闸(下方的编造发布闸等)对它全部空转, 于是一路进了公众号草稿箱。
+  //       (注: 本注释刻意不写那个闸的函数名 —— publish-fabrication-gate.test 用 indexOf 锁
+  //        "违禁词硬拦在编造闸之前"的源码顺序, 在这里提前出现函数名会把那条防回归测试打翻。)
+  //     - 不给强发: 与正文编造硬闸同策 —— 这类稿子不是"质量有争议", 是"根本不是内容", 没有强发的合理场景。
+  {
+    const { checkOutputHealth, OUTPUT_UNHEALTHY_REASON } = await import("./output-health.js");
+    const health = checkOutputHealth({ title: content.title, body: content.body, type: content.type });
+    if (!health.healthy) {
+      logger.warn({ contentId, status: content.status, codes: health.codes, summary: health.summary }, "发布硬闸: 出稿不健康(废稿特征), 拒发");
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: OUTPUT_UNHEALTHY_REASON, outputHealth: { codes: health.codes, issues: health.issues } })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, contentId));
+      void import("../ops/incidents.js").then((m) => m.recordIncident({
+        kind: "output_unhealthy",
+        severity: "error",
+        tenantId,
+        message: `发布前拦下废稿(${health.codes.join("/")}): ${health.summary}`.slice(0, 500),
+        detail: { contentId, stage: "publish", status: content.status, codes: health.codes, issues: health.issues },
+      })).catch(() => { /* 告警旁路 */ });
+      throw new Error(`内容存在明显的生成失败特征(${health.summary}), 已拦截发布并转人工复核。`);
+    }
+  }
+
   // PR-Z3 合规层: 硬词拦截(封号级风险), 软词(广告法/医疗红线)警告放行; 发布体追加 AI 生成标识
   const { checkCompliance, appendAiLabel } = await import("../compliance/content-check.js");
   const compliance = await checkCompliance(`${content.title}\n${content.body}`);

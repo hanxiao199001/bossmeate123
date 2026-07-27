@@ -21,7 +21,14 @@ export type IncidentKind =
   | "briefing_push_failed"  // 每日简报企微推送失败
   | "supplier_balance_low"  // 供应商余额低于阈值
   | "spend_flatline"        // 消耗骤降到 0(疑似欠费/额度耗尽)
-  | "enrich_writeback_rejected"; // 期刊回写被合理性护栏拒绝(多为上游 LetPub 解析漂移)
+  | "enrich_writeback_rejected" // 期刊回写被合理性护栏拒绝(多为上游 LetPub 解析漂移)
+  // ---- 7-27 事故后补的五类: 当天 49 次 AI 超时 + 20 条评分 0 分, ops_incidents 一条都没有 ----
+  | "llm_timeout"               // AI 调用超时/中断(This operation was aborted) —— 高频, 走节流
+  | "quality_check_timeout"     // 六维质检主模型超时/没响应(该篇随后走降级重试)
+  | "quality_check_degraded"    // 六维质检的分是**降级模型**给的(分数可用, 但可信度待审计)
+  | "quality_check_unavailable" // 主模型 + 降级模型都失败 → 这篇**没评上分**(≠ 评了 0 分)
+  | "output_unhealthy"          // 出稿健康闸拦下明显废稿(占位文/截断/复读/过短)
+  | "llm_cost_cap";             // LLM 日花费/调用硬上限熔断(billing/llm-guard.ts, 已停止生成类调用)
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -31,6 +38,12 @@ export const KIND_LABEL: Record<string, string> = {
   supplier_balance_low: "供应商余额偏低",
   spend_flatline: "消耗骤停(疑似欠费)",
   enrich_writeback_rejected: "期刊数据回写被拒(疑似上游解析失效)",
+  llm_timeout: "AI 调用超时(等不到模型返回)",
+  quality_check_timeout: "六维质检超时(主模型没响应, 已自动换快模型重评)",
+  quality_check_degraded: "六维质检降级出分(分数来自备用快模型, 可信度待抽检)",
+  quality_check_unavailable: "六维质检不可用(这篇没评上分, 转人工复核)",
+  output_unhealthy: "出稿健康闸拦截(占位文/截断/复读等废稿)",
+  llm_cost_cap: "LLM 日上限熔断(已停止内容生成, 客服不受影响)",
 };
 
 export interface RecordIncidentInput {
@@ -61,6 +74,53 @@ export async function recordIncident(input: RecordIncidentInput): Promise<void> 
       "ops_incidents.record_failed — 告警落库失败, 该异常只剩本条日志",
     );
   }
+}
+
+// ============ 7-27: 节流版记录(高频失败专用) ============
+
+/**
+ * 进程内节流窗口。默认 10 分钟 —— 与 springer-journal-fetcher 的拒写告警同一档
+ * (那里的注释解释了为什么: 上游一坏就每篇都命中, 不限速会把 ops_incidents 刷屏, 把别的告警淹了)。
+ */
+export const INCIDENT_THROTTLE_MS = 10 * 60_000;
+
+interface ThrottleState { lastAt: number; suppressed: number }
+const throttleByKey = new Map<string, ThrottleState>();
+
+/** 仅供单测重置节流状态(线上没有调用方) */
+export function __resetIncidentThrottle(): void {
+  throttleByKey.clear();
+}
+
+/**
+ * 节流版 recordIncident: 同一 key 在窗口内只落一条, 被压掉的次数带在
+ * detail.suppressedSinceLastAlert 里(信息不丢, 只是不逐条落库)。
+ *
+ * 用在**一次故障会连锁触发几十上百次**的点(AI 超时: 7-27 当天 49 次)。
+ * 反过来, "一次事件 = 一篇内容被毙"这种点**不要**用它 —— 那里的条数本身就是要看的量
+ * (如 quality_check_timeout: 条数 = 今天有几篇内容没能进草稿箱)。
+ *
+ * @param key 节流粒度。默认按 kind; 想按 provider/租户分别节流就自己拼。
+ */
+export async function recordIncidentThrottled(
+  input: RecordIncidentInput,
+  opts?: { key?: string; cooldownMs?: number },
+): Promise<{ recorded: boolean }> {
+  const key = opts?.key ?? String(input.kind);
+  const cooldown = opts?.cooldownMs ?? INCIDENT_THROTTLE_MS;
+  const now = Date.now();
+  const st = throttleByKey.get(key);
+  if (st && now - st.lastAt < cooldown) {
+    st.suppressed += 1;
+    return { recorded: false };
+  }
+  const suppressed = st?.suppressed ?? 0;
+  throttleByKey.set(key, { lastAt: now, suppressed: 0 });
+  await recordIncident({
+    ...input,
+    detail: { ...(input.detail ?? {}), suppressedSinceLastAlert: suppressed },
+  });
+  return { recorded: true };
 }
 
 export interface IncidentCount {
@@ -149,4 +209,30 @@ export function isQuotaLikeError(status: number, body: string | null | undefined
     "未开通",
   ];
   return KEYWORDS.some((k) => t.includes(k));
+}
+
+/**
+ * 7-27: 判定一次调用失败是否属于"超时/被中断"类。
+ *
+ * 由来: 7-27 线上 49 次 `This operation was aborted`(AbortController 到点掐断 fetch),
+ *   一条 incident 都没有 —— 六维质检因此大面积拿不到分, 只能靠人肉翻日志才发现。
+ *   AI 超时是**成本与产能**双杀的信号(钱花了、内容没出来), 必须能被简报报出来。
+ *
+ * 刻意**不含** 4xx/5xx 业务错误 —— 那些由 llm_quota / 调用方各自的日志覆盖, 混进来会稀释信号。
+ */
+export function isTimeoutLikeError(err: unknown): boolean {
+  const msg = (err instanceof Error ? `${err.name} ${err.message}` : String(err ?? "")).toLowerCase();
+  if (!msg) return false;
+  const KEYWORDS = [
+    "aborted",          // undici: This operation was aborted
+    "abort",            // AbortError
+    "timeout",
+    "timed out",
+    "etimedout",
+    "esockettimedout",
+    "econnreset",
+    "socket hang up",
+    "超时",
+  ];
+  return KEYWORDS.some((k) => msg.includes(k));
 }

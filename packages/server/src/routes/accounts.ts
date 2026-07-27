@@ -41,6 +41,8 @@ const updateAccountSchema = z.object({
   groupName: z.string().nullable().optional(),
   status: z.enum(["active", "disabled"]).optional(),
   capability: z.enum(["full", "draft_only"]).optional(),
+  // 7-27 无人值守: 发布模式 — auto=客户端自动发(判 agent_offline/login_expired) / manual=人工下载上传(不判心跳类健康)
+  publishMode: z.enum(["auto", "manual"]).optional(),
   templateId: z.string().uuid().nullable().optional(), // PR Q.2: 绑定模板（NULL=用全局默认）
   journalScope: z.enum(["domestic", "international", "both"]).optional(), // PR-K 期刊定位
   discipline: z.enum(["medicine", "psychology", "engineering", "economics", "biology", "education", "law", "agriculture", "computer", "environment", "chemistry", "physics"]).nullable().optional(), // PR-W5 领域定位(单选, 兼容)
@@ -273,6 +275,7 @@ export async function accountRoutes(app: FastifyInstance) {
       if (body.groupName !== undefined) updateData.groupName = body.groupName;
       if (body.status) updateData.status = body.status;
       if (body.capability) updateData.capability = body.capability;
+      if (body.publishMode) updateData.publishMode = body.publishMode; // 7-27 发布模式(账号页批量入口逐个 PATCH)
       if (body.templateId !== undefined) updateData.templateId = body.templateId;
       if (body.journalScope) updateData.journalScope = body.journalScope;
       if (body.discipline !== undefined) updateData.discipline = body.discipline; // PR-W5

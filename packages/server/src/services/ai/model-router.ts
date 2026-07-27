@@ -24,6 +24,7 @@ export type TaskType =
   | "content_generation"   // 内容生成（图文、脚本）
   | "requirement_analysis" // 需求理解和拆解
   | "quality_check"        // 质检校准
+  | "quality_check_fast"   // 7-27 质检降级槽: 主评分模型超时时改走快模型重评(见下方路由表注释)
   | "knowledge_search"     // 知识库检索增强
   | "daily_chat"           // 日常问答
   | "formatting"           // 格式化处理
@@ -58,6 +59,13 @@ function buildTaskRoute(): Record<TaskType, { primary: ModelChoice; fallback: Mo
     content_generation:   { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT },     fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
     requirement_analysis: { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
     quality_check:        { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    // ⚠️ 7-27 质检降级槽 —— 全系统唯一没有**跨厂商**兜底的链路, 事故当天就栽在这里。
+    //   为什么 quality_check 那一行等于没有兜底: DEEPSEEK_MODEL_REASONER 与 DEEPSEEK_MODEL_CHAT
+    //   现在都默认 deepseek-v4-pro(同一个模型名) → selectModel 的去重把 fallback 直接丢掉,
+    //   chatWithSerialMode 里 `fallback.model !== provider.model` 也永远为 false → 主模型超时 = 直接凉。
+    //   本槽固定指向**另一个厂商的非推理型模型**(qwen-plus): 推理型超时是模型自身属性,
+    //   换一个同厂同架构的兄弟模型救不了; 只有换掉"推理"这个变量才是真兜底。
+    quality_check_fast:   { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
     knowledge_search:     { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
     daily_chat:           { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
     formatting:           { primary: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS },             fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },

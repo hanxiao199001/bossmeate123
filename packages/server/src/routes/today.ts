@@ -13,7 +13,7 @@ import { agentPublishTasks, contentPublishLog, contents, platformAccounts, tenan
 import { getSpend, type BudgetConfig } from "../services/billing/cost-ledger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { writeCalibrationSample } from "../services/content-engine/calibration-sample.js"; // 7-05 ③
-import { computePublishHealth } from "../services/metrics/matrix-health.js"; // 7-25 发布健康判定(与运维简报同源)
+import { computePublishHealth, normalizePublishMode } from "../services/metrics/matrix-health.js"; // 7-25 发布健康判定(与运维简报同源)
 import { logger } from "../config/logger.js";
 
 /** PR-W4: "今日"按北京时间算 (服务器跑 UTC, 本地 midnight 会把今天算成昨天) */
@@ -62,8 +62,11 @@ export async function todayRoutes(app: FastifyInstance) {
           status: agentPublishTasks.status,
           error: agentPublishTasks.error,
           createdAt: agentPublishTasks.createdAt,
+          // 7-27: 账号发布模式 — manual(人工下载上传)号的任务不进 stuckPending(没人领是常态)
+          publishMode: platformAccounts.publishMode,
         })
         .from(agentPublishTasks)
+        .leftJoin(platformAccounts, eq(agentPublishTasks.accountId, platformAccounts.id))
         .where(and(eq(agentPublishTasks.tenantId, tenantId), gte(agentPublishTasks.createdAt, since)))
         .orderBy(desc(agentPublishTasks.createdAt))
         .limit(100),
@@ -107,7 +110,10 @@ export async function todayRoutes(app: FastifyInstance) {
     // 6-17 #1 发布健康: 暴露"派了却发不出"的信号。核心是 stuckPending —
     // Agent 每 15s 轮询领单, pending 超 10 分钟仍没被领 = 客户端 Agent 没开/掉线(任务石沉大海)。
     // 7-25: 判定抽到 matrix-health.computePublishHealth, 与每日运维简报同一份口径(免两处漂)。
-    const { stuckPending, loginExpired, failed: failedTasks } = computePublishHealth(tasks);
+    // 7-27: manual 号(人工下载上传)的任务剔除 —— 它们的 pending 是"等运营下载", 不是"客户端掉线"。
+    const { stuckPending, loginExpired, failed: failedTasks } = computePublishHealth(
+      tasks.filter((t) => normalizePublishMode((t as { publishMode?: string | null }).publishMode) !== "manual"),
+    );
 
     const budget: BudgetConfig =
       ((tenant?.config as { budgetConfig?: BudgetConfig } | null)?.budgetConfig) ?? {};
@@ -132,6 +138,11 @@ export async function todayRoutes(app: FastifyInstance) {
               title_body_inconsistent: "标题-正文矛盾(标题喊保录/稳发, 正文却有风险信号)",
               title_data_fabricated: "标题数字无据(审稿周期/录用率 DB 无、疑编造)",
               sixdim_degraded: "评分器降级(分数不可信, 建议重评)",
+              // 7-27: "没评上分"≠"内容差" —— 运营看到这条要知道内容本身没查出问题, 只是评分器当时挂了
+              quality_check_unavailable: "质检不可用(这篇没评上分, 不是内容差 — 评分器超时/故障)",
+              // 7-27 出稿健康闸
+              body_fabrication: "正文编造指标(期刊库无此 IF/分区)",
+              output_unhealthy: "出稿不健康(占位文/截断/复读/过短 — 生成失败的废稿)",
             };
             if (nrr && REASON_LABEL[nrr]) reviewReason = REASON_LABEL[nrr];
             else if (Array.isArray(meta?.sixDimWeak) && meta!.sixDimWeak!.length > 0) reviewReason = `六维偏低 (总分 ${meta?.sixDimTotal ?? "—"})`;

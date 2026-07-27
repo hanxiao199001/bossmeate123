@@ -275,3 +275,29 @@ export async function notifyStaff(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * 7-27 无人值守: 带重试的 notifyStaff — 给**每日简报**这类"一天只有一次机会送达"的推送用。
+ * 此前推送失败只落库(ops_briefings + briefing_push_failed), 靠人第二天自己想起来打开驾驶舱;
+ * 无人值守下这等于没告警。企微 message/send 偶发 5xx/网络抖动占失败大头, 简单重试就能救回大半。
+ *
+ * 刻意**不改 notifyStaff 本身**: 客服 handoff 的通知在响应链路上被 await, 加 30s 重试会拖慢客户侧;
+ * 简报是 cron 旁路, 多等半分钟无所谓。
+ * 未配置凭证(loadAgentCredential 为空)时 notifyStaff 立即 false, 重试也没用 —— 这里无法区分
+ * "未配置"与"发送失败", 统一重试, 代价只是多两条 warn 日志。
+ */
+export async function notifyStaffWithRetry(
+  text: string,
+  attempts = 3,
+  backoffMs: number[] = [2_000, 8_000],
+): Promise<boolean> {
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    if (await notifyStaff(text)) return true;
+    if (i < attempts - 1) {
+      const wait = backoffMs[Math.min(i, backoffMs.length - 1)] ?? 5_000;
+      logger.warn({ attempt: i + 1, nextInMs: wait }, "notifyStaff 失败, 稍后重试");
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  return false;
+}

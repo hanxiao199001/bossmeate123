@@ -14,6 +14,7 @@
 
 import { logger } from "../../config/logger.js";
 import { chat } from "../ai/chat-service.js";
+import { isAiFallbackText } from "../ai/fallback-messages.js";
 import { semanticSearch } from "../knowledge/knowledge-service.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
 
@@ -66,8 +67,24 @@ export interface SixDimResult {
   passed: boolean;
   /** 硬数据密度统计（来自 dataAccuracy 的 justification，如"全文1800字/硬数据11个≈163字/个"） */
   dataDensity: string;
-  /** LLM 挂了走兜底时为 true：此时 passed=true（跳过该 pass 不阻塞），分数仅供参考 */
+  /**
+   * LLM 挂了走兜底时为 true。
+   * ⚠️ 7-27 起语义收紧: degraded=true 表示**没评上分**(totalScore 的 0 只是类型占位),
+   * 与"真的评了 0 分"完全不是一回事 —— 消费方排序/展示/统计前必须先看这个标志。
+   */
   degraded: boolean;
+  /** 7-27: 降级原因(AI 超时/无响应 vs 评分输出解析失败), 供简报与排查区分故障类型 */
+  degradedReason?: string;
+  /**
+   * 7-27: 这次的分**是谁给的**。
+   *   primary  = 路由表主评分模型(推理型, 与历史分数同一把尺子)
+   *   fallback = 主模型超时/挂了后自动换的快模型(qwen-plus) —— 分数可用, 但与历史分数不完全同尺,
+   *              落 metadata 是为了日后能把这批分单独捞出来做可信度审计(别混进标定样本)。
+   * degraded=true(没评上分)时本字段为 undefined。
+   */
+  scoredBy?: "primary" | "fallback";
+  /** 实际出分的模型名(如 deepseek-v4-pro / qwen-plus), 与 scoredBy 一起落 metadata 备查 */
+  scorerModel?: string;
 }
 
 export interface QualityCheckV2Result {
@@ -385,8 +402,10 @@ export async function sixDimQualityCheck(params: {
    * 不传 = 完全退回原行为(零回归)。复用 compliance/content-check 的同一套判断, 不新造标准。
    */
   journalFacts?: import("../compliance/content-check.js").TitleDataDbFields;
+  /** 7-27: 有则带进 ops_incidents.detail —— 简报报出"哪几篇没评上分"时能直接点开那篇 */
+  contentId?: string;
 }): Promise<SixDimResult> {
-  const { tenantId, title, body, journalFacts } = params;
+  const { tenantId, title, body, journalFacts, contentId } = params;
   // 7-20 反"奖励编造"(信任红线): 确定性前置扫描, 不靠 LLM 自觉。
   //   标题侧编造已由 batch-worker/ai-reviewer 的 checkTitleDataConsistency 转 needs_review;
   //   正文侧这里压分 —— 两侧合起来才是闭环。命中即 dataAccuracy 封顶 FABRICATION_CAP。
@@ -411,7 +430,23 @@ export async function sixDimQualityCheck(params: {
 
   // 7-03 评分降级修复: deepseek-reasoner 偶发降级会污染首过率(旧 degradedSixDim 伪装 passed=true)。
   // 降级 → 自动重打 1 次; 两次都挂才判 degraded(下游转 needs_review, 不计入首过率)。
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  //
+  // ═══ 7-27 质检自愈: 主模型挂了自动换快模型, 别让整条产线停在一个模型上 ═══
+  // 事故: 六维质检是全系统**唯一没有跨厂商兜底**的 LLM 链路(路由表 quality_check 的 primary 与
+  //   fallback 都是 deepseek-v4-pro, 被去重后等于没有备选)。当天 v4-pro 60s 超时, 重打一次还是
+  //   超时(同一个模型、同一条长提示, 第二次凭什么快?) → 20/25 条没评上分 → 零进草稿箱。
+  // 打法(最多 3 次调用, 有上限不烧钱):
+  //   ① primary(v4-pro) →
+  //   ② 超时类失败 **直接换快模型**(不再原模型重打 —— 那是纯粹的 120s + 一次推理钱打水漂);
+  //      输出解析类失败(模型有响应, 只是 JSON 坏了) 才保留"原模型重打 1 次"的旧行为 →
+  //   ③ 仍失败 → 快模型(qwen-plus)。
+  //   快模型也挂 → 停手, 判"没评上分"(quality_check_unavailable), 绝不无限重试。
+  const MAX_SCORE_ATTEMPTS = 3;
+  let tier: "primary" | "fallback" = "primary";
+  let slowRetryUsed = false;   // 原模型的那 1 次重打用掉没有
+  let timeoutReported = false; // quality_check_timeout 每篇只报一条, 不按 attempt 刷屏
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= MAX_SCORE_ATTEMPTS; attempt++) {
   try {
     const response = await chat({
       tenantId,
@@ -450,8 +485,14 @@ ${scorerView}
   "practicality": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
   "originalityCompliance": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"}
 }`,
-      skillType: "quality_check",
+      // 7-27: primary → 路由表 quality_check 槽(推理型 v4-pro); fallback → quality_check_fast 槽(qwen-plus)
+      skillType: tier === "primary" ? "quality_check" : "quality_check_fast",
     });
+
+    // 7-27: chat() 主备全挂时**不抛错**, 而是返回一句兜底文案。原来这里只会得到
+    //   "六维评分输出无 JSON" —— 于是"AI 根本没响应"被记成了"模型输出格式不对", 两种完全
+    //   不同的故障混成一类, 告警也就无从区分。先显式识别兜底文案, 标成 AI 不可用。
+    if (isAiFallbackText(response.content)) throw new QualityCheckAiUnavailable("AI 兜底文案(模型超时/主备全挂), 未评分");
 
     const jsonMatch = response.content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("六维评分输出无 JSON");
@@ -495,24 +536,117 @@ ${scorerView}
     // 通过标准照 md：总分 ≥80 且无维度 <6
     const passed = total >= 80 && (Object.values(dims) as SixDimDetail[]).every((d) => d.score >= 6);
 
+    // 7-27: 分是降级快模型给的 → 落 incident(供简报统计 + 日后抽检降级分的可信度)。
+    //   不阻塞: 降级分照常参与发布判定 —— 若一降级就转人工, 主模型一抖照样全线停产, 等于没自愈。
+    if (tier === "fallback") {
+      reportQualityIncident("quality_check_degraded", "warn",
+        `六维质检由降级模型 ${response.model} 出分(主模型不可用): 《${title.slice(0, 40)}》 总分 ${total}`,
+        { tenantId, title, contentId, extra: { scorerModel: response.model, totalScore: total, attempt } });
+    }
+
     return {
       dims,
       totalScore: total,
       passed,
       dataDensity: dims.dataAccuracy.justification,
       degraded: false,
+      scoredBy: tier,
+      scorerModel: response.model,
     };
   } catch (err) {
-    const last = attempt >= 2;
+    lastErr = err;
+    const cls = classifyQualityFailure(err);
+    // 主模型超时 → 立刻记一条(**每篇只记一条**), 不等最终结果: 即使降级救回来了, "主评分模型在超时"
+    //   本身就是要报的信号(钱花了没拿到东西 + 分数换了把尺子), 等全挂才告警就晚了。
+    if (tier === "primary" && cls === "timeout" && !timeoutReported) {
+      timeoutReported = true;
+      reportQualityIncident("quality_check_timeout", "warn",
+        `六维质检主模型超时/无响应, 转降级模型重评: 《${title.slice(0, 40)}》`,
+        { tenantId, title, contentId, extra: { attempt, error: errText(err) } });
+    }
+
+    const willBeLast = attempt >= MAX_SCORE_ATTEMPTS || tier === "fallback";
     logger.warn(
-      { err: err instanceof Error ? err.message : err, attempt },
-      last ? "P0① 六维评分两次均失败 → degraded(转 needs_review, 不计入首过率)" : "P0① 六维评分 LLM 失败，自动重打 1 次"
+      { err: errText(err), attempt, tier, cls },
+      willBeLast
+        ? "P0① 六维评分主/降级模型均失败 → 未评上分(转 needs_review, 不计入首过率)"
+        : tier === "primary" && (cls === "timeout" || slowRetryUsed)
+          ? "P0① 六维评分主模型不可用, 自动换降级快模型重评"
+          : "P0① 六维评分输出不可解析, 原模型重打 1 次"
     );
-    if (last) return degradedSixDim();
-    // else: 继续 for 循环重打一次
+    if (willBeLast) break;
+
+    if (cls === "timeout" || slowRetryUsed) tier = "fallback"; // 超时不原地重打(白等 + 白花钱)
+    else slowRetryUsed = true;                                  // 输出坏 → 保留旧的"原模型重打 1 次"
   }
   }
-  return degradedSixDim(); // 循环内必 return, 此行仅满足类型
+
+  // 主模型 + 降级模型都没救回来 → 这篇**没评上分**(≠ 评了 0 分), 见 degradedSixDim 的注释
+  const reason = classifyQualityFailure(lastErr) === "timeout" ? "AI 超时/无响应" : "评分输出解析失败";
+  reportQualityIncident("quality_check_unavailable", "error",
+    `六维质检未评上分(${reason}, 主+降级模型均失败): 《${title.slice(0, 40)}》 — ${errText(lastErr).slice(0, 120)}`,
+    { tenantId, title, contentId, extra: { reason, error: errText(lastErr).slice(0, 200) } });
+  return degradedSixDim(reason);
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err ?? "");
+}
+
+/** chat() 返回兜底文案(= 这次调用等于没响应)时抛它, 与"输出解析失败"区分开 */
+class QualityCheckAiUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QualityCheckAiUnavailable";
+  }
+}
+
+/** 失败归类: timeout = AI 压根没给出内容(超时/主备全挂); degraded = 给了内容但评分不可用 */
+export function classifyQualityFailure(err: unknown): "timeout" | "degraded" {
+  if (err instanceof QualityCheckAiUnavailable) return "timeout";
+  const msg = (err instanceof Error ? `${err.name} ${err.message}` : String(err ?? "")).toLowerCase();
+  return /abort|timeout|timed out|etimedout|超时/.test(msg) ? "timeout" : "degraded";
+}
+
+/**
+ * 7-27: 质检异常 → 落 ops_incidents。**这是昨天新建告警体系最大的盲区**:
+ *   当天 25 条内容里 20 条因 LLM 60s 超时评分为 0 → 被红线剔除、零进草稿箱,
+ *   而 ops_incidents 一条都没有, 只能靠人肉翻日志才看出来。
+ *
+ * 三个 kind 各自的语义(简报按 kind 分别汇总):
+ *   quality_check_timeout     主评分模型超时, 已自动转降级模型(每篇至多一条)
+ *   quality_check_degraded    这篇的分是降级快模型给的(分可用, 尺子换了)
+ *   quality_check_unavailable 主+降级都失败, 这篇**没评上分**
+ *
+ * 刻意**不节流**: 一条事件 = 一篇内容的遭遇, 条数本身就是要看的量(简报那句"今日有 N 条内容
+ *   没评上分"就是数它)。量级可控: 每篇每个 kind 至多一条, 且降级后 quality-pipeline 会跳过
+ *   重写循环, 不会对同一篇反复打分。—— 与 llm_timeout(上游一坏就几十次)刻意不同, 那类才节流。
+ * 旁路: 整段包在 void async + try/catch 里, 告警失败绝不影响生成。
+ */
+// 动态 import 记忆化: 一篇内容可能连发两条事件(如 timeout + degraded), 两次并发 import()
+// 同一模块在 vitest 的模块运行器下第二个 promise 会永远不 resolve(单测实测), 生产上也省重复解析。
+let incidentsModule: Promise<typeof import("../ops/incidents.js")> | null = null;
+
+function reportQualityIncident(
+  kind: "quality_check_timeout" | "quality_check_degraded" | "quality_check_unavailable",
+  severity: "warn" | "error",
+  message: string,
+  ctx: { tenantId: string; title: string; contentId?: string; extra?: Record<string, unknown> },
+): void {
+  void (async () => {
+    try {
+      const { recordIncident } = await (incidentsModule ??= import("../ops/incidents.js"));
+      await recordIncident({
+        kind,
+        severity,
+        tenantId: ctx.tenantId,
+        message: message.slice(0, 500),
+        detail: { ...(ctx.contentId ? { contentId: ctx.contentId } : {}), title: ctx.title.slice(0, 120), ...(ctx.extra ?? {}) },
+      });
+    } catch {
+      /* 告警旁路失败不影响生成 */
+    }
+  })();
 }
 
 /**
@@ -521,12 +655,15 @@ ${scorerView}
  * 改为 passed=false → batch-worker 转 needs_review(人工复核); degraded 标记让首过率统计把它排除在分母外。
  * (degraded 仍跳过重写循环, 见 quality-pipeline 的 sixDim.degraded 判断, 不会拿默认分瞎重写烧钱)
  */
-function degradedSixDim(): SixDimResult {
+function degradedSixDim(reason = "评分服务降级"): SixDimResult {
   const dims = {} as Record<SixDimKey, SixDimDetail>;
   for (const key of Object.keys(SIX_DIM_WEIGHTS) as SixDimKey[]) {
-    dims[key] = { score: 0, weakestSection: "全文", fixHint: "", justification: "评分服务降级，分数不可信" };
+    dims[key] = { score: 0, weakestSection: "全文", fixHint: "", justification: `${reason}，未评上分(不是 0 分)` };
   }
-  return { dims, totalScore: 0, passed: false, dataDensity: "评分服务降级，无统计", degraded: true };
+  // ⚠️ 7-27: totalScore=0 是**类型上的占位**, 语义是"没评上分"而不是"评了 0 分"。
+  //   唯一可信的判据是 degraded=true —— 任何消费方(排序/展示/统计/AI 复审)必须先看它。
+  //   落库侧已做区分: quality-pipeline 在 degraded 时把 sixDimTotal/sixDimScores 写成 null。
+  return { dims, totalScore: 0, passed: false, dataDensity: `${reason}，无统计`, degraded: true, degradedReason: reason };
 }
 
 /** 7-20 编造红线封顶分: 正文出现无据 IF/分区 时 dataAccuracy 的上限。

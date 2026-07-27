@@ -149,6 +149,29 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   const startedAt = new Date().toISOString();
   logger.info({ size: RECOMMENDATION_BATCH_SIZE }, "PR #130 daily-recommendation cron 开始");
 
+  // 7-27 无人值守③: LLM 日花费/日调用硬上限 —— 触顶当天不再排产(宁可停产一天, 不能把余额烧光)。
+  //   第二道闸在 batch-worker 逐行开工前(拦已入队的行); 客服/对话链路不经过这两处, 天然豁免。
+  //   熔断事实由 llm-guard 落 ops_incidents(llm_cost_cap), 次日简报红色置顶给出人话原因。
+  try {
+    const { checkLlmDailyCap } = await import("../billing/llm-guard.js");
+    const cap = await checkLlmDailyCap();
+    if (!cap.allowed) {
+      logger.error({ usage: cap.usage }, "🛑 LLM 日上限熔断 — 今日排产取消(明天北京时间零点自动解封)");
+      return {
+        selectedKeywords: 0,
+        articlesEnqueued: 0,
+        failures: [{ keyword: "(llm-cap)", error: cap.reason ?? "LLM 日上限熔断" }],
+        batchIds: [],
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        fallbackLevel: 0,
+        diversityStats: { uniqueJournals: 0, disciplines: [] },
+      };
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "LLM 日上限检查异常, 放行(fail-open)");
+  }
+
   // 7-14 单一流水线: 退役 A 路"锁定领域号专属生成通道"。所有号(含单领域锁定号)的领域需求
   //   统一并入 computeAutoQuota 的共享池配额(见下), 不再预先绑号(exclusiveAccountId)。
   //   分发时由 smart-assign 两轮保底(领域优先 + 相邻学科兜底)从共享池匹配到号。

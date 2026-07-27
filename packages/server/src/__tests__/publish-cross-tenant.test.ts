@@ -44,6 +44,8 @@ vi.mock("drizzle-orm", () => ({
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
   and: (...xs: unknown[]) => ({ and: xs }),
   or: (...xs: unknown[]) => ({ or: xs }),
+  // 7-27: publisher/index 出稿健康闸的 needs_review 落库用到 sql`` 模板(COALESCE metadata)
+  sql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({ sql: strings.join("?"), vals }),
 }));
 
 const publishMock = vi.fn();
@@ -64,6 +66,12 @@ const { publishToAccounts } = await import("../services/publisher/index.js");
 
 const SYSTEM_TENANT = "00000000-0000-0000-0000-000000000001";
 const HANXIAO_TENANT = "4c03a3d0-cad4-4286-b14d-d6b12b6422bd";
+
+// 7-27 出稿健康闸后, 发布走 publishToAccounts 的内容必须长得像真稿子:
+// 标题 ≥6 字、正文剥标签后 ≥300 字、结尾不是半句 —— 否则会被闸拦下(那正是闸的职责)。
+// 本测试考的是"跨租户可见性/所有权 guard", 不是健康闸, 所以给一份合格的固定内容。
+const HEALTHY_TITLE = "北大核心管理学期刊投稿推荐指南";
+const HEALTHY_BODY = "<p>" + "该刊在管理学领域有稳定影响力，栏目覆盖企业管理与公共治理两个方向，对有一手调研数据、方法交代清楚的实证稿件接受度较高，投稿前请按官网最新格式要求排版并确认选题不与近一年已刊文章高度重合。".repeat(4) + "</p>";
 const wechatAccount = {
   id: "acc-1", tenantId: HANXIAO_TENANT, platform: "wechat",
   accountName: "老韩很野vibecoding", credentials: "encrypted-blob", capability: "draft_only", metadata: {},
@@ -79,7 +87,7 @@ beforeEach(() => {
 
 describe("publishToAccounts — 跨 tenant 发布 system 推荐文章", () => {
   it("system tenant 文章 + 韩宵 (你好集团) 发布 → 成功，不抛 '内容不存在'", async () => {
-    contentRow = { id: "art-sys", tenantId: SYSTEM_TENANT, type: "article", title: "推荐文章", body: "<p>正文</p>", metadata: {} };
+    contentRow = { id: "art-sys", tenantId: SYSTEM_TENANT, type: "article", title: HEALTHY_TITLE, body: HEALTHY_BODY, metadata: {} };
     publishMock.mockResolvedValue({ success: true, mode: "draft_only", mediaId: "media-123" });
     const results = await publishToAccounts({ contentId: "art-sys", tenantId: HANXIAO_TENANT, accountIds: ["acc-1"] });
     expect(results[0]?.success).toBe(true);
@@ -87,14 +95,14 @@ describe("publishToAccounts — 跨 tenant 发布 system 推荐文章", () => {
   });
 
   it("guard: system 文章 full publish → transitionToStatus 不调用（非 owner 不改全局 status）", async () => {
-    contentRow = { id: "art-sys", tenantId: SYSTEM_TENANT, type: "article", title: "推荐文章", body: "<p>正文</p>", metadata: {} };
+    contentRow = { id: "art-sys", tenantId: SYSTEM_TENANT, type: "article", title: HEALTHY_TITLE, body: HEALTHY_BODY, metadata: {} };
     publishMock.mockResolvedValue({ success: true, mode: "full" });
     await publishToAccounts({ contentId: "art-sys", tenantId: HANXIAO_TENANT, accountIds: ["acc-1"] });
     expect(transitionToStatusMock).not.toHaveBeenCalled();
   });
 
   it("owner 自己 tenant 文章 full publish → transitionToStatus 正常调用", async () => {
-    contentRow = { id: "art-own", tenantId: HANXIAO_TENANT, type: "article", title: "我的文章", body: "<p>正文</p>", metadata: {} };
+    contentRow = { id: "art-own", tenantId: HANXIAO_TENANT, type: "article", title: HEALTHY_TITLE, body: HEALTHY_BODY, metadata: {} };
     publishMock.mockResolvedValue({ success: true, mode: "full" });
     await publishToAccounts({ contentId: "art-own", tenantId: HANXIAO_TENANT, accountIds: ["acc-1"] });
     expect(transitionToStatusMock).toHaveBeenCalledWith("art-own", "published");

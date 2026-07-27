@@ -4,6 +4,8 @@
  *   红线: 只用传入的真实数据, 绝不编造 IF/分区/审稿/录用率 等任何数字。
  */
 import { chat } from "../ai/chat-service.js";
+import { findAiFallbackText } from "../ai/fallback-messages.js";
+import { TITLE_PLACEHOLDER_RE } from "../publisher/output-health.js";
 import { logger } from "../../config/logger.js";
 import { exhaustedKeys, recordUsage, usageCount } from "./usage-rotation.js";
 
@@ -137,8 +139,17 @@ export async function generateTitles(opts: {
   //   抄进标题流到可发布状态(生产 4 条: "IF X.X+1区化学,审稿2.8个月,毕业党闭眼冲！")。
   //   prompt 已改成不给可抄的占位符, 这里再加一道硬过滤 —— 与评分器"代码罚而非LLM自罚"同一思路。
   //   全部候选都被判占位符时不强行清空(否则整批无标题), 退回原列表并告警, 由下游标题校验兜住。
-  const PLACEHOLDER_RE = /(?:IF|影响因子)\s*[:：]?\s*[XxNn](?:\.[XxNn])?|[XxNn]\s*(?:天|个月|月|%|区)|\$\s*[XxNn]|<[^>]{0,8}(?:分区|真实|数值)[^>]{0,8}>/;
-  const cleaned = titles.map((t) => String(t).trim()).filter(Boolean);
+  //   7-27: 正则搬到 publisher/output-health.ts 作单一来源(出稿健康闸要用同一份判据), 这里只 import。
+  const PLACEHOLDER_RE = TITLE_PLACEHOLDER_RE;
+  const cleaned = titles
+    .map((t) => String(t).trim())
+    .filter(Boolean)
+    // 7-27 事故根因就在这一行: chat() 主备全挂时返回的是**兜底文案**而不是抛错, 上面的
+    //   "按行拆"兜底把 "抱歉，AI暂时无法响应，请稍后重试。" 当成了长度≥8 的合法候选,
+    //   于是 batch-worker 拿 titles[0] 覆盖了标题 → 一篇标题=占位文的文章带着六维 80 分
+    //   流进公众号草稿箱。这里直接把兜底文案从候选里剔掉; 全被剔完时返回空数组,
+    //   调用方(batch-worker 的 `if (titles[0])`)会保留原标题, 而不是写一句道歉进去。
+    .filter((t) => !findAiFallbackText(t));
   const noPlaceholder = cleaned.filter((t) => !PLACEHOLDER_RE.test(t));
   if (noPlaceholder.length < cleaned.length) {
     logger.warn({ dropped: cleaned.filter((t) => PLACEHOLDER_RE.test(t)), kept: noPlaceholder.length },

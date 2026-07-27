@@ -33,6 +33,33 @@ export class OpenAICompatibleProvider implements AIProvider {
     this.defaultModel = defaultModel;
   }
 
+  /**
+   * 7-27: 超时/连接中断类失败 → 落 ops_incidents(kind=llm_timeout, 10 分钟节流)。
+   *
+   * 为什么这里也要记: chat() 网关那条路已经在 chat-service 里记了, 但本类还被 getProvider()
+   * 的直连调用方用着(style-learner / 数采质检等) —— 那些调用没有 AbortController, 失败形态是
+   * ECONNRESET / socket hang up 一类, 原来只留一行日志。与 chat-service 用同一把节流 key
+   * (llm_timeout:provider:model), 同一模型的两条路故障共享一个 10 分钟窗口, 不会双份刷屏。
+   * 照旧抛错, 告警只是旁路。
+   */
+  private reportTimeoutIfNeeded(err: unknown, model: string): void {
+    void (async () => {
+      try {
+        const { isTimeoutLikeError, recordIncidentThrottled } = await import("../../ops/incidents.js");
+        if (!isTimeoutLikeError(err)) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        await recordIncidentThrottled({
+          kind: "llm_timeout",
+          severity: "warn",
+          message: `AI 调用超时/中断(直连 provider): ${this.name}/${model} — ${msg.slice(0, 160)}`,
+          detail: { provider: this.name, model, path: "direct-provider" },
+        }, { key: `llm_timeout:${this.name}:${model}` });
+      } catch {
+        /* 告警旁路失败不影响主流程 */
+      }
+    })();
+  }
+
   /** 额度不足/欠费类失败 → 落 ops_incidents(旁路, 绝不影响原有抛错行为) */
   private reportQuotaIfNeeded(status: number, body: string): void {
     void (async () => {
@@ -69,14 +96,20 @@ export class OpenAICompatibleProvider implements AIProvider {
       "OpenAI兼容 调用开始"
     );
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      this.reportTimeoutIfNeeded(err, model);
+      throw err;
+    }
 
     if (!response.ok) {
       const error = await response.text();
@@ -139,14 +172,20 @@ export class OpenAICompatibleProvider implements AIProvider {
       stream: true,
     };
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      this.reportTimeoutIfNeeded(err, model);
+      throw err;
+    }
 
     if (!response.ok) {
       const error = await response.text();

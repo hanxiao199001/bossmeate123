@@ -14,6 +14,36 @@ import { env } from "../../config/env.js";
 import { withRetry } from "../../utils/retry.js";
 import { createTimeoutController } from "../../utils/timeout.js";
 import { recordLlmUsage } from "../billing/llm-cost.js";
+import { AI_FALLBACK_NO_MODEL, AI_FALLBACK_UNAVAILABLE } from "./fallback-messages.js";
+
+/**
+ * 7-27: AI 调用失败 → 落 ops_incidents(旁路, 绝不影响原有返回/抛错行为)。
+ *
+ * 为什么必须记: 7-27 线上 49 次 `This operation was aborted`(60s 超时掐断), ops_incidents
+ *   一条都没有 —— 而这批超时正是"20/25 条内容评分为 0、零进草稿箱"的根因。日志里有, 但日志
+ *   没人天天看; 昨天刚建的告警体系恰好漏了这一类。
+ *
+ * 节流: 一次故障会连锁触发几十次(每篇内容都撞), 走 recordIncidentThrottled(10 分钟一条,
+ *   被压掉的次数带在 detail.suppressedSinceLastAlert), 免得把别的告警淹了。
+ */
+function reportAiCallFailure(err: unknown, ctx: { provider: string; model: string; taskType: string; tenantId?: string | null }): void {
+  void (async () => {
+    try {
+      const { isTimeoutLikeError, recordIncidentThrottled } = await import("../ops/incidents.js");
+      if (!isTimeoutLikeError(err)) return; // 只记超时/中断类; 额度类由 openai-compatible 的 llm_quota 覆盖
+      const msg = err instanceof Error ? err.message : String(err);
+      await recordIncidentThrottled({
+        kind: "llm_timeout",
+        severity: "warn",
+        message: `AI 调用超时/中断: ${ctx.provider}/${ctx.model} (${ctx.taskType}) — ${msg.slice(0, 160)}`,
+        tenantId: ctx.tenantId ?? null,
+        detail: { provider: ctx.provider, model: ctx.model, taskType: ctx.taskType },
+      }, { key: `llm_timeout:${ctx.provider}:${ctx.model}` });
+    } catch {
+      /* 告警旁路失败不影响主流程 */
+    }
+  })();
+}
 
 export interface ChatRequest {
   tenantId: string;
@@ -71,6 +101,8 @@ const SKILL_TO_TASK_TYPE: Record<string, TaskType> = {
   // 质检类
   style_analysis: "quality_check",
   quality_check: "quality_check",
+  // 7-27 质检降级槽: 主评分模型(推理型 v4-pro)超时/挂了时改走这个 skillType → 路由到快模型
+  quality_check_fast: "quality_check_fast",
   // 其他
   customer_service: "customer_service",
   formatting: "formatting",
@@ -177,6 +209,30 @@ async function executeAICall(
 }
 
 /**
+ * 7-27 按任务类型差异化超时 —— "一个 AI_REQUEST_TIMEOUT_MS 管全部"是 7-27 事故的放大器。
+ *
+ * 事故复盘: 现役模型 deepseek-v4-pro 是**推理型**, 出答案前先跑一段思维链, 提示越长越慢。
+ *   六维质检那条提示 ~3000 token, 60s 常常返回不完 → AbortController 掐断 → 当天 49 次
+ *   "This operation was aborted", 20/25 条内容没评上分。而同一个默认值又管着企微客服 ——
+ *   客服那边等 60s 才失败, 用户早跑了; 一刀切往上调到 120s 只会让客服体验更差。
+ *   结论: 慢任务要更长, 快任务要更短, 一个数值满足不了两头。
+ *
+ * 四档(全部可用 env 覆盖, 不改代码就能现场调):
+ *   ① quality_check(含降级槽): AI_QUALITY_CHECK_TIMEOUT_MS 默认 180s —— 长提示 + 推理型模型, 给足;
+ *      反正超了也有降级重试兜着, 宁可多等也别白花一次推理钱。
+ *   ② article/video 生成: AI_ARTICLE_TIMEOUT_MS 默认 120s(原样不动)。
+ *   ③ customer_service / daily_chat: AI_FAST_TIMEOUT_MS 默认 45s —— 人在对面等着,
+ *      走的是 qwen-plus(非推理型, 实测个位数秒), 45s 已是极宽松的上限; 早失败早走兜底话术。
+ *   ④ 其余: AI_REQUEST_TIMEOUT_MS 默认 120s。
+ */
+export function resolveTimeoutMs(skillType: string | undefined, taskType: TaskType): number {
+  if (skillType === "article" || skillType === "video") return env.AI_ARTICLE_TIMEOUT_MS;
+  if (taskType === "quality_check" || taskType === "quality_check_fast") return env.AI_QUALITY_CHECK_TIMEOUT_MS;
+  if (taskType === "customer_service" || taskType === "daily_chat") return env.AI_FAST_TIMEOUT_MS;
+  return env.AI_REQUEST_TIMEOUT_MS;
+}
+
+/**
  * 调用 AI 模型获取回复
  *
  * 支持两种回退策略：
@@ -186,9 +242,8 @@ async function executeAICall(
 export async function chat(request: ChatRequest): Promise<ChatResponse> {
   const taskType = inferTaskType(request.skillType, request.message);
 
-  // 确定超时时间（文章生成任务使用更长的超时）
-  const isArticleGeneration = request.skillType === "article" || request.skillType === "video";
-  const timeoutMs = isArticleGeneration ? env.AI_ARTICLE_TIMEOUT_MS : env.AI_REQUEST_TIMEOUT_MS;
+  // 确定超时时间（按任务类型差异化，见 resolveTimeoutMs 的注释）
+  const timeoutMs = resolveTimeoutMs(request.skillType, taskType);
 
   // 构建消息列表
   const messages: Array<{ role: string; content: string }> = [];
@@ -240,7 +295,7 @@ async function chatWithSerialMode(
   if (!provider) {
     logger.error("无可用AI模型");
     return {
-      content: "抱歉，当前没有可用的AI模型，请检查配置。",
+      content: AI_FALLBACK_NO_MODEL,
       model: "none",
       provider: "none",
       inputTokens: 0,
@@ -289,6 +344,9 @@ async function chatWithSerialMode(
       { err: errorMsg, provider: provider.name, model: provider.model },
       "AI 调用失败"
     );
+    // 7-27: 超时/中断类失败落 ops_incidents(节流)。即使备选救回来了也记 —— 超时本身就是
+    //   "钱花了没拿到东西 + 链路在变慢"的信号, 等到主备全挂才告警就晚了。
+    reportAiCallFailure(err, { provider: provider.name, model: provider.model, taskType, tenantId: request.tenantId });
 
     // 尝试备选模型
     const fallback = modelRouter.selectModel(taskType);
@@ -310,11 +368,12 @@ async function chatWithSerialMode(
           { err: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
           "备选模型也失败了"
         );
+        reportAiCallFailure(fallbackErr, { provider: fallback.name, model: fallback.model, taskType, tenantId: request.tenantId });
       }
     }
 
     return {
-      content: "抱歉，AI暂时无法响应，请稍后重试。",
+      content: AI_FALLBACK_UNAVAILABLE,
       model: provider.model,
       provider: provider.name,
       inputTokens: 0,
@@ -338,7 +397,7 @@ async function chatWithRaceMode(
   if (!modelPair.primary) {
     logger.error("无可用AI模型");
     return {
-      content: "抱歉，当前没有可用的AI模型，请检查配置。",
+      content: AI_FALLBACK_NO_MODEL,
       model: "none",
       provider: "none",
       inputTokens: 0,
@@ -424,6 +483,7 @@ async function chatWithRaceMode(
         },
         "竞速模式中一个提供商失败，等待备选"
       );
+      reportAiCallFailure(winner.error, { provider: winner.provider.name, model: winner.provider.model, taskType, tenantId: request.tenantId });
 
       const loser = await Promise.race([primaryPromise, secondaryPromise]);
       if (loser.success) {
@@ -455,9 +515,10 @@ async function chatWithRaceMode(
           },
           "AI 竞速调用两个提供商都失败了"
         );
+        reportAiCallFailure(loser.error, { provider: loser.provider.name, model: loser.provider.model, taskType, tenantId: request.tenantId });
 
         return {
-          content: "抱歉，AI暂时无法响应，请稍后重试。",
+          content: AI_FALLBACK_UNAVAILABLE,
           model: modelPair.primary.model,
           provider: modelPair.primary.name,
           inputTokens: 0,
@@ -472,7 +533,7 @@ async function chatWithRaceMode(
     );
 
     return {
-      content: "抱歉，AI暂时无法响应，请稍后重试。",
+      content: AI_FALLBACK_UNAVAILABLE,
       model: modelPair.primary.model,
       provider: modelPair.primary.name,
       inputTokens: 0,

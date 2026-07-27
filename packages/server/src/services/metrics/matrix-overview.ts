@@ -27,8 +27,10 @@ import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendat
 import {
   computeAccountHealth,
   healthRank,
+  normalizePublishMode,
   startOfBjDay,
   type AccountHealth,
+  type PublishMode,
 } from "./matrix-health.js";
 
 export interface MatrixAccountRow {
@@ -41,6 +43,17 @@ export interface MatrixAccountRow {
   hasPersona: boolean;
   agentDeviceId: string | null;
   agentOnline: boolean;
+  /** 7-27 发布模式：auto=客户端自动发 / manual=人工下载后自己传 */
+  publishMode: PublishMode;
+  /**
+   * 【manual 号的正确信号】待下载上传条数 —— 系统已经出片、派到这个号，等运营下载后手动传。
+   * 数据就是 agent_publish_tasks 里 pending/claimed/manual_pending 的存量：
+   * 人工号没有客户端来领单，这些行永远停在 pending，那张表本身就是"待下载上传清单"
+   * （每行的 videoSource 就是下载地址），无需新建表。
+   */
+  pendingUpload: number;
+  /** 待上传里最早一条的时间（判"积压太久没人动"用） */
+  oldestPendingUploadAt: string | null;
   /** 今日专属生成数（batch_rows.accountId 绑定的 exclusive 生成） */
   generatedToday: number;
   /** 今日分发行数（publish log 今日新增，任意状态） */
@@ -70,6 +83,10 @@ export interface MatrixOverview {
     draftPending: number;
     /** 异常账号数（health 非 healthy/disabled） */
     abnormalAccounts: number;
+    /** 7-27 人工号总数（publishMode=manual） */
+    manualAccounts: number;
+    /** 7-27【今天要人动手的第一件事】人工号待下载上传总条数 */
+    pendingManualUpload: number;
   };
   accounts: MatrixAccountRow[];
 }
@@ -97,6 +114,7 @@ export async function getMatrixOverview(
         disciplines: platformAccounts.disciplines,
         persona: platformAccounts.persona,
         agentDeviceId: platformAccounts.agentDeviceId,
+        publishMode: platformAccounts.publishMode,
         createdAt: platformAccounts.createdAt,
       })
       .from(platformAccounts)
@@ -122,6 +140,9 @@ export async function getMatrixOverview(
         accountId: agentPublishTasks.accountId,
         loginExpired24h: sql<string>`COUNT(*) FILTER (WHERE ${agentPublishTasks.status} = 'login_expired' AND ${agentPublishTasks.updatedAt} >= ${h24Ago})`,
         tasksToday: sql<string>`COUNT(*) FILTER (WHERE ${agentPublishTasks.createdAt} >= ${since})`,
+        // 7-27 待下载上传存量: 人工号没有客户端来领单, 这些行就是"运营的待办清单"
+        pendingUpload: sql<string>`COUNT(*) FILTER (WHERE ${agentPublishTasks.status} IN ('pending','claimed','manual_pending'))`,
+        oldestPendingAt: sql<string | null>`MIN(${agentPublishTasks.createdAt}) FILTER (WHERE ${agentPublishTasks.status} IN ('pending','claimed','manual_pending'))`,
       })
       .from(agentPublishTasks)
       .where(eq(agentPublishTasks.tenantId, tenantId))
@@ -173,11 +194,15 @@ export async function getMatrixOverview(
     const tasksToday = Number(task?.tasksToday ?? 0);
     const lastSuccessAt = pub?.lastSuccessAt ? new Date(pub.lastSuccessAt) : null;
     const agentOnline = a.agentDeviceId ? onlineDevs.has(a.agentDeviceId) : false;
+    const publishMode = normalizePublishMode(a.publishMode);
+    const pendingUpload = Number(task?.pendingUpload ?? 0);
+    const oldestPendingUploadAt = task?.oldestPendingAt ? new Date(task.oldestPendingAt) : null;
 
     const { health, flags } = computeAccountHealth(
       {
         accountStatus: a.status,
         loginStatus: a.loginStatus,
+        publishMode,
         agentDeviceBound: !!a.agentDeviceId,
         agentOnline,
         loginExpired24h: Number(task?.loginExpired24h ?? 0) > 0,
@@ -185,8 +210,11 @@ export async function getMatrixOverview(
         // 今日分到内容 = 今日 publish log 行 + 今日 agent 任务（重叠不影响 >0 判定）
         assignedToday: dispatchedToday + tasksToday,
         createdAt: a.createdAt,
+        pendingUpload,
+        oldestPendingUploadAt,
       },
       since,
+      now,
     );
 
     return {
@@ -199,6 +227,9 @@ export async function getMatrixOverview(
       hasPersona: !!(a.persona && a.persona.trim().length > 0),
       agentDeviceId: a.agentDeviceId,
       agentOnline,
+      publishMode,
+      pendingUpload,
+      oldestPendingUploadAt: oldestPendingUploadAt ? oldestPendingUploadAt.toISOString() : null,
       generatedToday: exclusiveMap.get(a.id) ?? 0,
       dispatchedToday,
       publishedToday,
@@ -230,6 +261,11 @@ export async function getMatrixOverview(
       publishedToday: rows.reduce((s, r) => s + r.publishedToday, 0),
       draftPending: rows.reduce((s, r) => s + r.draftPending, 0),
       abnormalAccounts: rows.filter((r) => r.health !== "healthy" && r.health !== "disabled").length,
+      manualAccounts: rows.filter((r) => r.publishMode === "manual" && r.status !== "disabled").length,
+      // 只统计人工号 —— auto 号的待发是客户端的事, 不需要人动手
+      pendingManualUpload: rows
+        .filter((r) => r.publishMode === "manual" && r.status !== "disabled")
+        .reduce((s, r) => s + r.pendingUpload, 0),
     },
     accounts: rows,
   };

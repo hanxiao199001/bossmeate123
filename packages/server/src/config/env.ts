@@ -81,12 +81,35 @@ const envSchema = z.object({
   DEFAULT_CHEAP_MODEL: z.string().default("deepseek-chat"),
   MODEL_CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().default(5),
   AI_FALLBACK_STRATEGY: z.enum(["serial", "race"]).default("serial"),
-  AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
+  // ⚠️ 7-27: 默认从 60s 提到 120s。DeepSeek 现役模型 deepseek-v4-pro 是**推理型**,
+  //   3000 token 的提示(六维质检那条)在 60s 内经常返回不完 → AbortController 掐断 →
+  //   当天 49 次 "This operation was aborted", 25 条内容里 20 条没评上分、零进草稿箱。
+  //   服务器 .env 已热改, 但代码默认值不跟上的话, 下一台新部署会原样再踩一遍。
+  //   这是**兜底档**(未分类任务); 分任务档见下面三条与 chat-service.resolveTimeoutMs。
+  AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(120000),
   AI_ARTICLE_TIMEOUT_MS: z.coerce.number().default(120000),
+  // 7-27 分任务档: 一个数值管不了"3000 token 推理型质检"和"人在对面等的客服"两头。
+  //   质检 180s: 提示最长、模型最慢, 而且超了还有降级重试兜着, 宁可多等也别白烧一次推理钱。
+  AI_QUALITY_CHECK_TIMEOUT_MS: z.coerce.number().default(180000),
+  //   客服/日常问答 45s: 走 qwen-plus(非推理型, 实测个位数秒), 早失败早给兜底话术,
+  //   让客服跟着质检一起等 120s 是把两个不相干的需求绑在一根绳上。
+  AI_FAST_TIMEOUT_MS: z.coerce.number().default(45000),
 
   // 7-06: LLM 单价覆盖(JSON, 单位: 分/1M token), 如 {"deepseek-chat":{"in":200,"out":800}}
   //   默认价目在 services/billing/llm-cost.ts(2026-07 手抄, 以百炼账单为准); 改价/补新模型不用改代码
   LLM_PRICE_OVERRIDES: z.string().optional(),
+
+  // 7-27 无人值守③: LLM 日花费/日调用硬上限(services/billing/llm-guard.ts, 平台级熔断)。
+  //   老板接下来几个月不看系统, 所以**默认就要带保险**(不是 0=不限):
+  //   - 日花费 50 元: cost_ledger 近 14 天日均 ≈5 元, 给 10 倍余量 —— 正常放量绝碰不到,
+  //     碰到的只会是"重试打转/死循环狂烧钱"这类事故。余额烧光=停产好几天(充值走财务),
+  //     今天停产=停一天, 两害取轻(取舍全文见 llm-guard.ts 文件头)。
+  //   - 日调用 2000 次: 每天 25-40 篇 × 每篇 6-10 次 LLM ≈ 200-400 次, 同样 5-10 倍余量。
+  //   超限只停**生成类**链路(daily-cron 排产 + batch-worker 逐篇), AI 客服/对话不受影响
+  //   (客服断了客户直接感知, 且其量级烧不动钱)。设 0 = 该项不限; 总开关 LLM_DAILY_CAP_ENABLED。
+  LLM_DAILY_COST_CAP_YUAN: z.coerce.number().default(50),
+  LLM_DAILY_CALL_CAP: z.coerce.number().default(2000),
+  LLM_DAILY_CAP_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
 
   // 7-05 ④ AI 审稿员 (services/review/ai-reviewer.ts)
   //   off=完全关闭; shadow=只记建议不动状态(默认, 影子期); live=达信心阈值自动采用/驳回
@@ -349,6 +372,8 @@ const envSchema = z.object({
   OPS_BRIEFING_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(30), // 默认 09:30 — 生成(03:00)/分发(07:00)/草稿(08:00)/数据回流(09:10) 都跑完之后
   // 阈值: 今日生成低于该篇数 → 黄色; 等于 0 → 红色
   OPS_MIN_DAILY_CONTENT: z.coerce.number().int().min(0).default(5),
+  // 7-27 无人值守: 连续 N 天零产出/零分发 → 简报升级为 🚨 强告警(单日=偶发, 连续=系统真死了没人管)
+  OPS_ZERO_STREAK_DAYS: z.coerce.number().int().min(2).default(3),
   // 预算使用率超该百分比 → 黄色; ≥100% → 红色(预算闸已在拒绝花钱动作)
   OPS_BUDGET_WARN_PCT: z.coerce.number().int().min(1).max(100).default(80),
   // AI 客服今日转人工达到该次数 → 黄色(提醒补 FAQ)

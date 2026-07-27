@@ -66,6 +66,25 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         return;
       }
 
+      // 1.5 —— 7-27 无人值守③: LLM 日花费/日调用硬上限(billing/llm-guard)。
+      //   这里是**真正烧钱的地方**(每篇 6-10 次 LLM 调用), daily-cron 只在排产时查一次,
+      //   队列里已排进来的行必须在开工前再拦一道, 否则熔断后已入队的几十行照烧不误。
+      //   触顶 → 行标 failed(带人话原因, 明天可到批次页 retry), 不 throw(避免 BullMQ 重试风暴)。
+      //   AI 客服/对话链路不经过这里, 天然豁免。fail-open: 闸自身异常放行(见 llm-guard 文件头)。
+      try {
+        const { checkLlmDailyCap } = await import("../billing/llm-guard.js");
+        const cap = await checkLlmDailyCap();
+        if (!cap.allowed) {
+          logger.error({ rowId, usage: cap.usage }, "🛑 LLM 日上限熔断 — 本行不生成(明天零点自动解封, 可 retry)");
+          await updateRowProgress(rowId, "failed", {
+            errorMessage: `LLM 日上限熔断, 今日停产保余额: ${(cap.reason ?? "").slice(0, 300)}`,
+          });
+          return;
+        }
+      } catch (err) {
+        logger.warn({ err: err instanceof Error ? err.message : err }, "LLM 日上限检查异常, 放行(fail-open)");
+      }
+
       // 2. INSERT contents (status='draft') — initialStatusFields 走状态机初始化
       const [content] = await db
         .insert(contents)
@@ -228,6 +247,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               userId,
               title: cur.title ?? row.topic,
               body: cur.body,
+              contentId: content.id, // 7-27: 质检告警带上是哪一篇, 简报能直接点开
               ...(row.journalId ? { journalId: row.journalId } : {}),
             });
             const meta = qualityPipelineMeta(qp);
@@ -287,14 +307,17 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
           // 7-03: 区分待审原因 — 标题-正文矛盾 / 评分降级(分数不可信,需重评) / 质量真不过。首过率统计据 sixDimDegraded 排除降级样本。
+          // 7-27 换 reason 名: 旧名 sixdim_degraded 让人读成"评了个降级的分"(→ 管理端当劣质内容),
+          //   真相是**主+降级模型都没救回来, 这篇根本没评上分**。改叫 quality_check_unavailable,
+          //   与"分低"彻底分开; 旧数据的 sixdim_degraded 仍被下游全部判据识别(见 draft-distributor 的 UNSCORED_REASONS)。
           const reviewMeta = titleBodyBad
             ? { needsReview: true, needsReviewReason: titleBodyBad.reason, titleIssue: titleBodyBad.detail }
-            : sixDimDegraded ? { needsReview: true, needsReviewReason: "sixdim_degraded" } : { needsReview: true };
+            : sixDimDegraded ? { needsReview: true, needsReviewReason: "quality_check_unavailable" } : { needsReview: true };
           await db.update(contents)
             .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(reviewMeta)}::jsonb` })
             .where(eq(contents.id, content.id));
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
-          logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded }, sixDimDegraded ? "评分降级(两次), 转 needs_review 待重评" : "PR-U2 质检未过, 转 needs_review 待人工复核");
+          logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded }, sixDimDegraded ? "质检不可用(主+降级模型均失败, 未评上分), 转 needs_review 待重评" : "PR-U2 质检未过, 转 needs_review 待人工复核");
         } else {
           await transitionStatus(content.id, "generating", "generated");
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });

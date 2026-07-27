@@ -8,6 +8,8 @@ import {
   startOfBjDay,
   idleWindowStart,
   healthRank,
+  normalizePublishMode,
+  MANUAL_UPLOAD_STALE_MS,
   type HealthInput,
 } from "../services/metrics/matrix-health.js";
 
@@ -162,5 +164,77 @@ describe("computeAccountHealth — 多告警优先级", () => {
     expect(healthRank("login_expired")).toBeLessThan(healthRank("healthy"));
     expect(healthRank("no_content_today")).toBeLessThan(healthRank("healthy"));
     expect(healthRank("healthy")).toBeLessThan(healthRank("disabled"));
+  });
+});
+
+// ============ 7-27 publishMode: 人工号不看客户端心跳 ============
+
+describe("normalizePublishMode — 脏值兜底", () => {
+  it("只认 'manual', 其余(null/undefined/脏值)一律当 auto(宁可多报不静默漏报)", () => {
+    expect(normalizePublishMode("manual")).toBe("manual");
+    expect(normalizePublishMode("auto")).toBe("auto");
+    expect(normalizePublishMode(null)).toBe("auto");
+    expect(normalizePublishMode(undefined)).toBe("auto");
+    expect(normalizePublishMode("MANUAL")).toBe("auto");
+    expect(normalizePublishMode("")).toBe("auto");
+  });
+});
+
+describe("computeAccountHealth — manual(人工上传)号判据", () => {
+  const manual = (overrides: Partial<HealthInput> = {}) =>
+    base({ publishMode: "manual", ...overrides });
+
+  it("绑了设备且离线 → 不报 agent_offline(客户端本来就不用开; 7-27 的 11 条噪音)", () => {
+    const r = computeAccountHealth(manual({ agentDeviceBound: true, agentOnline: false }), TODAY, NOW);
+    expect(r.flags).not.toContain("agent_offline");
+    expect(r.health).toBe("healthy");
+  });
+
+  it("登录态失效(任务报 login_expired / loginStatus=expired) → 不报(人工上传用运营自己设备的登录态)", () => {
+    const a = computeAccountHealth(manual({ loginExpired24h: true }), TODAY, NOW);
+    expect(a.flags).not.toContain("login_expired");
+    const b = computeAccountHealth(manual({ loginStatus: "expired" }), TODAY, NOW);
+    expect(b.flags).not.toContain("login_expired");
+  });
+
+  it("长期无'成功发布'记录 → 不报 idle_3d(人工传完未必回系统点已发布, 那是记账问题)", () => {
+    const r = computeAccountHealth(manual({ lastSuccessAt: null }), TODAY, NOW);
+    expect(r.flags).not.toContain("idle_3d");
+  });
+
+  it("token_invalid(显式 verify 失败)仍然报 —— 硬故障不因模式豁免", () => {
+    const r = computeAccountHealth(manual({ accountStatus: "expired" }), TODAY, NOW);
+    expect(r.health).toBe("token_invalid");
+  });
+
+  it("待上传积压: 最早一条压超 2 天 → manual_upload_stale; 未超 2 天 → 不报(手上有活很正常)", () => {
+    const stale = computeAccountHealth(
+      manual({ pendingUpload: 3, oldestPendingUploadAt: new Date(NOW.getTime() - MANUAL_UPLOAD_STALE_MS - 1) }),
+      TODAY, NOW,
+    );
+    expect(stale.health).toBe("manual_upload_stale");
+
+    const fresh = computeAccountHealth(
+      manual({ pendingUpload: 3, oldestPendingUploadAt: new Date(NOW.getTime() - MANUAL_UPLOAD_STALE_MS + 60_000) }),
+      TODAY, NOW,
+    );
+    expect(fresh.flags).not.toContain("manual_upload_stale");
+    expect(fresh.health).toBe("healthy");
+  });
+
+  it("没有待上传(pendingUpload=0)时即便 oldest 有脏值也不报积压", () => {
+    const r = computeAccountHealth(
+      manual({ pendingUpload: 0, oldestPendingUploadAt: new Date(NOW.getTime() - 10 * DAY) }),
+      TODAY, NOW,
+    );
+    expect(r.flags).not.toContain("manual_upload_stale");
+  });
+
+  it("auto 号(含缺省/脏值 publishMode)行为不变: 离线照报", () => {
+    const dirty = computeAccountHealth(
+      base({ publishMode: "whatever", agentDeviceBound: true, agentOnline: false }),
+      TODAY, NOW,
+    );
+    expect(dirty.health).toBe("agent_offline");
   });
 });

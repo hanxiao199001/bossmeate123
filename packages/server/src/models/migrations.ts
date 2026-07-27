@@ -580,4 +580,26 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_ops_briefings_tenant_date ON ops_briefings (tenant_id, brief_date);
     `,
   },
+  {
+    version: "028_pa_publish_mode",
+    description:
+      "7-27 无人值守: platform_accounts.publish_mode (auto=客户端自动发 / manual=人工下载后自己上传)。" +
+      "列默认 'auto' 保持现状语义不变; 随后一次性回填把 douyin/wechat_video 置为 manual —— " +
+      "这两个平台目前的真实运营方式就是'系统出视频→运营下载→手机上传', 客户端根本不开机, " +
+      "再按心跳判 agent_offline 每天固定刷 11 条噪音告警(7-27 简报实况), 把真问题淹掉。" +
+      "回填只改这一列、只碰这两个平台, 要退回执行: " +
+      "UPDATE platform_accounts SET publish_mode='auto' WHERE platform IN ('douyin','wechat_video');",
+    sql: `
+      ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS publish_mode varchar(10) NOT NULL DEFAULT 'auto';
+
+      -- 一次性回填(版本化迁移天然只跑一次)。加 publish_mode='auto' 条件保证即便重跑也只动没被人手动改过的行。
+      UPDATE platform_accounts
+         SET publish_mode = 'manual', updated_at = NOW()
+       WHERE platform IN ('douyin', 'wechat_video')
+         AND publish_mode = 'auto';
+
+      -- 简报/矩阵按 (tenant, publish_mode) 分桶统计
+      CREATE INDEX IF NOT EXISTS idx_pa_publish_mode ON platform_accounts (tenant_id, publish_mode);
+    `,
+  },
 ];

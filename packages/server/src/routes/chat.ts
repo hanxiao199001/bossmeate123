@@ -10,6 +10,8 @@ import { db } from "../models/db.js";
 import { conversations, messages, contents, tokenLogs, platformAccounts, productionRecords } from "../models/schema.js";
 import { logger } from "../config/logger.js";
 import { getProvider } from "../services/ai/provider-factory.js";
+// 7-27: 兜底文案单一来源(services/ai/fallback-messages.ts) — 出稿健康闸靠这份常量集识别废稿, 别再散落硬编码
+import { AI_FALLBACK_NO_MODEL_HINT } from "../services/ai/fallback-messages.js";
 import { SkillRegistry } from "../services/skills/index.js";
 import { runWithLlmCallAttribution } from "../services/billing/llm-cost.js";
 import { publishToAccounts } from "../services/publisher/index.js";
@@ -206,7 +208,7 @@ export async function chatRoutes(app: FastifyInstance) {
       if (skill) {
         const provider = getProvider(skill.preferredTier) || getProvider("cheap");
         if (!provider) {
-          aiContent = "当前没有可用的AI模型，请在 .env 中配置 API Key。";
+          aiContent = AI_FALLBACK_NO_MODEL_HINT;
         } else {
           try {
             const chatHistory = history.map((m) => ({
@@ -473,7 +475,7 @@ export async function chatRoutes(app: FastifyInstance) {
         // 通用聊天路径
         const provider = getProvider("cheap");
         if (!provider) {
-          aiContent = "当前没有可用的AI模型，请在 .env 中配置 API Key。";
+          aiContent = AI_FALLBACK_NO_MODEL_HINT;
         } else {
           try {
             const chatMessages = history.slice(-10).map((m) => ({

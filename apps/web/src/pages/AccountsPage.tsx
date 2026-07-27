@@ -22,6 +22,8 @@ interface Account {
   disciplines?: string[]; // PR-W5b 领域定位多选
   persona?: string | null; // PR-X1 人设画像
   styleProfile?: string | null; // PR-X3 风格画像
+  // 7-27 无人值守: 发布模式 — auto=客户端自动发(判离线/登录态) / manual=人工下载后自己传(不判心跳类健康)
+  publishMode?: "auto" | "manual";
   status: string;
   isVerified: boolean;
   lastPublishAt?: string;
@@ -376,6 +378,42 @@ const handleScopeChange = async (accountId: string, scope: string) => {
       fetchAccounts();
     } catch { /* 静默 */ }
   };
+
+  // ===== 7-27 无人值守: 发布模式(auto/manual) + 批量设置 =====
+  // 背景: 实际运营是"系统出片→运营下载→手机上传", 客户端根本不开机, 按心跳判健康每天固定
+  // 刷 11 条"助手离线"假警。这里给单号切换 + 多选批量(14 个号一次设完), 设为 manual 后
+  // 矩阵/简报不再判它的离线与登录态, 只看"待上传积压"。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+  const handlePublishModeChange = async (accountId: string, mode: string) => {
+    try {
+      await api.patch(`/accounts/${accountId}`, { publishMode: mode });
+      fetchAccounts();
+    } catch { /* api 层已统一弹错 */ }
+  };
+  const bulkSetPublishMode = async (mode: "auto" | "manual") => {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const results = await Promise.allSettled(
+        [...selectedIds].map((id) => api.patch(`/accounts/${id}`, { publishMode: mode })),
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) toast.error(`${failed} 个账号设置失败, 其余已生效`);
+      else toast.success(`已把 ${selectedIds.size} 个账号设为「${mode === "manual" ? "人工上传" : "自动发布"}」`);
+      setSelectedIds(new Set());
+      fetchAccounts();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
   const DISC_OPTIONS: Array<[string, string]> = [
     ["medicine", "医学"], ["psychology", "心理"], ["engineering", "工程"], ["economics", "经管"],
     ["biology", "生物"], ["education", "教育"], ["law", "法学"], ["agriculture", "农林"],
@@ -493,7 +531,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
 
         {/* 6-11: 登录失效醒目提醒(保活巡检发现掉线 → 这里催扫码) */}
         {(() => {
-          const expiredAccounts = accounts.filter((a) => a.loginStatus === "expired");
+          // 7-27: 人工上传号不催扫码 —— 运营在自己设备上传, 系统这份登录态不参与任何链路
+          const expiredAccounts = accounts.filter((a) => a.loginStatus === "expired" && (a.publishMode || "auto") !== "manual");
           if (expiredAccounts.length === 0) return null;
           return (
             <div className="mb-6 p-3 rounded-lg text-sm bg-amber-50 text-amber-800 border border-amber-200 flex items-center justify-between">
@@ -741,6 +780,39 @@ const handleScopeChange = async (accountId: string, scope: string) => {
           </div>
         )}
 
+        {/* 7-27 批量设置发布模式: 勾选账号后出现操作条(14 个号一次设完, 不用逐个点) */}
+        {filteredAccounts.length > 0 && (
+          <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-sky-900">
+            <span className="font-medium">发布模式批量设置</span>
+            <span className="text-xs text-sky-700">
+              人工上传 = 运营下载后自己在手机/浏览器传（客户端不用开机, 不再报"助手离线"）; 自动发布 = 客户端发布助手代发
+            </span>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={selectedIds.size > 0 && filteredAccounts.every((a) => selectedIds.has(a.id))}
+                onChange={(e) => setSelectedIds(e.target.checked ? new Set(filteredAccounts.map((a) => a.id)) : new Set())}
+              />
+              全选当前筛选({filteredAccounts.length})
+            </label>
+            <span className="text-xs">{selectedIds.size > 0 ? `已选 ${selectedIds.size} 个` : "先勾选下方账号"}</span>
+            <button
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={() => void bulkSetPublishMode("manual")}
+              className="px-3 py-1 rounded-lg bg-sky-600 text-white text-xs font-medium hover:bg-sky-500 disabled:opacity-40"
+            >
+              {bulkBusy ? "设置中…" : "批量设为人工上传"}
+            </button>
+            <button
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={() => void bulkSetPublishMode("auto")}
+              className="px-3 py-1 rounded-lg bg-white border border-sky-300 text-sky-700 text-xs font-medium hover:bg-sky-100 disabled:opacity-40"
+            >
+              批量设为自动发布
+            </button>
+          </div>
+        )}
+
         {/* 账号列表 */}
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -773,7 +845,29 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                         <div className="flex items-center justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-3 mb-2">
+                              {/* 7-27 批量设置发布模式的勾选框 */}
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(account.id)}
+                                onChange={() => toggleSelect(account.id)}
+                                title="勾选后可在上方操作条批量设置发布模式"
+                                className="cursor-pointer"
+                              />
                               <h4 className="font-medium text-gray-900">{account.accountName}</h4>
+                              {/* 7-27 发布模式: manual=人工下载上传(不判离线/登录态) */}
+                              <select
+                                value={account.publishMode || "auto"}
+                                onChange={(e) => handlePublishModeChange(account.id, e.target.value)}
+                                title="发布模式 — 人工上传: 运营下载后自己传, 客户端不用开机, 矩阵/简报不再报它离线; 自动发布: 客户端发布助手代发"
+                                className={`text-xs px-2 py-0.5 rounded-full border focus:outline-none cursor-pointer ${
+                                  (account.publishMode || "auto") === "manual"
+                                    ? "border-sky-300 bg-sky-50 text-sky-700"
+                                    : "border-slate-200 bg-slate-50 text-slate-600"
+                                }`}
+                              >
+                                <option value="auto">自动发布</option>
+                                <option value="manual">人工上传</option>
+                              </select>
                               {remarkEditId === account.id ? (
                                 <span className="inline-flex items-center gap-1">
                                   <input

@@ -14,7 +14,7 @@ import PageHeader from "../components/ui/PageHeader";
 
 type AccountHealth =
   | "healthy" | "login_expired" | "token_invalid" | "agent_offline"
-  | "idle_3d" | "no_content_today" | "disabled";
+  | "manual_upload_stale" | "idle_3d" | "no_content_today" | "disabled";
 
 interface MatrixAccountRow {
   id: string;
@@ -25,6 +25,11 @@ interface MatrixAccountRow {
   hasPersona: boolean;
   agentDeviceId: string | null;
   agentOnline: boolean;
+  /** 7-27 发布模式: auto=客户端自动发 / manual=人工下载后自己传(不判离线/登录态) */
+  publishMode: "auto" | "manual";
+  /** 7-27 manual 号: 待下载上传条数(运营的待办清单) */
+  pendingUpload: number;
+  oldestPendingUploadAt: string | null;
   generatedToday: number;
   dispatchedToday: number;
   publishedToday: number;
@@ -44,6 +49,9 @@ interface MatrixOverview {
     publishedToday: number;
     draftPending: number;
     abnormalAccounts: number;
+    /** 7-27 人工号数量 / 人工号待下载上传总条数 */
+    manualAccounts: number;
+    pendingManualUpload: number;
   };
   accounts: MatrixAccountRow[];
 }
@@ -66,6 +74,7 @@ const HEALTH_BADGE: Record<AccountHealth, { label: string; cls: string }> = {
   login_expired: { label: "登录失效", cls: "bg-red-100 text-red-700" },
   token_invalid: { label: "凭证失效", cls: "bg-red-100 text-red-700" },
   agent_offline: { label: "Agent 离线", cls: "bg-slate-200 text-slate-600" },
+  manual_upload_stale: { label: "待上传积压 2 天+", cls: "bg-orange-100 text-orange-700" },
   idle_3d: { label: "3 天未发", cls: "bg-orange-100 text-orange-700" },
   no_content_today: { label: "今日无内容", cls: "bg-amber-100 text-amber-700" },
   disabled: { label: "已停用", cls: "bg-gray-100 text-gray-400" },
@@ -160,9 +169,15 @@ export default function MatrixOverviewPage() {
         )}
 
         {/* 今日待办条 */}
-        {s && (s.needsReview > 0 || s.draftPending > 0) && (
+        {s && (s.needsReview > 0 || s.draftPending > 0 || (s.pendingManualUpload ?? 0) > 0) && (
           <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-indigo-900">
             <span className="font-medium">今日待办</span>
+            {/* 7-27 人工号的核心信号: 系统已出片, 等人下载后手动传 —— 放第一位, 这是运营每天的主活 */}
+            {(s.pendingManualUpload ?? 0) > 0 && (
+              <span>
+                待下载上传 <strong>{s.pendingManualUpload}</strong> 条（{s.manualAccounts} 个人工上传号）— 按下表「待上传」列逐号下载, 传完即清
+              </span>
+            )}
             {s.needsReview > 0 && (
               <span>
                 待审 <strong>{s.needsReview}</strong> 篇
@@ -207,15 +222,16 @@ export default function MatrixOverviewPage() {
                 <th className="px-4 py-2.5 font-medium text-right">今日生成</th>
                 <th className="px-4 py-2.5 font-medium text-right">今日已发</th>
                 <th className="px-4 py-2.5 font-medium text-right">草稿待选</th>
+                <th className="px-4 py-2.5 font-medium text-right" title="人工上传号: 系统已出片、等运营下载后手动上传的条数">待上传</th>
                 <th className="px-4 py-2.5 font-medium">最后成功发布</th>
               </tr>
             </thead>
             <tbody>
               {loading && !data ? (
-                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">加载中…</td></tr>
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">加载中…</td></tr>
               ) : !data || data.accounts.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={10} className="px-4 py-10 text-center text-slate-400">
                     暂无账号 — 先到 <Link to="/accounts" className="text-indigo-600 underline">账号矩阵</Link> 添加平台账号
                   </td>
                 </tr>
@@ -243,10 +259,19 @@ export default function MatrixOverviewPage() {
                           {a.healthFlags.length > 1 ? ` +${a.healthFlags.length - 1}` : ""}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{platformLabel(a.platform)}</td>
+                      <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">
+                        {platformLabel(a.platform)}
+                        {a.publishMode === "manual" && (
+                          <span
+                            className="ml-1.5 px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 text-[10px] align-middle"
+                            title="人工上传号: 运营下载后在自己手机/浏览器上传, 客户端不需要开机, 不判离线/登录态"
+                          >人工上传</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 font-medium text-slate-900 max-w-[200px] truncate" title={a.accountName}>
                         {a.accountName}
-                        {a.agentDeviceId && (
+                        {/* 7-27: manual 号不显示设备在离线点 —— 客户端本来就不开, 灰点只制造焦虑 */}
+                        {a.agentDeviceId && a.publishMode !== "manual" && (
                           <span
                             className={`ml-1.5 inline-block w-1.5 h-1.5 rounded-full align-middle ${a.agentOnline ? "bg-green-500" : "bg-slate-300"}`}
                             title={a.agentOnline ? "Agent 设备在线" : "Agent 设备离线"}
@@ -287,6 +312,18 @@ export default function MatrixOverviewPage() {
                           ? <span className="text-sky-700">{a.draftPending}</span>
                           : <span className="text-slate-300">0</span>}
                       </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        {a.publishMode === "manual" && a.pendingUpload > 0 ? (
+                          <span
+                            className={a.health === "manual_upload_stale" ? "text-orange-600 font-semibold" : "text-indigo-700 font-medium"}
+                            title={a.oldestPendingUploadAt ? `最早一条 ${formatTime(a.oldestPendingUploadAt)} 生成` : undefined}
+                          >
+                            {a.pendingUpload}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">{a.publishMode === "manual" ? 0 : "—"}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{formatTime(a.lastSuccessAt)}</td>
                     </tr>
                   );
@@ -299,6 +336,9 @@ export default function MatrixOverviewPage() {
         <p className="mt-3 text-xs text-slate-400">
           健康判定: 登录失效 = Agent 任务近 24h 报 login_expired 或登录态过期; 凭证失效 = 平台凭证验证失败;
           Agent 离线 = 绑定设备 90s 内无心跳; 3 天未发 = 前天/昨天/今天均无成功发布; 今日无内容 = 今天没分到任何内容。
+          <br />
+          「人工上传」号(在账号矩阵页设置)不判 Agent 离线/登录失效/3 天未发 —— 运营在自己设备上传, 客户端不需要开机;
+          它的唯一硬指标是「待上传」积压: 最早一条压过 2 天没人动才标异常。
         </p>
       </div>
     </div>

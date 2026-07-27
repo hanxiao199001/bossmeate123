@@ -92,8 +92,9 @@ export async function runArticleQualityPasses(params: {
   title: string;
   body: string;
   journalId?: string; // 7-03 B-②: 传 journalId, 内部查库构造硬数据清单, 透传给定向重写(数据准确/密度维度补数)
+  contentId?: string; // 7-27: 透传给质检告警(ops_incidents.detail.contentId), 简报能点开是哪几篇
 }): Promise<QualityPipelineResult> {
-  const { tenantId, userId, title, journalId } = params;
+  const { tenantId, userId, title, journalId, contentId } = params;
   let body = params.body || "";
   const originalBody = body;
   let llmCalls = 0;
@@ -178,7 +179,7 @@ export async function runArticleQualityPasses(params: {
   if (env.ARTICLE_SIXDIM_QC === "false") {
     loop.skippedReason = "disabled";
   } else {
-    sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts });
+    sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts, ...(contentId ? { contentId } : {}) });
     llmCalls += 1;
 
     const maxRounds = Math.max(0, env.ARTICLE_QUALITY_REWRITE_MAX);
@@ -205,7 +206,7 @@ export async function runArticleQualityPasses(params: {
           }
           body = newBody;
           // 重新六维质检（重写后的效果要用同一把尺子验证）
-          sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts });
+          sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts, ...(contentId ? { contentId } : {}) });
           llmCalls += 1;
           loop.rounds = roundNo;
           if (sixDim.degraded) break;
@@ -216,10 +217,19 @@ export async function runArticleQualityPasses(params: {
       }
     }
 
-    loop.finalScores = Object.fromEntries(
-      (Object.keys(sixDim.dims) as SixDimKey[]).map((k) => [k, sixDim!.dims[k].score])
-    );
-    loop.finalTotal = sixDim.totalScore;
+    // 7-27「0 分 vs 没评上分」: 降级时六维返回的全 0 只是类型占位, 语义是**没评上分**。
+    //   原来照抄进 metadata.sixDimTotal=0, 于是管理端/排序/统计一律把它当"极差内容"看,
+    //   而真相是"评分器当时超时了, 这篇根本没被评"。降级时一律写 null(= 未评分), 由
+    //   sixDimDegraded / sixDimDegradedReason 说明为什么。非降级路径行为完全不变。
+    if (sixDim.degraded) {
+      loop.finalScores = null;
+      loop.finalTotal = null;
+    } else {
+      loop.finalScores = Object.fromEntries(
+        (Object.keys(sixDim.dims) as SixDimKey[]).map((k) => [k, sixDim!.dims[k].score])
+      );
+      loop.finalTotal = sixDim.totalScore;
+    }
     loop.passed = sixDim.passed;
   }
 
@@ -418,6 +428,14 @@ export function qualityPipelineMeta(qp: QualityPipelineResult): Record<string, u
     sixDimTotal: qp.qualityLoop.finalTotal,
     sixDimPassed: qp.qualityLoop.passed,
     sixDimDegraded: qp.sixDim?.degraded ?? null,
+    // 7-27: 降级原因(AI 超时/无响应 vs 输出解析失败)。sixDimTotal 此时是 null(未评分, 非 0 分)。
+    ...(qp.sixDim?.degraded ? { sixDimDegradedReason: qp.sixDim.degradedReason ?? "评分服务降级" } : {}),
+    // 7-27 分数的**出处**: primary=主评分模型(与历史分同尺) / fallback=主模型不可用时自动换的快模型。
+    //   落库是为了日后能把降级分单独捞出来抽检可信度 —— 降级分不该混进标定样本(calibration-sample)
+    //   和"首过率"的历史对比里, 否则以后分数波动会归因不了。
+    ...(qp.sixDim && !qp.sixDim.degraded
+      ? { sixDimScoredBy: qp.sixDim.scoredBy ?? "primary", sixDimScorerModel: qp.sixDim.scorerModel ?? null }
+      : {}),
     // 7-05 ①: 存失败维度(score<8)的 weakestSection + fixHint, 供待审卡片露出"哪挂了/怎么改"
     sixDimWeak: qp.sixDim && !qp.sixDim.degraded
       ? (Object.keys(qp.sixDim.dims) as SixDimKey[])

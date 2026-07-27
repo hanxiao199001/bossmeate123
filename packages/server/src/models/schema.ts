@@ -887,6 +887,14 @@ export const platformAccounts = pgTable(
     // 发布能力: full = 全流程自动群发；draft_only = 仅建草稿，需人工到公众号后台手动发送
     // 未认证订阅号 freepublish 接口无权限（errcode 48001），默认走 draft_only 保守
     capability: varchar("capability", { length: 20 }).notNull().default("draft_only"),
+    // 7-27 无人值守: **发布模式** — 这个号的内容最终是"系统自动发"还是"人工下载后自己传"。
+    //   auto   = 客户端发布助手(Agent)自动发 → 客户端心跳断掉才是真故障, agent_offline 有意义
+    //   manual = 运营下载视频/文案后, 在自己手机或浏览器上传 → 客户端**根本不需要开**,
+    //            再按心跳判健康就是每天固定几条噪音告警(7-27 简报报了 11 条"助手离线", 全是假的,
+    //            还把"公众号今天全挂"这个真问题淹了)。
+    //   与 capability 的区别: capability 说的是"公众号 API 有没有群发权限"(平台授权层),
+    //   publishMode 说的是"这条内容由谁按下发布键"(运营流程层) —— 两者正交, 不可复用。
+    publishMode: varchar("publish_mode", { length: 10 }).notNull().default("auto"),
     groupName: varchar("group_name", { length: 100 }), // 分组标签（如"医学组"、"教育组"）
     remark: varchar("remark", { length: 100 }), // 6-19 用户手动备注名(扫码后自己标, 不被自动昵称覆盖)
     // PR-A16: 账号↔设备绑定 — 该账号浏览器登录态在哪台客户机 (NULL=未绑定, 任意设备可领;

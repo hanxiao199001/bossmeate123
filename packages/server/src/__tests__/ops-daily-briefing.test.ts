@@ -68,6 +68,7 @@ vi.mock("../services/billing/cost-ledger.js", () => ({
 const {
   judgeTenant,
   judgePlatform,
+  judgeZeroStreak,
   renderBriefingText,
   worstLevel,
   collectTenantBriefing,
@@ -86,6 +87,8 @@ const HEALTHY_SIGNALS = {
   kf: { handoffs: 0, blockedSensitive: 0, customerMessages: 12 },
   spend: { todayCents: 1000, monthCents: 20000, budget: {} as { dailyLimitYuan?: number; monthlyLimitYuan?: number } },
   accounts: { total: 3, abnormal: 0, byHealth: { healthy: 3 } as Record<string, number> },
+  manualAccounts: 0,
+  manualPendingUpload: 0,
   minDailyContent: 5,
   budgetWarnPct: 80,
   handoffWarnCount: 5,
@@ -191,7 +194,7 @@ describe("judgePlatform — 系统健康 + 供应商 + 事件流水", () => {
       health: { status: "error", timestamp: "", checks: { db: { status: "error" }, redis: { status: "ok" } } },
       supplier: OK_SUPPLIER,
       incidents: [],
-    });
+    }).items;
     expect(err[0]?.level).toBe("alert");
     expect(err[0]?.text).toContain("db");
 
@@ -199,12 +202,12 @@ describe("judgePlatform — 系统健康 + 供应商 + 事件流水", () => {
       health: { status: "degraded", timestamp: "", checks: { disk: { status: "warn" } } },
       supplier: OK_SUPPLIER,
       incidents: [],
-    });
+    }).items;
     expect(deg[0]?.level).toBe("warn");
   });
 
   it("记账失败事件 → 红色(钱花了没记上账)", () => {
-    const items = judgePlatform({
+    const { items } = judgePlatform({
       health: { status: "ok", timestamp: "", checks: {} },
       supplier: OK_SUPPLIER,
       incidents: [{ kind: "ledger_write_failed", count: 3, lastMessage: "扣费 1.65 元(dvh)未记上账", lastAt: new Date() }],
@@ -214,13 +217,135 @@ describe("judgePlatform — 系统健康 + 供应商 + 事件流水", () => {
   });
 
   it("llm_quota 事件不重复刷屏(已由供应商判定覆盖)", () => {
-    const items = judgePlatform({
+    const { items } = judgePlatform({
       health: { status: "ok", timestamp: "", checks: {} },
       supplier: { ...OK_SUPPLIER, level: "alert", llmQuotaErrors24h: 2, reasons: ["AI 调用近 24h 报了 2 次「额度不足/欠费」"] },
       incidents: [{ kind: "llm_quota", count: 2, lastMessage: "x", lastAt: new Date() }],
     });
     expect(items).toHaveLength(1);
     expect(items[0]?.text).toContain("额度不足");
+  });
+
+  // ---- 7-27 质检三态归因: 语义各归各, 尤其 degraded ≠ "没评上分"(交接修正项) ----
+  const OK_HEALTH = { status: "ok" as const, timestamp: "", checks: {} };
+
+  it("quality_check_degraded = 出了分照常走 → info(知道就行), 绝不能写成'没评上分/进不了草稿箱'", () => {
+    const { items } = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "quality_check_degraded", count: 8, lastMessage: "x", lastAt: new Date() }],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.level).toBe("info");
+    expect(items[0]?.text).toContain("照常");
+    expect(items[0]?.text).toContain("抽检");
+    expect(items[0]?.text).not.toContain("没评上分");
+    expect(items[0]?.text).not.toContain("进不了草稿箱");
+  });
+
+  it("quality_check_unavailable = 真没评上分 → ≥5 红色 + 进待办; <5 黄色", () => {
+    const big = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "quality_check_unavailable", count: 20, lastMessage: "x", lastAt: new Date() }],
+    });
+    expect(big.items[0]?.level).toBe("alert");
+    expect(big.items[0]?.text).toContain("20 篇没评上分");
+    expect(big.items[0]?.text).toContain("进不了草稿箱");
+    expect(big.todos.some((t) => t.includes("20 条没评上分待复核"))).toBe(true);
+
+    const small = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "quality_check_unavailable", count: 2, lastMessage: "x", lastAt: new Date() }],
+    });
+    expect(small.items[0]?.level).toBe("warn");
+  });
+
+  it("quality_check_timeout = 过程量(随后自动降级重评) → 少量 info, 大量 warn, 不喊'进不了草稿箱'", () => {
+    const few = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "quality_check_timeout", count: 2, lastMessage: "x", lastAt: new Date() }],
+    });
+    expect(few.items[0]?.level).toBe("info");
+    const many = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "quality_check_timeout", count: 20, lastMessage: "x", lastAt: new Date() }],
+    });
+    expect(many.items[0]?.level).toBe("warn");
+    expect(many.items[0]?.text).not.toContain("进不了草稿箱");
+  });
+
+  it("llm_cost_cap 熔断 → 红色置顶, 带熔断原因原文", () => {
+    const { items } = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "llm_cost_cap", count: 1, lastMessage: "今日 AI 调用已花 52.10 元, 触达日花费硬上限 50 元 —— 已停止内容生成", lastAt: new Date() }],
+    });
+    expect(items[0]?.level).toBe("alert");
+    expect(items[0]?.text).toContain("硬上限 50 元");
+  });
+
+  it("llm_timeout 节流事件 → warn, 明说 count 是'波数'", () => {
+    const { items } = judgePlatform({
+      health: OK_HEALTH, supplier: OK_SUPPLIER,
+      incidents: [{ kind: "llm_timeout", count: 3, lastMessage: "This operation was aborted", lastAt: new Date() }],
+    });
+    expect(items[0]?.level).toBe("warn");
+    expect(items[0]?.text).toContain("3 波");
+  });
+});
+
+describe("7-27 manual 号(人工上传) — 简报口径", () => {
+  it("有待上传 → 进待办段, 不产异常条目", () => {
+    const { items, todos } = judgeTenant({
+      ...HEALTHY_SIGNALS,
+      manualAccounts: 14,
+      manualPendingUpload: 9,
+    });
+    expect(items).toHaveLength(0); // 待上传是活儿不是故障
+    expect(todos.some((t) => t.includes("9 条内容已生成待下载上传") && t.includes("14 个人工号"))).toBe(true);
+  });
+
+  it("登录失效的号 → 同时进待办(要重新扫码)与告警", () => {
+    const { items, todos } = judgeTenant({
+      ...HEALTHY_SIGNALS,
+      accounts: { total: 5, abnormal: 2, byHealth: { login_expired: 2, healthy: 3 } },
+    });
+    expect(todos.some((t) => t.includes("2 个号登录失效要重新扫码"))).toBe(true);
+    expect(items.find((i) => i.text.includes("账号异常"))?.level).toBe("alert");
+  });
+
+  it("manual 号积压(manual_upload_stale)计入账号异常黄色; agent_offline 若出现仍照报(auto 号)", () => {
+    const stale = judgeTenant({
+      ...HEALTHY_SIGNALS,
+      accounts: { total: 5, abnormal: 1, byHealth: { manual_upload_stale: 1, healthy: 4 } },
+    });
+    const hit = stale.items.find((i) => i.text.includes("账号异常"));
+    expect(hit?.level).toBe("warn");
+    expect(hit?.text).toContain("积压");
+  });
+});
+
+describe("7-27 judgeZeroStreak — 连续异常升级", () => {
+  const day = (generated: number, distributed: number) => ({ generated, distributed });
+
+  it("连续 3 天零产出 → 🚨 红色强告警", () => {
+    const items = judgeZeroStreak([day(0, 0), day(0, 0), day(0, 0)], 3);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.level).toBe("alert");
+    expect(items[0]!.text).toContain("🚨");
+    expect(items[0]!.text).toContain("连续 3 天零产出");
+  });
+
+  it("今天零但昨天有产出 → 不升级(单日偶发交给普通红条)", () => {
+    expect(judgeZeroStreak([day(0, 0), day(12, 5), day(10, 4)], 3)).toHaveLength(0);
+  });
+
+  it("有生成但连续 3 天零分发 → 🚨 零分发告警(钱照烧内容没出去)", () => {
+    const items = judgeZeroStreak([day(10, 0), day(8, 0), day(12, 0)], 3);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.text).toContain("零分发");
+  });
+
+  it("窗口不满 N 天(新租户) → 宁可不喊", () => {
+    expect(judgeZeroStreak([day(0, 0), day(0, 0)], 3)).toHaveLength(0);
   });
 });
 
@@ -285,6 +410,7 @@ describe("renderBriefingText — 异常置顶, 正常也发", () => {
       { level: "alert" as const, text: "今日内容生成 0 篇" },
       { level: "warn" as const, text: "1 个公众号未达保底" },
     ],
+    todos: [] as string[],
     level: "alert" as const,
   };
   const platform = {
@@ -295,6 +421,7 @@ describe("renderBriefingText — 异常置顶, 正常也发", () => {
     },
     incidents: [],
     items: [],
+    todos: [] as string[],
     level: "ok" as const,
   };
 
@@ -312,6 +439,38 @@ describe("renderBriefingText — 异常置顶, 正常也发", () => {
     expect(txt).toContain("✅ 一切正常");
     expect(txt).toContain("— 今日概况 —");
     expect(txt).not.toContain("🔴");
+  });
+
+  it("7-27 待办段: 🔴 之后 🟡 之前; info 段单独一节'知道就行'", () => {
+    const txt = renderBriefingText("2026-07-27", platform, [{
+      ...tenantBrief,
+      items: [
+        { level: "alert" as const, text: "公众号 token 全挂" },
+        { level: "warn" as const, text: "1 个公众号未达保底" },
+        { level: "info" as const, text: "8 篇的质检分来自降级快模型" },
+      ],
+      todos: ["9 条内容已生成待下载上传(14 个人工号)", "2 个号登录失效要重新扫码"],
+    }]);
+    expect(txt.indexOf("🔴")).toBeLessThan(txt.indexOf("📋 今日待办"));
+    expect(txt.indexOf("📋 今日待办")).toBeLessThan(txt.indexOf("🟡"));
+    expect(txt.indexOf("🟡")).toBeLessThan(txt.indexOf("ℹ️ 知道就行"));
+    expect(txt).toContain("9 条内容已生成待下载上传");
+    expect(txt).toContain("降级快模型");
+  });
+
+  it("7-27 有 🚨 条目 → 标题切换为强告警版(和普通简报一眼区分)", () => {
+    const txt = renderBriefingText("2026-07-27", platform, [{
+      ...tenantBrief,
+      items: [{ level: "alert" as const, text: "🚨【连续 3 天零产出】生成链路已停摆" }],
+    }]);
+    expect(txt.startsWith("🚨🚨【BossMate 强告警")).toBe(true);
+    const normal = renderBriefingText("2026-07-27", platform, [tenantBrief]);
+    expect(normal.startsWith("【BossMate 运维简报】")).toBe(true);
+  });
+
+  it("info 条目不把整体级别顶成异常(worstLevel 视同 ok)", () => {
+    expect(worstLevel([{ level: "info" }])).toBe("ok");
+    expect(worstLevel([{ level: "info" }, { level: "warn" }])).toBe("warn");
   });
 });
 
@@ -338,7 +497,8 @@ describe("collectTenantBriefing — mock db 聚合口径", () => {
       { id: "a1", accountName: "达标号" },
       { id: "a2", accountName: "饿死号" },
     ]);
-    h.selectQueue.push([{ config: { budgetConfig: { dailyLimitYuan: 100 } } }]); // ⑥ 日预算 100 元
+    // ⑥ 租户配置(createdAt=刚创建 → 跳过"连续异常"统计, 不占用后续 select 队列)
+    h.selectQueue.push([{ config: { budgetConfig: { dailyLimitYuan: 100 } }, createdAt: new Date() }]);
 
     const b = await collectTenantBriefing("t1", "测试租户");
 
@@ -358,11 +518,40 @@ describe("collectTenantBriefing — mock db 聚合口径", () => {
   });
 
   it("空库: 全零不抛, 零产出被判红", async () => {
-    for (let i = 0; i < 6; i++) h.selectQueue.push([]);
+    for (let i = 0; i < 5; i++) h.selectQueue.push([]);
+    h.selectQueue.push([{ config: null, createdAt: new Date() }]); // 新租户 → 跳过连续异常统计
     const b = await collectTenantBriefing("t1", "空租户");
     expect(b.generatedToday).toBe(0);
     expect(b.draftShortfalls).toHaveLength(0);
     expect(b.level).toBe("alert");
     expect(b.items.some((i) => i.text.includes("0 篇"))).toBe(true);
+  });
+
+  it("7-27 manual 号的任务不进 stuckPending(人工号没人领单是常态, 不是客户端掉线)", async () => {
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    h.selectQueue.push([{ count: 5 }]);                                   // ① 生成
+    h.selectQueue.push([                                                   // ② 任务: manual 的 pending 不算卡住
+      { status: "pending", createdAt: old, publishMode: "manual" },
+      { status: "pending", createdAt: old, publishMode: "manual" },
+      { status: "pending", createdAt: old, publishMode: "auto" },
+    ]);
+    h.selectQueue.push([]);                                                // ③ 草稿箱
+    h.selectQueue.push([{ count: 1 }]);                                    // ④ 发布
+    h.selectQueue.push([]);                                                // ⑤ 公众号
+    h.selectQueue.push([{ config: null, createdAt: new Date() }]);         // ⑥ 租户
+    const b = await collectTenantBriefing("t1", "测试租户");
+    expect(b.publishHealth.stuckPending).toBe(1); // 只有 auto 那条
+  });
+
+  it("7-27 老租户连续 3 天全零 → 🚨 升级条目", async () => {
+    const monthAgo = new Date(Date.now() - 30 * 86_400_000);
+    for (let i = 0; i < 5; i++) h.selectQueue.push([]);                    // ①-⑤ 全零
+    h.selectQueue.push([{ config: null, createdAt: monthAgo }]);           // ⑥ 老租户 → 跑连续异常统计
+    h.selectQueue.push([]);                                                // ⑦ 近 N 天逐日生成: 空 = 全零
+    h.selectQueue.push([]);                                                // ⑧ 近 N 天逐日分发: 空 = 全零
+    const b = await collectTenantBriefing("t1", "停摆租户");
+    const esc = b.items.find((i) => i.text.includes("🚨"));
+    expect(esc?.level).toBe("alert");
+    expect(esc?.text).toContain("零产出");
   });
 });

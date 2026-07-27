@@ -130,6 +130,10 @@ export async function recordLlmUsage(p: {
       quantity: p.inputTokens + p.outputTokens,
       note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens} billing=${billing}${priced ? "" : " unpriced"}`,
     });
+    // 7-27 无人值守: 把刚花的钱累到日上限闸的进程内增量上, 让 60s 缓存窗口内也能及时触顶。
+    //   闸门本身(checkLlmDailyCap)在生成链路调用; 这里只喂数, 不做任何拦截(记账出口不该有副作用)。
+    const { noteLlmSpend } = await import("./llm-guard.js");
+    noteLlmSpend(cents);
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : err }, "llm_cost.record_failed(已忽略, 不影响业务)");
   }
