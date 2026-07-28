@@ -34,6 +34,7 @@ import { buildJournalFieldContract } from "./journal-prompt-fields.js";
 import { ARTICLE_PROMPT_VERSION } from "./prompt-version.js";
 // 7-28: 分区证据的列清单单一真相源(别再手写 casPartition 这类死列, 见 intl-signal.ts 病史)
 import { hasAnyFact, PARTITION_FACT_KEYS } from "../compliance/fabrication-criteria.js";
+import { isDomesticKind, toJournalKind } from "../journals/journal-kind.js";
 import { nanoid } from "nanoid";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 import { pickHookPatterns } from "../../data/hook-patterns.js";
@@ -973,9 +974,15 @@ export class ArticleSkill implements ISkill {
     //   白烧一次 LetPub 抓取 + 一次 LLM 调用, 而且从未被发现(它不报错, 只是多花钱多耗时)。
     //   原意图是"缺分区数据就去补", 所以改成判**全部四类分区证据**(单一真相源 PARTITION_FACT_KEYS,
     //   病史见 journals/intl-signal.ts 文件头)。
-    //   已知限制: 国内刊客观上没有分区, 这一项对国内刊仍恒为真 —— 但那与改动前一致, 不是退步;
-    //   彻底解法是按 journal_kind 分流(国内刊富化本来也抓不到 LetPub 数据), 属另一轮。
-    const lacksPartitionEvidence = !hasAnyFact(journal, PARTITION_FACT_KEYS);
+    //
+    // 7-29 补上另一半(上一轮标为"已知限制"的那条):
+    //   只有国际体系的刊才该因"缺分区证据"去富化。国内刊客观上没有中科院/JCR 分区,
+    //   拿它当富化理由等于永远为真, 而 LetPub/Springer 链路对国内刊本来就抓不到东西
+    //   —— 白跑一次抓取 + 一次 LLM。生产实测: cn 3593 本 + unknown 538 本全部命中这一项。
+    //   注意: 国内刊仍会因缺 abbreviation / foundingYear / website / coverUrl 触发富化,
+    //   那些是抓得到的, 本改动只摘掉"分区"这一条不成立的理由, 不是给国内刊关掉富化。
+    const isDomestic = isDomesticKind(toJournalKind(journal));
+    const lacksPartitionEvidence = !isDomestic && !hasAnyFact(journal, PARTITION_FACT_KEYS);
     const needsEnrichment = !journal.abbreviation || !journal.foundingYear ||
       lacksPartitionEvidence || !journal.website || !journal.coverUrl;
     if (needsEnrichment) {
