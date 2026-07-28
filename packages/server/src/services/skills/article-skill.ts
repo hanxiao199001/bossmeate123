@@ -32,6 +32,8 @@ import { platformAccounts, tenants, journals } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
 import { buildJournalFieldContract } from "./journal-prompt-fields.js";
 import { ARTICLE_PROMPT_VERSION } from "./prompt-version.js";
+// 7-28: 分区证据的列清单单一真相源(别再手写 casPartition 这类死列, 见 intl-signal.ts 病史)
+import { hasAnyFact, PARTITION_FACT_KEYS } from "../compliance/fabrication-criteria.js";
 import { nanoid } from "nanoid";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 import { pickHookPatterns } from "../../data/hook-patterns.js";
@@ -965,8 +967,17 @@ export class ArticleSkill implements ISkill {
 
     // 1. 补充期刊详细数据（如果还没有 enriched）
     // enrichment 触发条件：缺少任一关键补充字段即触发（不要求全部缺失）
+    //
+    // 7-28 修一个恒真条件: 原判据是 `!journal.casPartition`, 而 cas_partition **整库 0 行**(死列),
+    //   于是这一项恒为真 → needsEnrichment 恒为真 → **每篇文章都在触发富化**,
+    //   白烧一次 LetPub 抓取 + 一次 LLM 调用, 而且从未被发现(它不报错, 只是多花钱多耗时)。
+    //   原意图是"缺分区数据就去补", 所以改成判**全部四类分区证据**(单一真相源 PARTITION_FACT_KEYS,
+    //   病史见 journals/intl-signal.ts 文件头)。
+    //   已知限制: 国内刊客观上没有分区, 这一项对国内刊仍恒为真 —— 但那与改动前一致, 不是退步;
+    //   彻底解法是按 journal_kind 分流(国内刊富化本来也抓不到 LetPub 数据), 属另一轮。
+    const lacksPartitionEvidence = !hasAnyFact(journal, PARTITION_FACT_KEYS);
     const needsEnrichment = !journal.abbreviation || !journal.foundingYear ||
-      !journal.casPartition || !journal.website || !journal.coverUrl;
+      lacksPartitionEvidence || !journal.website || !journal.coverUrl;
     if (needsEnrichment) {
       try {
         const enriched = await ensureJournalEnriched(

@@ -44,6 +44,14 @@ const ALLOWED = new Map<string, string>([
   ],
   ["services/crawler/trusted-facts-validator.ts", "写入侧校验值本身合不合理, 不判有无"],
   ["models/migrations.ts", "生成列 DDL 是 buildIntlSignalSql() 的输出快照, 不是另一套判据"],
+  [
+    "routes/workflow.ts",
+    "冻结文件: 与主生成链平行的第二条流水线(自带 prompt/评分/自愈), 架构修复设计框架 第六节已决定不再改动、不再加功能, 只等阶段1-3 做完后整体评估。此处 ej.partition && refMatch.partition 是期刊对比工作流的两两比对, 不进选刊·生成·发布链路",
+  ],
+  [
+    "services/crawler/scrapling-bridge.ts",
+    "判的是**爬虫刚抓回的原始页面结构**里有没有分区字段(用于回报抓取完整度), 不是 DB 列的有无判定; 该值不直接决定期刊身份, 抓错只影响这一次抓取的日志",
+  ],
 ]);
 
 /**

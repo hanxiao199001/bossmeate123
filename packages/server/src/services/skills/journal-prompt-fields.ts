@@ -28,6 +28,7 @@
  */
 
 import { isDomesticKind, toJournalKind } from "../journals/journal-kind.js";
+import { hasIntlSignal } from "../journals/intl-signal.js";
 
 // ============ 字段词表 ============
 
@@ -323,7 +324,13 @@ export function buildJournalFieldContract(j: JournalFieldInput): JournalFieldCon
   if (j.annualVolume) rawKnown.set("annualVolume", `- 年发文量：约 ${j.annualVolume} 篇/年`);
 
   // 预警名单只覆盖国际(SCI)刊; 国内刊不在其适用范围, 不做"不在预警名单"的正面断言(避免误导)
-  const inWarnScope = !!j.isWarningList || typeof j.impactFactor === "number" || !!j.partition || !!j.jcrFull;
+  //
+  // 7-28: 后半段原本自己拼了一遍"有没有国际指标"(impactFactor/partition/jcrFull), 又漏了
+  //   casPartitionNew/casPartition —— 这是同一个坑当天踩的第三次(前两次见 intl-signal.ts 文件头病史)。
+  //   漏判的后果: 有中科院分区但无 IF 的国际刊被判"不在预警适用范围", 于是连"不在预警名单中"
+  //   这句正面背书都不写, 白丢一个卖点。
+  //   拆法: isWarningList 是预警名单语义(保留), "有没有国际指标"换成单一真相源 hasIntlSignal。
+  const inWarnScope = !!j.isWarningList || hasIntlSignal(j);
   if (j.isWarningList) rawKnown.set("warningList", "- ⚠️ 在中科院预警名单中");
   else if (inWarnScope) rawKnown.set("warningList", "- 不在中科院预警名单中");
 
