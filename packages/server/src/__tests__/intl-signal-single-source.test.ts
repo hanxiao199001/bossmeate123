@@ -35,7 +35,7 @@ const SRC = resolve(HERE, "..");
  * 加白名单前先问一句: 你是不是在造第四套判据?
  */
 const ALLOWED = new Map<string, string>([
-  ["services/journals/intl-signal.ts", "判据本身的定义处"],
+  ["services/journals/intl-signal.ts", "判据与列清单本身的定义处(单一真相源)"],
   ["services/journals/journal-kind.ts", "委派给 intl-signal, 注释里提到列名属历史说明"],
   ["services/compliance/fabrication-criteria.ts", "PARTITION_FACT_KEYS 从 intl-signal 派生"],
   [
