@@ -199,7 +199,10 @@ export async function buildEffectDashboard(tenantId: string, rangeDays: RangeDay
   if (journalIds.length > 0) {
     try {
       const jRows = await db
-        .select({ id: journals.id, discipline: journals.discipline })
+        // 7-28 (#5) 学科码收口: 原来读**原始列**, 学科分布图的桶就成了几百个中文分类名 + 一堆
+        //   英文码混在一起(国内刊 "临床医学"/"内科学" 各占一格), 前端的 code→中文标签映射表
+        //   全部 miss、图上一片原始串。改读生成列: 恒定 14 个桶, 与选刊器/筛选器同口径。
+        .select({ id: journals.id, discipline: journals.disciplineCode })
         .from(journals)
         .where(inArray(journals.id, journalIds));
       for (const j of jRows) if (j.discipline) discMap.set(j.id, j.discipline);

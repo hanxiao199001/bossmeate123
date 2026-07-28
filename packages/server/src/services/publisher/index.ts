@@ -19,7 +19,14 @@ import { XiaohongshuAdapter } from "./adapters/xiaohongshu.js";
 import { DouyinAdapter } from "./adapters/douyin.js";
 import { WechatVideoAdapter } from "./adapters/wechat-video.js";
 import { hydrateAccount, decryptCredentialField } from "./credentials-loader.js";
-import { AGENT_PLATFORMS, dispatchVideoToAgent } from "./agent-dispatch.js";
+import { dispatchVideoToAgent } from "./agent-dispatch.js";
+import {
+  AGENT_PLATFORMS,
+  ARTICLE_PLATFORMS,
+  VIDEO_PLATFORMS,
+  definePlatformMap,
+  getPlatformCapability,
+} from "../platforms/capabilities.js";
 import { auditContent, type AuditHit } from "../risk-control/audit-content.js";
 import {
   getLeadCaptureConfig,
@@ -100,7 +107,8 @@ export interface PlatformAdapter {
 }
 
 // ===== 适配器注册 =====
-const adapters: Record<string, PlatformAdapter> = {
+// key 集合由 PLATFORM_CAPABILITIES.hasAdapter 校验(启动即抛错), 别在这里凭记忆加平台。
+const adapters: Record<string, PlatformAdapter> = definePlatformMap<PlatformAdapter>("hasAdapter", {
   wechat: new WechatAdapter(),
   baijiahao: new BaijiahaoAdapter(),
   toutiao: new ToutiaoAdapter(),
@@ -108,7 +116,7 @@ const adapters: Record<string, PlatformAdapter> = {
   xiaohongshu: new XiaohongshuAdapter(),
   douyin: new DouyinAdapter(),
   wechat_video: new WechatVideoAdapter(),
-};
+});
 
 export function getAdapter(platform: string): PlatformAdapter | undefined {
   return adapters[platform];
@@ -265,9 +273,7 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
 
   let targetAccounts = accounts.filter(a => accountIds.includes(a.id));
 
-  // 内容类型智能路由：图文→文字平台，视频→视频平台
-  const VIDEO_PLATFORMS = new Set(["douyin", "wechat_video"]);
-  const ARTICLE_PLATFORMS = new Set(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu"]);
+  // 内容类型智能路由：图文→文字平台，视频→视频平台(平台归属见 platforms/capabilities.ts contentKind)
   if (content.type === "video") {
     const filtered = targetAccounts.filter(a => VIDEO_PLATFORMS.has(a.platform));
     if (filtered.length > 0) targetAccounts = filtered;
@@ -411,9 +417,13 @@ export async function publishToAccounts(req: PublishRequest): Promise<PublishRes
         let publishContent = content.body!;
         let publishDigest = options?.digest;
 
-        if (content.type !== "video" && account.platform !== "wechat") {
-          // 图文类平台（公众号已有服务卡片，不重复注入）
-          if (account.platform === "xiaohongshu") {
+        // 获客尾部注入方式由 PLATFORM_CAPABILITIES.leadCapture 决定
+        //   none        = 不注入(公众号正文已有服务卡片, 抖音/视频号走 digest)
+        //   xiaohongshu = 小红书专用文案
+        //   article     = 通用图文尾部(HTML/纯文本按内容形态自适应)
+        const leadStyle = getPlatformCapability(account.platform)?.leadCapture ?? "article";
+        if (content.type !== "video" && leadStyle !== "none") {
+          if (leadStyle === "xiaohongshu") {
             publishContent += xiaohongshuLeadCaptureText(lcConfig);
           } else if (publishContent.includes("<")) {
             // HTML 内容追加 HTML 获客尾部

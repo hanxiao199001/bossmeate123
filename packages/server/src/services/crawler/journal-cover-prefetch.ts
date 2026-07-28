@@ -16,7 +16,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
 import { eq, isNull, desc, and, or, ilike, sql } from "drizzle-orm";
-import { journalVisibleTo } from "../journals/journal-sql.js";
+import { journalVisibleTo, journalDisciplineMatches } from "../journals/journal-sql.js";
 import {
   fetchJournalCoverFromLetPub,
 } from "./journal-image-crawler.js";
@@ -104,6 +104,10 @@ export async function prefetchJournalCovers(
   // 1b: 按 topic 关键词匹配（每个 topic 最多取 3 个期刊）
   for (const topic of topics) {
     if (!topic) continue;
+    // 7-28 (#5) 学科码收口: 原来是 `ilike(journals.discipline, '%<topic>%')` 打原始列 —— 国内刊
+    //   中文分类名与国际刊英文码只能命中一边。改走 helper 归一到生成列 discipline_code;
+    //   topic 是自由主题词, 归一不出具体学科时返回 null → 只按刊名匹配(不掉进 generic 全捞)。
+    const discCond = journalDisciplineMatches(topic);
     const rows = await db
       .select({
         id: journals.id,
@@ -119,10 +123,9 @@ export async function prefetchJournalCovers(
           // 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 封面预取恒空(文章配图全走兜底)
           journalVisibleTo(tenantId),
           eq(journals.status, "active"),
-          or(
-            ilike(journals.discipline, `%${topic}%`),
-            ilike(journals.name, `%${topic}%`)
-          )
+          discCond
+            ? or(discCond, ilike(journals.name, `%${topic}%`))
+            : ilike(journals.name, `%${topic}%`)
         )
       )
       .orderBy(desc(journals.impactFactor))

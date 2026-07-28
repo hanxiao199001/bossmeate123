@@ -55,7 +55,14 @@ export async function mineTopicsFromJournals(opts?: { sampleJournals?: number; t
   const perJournal = opts?.topicsPerJournal ?? 3;
 
   const factors = await categoryFactors();
-  const sampled = await db.select({ id: journals.id, discipline: journals.discipline })
+  // 7-28 (#5) 学科码收口: 原来读**原始列** discipline, 下面两处都因此静默失效 ——
+  //   ① `factors.get(j.discipline)`: factors 由 computeCategoryWeights 按
+  //      `contents.metadata->>'discipline'`(学科码)聚合, 拿中文分类名("临床医学")去 get 恒 miss
+  //      → 学科表现加权对国内刊全程失效, 因子恒 1(选题飞轮对国内刊完全不转);
+  //   ② `category: j.discipline` **写**进 keywords.category: 而 selectCandidates 是
+  //      `category IN (学科码…)` —— 写进去的中文分类名任何学科筛选都选不中, 等于往选题池里
+  //      灌死票。这条是**写入侧**污染, 比读侧更贵(存量数据要清)。
+  const sampled = await db.select({ id: journals.id, discipline: journals.disciplineCode })
     .from(journals)
     .where(and(eq(journals.status, "active"), sql`${journals.dataSource} IS DISTINCT FROM 'ai_fabricated'`))
     .orderBy(sql`random()`)

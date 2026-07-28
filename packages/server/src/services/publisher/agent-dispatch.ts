@@ -5,17 +5,17 @@
  *   - /agent-admin/dispatch 路由自己建任务
  *   - TodayPage 前端按平台拆 agentIds/serverIds
  *   - 内容工坊直发完全没拆 → 选视频号账号发视频会静默打到没凭证的 /publish 失败
- * 现在统一: publishToAccounts(/publish) 与 /agent-admin/dispatch 都调这里,
- * 「视频→Agent / 文章→服务器」的判定只此一处 (AGENT_PLATFORMS)。
+ * 现在统一: publishToAccounts(/publish) 与 /agent-admin/dispatch 都调这里。
+ *
+ * 7-28 阶段1-B: 「视频→Agent / 文章→服务器」的判定原本在这里定义 (AGENT_PLATFORMS),
+ * 但 publish-pacing.ts 又原样复制了一份且没 import —— 两份各活各的。现已上收到
+ * services/platforms/capabilities.ts 的 publishVia 维度, 本文件不再定义, 只消费。
  */
 import { eq, and } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { agentPublishTasks, agentDevices } from "../../models/schema.js";
 import { buildPushCaptions } from "./draft-push.js";
 import { logger } from "../../config/logger.js";
-
-/** 登录态在客户本机、服务器无凭证的平台 → 走本地 Agent 推草稿, 不走服务器凭证发布 */
-export const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
 
 // 6-19: video 内容的 body 有时混入 HTML 尾注(如"本文由 AI 辅助生成"声明), 直接当视频源会 404。
 // 这里只从 body 里抽出视频 URL(/storage/...或 http...的 .mp4/.mov 等), 不信任整个 body。

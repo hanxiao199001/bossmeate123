@@ -15,6 +15,7 @@ import { journals, platformAccounts } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { produceVideo } from "../services/video/index.js";
 import { pickClipStyle, isClipStyleKey, CLIP_STYLES } from "../services/video/clip-styles.js";
+import { journalDisciplineMatches } from "../services/journals/journal-sql.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -52,7 +53,9 @@ async function main() {
   // 选刊: 指定 → 账号领域 → 随机有IF。6-23 修: 原 discCond 用裸 "AND ..."/空 sql`` 塞进 and() →
   //   空时生成 "... and )" 语法错(42601), 非空时 "and AND" 双 AND。改为按条件数组拼接(空就不加)。
   const conds = [eq(journals.status, "active"), isNotNull(journals.impactFactor)];
-  if (acctDiscipline) conds.push(sql`${journals.discipline} ILIKE ${"%" + acctDiscipline + "%"}`);
+  // 7-28 (#5): 同 sample-titles —— 账号 disciplines 是学科码, ILIKE 原始列只抽得到国际刊。
+  const discCond = journalDisciplineMatches(acctDiscipline);
+  if (discCond) conds.push(discCond);
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
     : await db.select().from(journals)

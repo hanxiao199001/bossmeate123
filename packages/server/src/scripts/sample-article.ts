@@ -13,6 +13,7 @@ import { initializeSkills, SkillRegistry } from "../services/skills/index.js";
 import { buildPersonaSuffix } from "../services/skills/structure-variation.js";
 import { generateTitles } from "../services/content-engine/title-generator.js";
 import { selectCandidates } from "../services/recommendation/daily-cron.js";
+import { journalDisciplineMatches } from "../services/journals/journal-sql.js";
 
 function arg(n: string): string | undefined { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; }
 
@@ -40,7 +41,9 @@ async function main() {
 
   // 6-26 修: 原 discCond 用裸 "AND ..."/空 sql`` 塞进 and() → 空时 "and )" 语法错(42601)、有值双 AND。改条件数组拼接(同 sample-card/titles)。
   const conds = [eq(journals.status, "active"), isNotNull(journals.impactFactor)];
-  if (disc) conds.push(sql`${journals.discipline} ILIKE ${"%" + disc + "%"}`);
+  // 7-28 (#5): 同 sample-titles —— 账号 disciplines 是学科码, ILIKE 原始列只抽得到国际刊。
+  const discCond = journalDisciplineMatches(disc);
+  if (discCond) conds.push(discCond);
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
     : await db.select().from(journals).where(and(...conds)).orderBy(sql`random()`).limit(1);

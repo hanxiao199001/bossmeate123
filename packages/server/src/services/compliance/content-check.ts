@@ -1,4 +1,11 @@
 /**
+ * ⚠️ 反编造相关的函数(checkTitleDataConsistency / findBodyFabrication /
+ *    findBodyFabricationMulti / checkRoundupFabrication / checkBodyFabricationForPublish /
+ *    fabricationPublishGate)是**四道反编造判据里的第 ①道**。
+ *    四道分别管什么、在哪个环节生效、为什么不能互相替代 —— 见
+ *    `services/compliance/fabrication-criteria.ts` 的文件头总纲。
+ *    共享的正则 / 字段名清单 /「值为空」判定也都在那里, **不许在本文件再复制一份**。
+ *
  * PR-Z3: 内容合规层 — 商业化前置防线。
  * 1. 违禁词检查: 硬词(发布即封号级风险)拦截; 软词(广告法/医疗宣传红线)警告放行并记 metadata。
  *    词库 = 内置基础库 + SYSTEM config.automationConfig.complianceWords {hard[], soft[]} 扩展。
@@ -11,6 +18,17 @@ import { db } from "../../models/db.js";
 import { tenants } from "../../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { logger } from "../../config/logger.js";
+import {
+  TITLE_DATA_CLAIM,
+  TITLE_IF_CLAIM,
+  TITLE_PARTITION_CLAIM,
+  IF_FACT_KEYS,
+  PARTITION_FACT_KEYS,
+  ALL_FACT_KEYS,
+  hasDbFact,
+  hasAnyFact,
+  providesAnyKey,
+} from "./fabrication-criteria.js";
 
 // 硬词: 命中即拦截 (政治敏感类客户自行扩充; 此处放公认高危词根)
 const HARD_WORDS = [
@@ -109,18 +127,17 @@ export function checkTitleBodyConsistency(
 
 // 7-05 脏点清理(行1 教训): 标题的"审稿周期/录用率"具体数字必须在正文复现。
 // 正文由核验过的期刊库派生 → 正文没有 = DB 没有 = 标题编造(行1 标题"审稿60天/录用率35%", DB两者皆空, 正文写"3-4个月/较低")。
-const TITLE_DATA_CLAIM = /(?:审稿|外审|见刊|接收|录用率|命中率)[约仅低于\s]*\d+(?:\.\d+)?\s*(?:天|周|个月|月|%)/g;
-
+//
 // 7-20 补 IF/分区两维(信任红线)。原注释写"IF/分区等几乎必复现, 不查以免误伤" ——
 //   这个前提**只对国际刊成立**: 国际刊 DB 有 IF, LLM 写的数字正文能复现, 所以不查没事;
 //   国内刊 DB 根本没有 IF/分区(2746 本国内核心刊中 有IF 213 本=7.8%、有分区 8 本=0.3%),
 //   LLM 只能凭空编, 而校验对它完全睁眼瞎。
 //   生产实测(近30天): 国内刊 185 篇里 57 篇(31%)标题写了 DB 没有的 IF, 其中 40 篇 status=generated
 //   可发布、6 篇已推送草稿/已发出。故补这两维, 走与审稿/录用率完全相同的机制, 不新造闸门。
-// IF: "IF 2.0+" / "影响因子 3.5" / "IF：2.3" / "impact factor 4.1"
-const TITLE_IF_CLAIM = /(?:IF|影响因子|impact\s*factor)\s*[:：]?\s*[约仅低于＜<]?\s*\d+(?:\.\d+)?\s*\+?/gi;
-// 分区: "中科院1区" / "JCR Q2" / "Q1" / "一区" / "3区"
-const TITLE_PARTITION_CLAIM = /(?:中科院\s*|JCR\s*)?(?:Q\s*[1-4]|[1-4一二三四]\s*区)/gi;
+//
+// 7-28 (#6) 收口: 三条正则 + 字段名清单 + "值为空"判定已移到 fabrication-criteria.ts
+//   (本文件顶部 import)。原来它们只在本文件定义, 但字段名清单在本文件内就手抄了 5 遍,
+//   "值为空"更是三套写法并存(见 hasDbFact 的注释)。
 /**
  * 7-20 正文编造检测（评分器用）。
  *
@@ -144,16 +161,15 @@ export function findBodyFabrication(
 ): string[] {
   if (!db || !body) return [];
   const plain = body.replace(/<svg[\s\S]*?<\/svg>/gi, " ").replace(/<[^>]+>/g, " ");
+  // 7-28 (#6): 原来这两段一个用 `== null`、一个用 truthiness `||` —— 同一个文件里两套
+  //   "值为空"口径, 对 `partition = ''` / `impactFactor = 0` 给出相反答案。
+  //   统一走 fabrication-criteria.ts 的 hasAnyFact(== null 口径, 理由见那里的长注释)。
   const hits: string[] = [];
-  if ("impactFactor" in db || "compositeImpactFactor" in db) {
-    if (db.impactFactor == null && db.compositeImpactFactor == null) {
-      for (const c of [...new Set(plain.match(TITLE_IF_CLAIM) || [])]) hits.push(`${c.trim()}(DB无影响因子)`);
-    }
+  if (providesAnyKey(db, IF_FACT_KEYS) && !hasAnyFact(db, IF_FACT_KEYS)) {
+    for (const c of [...new Set(plain.match(TITLE_IF_CLAIM) || [])]) hits.push(`${c.trim()}(DB无影响因子)`);
   }
-  if ("partition" in db || "casPartition" in db || "casPartitionNew" in db || "jcrFull" in db) {
-    if (!(db.partition || db.casPartition || db.casPartitionNew || db.jcrFull)) {
-      for (const c of [...new Set(plain.match(TITLE_PARTITION_CLAIM) || [])]) hits.push(`${c.trim()}(DB无分区)`);
-    }
+  if (providesAnyKey(db, PARTITION_FACT_KEYS) && !hasAnyFact(db, PARTITION_FACT_KEYS)) {
+    for (const c of [...new Set(plain.match(TITLE_PARTITION_CLAIM) || [])]) hits.push(`${c.trim()}(DB无分区)`);
   }
   return hits;
 }
@@ -181,18 +197,14 @@ export function mergeJournalFacts(
 ): TitleDataDbFields | undefined {
   const list = facts.filter((f): f is TitleDataDbFields => !!f);
   if (list.length === 0) return undefined;
-  const KEYS = [
-    "reviewCycle", "acceptanceRate", "impactFactor", "compositeImpactFactor",
-    "partition", "casPartition", "casPartitionNew", "jcrFull",
-  ] as const;
   const out: Record<string, unknown> = {};
-  for (const k of KEYS) {
+  // 7-28 (#6): 字段清单改用 ALL_FACT_KEYS(唯一定义处), "值为空"改用 hasDbFact ——
+  //   原来这里是本文件的**第三套**判空写法(`!== null && !== undefined && !== ""`),
+  //   与上面两处都不一样。三套口径混用 = 同一行数据在不同函数里得到不同结论。
+  for (const k of ALL_FACT_KEYS) {
     const provided = list.filter((f) => k in f);
     if (provided.length === 0) continue; // 无人提供该键 → 保持缺席, 校验跳过
-    const hit = provided.find((f) => {
-      const v = (f as Record<string, unknown>)[k];
-      return v !== null && v !== undefined && v !== "";
-    });
+    const hit = provided.find((f) => hasDbFact((f as Record<string, unknown>)[k]));
     out[k] = hit ? (hit as Record<string, unknown>)[k] : null;
   }
   return out as TitleDataDbFields;
@@ -240,12 +252,61 @@ export async function checkBodyFabricationForPublish(content: {
   /** 7-25 多刊盘点(roundup): 本篇涉及的全部刊。与 journalId 可同时传, 内部去重。 */
   journalIds?: string[] | null;
 }): Promise<string[]> {
+  return (await checkPublishJournalGate(content)).fabrication;
+}
+
+/**
+ * 7-28 (#6) 发布期期刊侧总闸 —— **一次查库, 同时给出判据 ① 与判据 ⑤ 的结论**。
+ *
+ * ## 为什么把 ⑤(期刊可信度)也接进发布链路
+ * 审计发现的缺口: `verification.ts` 的 `isUnverifiedJournal` 只有三个消费方 ——
+ *   生成期 batch-worker(标 needs_review/unverified_source_journal)、客服播报护栏、
+ *   选刊器 SQL —— **发布链路三道闸一道都没读它**。后果:
+ *   ① batch-worker 那道只在 `tenantId === SYSTEM 租户` 时才判, 租户自己触发的生成完全不查;
+ *   ② roundup 根本不走 batch-worker, 整条链路对源刊可信度失明;
+ *   ③ 就算标上了 `unverified_source_journal`, 它既不在 RED_LINE_REASONS(会被剔除)
+ *      也不在 TAIL_REASONS(会排队尾) —— 于是**与完全核实过的内容平起平坐抢名额**。
+ *   而 ①②④ 三道判据校的都是**数字**: 一篇讲 LLM 编出来的影子刊的文章, 每个数字都能在
+ *   那条假记录里找到"源", 三道闸全绿, 而整本刊不存在。这是最贵的一类信任事故。
+ *
+ * ## 分两档处理(刻意不是一刀切拦截)
+ *   · **硬红线 = `dataSource === 'ai_fabricated'`**: LLM 自己编出来的影子刊, 刊名/CN 刊号/
+ *     主办方全是假的。这是**确定性事实**(一个字段值, 零推断), 误判率结构上为 0, 所以拦得起。
+ *   · **软降级 = 未通过分体系可信门槛**: 拦不得。7-28 刚把国内刊改成目录成员资格判定,
+ *     但目录字段(catalogs/cscd_level/…)本身还有回填缺口, 现在一刀切拦截 = 复刻 7-27 的
+ *     零产出事故。改为**排队尾**: 核实过的内容先占名额, 不够时它们才顶上, 运营在草稿箱里
+ *     还能看到 needs_review 标。零停产风险, 又确实改变了推什么。
+ *
+ * @returns fabrication 沿用原语义(命中的无据指标, 空=放行); 另加两个期刊侧信号。
+ */
+export interface PublishJournalGateResult {
+  /** 判据①: 正文里无据的 IF/分区。空 = 放行。 */
+  fabrication: string[];
+  /** 判据⑤ 硬红线: 本篇关联到 LLM 编出来的影子刊(dataSource='ai_fabricated')。 */
+  aiFabricatedJournal: boolean;
+  /** 判据⑤ 软信号: 关联刊未过分体系可信门槛(见 verification.ts)。调用方应排队尾, **不要拦**。 */
+  unverifiedJournal: boolean;
+  /** 实际查到的关联刊数。0 = 无期刊可判, 上面三项一律空/false。 */
+  journalCount: number;
+}
+
+const EMPTY_GATE: PublishJournalGateResult = {
+  fabrication: [], aiFabricatedJournal: false, unverifiedJournal: false, journalCount: 0,
+};
+
+export async function checkPublishJournalGate(content: {
+  body?: string | null;
+  journalId?: string | null;
+  journalIds?: string[] | null;
+}): Promise<PublishJournalGateResult> {
   const ids = [...new Set([
     ...(Array.isArray(content.journalIds) ? content.journalIds : []),
     ...(content.journalId ? [content.journalId] : []),
   ].filter((x): x is string => typeof x === "string" && x.length > 0))];
-  if (!content.body || ids.length === 0) return [];
+  if (ids.length === 0) return EMPTY_GATE;
   const { journals } = await import("../../models/schema.js");
+  // ⚠️ 投影必须覆盖 isUnverifiedJournal 读的**全部**字段 —— 少投影一列, 国内刊会落回
+  //   国际刊那把尺子(isIntlVerified), 88% 被误判未核实(batch-worker:325 踩过同一个坑)。
   const rows = await db
     .select({
       catalogs: journals.catalogs,
@@ -255,16 +316,31 @@ export async function checkBodyFabricationForPublish(content: {
       casPartition: journals.casPartition,
       casPartitionNew: journals.casPartitionNew,
       jcrFull: journals.jcrFull,
+      confidence: journals.confidence,
+      dataSource: journals.dataSource,
+      cscdLevel: journals.cscdLevel,
+      pkuCoreLevel: journals.pkuCoreLevel,
+      catalogType: journals.catalogType,
+      cnNumber: journals.cnNumber,
+      publisher: journals.publisher,
     })
     .from(journals)
     .where(inArray(journals.id, ids));
-  if (rows.length === 0) return [];
-  // 骑墙豁免 + 只管纯国内刊(多刊: 有一本骑墙/国际就整篇豁免)
-  if (!rows.every((r) => isPureDomesticCatalogs(r.catalogs))) return [];
-  return findBodyFabricationMulti(content.body, rows.map((j) => ({
-    impactFactor: j.impactFactor, compositeImpactFactor: j.compositeImpactFactor,
-    partition: j.partition, casPartition: j.casPartition, casPartitionNew: j.casPartitionNew, jcrFull: j.jcrFull,
-  })));
+  if (rows.length === 0) return EMPTY_GATE;
+
+  const { isUnverifiedJournal } = await import("../journals/verification.js");
+  const aiFabricatedJournal = rows.some((r) => r.dataSource === "ai_fabricated");
+  const unverifiedJournal = rows.some((r) => isUnverifiedJournal(r));
+
+  // 判据①: 骑墙豁免 + 只管纯国内刊(多刊: 有一本骑墙/国际就整篇豁免)
+  const fabrication = content.body && rows.every((r) => isPureDomesticCatalogs(r.catalogs))
+    ? findBodyFabricationMulti(content.body, rows.map((j) => ({
+        impactFactor: j.impactFactor, compositeImpactFactor: j.compositeImpactFactor,
+        partition: j.partition, casPartition: j.casPartition, casPartitionNew: j.casPartitionNew, jcrFull: j.jcrFull,
+      })))
+    : [];
+
+  return { fabrication, aiFabricatedJournal, unverifiedJournal, journalCount: rows.length };
 }
 
 /**
@@ -301,9 +377,11 @@ export function checkTitleDataConsistency(
     const [, num, unit] = m;
     const isAcceptance = unit === "%";
     // ① DB 硬校验: 字段空 → 编造
+    // 7-28 (#6): 审稿周期原来用 `!db.reviewCycle` 的 truthiness, 录用率用 `== null` ——
+    //   同一个 if 里两套口径。统一走 hasDbFact。
     if (db) {
-      if (isAcceptance && db.acceptanceRate == null) { mismatches.push(`${c}(DB无录用率数据)`); continue; }
-      if (!isAcceptance && !db.reviewCycle) { mismatches.push(`${c}(DB无审稿周期数据)`); continue; }
+      if (isAcceptance && !hasDbFact(db.acceptanceRate)) { mismatches.push(`${c}(DB无录用率数据)`); continue; }
+      if (!isAcceptance && !hasDbFact(db.reviewCycle)) { mismatches.push(`${c}(DB无审稿周期数据)`); continue; }
     }
     // ② 正文复现
     const unitAlt = unit === "月" || unit === "个月" ? "(?:个月|月)" : unit === "%" ? "%" : unit;
@@ -318,20 +396,14 @@ export function checkTitleDataConsistency(
   //   此时必须跳过，不能当成"DB 无 IF"去判编造，否则会把所有带 IF 的标题全误伤。
   //   (这些字段类型上都是可选的，TS 拦不住漏传；显式 in 判断是唯一可靠护栏。)
   if (db) {
-    if ("impactFactor" in db || "compositeImpactFactor" in db) {
-      const hasIf = db.impactFactor != null || db.compositeImpactFactor != null;
-      if (!hasIf) {
-        for (const c of [...new Set((title || "").match(TITLE_IF_CLAIM) || [])]) {
-          mismatches.push(`${c.trim()}(DB无影响因子数据)`);
-        }
+    if (providesAnyKey(db, IF_FACT_KEYS) && !hasAnyFact(db, IF_FACT_KEYS)) {
+      for (const c of [...new Set((title || "").match(TITLE_IF_CLAIM) || [])]) {
+        mismatches.push(`${c.trim()}(DB无影响因子数据)`);
       }
     }
-    if ("partition" in db || "casPartition" in db || "casPartitionNew" in db || "jcrFull" in db) {
-      const hasPartition = !!(db.partition || db.casPartition || db.casPartitionNew || db.jcrFull);
-      if (!hasPartition) {
-        for (const c of [...new Set((title || "").match(TITLE_PARTITION_CLAIM) || [])]) {
-          mismatches.push(`${c.trim()}(DB无分区数据)`);
-        }
+    if (providesAnyKey(db, PARTITION_FACT_KEYS) && !hasAnyFact(db, PARTITION_FACT_KEYS)) {
+      for (const c of [...new Set((title || "").match(TITLE_PARTITION_CLAIM) || [])]) {
+        mismatches.push(`${c.trim()}(DB无分区数据)`);
       }
     }
   }

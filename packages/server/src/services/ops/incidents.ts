@@ -39,7 +39,9 @@ export type IncidentKind =
   | "generation_failed"         // 单篇生成失败(排产环节, 非质检)
   | "draft_shortfall"           // 公众号未达每日保底(草稿分发缺口)
   | "draft_remedy_failed"       // 缺口自动补救本身失败
-  | "quality_gate_unavailable"; // 质检闸"没能跑成"(规则检索/红线解析/一致性检查异常) ≠ 内容违规
+  | "quality_gate_unavailable"  // 质检闸"没能跑成"(规则检索/红线解析/一致性检查异常) ≠ 内容违规
+  // ---- 7-28 阶段1-C Prompt 治理 ----
+  | "prompt_contradiction";     // prompt 里同一字段既被要求写又被禁止写(LLM 只能编 → 被防编造闸拦下)
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -64,6 +66,7 @@ export const KIND_LABEL: Record<string, string> = {
   draft_shortfall: "公众号未达每日保底(草稿分发缺口)",
   draft_remedy_failed: "草稿缺口自动补救失败",
   quality_gate_unavailable: "质检闸不可用(没检查成, 已转人工; ≠ 内容违规)",
+  prompt_contradiction: "prompt 指令自相矛盾(同一字段既要求写又禁止写, 已自动修正; 需回看代码)",
 };
 
 export interface RecordIncidentInput {

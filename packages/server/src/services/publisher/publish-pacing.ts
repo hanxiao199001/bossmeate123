@@ -11,7 +11,12 @@
  *
  * 这是"让发布行为本身真的低风险"的合规做法 —— 不伪造任何信号、不绕过任何检测,
  *   只是把节奏放慢、打散、拟人, 与正规矩阵运营一致。全部阈值可用环境变量覆盖。
+ *
+ * 7-28 阶段1-B: 本文件原先自带一份 `AGENT_PLATFORMS = new Set(["douyin","wechat_video"])`,
+ *   与 agent-dispatch.ts 的那份是复制粘贴关系且从未 import —— 任一边加平台另一边就漂。
+ *   现统一读 services/platforms/capabilities.ts 的 publishVia 维度。
  */
+import { AGENT_PLATFORMS } from "../platforms/capabilities.js";
 
 const num = (v: string | undefined, d: number) => {
   const n = Number(v);
@@ -32,8 +37,7 @@ export const PACE = {
   serverThrottleMs: num(process.env.PUBLISH_SERVER_THROTTLE_MS, 3_000),  // 默认 3 秒
 };
 
-const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
-const rand = (a: number, b: number) => a + Math.floor(Math.random() * Math.max(1, b - a));
+const rand =(a: number, b: number) => a + Math.floor(Math.random() * Math.max(1, b - a));
 
 export interface PacingJob {
   accountId: string;

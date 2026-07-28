@@ -32,7 +32,14 @@ vi.mock("../services/publisher/output-health.js", () => ({
   checkOutputHealth: () => ({ healthy: true, codes: [], issues: [], summary: "" }),
   OUTPUT_UNHEALTHY_REASON: "output_unhealthy",
 }));
-vi.mock("../services/compliance/content-check.js", () => ({ checkBodyFabricationForPublish: async () => [] }));
+// 7-28 (#6): draft-distributor 改调 checkPublishJournalGate(一次查库同时给判据①正文编造 +
+//   判据⑤源刊可信度)。两个都 mock 成放行, 保持本测试只测缺口补救那条逻辑。
+vi.mock("../services/compliance/content-check.js", () => ({
+  checkBodyFabricationForPublish: async () => [],
+  checkPublishJournalGate: async () => ({
+    fabrication: [], aiFabricatedJournal: false, unverifiedJournal: false, journalCount: 0,
+  }),
+}));
 
 const recordIncidentSpy = vi.fn(async (..._a: unknown[]) => undefined);
 vi.mock("../services/ops/incidents.js", () => ({ recordIncident: (...a: unknown[]) => recordIncidentSpy(...a) }));

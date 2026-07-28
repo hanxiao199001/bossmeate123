@@ -7,6 +7,10 @@ import {
   DISCIPLINE_CODES,
   GENERIC_DISCIPLINE_CODE,
 } from "../services/recommendation/discipline-mapping.js";
+import {
+  journalDisciplineIs,
+  journalDisciplineMatches,
+} from "../services/journals/journal-sql.js";
 
 /**
  * 7-25 小程序期刊匹配(POST /journals/match)接通 discipline_code。
@@ -83,16 +87,66 @@ describe("bug①: 国内刊中文分类名现在能匹配上", () => {
   });
 });
 
+/**
+ * 7-28 (阶段 1-A #5): 这里原来是两条**源码正则守卫**(断言路由里出现
+ * `journals.disciplineCode` 和 `or(eq(code), eq(GENERIC))` 字面量)。判据抽进
+ * `journal-sql.ts` 的 journalDisciplineMatches 之后, 那两条字面量自然消失, 正则守卫会
+ * 假红 —— 正是设计框架里说的"守文本不守行为、等价重构反而全红"。
+ * 换成: ① 对 helper 本身做**真行为测试**(它生成的 SQL 打的是哪一列、有没有放行 generic);
+ *       ② 路由这边只留一条"确实在调 helper"的轻量检查, 具体行为由 ① 保证。
+ * 全仓不许再读原始列这一条由 `journals-discipline-code-scan.test.ts` 全量扫描守着。
+ */
 describe("路由已切到生成列 + generic 放行", () => {
-  it("查 journals.disciplineCode 而非原始 discipline 列", () => {
-    expect(ROUTE_SRC).toContain("journals.disciplineCode");
-    expect(ROUTE_SRC).toContain("toDisciplineCode(discipline)");
+  it("路由调 helper, 不再自己拼学科条件", () => {
+    expect(ROUTE_SRC).toContain("journalDisciplineMatches(discipline)");
     // 匹配端点不再对原始 discipline 列做全等匹配
     expect(ROUTE_SRC).not.toContain("eq(journals.discipline, enDiscipline)");
   });
 
+  it("helper 打的是生成列 discipline_code, 不是原始列", () => {
+    const q = journalDisciplineMatches("临床医学")!;
+    expect(q).not.toBeNull();
+    const sqlText = JSON.stringify(q);
+    expect(sqlText).toContain("discipline_code");
+    // 原始列 "discipline" 只会作为 "discipline_code" 的前缀出现, 不会单独出现
+    expect(/"name":"discipline"/.test(sqlText)).toBe(false);
+  });
+
   it("与 daily-cron 选刊器同口径: code OR generic(综合刊任何槽位通吃)", () => {
-    expect(ROUTE_SRC).toMatch(/or\(\s*eq\(journals\.disciplineCode, code\),\s*eq\(journals\.disciplineCode, GENERIC_DISCIPLINE_CODE\)\s*\)/);
+    const q = journalDisciplineMatches("计算机")!;
+    const sqlText = JSON.stringify(q);
+    expect(sqlText).toContain("computer");
+    expect(sqlText).toContain(GENERIC_DISCIPLINE_CODE);
+  });
+
+  it("includeGeneric:false 时只要对口刊(筛选器/同档对比用)", () => {
+    const q = journalDisciplineMatches("计算机", { includeGeneric: false })!;
+    const sqlText = JSON.stringify(q);
+    expect(sqlText).toContain("computer");
+    expect(sqlText).not.toContain(GENERIC_DISCIPLINE_CODE);
+  });
+
+  it("自由文本归一不出具体学科 → null(不加条件), 不掉进 generic 把综合刊全捞出来", () => {
+    expect(journalDisciplineMatches("元宇宙")).toBeNull();
+    expect(journalDisciplineMatches("")).toBeNull();
+    expect(journalDisciplineMatches(null)).toBeNull();
+  });
+
+  it("journalDisciplineIs: 精确分桶, 与 meta/disciplines 的 GROUP BY discipline_code 同口径", () => {
+    const sqlText = JSON.stringify(journalDisciplineIs("临床医学"));
+    expect(sqlText).toContain("discipline_code");
+    expect(sqlText).toContain("medicine");
+    expect(sqlText).not.toContain(GENERIC_DISCIPLINE_CODE);
+    // 下拉框里的 generic 那一桶也能原样查回来
+    expect(JSON.stringify(journalDisciplineIs(GENERIC_DISCIPLINE_CODE))).toContain(GENERIC_DISCIPLINE_CODE);
+  });
+
+  it("学科下拉框按生成列分组(否则前端永远拼不出『medicine 还剩几本』)", () => {
+    const start = ROUTE_SRC.indexOf('app.get("/journals/meta/disciplines"');
+    expect(start).toBeGreaterThan(-1);
+    const body = ROUTE_SRC.slice(start, start + 1600);
+    expect(body).toContain("groupBy(journals.disciplineCode)");
+    expect(body).not.toMatch(/groupBy\(journals\.discipline\)/);
   });
 });
 

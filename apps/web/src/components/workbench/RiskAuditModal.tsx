@@ -7,7 +7,7 @@
  *  - [⚠️ 强制放行]  → 二次确认 + 填理由 → POST /publish { forceOverride:true, overrideReason }
  */
 import { useState } from "react";
-import { platformShortLabel } from "../../utils/i18n";
+import { isAgentPlatform, platformShortLabel } from "../../utils/platforms";
 
 export interface AuditHit {
   platform: string;
@@ -32,7 +32,8 @@ export interface RiskAuditModalProps {
 }
 
 function hitNoteFor(platform: string, word: string): string {
-  if ((platform === "douyin" || platform === "wechat_video") && (word === "微信" || word === "WeChat" || word === "公众号")) {
+  // 抖音/视频号(派单给本地 Agent 的两个平台)禁止提微信 —— 平台归属见 utils/platforms.ts
+  if (isAgentPlatform(platform) && (word === "微信" || word === "WeChat" || word === "公众号")) {
     return "跨平台导流，平台禁止";
   }
   if (word === "免费" || word === "免费领" || word === "免费送" || word === "抢购" || word === "限时秒杀") {

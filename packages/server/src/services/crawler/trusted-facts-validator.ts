@@ -20,7 +20,20 @@
  *    合法的错值放进 DB, 比整条拒写危险得多。
  * ② **宁可拒真, 不可放假**。拒写的代价 = 这一轮生成的校验器少一份数据(回到 backlog-C 之前的
  *    状态, 已知可承受); 放假的代价 = 永久污染 + 三道闸失效(已实际发生过)。两者不对等。
+ *
+ * ══ 在四道反编造判据里的位置: 这是**第 ④道(写入侧)** ══
+ * 总纲(四道分别管什么/在哪生效/为什么不能互相替代)见
+ * `services/compliance/fabrication-criteria.ts` 的文件头。一句话版:
+ *   ①②⑤ 全部以 DB 为唯一真相源, 所以它们守不住"DB 本身被污染"这一种失效;
+ *   ④ 是唯一一道**不查库、不联网、不问 LLM** 的闸, 它守的就是 DB 本身。
+ *
+ * ⚠️ 本文件的"字段有没有给"用 `wasProvided`(空串算没给), 与读取侧的 `hasDbFact`
+ *    (只有 null/undefined 算没有)**语义不同, 刻意不合并** —— 抓取失败的典型表现就是
+ *    给回空串(选择器命中了空节点), 在这一侧必须算"没抓到", 否则会拿空串去跑格式校验、
+ *    报一堆无意义的 bad_format。两条判定都在 fabrication-criteria.ts 里, 并排放着好对比。
  */
+
+import { wasProvided } from "../compliance/fabrication-criteria.js";
 
 // ============ 判据常量(集中在此, 便于日后调参与审计) ============
 
@@ -182,7 +195,8 @@ export interface TrustedFactsInput {
 
 // ============ 主函数 ============
 
-const isPresent = (v: unknown): boolean => v !== null && v !== undefined && v !== "";
+/** 7-28 (#6): 收口到 fabrication-criteria.ts 的 wasProvided(写入侧口径, 空串算没给)。 */
+const isPresent = wasProvided;
 
 /**
  * 回写前的确定性合理性校验。**任何一个字段不合理 → ok=false → 调用方整条拒写**。

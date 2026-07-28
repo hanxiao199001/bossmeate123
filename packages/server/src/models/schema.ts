@@ -172,8 +172,12 @@ export const contents = pgTable(
     type: varchar("type", { length: 20 }).notNull(), // article | video_script | reply
     title: varchar("title", { length: 300 }),
     body: text("body"), // 正文内容（Markdown）
-    // P0 lifecycle: draft | generating | failed | generated | published | archived
+    // P0 lifecycle (7 状态): draft | generating | failed | generated | needs_review | published | archived
+    //   needs_review = PR-U2 质检未过, 待人工复核(不可直接发)。
     // 旧 reviewing/approved 已 migration 回填为 generated（详见 migrate.ts 末尾 P0 段）
+    // ⚠️ 值域的唯一真相源是 services/articles/state-machine.ts 的 ARTICLE_STATUSES;
+    //    本注释若与之不符, 以那边为准(注释漏列 needs_review 曾让前端词表跟着漏, 详情页直接显示英文原码)。
+    //    DB CHECK 约束是阶段3 的事, 现在没有约束 —— 别以为写在这里就管得住。
     status: varchar("status", { length: 20 }).notNull().default("draft"),
     errorMessage: text("error_message"), // P0：generating → failed 时记录失败原因
     statusUpdatedAt: timestamp("status_updated_at", { withTimezone: true }), // P0：状态机变更时间戳
@@ -399,7 +403,7 @@ export const competitors = pgTable(
       .notNull(),
     accountId: varchar("account_id", { length: 200 }).notNull(), // 竞品账号标识
     accountName: varchar("account_name", { length: 200 }), // 账号名称
-    platform: varchar("platform", { length: 50 }).notNull(), // 平台: wechat | douyin | xiaohongshu ...
+    platform: varchar("platform", { length: 50 }).notNull(), // 竞品来源平台(自由文本, 非 PLATFORM_CAPABILITIES 值域)
     articleTitle: varchar("article_title", { length: 500 }),
     articleContent: text("article_content"), // 正文/文案
     articleUrl: varchar("article_url", { length: 1000 }),
@@ -429,7 +433,7 @@ export const distributionRecords = pgTable(
       .notNull(),
     contentId: uuid("content_id")
       .references(() => contents.id, { onDelete: "cascade" }),
-    platform: varchar("platform", { length: 50 }).notNull(), // wechat | video | douyin | xiaohongshu | zhihu | weibo | baijiahao | toutiao
+    platform: varchar("platform", { length: 50 }).notNull(), // 值域见 services/platforms/capabilities.ts (旧注释里的 video/weibo 是历史遗留, 系统里不存在)
     accountName: varchar("account_name", { length: 200 }),
     publishedTitle: varchar("published_title", { length: 500 }),
     publishedUrl: varchar("published_url", { length: 1000 }),
@@ -877,7 +881,10 @@ export const platformAccounts = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
-    platform: varchar("platform", { length: 50 }).notNull(), // wechat | baijiahao | toutiao | zhihu | xiaohongshu
+    // 值域唯一真相源 = services/platforms/capabilities.ts 的 PLATFORM_CAPABILITIES:
+    //   wechat | baijiahao | toutiao | zhihu | xiaohongshu | douyin | wechat_video
+    // (旧注释漏了 douyin/wechat_video —— 无 DB 约束, 注释漂了也没人拦。CHECK 见阶段3)
+    platform: varchar("platform", { length: 50 }).notNull(),
     accountName: varchar("account_name", { length: 200 }).notNull(), // 账号名称/昵称
     accountId: varchar("account_id", { length: 200 }), // 平台方的账号ID
     credentials: jsonb("credentials").default({}).notNull(), // 平台凭证 (加密存储)
@@ -1370,7 +1377,7 @@ export const agentPublishTasks = pgTable(
     tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }).notNull(),
     contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(),
     accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
-    platform: varchar("platform", { length: 20 }).notNull(), // douyin | wechat_video
+    platform: varchar("platform", { length: 20 }).notNull(), // 派单给本地 Agent 的平台 = capabilities 表里 publishVia==="agent" 的那些(当前 douyin | wechat_video)
     accountName: varchar("account_name", { length: 200 }),
     videoSource: text("video_source").notNull(), // /storage/相对路径 或 http(s) url
     caption: text("caption"),

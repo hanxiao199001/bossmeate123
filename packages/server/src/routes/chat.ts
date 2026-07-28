@@ -15,6 +15,7 @@ import { AI_FALLBACK_NO_MODEL_HINT } from "../services/ai/fallback-messages.js";
 import { SkillRegistry } from "../services/skills/index.js";
 import { runWithLlmCallAttribution } from "../services/billing/llm-cost.js";
 import { publishToAccounts } from "../services/publisher/index.js";
+import { PLATFORM_ALIAS_MAP, ARTICLE_PLATFORMS } from "../services/platforms/capabilities.js";
 import {
   initialStatusFields,
   transitionToStatus,
@@ -40,13 +41,9 @@ const sendMessageSchema = z.object({
 // 发布指令关键词
 const PUBLISH_KEYWORDS = ["发布", "可以发了", "发到", "推送", "发出去", "发吧", "发送"];
 
-// 平台名称映射
+// 平台名称映射: 各平台别名来自 PLATFORM_CAPABILITIES.aliases(唯一真相源), 这里只补"全平台"这类聚合词
 const PLATFORM_MAP: Record<string, string> = {
-  "微信": "wechat", "公众号": "wechat",
-  "百家号": "baijiahao", "百家": "baijiahao",
-  "头条": "toutiao", "今日头条": "toutiao",
-  "知乎": "zhihu",
-  "小红书": "xiaohongshu", "红书": "xiaohongshu",
+  ...PLATFORM_ALIAS_MAP,
   "所有": "all", "全部": "all", "全平台": "all",
 };
 
@@ -640,7 +637,8 @@ async function handlePublishCommand(
   for (const [keyword, platform] of Object.entries(PLATFORM_MAP)) {
     if (userMessage.includes(keyword)) {
       if (platform === "all") {
-        targetPlatforms.push("wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu");
+        // "全平台" = 全部图文平台(聊天里发的是文章; 视频走工坊/今日页派单, 不在这条链路)
+        targetPlatforms.push(...ARTICLE_PLATFORMS);
         break;
       }
       if (!targetPlatforms.includes(platform)) {

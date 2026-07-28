@@ -20,6 +20,7 @@ import { eq, and } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { generateDailyRecommendations } from "../content-engine/topic-recommender.js";
 import { logAgentAction, updateAgentLog } from "./base/agent-logger.js";
+import { VIDEO_PLATFORMS, getPlatformCapability } from "../platforms/capabilities.js";
 import type {
   IAgent,
   AgentConfig,
@@ -60,28 +61,8 @@ export interface DailyContentPlan {
 }
 
 // ============ 平台风格映射 ============
-
-const PLATFORM_STYLE_MAP: Record<string, { style: string; wordCount: number }> = {
-  wechat: { style: "deep_analysis", wordCount: 2000 },
-  baijiahao: { style: "popular_science", wordCount: 1200 },
-  toutiao: { style: "news_brief", wordCount: 800 },
-  zhihu: { style: "qa_format", wordCount: 1500 },
-  xiaohongshu: { style: "listicle", wordCount: 600 },
-};
-
-// 默认发布时间（小时:分钟）
-const PLATFORM_PUBLISH_HOURS: Record<string, string> = {
-  wechat: "08:30",
-  baijiahao: "09:00",
-  toutiao: "10:00",
-  zhihu: "11:00",
-  xiaohongshu: "12:00",
-  douyin: "18:00",
-  wechat_video: "19:00",
-};
-
-/** 视频平台列表 */
-const VIDEO_PLATFORMS = new Set(["douyin", "wechat_video"]);
+// 7-28 阶段1-B: 风格/字数/排期时刻/视频平台归属三张表已上收到
+// services/platforms/capabilities.ts (styleProfile / defaultPublishHour / contentKind)。
 
 export class ContentDirector implements IAgent {
   readonly name = "content-director";
@@ -250,8 +231,9 @@ export class ContentDirector implements IAgent {
     for (const rec of recommendations.slice(0, maxDailyArticles)) {
       for (const platform of activePlatforms) {
         const account = accounts.find((a) => a.platform === platform);
-        const styleInfo = PLATFORM_STYLE_MAP[platform] || { style: "deep_analysis", wordCount: 1500 };
-        const publishHour = PLATFORM_PUBLISH_HOURS[platform] || "09:00";
+        const cap = getPlatformCapability(platform);
+        const styleInfo = cap?.styleProfile ?? { style: "deep_analysis", wordCount: 1500 };
+        const publishHour = cap?.defaultPublishHour ?? "09:00";
 
         const task: ContentTask = {
           id: nanoid(16),
@@ -281,7 +263,7 @@ export class ContentDirector implements IAgent {
       const videoPlatforms = activePlatforms.filter((p) => VIDEO_PLATFORMS.has(p));
       const targetPlatform = videoPlatforms[0] || "douyin"; // 默认目标平台
       for (const rec of recommendations.slice(0, maxDailyVideos)) {
-        const publishHour = PLATFORM_PUBLISH_HOURS[targetPlatform] || "18:00";
+        const publishHour = getPlatformCapability(targetPlatform)?.defaultPublishHour ?? "18:00";
         contentTasks.push({
           id: nanoid(16),
           type: "video",

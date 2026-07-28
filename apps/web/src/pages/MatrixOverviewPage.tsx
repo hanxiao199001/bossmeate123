@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../utils/api";
 import PageHeader from "../components/ui/PageHeader";
+import { AGENT_PLATFORMS, platformShortLabel } from "../utils/platforms";
 
 type AccountHealth =
   | "healthy" | "login_expired" | "token_invalid" | "agent_offline"
@@ -56,17 +57,13 @@ interface MatrixOverview {
   accounts: MatrixAccountRow[];
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", douyin: "抖音", wechat_video: "视频号",
-  xiaohongshu: "小红书", zhihu: "知乎", baijiahao: "百家号", toutiao: "头条号",
-};
-const platformLabel = (p: string) => PLATFORM_LABEL[p] ?? p;
 
+
+// 矩阵页只筛"有矩阵号"的平台: 派单给本地 Agent 的两个视频平台 + 公众号。
+// 平台名一律走 utils/platforms.ts, 本页不再自带标签表。
 const PLATFORM_TABS: Array<{ value: string; label: string }> = [
   { value: "all", label: "全部" },
-  { value: "douyin", label: "抖音" },
-  { value: "wechat_video", label: "视频号" },
-  { value: "wechat", label: "公众号" },
+  ...[...AGENT_PLATFORMS, "wechat"].map((p) => ({ value: p, label: platformShortLabel(p) })),
 ];
 
 const HEALTH_BADGE: Record<AccountHealth, { label: string; cls: string }> = {
@@ -138,7 +135,7 @@ export default function MatrixOverviewPage() {
 
   const s = data?.summary;
   const byPlatformText = s
-    ? Object.entries(s.byPlatform).map(([p, n]) => `${platformLabel(p)} ${n}`).join(" · ")
+    ? Object.entries(s.byPlatform).map(([p, n]) => `${platformShortLabel(p)} ${n}`).join(" · ")
     : "";
 
   return (
@@ -260,7 +257,7 @@ export default function MatrixOverviewPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">
-                        {platformLabel(a.platform)}
+                        {platformShortLabel(a.platform)}
                         {a.publishMode === "manual" && (
                           <span
                             className="ml-1.5 px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 text-[10px] align-middle"

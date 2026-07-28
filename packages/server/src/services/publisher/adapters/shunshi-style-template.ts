@@ -352,8 +352,13 @@ function hasWosData(journal: JournalInfo): boolean {
   const hasIf = typeof ifv === "number" && ifv > 0;
   const q = (journal as { partition?: string | null }).partition;
   const hasQ = typeof q === "string" && /^Q[1-4]$/i.test(q);
-  // 刻意不把 cas_partition 算进来: 它虽是国际信号(进 journal_kind), 但 WoS 版块渲的是
-  // JCR分区/IF趋势/CAR, 只有中科院分区一个值撑不起那几块, 放开只会退回 6-17 修掉的"满屏占位"。
+  // 刻意不把中科院分区(cas_partition / cas_partition_new)算进来: 它们虽是国际信号
+  // (进 journal_kind, 见 journals/intl-signal.ts 的 INTL_SIGNAL_FIELDS), 但 WoS 版块渲的是
+  // JCR分区/IF趋势/CAR, 只有一个"3区医学"撑不起那几块, 放开只会退回 6-17 修掉的"满屏占位"。
+  //
+  // 7-29 备案: 本判据是 intl-signal 列清单的**刻意窄子集**, 不是漏读 —— 它回答的是
+  //   "够不够渲染", 不是 "是不是国际刊"。三个判据为何取不同子集见 intl-signal.ts 文件头。
+  //   扫描测试 intl-signal-single-source.test.ts 把本函数列在白名单里, 就是为了记住这件事。
   return hasJif || hasIf || hasQ;
 }
 

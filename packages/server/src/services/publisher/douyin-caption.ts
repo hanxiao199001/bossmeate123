@@ -30,7 +30,12 @@ const MAX_VARIANTS = 10;
 const HOOK_PREFIXES = ["", "干货丨", "实测丨", "建议收藏丨", "亲历丨", "避坑丨", "重磅丨", "科普丨", "经验丨", "提醒丨"];
 const LEAD_POOL = ["关注我，了解更多投稿干货", "想发这本期刊的扣1", "全程干货，建议收藏", "评论区聊聊你的投稿经历", "关注追更，少走弯路", "有问题评论区问我", "收藏起来慢慢看", "点赞过百出下期"];
 
-type VideoPlatform = "douyin" | "wechat_video";
+/**
+ * 视频平台字面量类型 —— 必须与 PLATFORM_CAPABILITIES 里 contentKind==="video" 的集合相同。
+ * (类型无法从运行时 Set 推导, 所以由 __tests__/platform-capabilities.test.ts 的
+ *  "视频只往视频平台发" 那条断言盯着两边一致; 加视频平台时这里也要加。)
+ */
+export type VideoPlatform = "douyin" | "wechat_video";
 const WV_LEAD_POOL = ["点赞+在看，支持一下", "关注我们的视频号，持续更新", "想了解更多，私信或评论", "收藏起来，投稿少走弯路", "转发给需要的同门", "关注追更，干货不断"];
 function captionField(p: VideoPlatform): string { return p === "wechat_video" ? "wechatVideoCaption" : "douyinCaption"; }
 function variantsField(p: VideoPlatform): string { return p === "wechat_video" ? "wechatVideoCaptionVariants" : "douyinCaptionVariants"; }

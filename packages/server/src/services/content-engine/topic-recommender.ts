@@ -13,7 +13,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals, dailyRecommendations, tenants, keywordHistory } from "../../models/schema.js";
 import { eq, and, desc, or, ilike } from "drizzle-orm";
-import { journalVisibleTo } from "../journals/journal-sql.js";
+import { journalVisibleTo, journalDisciplineMatches } from "../journals/journal-sql.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { getTrendReport, type TrendLabel } from "../agents/keyword-trend.js";
 import { chat } from "../ai/chat-service.js";
@@ -261,7 +261,10 @@ export async function generateDailyRecommendations(
 
   for (let i = 0; i < hotTopics.length; i++) {
     const topic = hotTopics[i];
-    const discipline = extractDiscipline(topic.keyword);
+    // 7-28 (#5): 原来这里另有一个 `extractDiscipline()` —— 同文件里的**第二张**关键词→学科映射表,
+    //   它返回中文标签("医学"/"农林科学"), 而紧邻的 inferCategoryFromKeyword 返回学科码。
+    //   一个文件两张表、两套值域, 中文标签那套还拿去 ILIKE 原始列(对国际刊恒不命中)。
+    //   删掉 extractDiscipline, 统一用学科码这一套(topic.category 本就是 keywords.category 存的码)。
     const categoryCode = topic.category || inferCategoryFromKeyword(topic.keyword) || "general";
     const template = DISCIPLINE_TEMPLATES[categoryCode] || DEFAULT_TEMPLATE;
 
@@ -270,16 +273,22 @@ export async function generateDailyRecommendations(
     //      tenant_id 是 NULL, `NULL = 'uuid'` 恒不成立 → 第一轮**恒空**, 每次都掉进 fallback;
     //   ② fallback 是**反向越界**: 完全不带 tenant 条件查全库, 把别的租户的自建刊也捞出来推给你。
     //   一条 journalVisibleTo(共享池 + 本租户自建刊)同时治好两头, fallback 随之取消。
+    // 7-28 (#5) 学科码收口: 原来是 `ilike(journals.discipline, '%医学%')` —— 打**原始列**,
+    //   extractDiscipline 返回的是中文标签("医学"/"计算机"), 对国际刊(原始列存英文码 "medicine")
+    //   永远匹配不上; 反过来若返回英文码又匹配不上国内刊的中文分类名。两头都漏。
+    //   改打生成列 discipline_code(两种原始值都归一到同一套码)。
+    //   归一不出具体学科(自由热词, 如 "元宇宙") → helper 返回 null → 只按刊名匹配, 不掉进
+    //   generic 把 1139 本综合刊全捞出来。
+    const discCond = journalDisciplineMatches(categoryCode);
     const matchedJournals = await db
       .select()
       .from(journals)
       .where(
         and(
           journalVisibleTo(tenantId),
-          or(
-            ilike(journals.discipline, `%${discipline}%`),
-            ilike(journals.name, `%${topic.keyword}%`)
-          )
+          discCond
+            ? or(discCond, ilike(journals.name, `%${topic.keyword}%`))
+            : ilike(journals.name, `%${topic.keyword}%`)
         )
       )
       .orderBy(desc(journals.impactFactor))
@@ -421,32 +430,10 @@ export async function getRecommendationHistory(
 
 // ============ 工具 ============
 
-function extractDiscipline(keyword: string): string {
-  const disciplineMap: Record<string, string> = {
-    "糖尿": "医学", "高血压": "医学", "肿瘤": "医学", "癌": "医学",
-    "心血管": "医学", "神经": "医学", "免疫": "医学", "药": "医学",
-    "临床": "医学", "护理": "医学", "中医": "医学",
-    "教育": "教育", "教学": "教育", "课程": "教育", "学生": "教育",
-    "高考": "教育", "考研": "教育",
-    "AI": "计算机", "机器学习": "计算机", "深度学习": "计算机",
-    "算法": "计算机", "人工智能": "计算机",
-    "环境": "环境科学", "污染": "环境科学", "碳": "环境科学", "生态": "环境科学",
-    "材料": "工程技术", "纳米": "工程技术", "机械": "工程技术",
-    "经济": "经济管理", "管理": "经济管理", "金融": "经济管理",
-    "农": "农林科学", "作物": "农林科学", "土壤": "农林科学",
-    "能源": "工程技术", "电池": "工程技术", "光伏": "工程技术",
-    "法学": "法学", "法律": "法学",
-    "心理": "心理学",
-    "生物": "生物", "基因": "生物", "细胞": "生物",
-    "化学": "化学", "催化": "化学",
-    "物理": "物理", "量子": "物理",
-  };
-
-  for (const [key, discipline] of Object.entries(disciplineMap)) {
-    if (keyword.includes(key)) return discipline;
-  }
-  return keyword;
-}
+// 7-28 (#5): 已删除 extractDiscipline() —— 它是本文件的**第二张**关键词→学科表, 值域是中文标签
+//   ("医学"/"农林科学"), 与下面 inferCategoryFromKeyword 的学科码值域并存。中文标签那套唯一的
+//   用途是 `ILIKE journals.discipline` 打原始列, 对国际刊(原始列存英文码)恒不命中。
+//   它独有的词根(高血压/癌/纳米/电池/光伏)已并入下表, 覆盖面不缩。
 
 /**
  * 从关键词推断学科分类代码（与 keyword-analyzer.ts 的 inferCategory 对齐）
@@ -454,10 +441,10 @@ function extractDiscipline(keyword: string): string {
 function inferCategoryFromKeyword(keyword: string): string | null {
   const lower = keyword.toLowerCase();
   const categoryMap: Record<string, string[]> = {
-    medicine: ["医学", "临床", "药", "基因", "细胞", "肿瘤", "心血管", "神经", "免疫", "护理", "中医", "康复", "糖尿", "lancet", "jama", "bmj", "pubmed"],
+    medicine: ["医学", "临床", "药", "基因", "细胞", "肿瘤", "心血管", "神经", "免疫", "护理", "中医", "康复", "糖尿", "高血压", "癌", "lancet", "jama", "bmj", "pubmed"],
     education: ["教育", "教学", "课程", "学生", "教师", "高考", "考研", "保研", "高校"],
     economics: ["经济", "金融", "管理", "会计", "市场", "贸易"],
-    engineering: ["工程", "机械", "材料", "能源", "建筑", "自动化", "电气"],
+    engineering: ["工程", "机械", "材料", "能源", "建筑", "自动化", "电气", "纳米", "电池", "光伏"],
     computer: ["计算机", "人工智能", "ai", "机器学习", "深度学习", "大数据", "算法"],
     agriculture: ["农", "畜牧", "水产", "食品", "园艺", "作物", "土壤"],
     environment: ["环境", "污染", "生态", "碳", "气候"],

@@ -29,6 +29,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { loadLoginState, markLoginExpired, getSessionBrowser, acquireProfileBrowser, releaseProfileBrowser, BROWSER_LOGIN_PLATFORMS } from "./browser-session.js";
 import { generateDouyinCaptionVariants } from "./douyin-caption.js";
+import { definePlatformMap, platformCreatorOrigin, isVideoPlatform } from "../platforms/capabilities.js";
 
 // ===== 任务模型 =====
 export type DraftPushAccountStatus = "queued" | "running" | "success" | "failed" | "login_expired";
@@ -728,10 +729,11 @@ async function wechatVideoPushDraft({ page, videoPath, caption, title }: UploadP
   }
 }
 
-const PLATFORM_PUSHERS: Record<string, (p: UploadParams) => Promise<void>> = {
+// key 集合由 PLATFORM_CAPABILITIES.supportsDraftPush 校验(启动即抛错)
+const PLATFORM_PUSHERS = definePlatformMap<(p: UploadParams) => Promise<void>>("supportsDraftPush", {
   douyin: douyinPushDraft,
   wechat_video: wechatVideoPushDraft,
-};
+});
 
 // ===== 队列执行 =====
 /**
@@ -761,12 +763,6 @@ async function resolveVideoSource(source: string): Promise<{ path: string; isTem
   throw new Error(`无法识别的视频源: ${source.slice(0, 80)}`);
 }
 
-// 平台登录态所在 origin (注入 localStorage 需先停在该域页面)
-const PLATFORM_ORIGIN: Record<string, string> = {
-  douyin: "https://creator.douyin.com",
-  wechat_video: "https://channels.weixin.qq.com",
-};
-
 export async function setPageLoginState(page: Page, state: { cookies: any[]; localStorage?: string }, platform: string) {
   const cdp = await page.target().createCDPSession();
   // CDP setCookies 支持跨域批量
@@ -777,7 +773,8 @@ export async function setPageLoginState(page: Page, state: { cookies: any[]; loc
 
   // 关键: 恢复 localStorage — 抖音/视频号部分登录令牌存这里, 只给 cookie 会被判未登录弹登录框。
   // localStorage 是 per-origin 的, 必须先停在该域的页面才能写。
-  const origin = PLATFORM_ORIGIN[platform];
+  // 登录态所在 origin 见 platforms/capabilities.ts 的 creatorOrigin
+  const origin = platformCreatorOrigin(platform);
   if (state.localStorage && state.localStorage !== "{}" && origin) {
     try {
       await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 45_000 });
@@ -818,7 +815,8 @@ export async function buildPushCaptions(
       tenantId,
       count: Math.min(accounts.length, 10),
       force: false,
-      platform: (accounts[0]?.platform === "wechat_video" ? "wechat_video" : "douyin") as any,
+      // 文案按视频平台风格生成; 非视频平台(不该走到这)兜底 douyin。归属见 platforms/capabilities.ts contentKind
+      platform: (isVideoPlatform(accounts[0]?.platform ?? "") ? accounts[0]!.platform : "douyin") as any,
     });
     if (variants.length > 0) {
       // 6-19: 生成阶段自动净化违禁/绝对化词, 出来即合规(不必发布时才拦截)

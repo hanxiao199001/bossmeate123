@@ -16,6 +16,12 @@ import { logger } from "../../config/logger.js";
 import { chat, isAiUnavailableError } from "../ai/chat-service.js";
 import { isAiFallbackText } from "../ai/fallback-messages.js";
 import { semanticSearch } from "../knowledge/knowledge-service.js";
+import {
+  SIX_DIM_PUBLISH_TOTAL,
+  SIX_DIM_PUBLISH_MIN_DIM,
+  SIX_DIM_EXCELLENT_SCORE,
+  SIX_DIM_WEAK_DIM_HINT,
+} from "./quality-thresholds.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
 
 // ============ 类型定义 ============
@@ -61,16 +67,29 @@ export interface SixDimDetail {
 
 export interface SixDimResult {
   dims: Record<SixDimKey, SixDimDetail>;
-  /** 加权总分 0-100 */
-  totalScore: number;
-  /** 总分 ≥80 且无维度 <6 */
+  /**
+   * 加权总分 0-100；**null = 没评上分**（≠ 评了 0 分）。
+   *
+   * 7-28 阶段1-C 类型强制: 这里原本是 `number`，降级时填 0 当类型占位 —— 于是"没评上分"
+   * 在类型上与"评了 0 分"完全不可区分，全靠消费方记得先看 `degraded`。7-27 事故正是这么来的
+   * (20 篇未评分被当 0 分 → 红线剔除 → 零产出)，同构点在 content-worker / smart-assign /
+   * quality-check-engine / crawl-data-sink 各有一处，人工 review 找不全。
+   *
+   * 改成 `number | null` 后，编译器会在**每一个**把它当数字用的地方报错，逼消费方显式
+   * 回答"未评分时该怎么办"。判据永远是 `totalScore === null`（等价于 degraded=true），
+   * 别再写 `|| 0` / `?? 0` / `|| 70` 这类默认值 —— 那是把问题重新埋回去。
+   * 正确范式参考 `services/review/ai-reviewer-rules.ts` 的 `!Number.isFinite(total)` → 不入池。
+   */
+  totalScore: number | null;
+  /** 总分 ≥80 且无维度 <6；没评上分时恒 false */
   passed: boolean;
   /** 硬数据密度统计（来自 dataAccuracy 的 justification，如"全文1800字/硬数据11个≈163字/个"） */
   dataDensity: string;
   /**
    * LLM 挂了走兜底时为 true。
-   * ⚠️ 7-27 起语义收紧: degraded=true 表示**没评上分**(totalScore 的 0 只是类型占位),
-   * 与"真的评了 0 分"完全不是一回事 —— 消费方排序/展示/统计前必须先看这个标志。
+   * ⚠️ 7-27 起语义收紧: degraded=true 表示**没评上分**，与"真的评了 0 分"完全不是一回事。
+   * 7-28 起 `totalScore === null` 与本字段严格同义（两者由同一处构造，见 degradedSixDim）；
+   * 保留 degraded 是为了带上 degradedReason，且消费方读哪个都不会错。
    */
   degraded: boolean;
   /** 7-27: 降级原因(AI 超时/无响应 vs 评分输出解析失败), 供简报与排查区分故障类型 */
@@ -90,7 +109,8 @@ export interface SixDimResult {
 export interface QualityCheckV2Result {
   /** P0①：六维明细（替换原五维 originality/academicRigor/... 结构） */
   scores: SixDimResult["dims"];
-  totalScore: number;         // 0-100（六维加权）
+  /** 0-100（六维加权）；**null = 没评上分**，语义与 SixDimResult.totalScore 完全一致（直接透传） */
+  totalScore: number | null;
   passed: boolean;            // 总分 ≥80 且无维度 <6
   dataDensity: string;
   degraded: boolean;
@@ -670,7 +690,9 @@ ${scorerView}
     );
 
     // 通过标准照 md：总分 ≥80 且无维度 <6
-    const passed = total >= 80 && (Object.values(dims) as SixDimDetail[]).every((d) => d.score >= 6);
+    const passed =
+      total >= SIX_DIM_PUBLISH_TOTAL &&
+      (Object.values(dims) as SixDimDetail[]).every((d) => d.score >= SIX_DIM_PUBLISH_MIN_DIM);
 
     // 7-27: 分是降级快模型给的 → 落 incident(供简报统计 + 日后抽检降级分的可信度)。
     //   不阻塞: 降级分照常参与发布判定 —— 若一降级就转人工, 主模型一抖照样全线停产, 等于没自愈。
@@ -799,10 +821,11 @@ function degradedSixDim(reason = "评分服务降级"): SixDimResult {
   for (const key of Object.keys(SIX_DIM_WEIGHTS) as SixDimKey[]) {
     dims[key] = { score: 0, weakestSection: "全文", fixHint: "", justification: `${reason}，未评上分(不是 0 分)` };
   }
-  // ⚠️ 7-27: totalScore=0 是**类型上的占位**, 语义是"没评上分"而不是"评了 0 分"。
-  //   唯一可信的判据是 degraded=true —— 任何消费方(排序/展示/统计/AI 复审)必须先看它。
-  //   落库侧已做区分: quality-pipeline 在 degraded 时把 sixDimTotal/sixDimScores 写成 null。
-  return { dims, totalScore: 0, passed: false, dataDensity: `${reason}，无统计`, degraded: true, degradedReason: reason };
+  // 7-28 阶段1-C: totalScore 由 0(类型占位) 改为 **null**(= 没评上分)。
+  //   语义没变, 变的是"消费方忘了看 degraded"这件事从此编译不过 —— 见 SixDimResult.totalScore 的注释。
+  //   dims 里各维仍是 0: 那是 SixDimDetail.score 的类型(number), 但 justification 已写明"未评上分",
+  //   且 degraded=true 时任何消费方都不该读 dims(generateFeedback 的低分维度列表就跳过了)。
+  return { dims, totalScore: null, passed: false, dataDensity: `${reason}，无统计`, degraded: true, degradedReason: reason };
 }
 
 /** 7-20 编造红线封顶分: 正文出现无据 IF/分区 时 dataAccuracy 的上限。
@@ -842,13 +865,18 @@ function generateFeedback(
     parts.push(`⚠️ 以下检查未能完成: ${names} —— 这不是内容违规, 是检查器当时不可用, 已转人工复核`);
   }
 
-  if (sixDim.totalScore >= 90) parts.push("内容质量优秀");
-  else if (sixDim.passed) parts.push("内容质量达到 80 分发布线");
-  else parts.push("内容质量未达 80 分发布线");
+  // 7-28 阶段1-C: 没评上分(totalScore=null) 必须单独说, 绝不能落进"未达 80 分发布线" ——
+  //   运营看到"未达 80 分"会去改内容, 而真相是评分器当时挂了, 内容一个字都没被看过。
+  //   这正是 7-27 事故在**人机界面**上的同一个错: 把"没评"说成"评差了"。
+  if (sixDim.totalScore === null) {
+    parts.push(`⚠️ 未评上分(${sixDim.degradedReason ?? "评分服务降级"}) —— 这不是"0 分", 是评分器当时不可用, 已转人工复核`);
+  } else if (sixDim.totalScore >= SIX_DIM_EXCELLENT_SCORE) parts.push("内容质量优秀");
+  else if (sixDim.passed) parts.push(`内容质量达到 ${SIX_DIM_PUBLISH_TOTAL} 分发布线`);
+  else parts.push(`内容质量未达 ${SIX_DIM_PUBLISH_TOTAL} 分发布线`);
 
   // 列出 <8 的低分维度（老韩打分流程：标出 <8 的维度逐个抬）
   const lows = (Object.keys(sixDim.dims) as SixDimKey[])
-    .filter((k) => sixDim.dims[k].score < 8)
+    .filter((k) => sixDim.dims[k].score < SIX_DIM_WEAK_DIM_HINT)
     .map((k) => `${SIX_DIM_LABELS[k]}${sixDim.dims[k].score}分(${sixDim.dims[k].weakestSection}：${sixDim.dims[k].fixHint})`);
   if (lows.length > 0 && !sixDim.degraded) {
     parts.push(`低分维度：${lows.join("；")}`);

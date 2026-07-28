@@ -26,8 +26,8 @@ import type { BaseAgentContext, BaseAgentTaskResult } from "./base/base-agent.js
 import type { AgentResult, AgentTask } from "./base/types.js";
 import type { BusEvent } from "../event-bus/types.js";
 
-// 分数门槛（>= 该分数直接自动放行）
-const AUTO_APPROVE_SCORE = 85;
+// 7-28 阶段1-C: 分数线收进 quality-thresholds.ts 单一真相源(原为本文件私有字面量 85)
+import { AGENT_AUTO_APPROVE_SCORE } from "../content-engine/quality-thresholds.js";
 
 interface ContentCreatedPayload {
   contentId: string;
@@ -245,13 +245,17 @@ export class QualityCheckerAgent extends BaseAgent {
       return "rejected";
     }
 
+    // 7-28 阶段1-C: totalScore 改 number|null 后, "未评上分"必须与"分低"分开处理。
+    //   null = 评分器当时不可用, 内容一个字都没被看过 —— 既不能当低分打回(rejected),
+    //   也不能当高分放行(approved), 一律落到下方的 reviewing 走人工。
+    //   这是 7-27 事故("没评上分"被当成"评了 0 分")在裁决侧的同一条教训。
     // 分数低于全局门槛 → 打回
-    if (qc.totalScore < env.QUALITY_MIN_SCORE) {
+    if (qc.totalScore !== null && qc.totalScore < env.QUALITY_MIN_SCORE) {
       return "rejected";
     }
 
-    // 高分 + 其它维度全过 → 自动放行
-    if (qc.overallPassed && qc.totalScore >= AUTO_APPROVE_SCORE) {
+    // 高分 + 其它维度全过 → 自动放行（未评上分绝不自动放行）
+    if (qc.overallPassed && qc.totalScore !== null && qc.totalScore >= AGENT_AUTO_APPROVE_SCORE) {
       return "approved";
     }
 
@@ -266,7 +270,10 @@ export class QualityCheckerAgent extends BaseAgent {
         `红线违规 ${qc.redlineCheck.violations.length} 条`
       );
     }
-    if (qc.totalScore < env.QUALITY_MIN_SCORE) {
+    if (qc.totalScore === null) {
+      // 措辞必须与"分低"区分开: 运营看到"评分不足"会去改内容, 而真相是评分器没跑成
+      parts.push("未评上分(评分器当时不可用, 非内容问题)");
+    } else if (qc.totalScore < env.QUALITY_MIN_SCORE) {
       parts.push(`评分 ${qc.totalScore} < ${env.QUALITY_MIN_SCORE}`);
     }
     if (!qc.platformCheck.passed) {

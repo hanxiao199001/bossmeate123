@@ -17,7 +17,7 @@ import { logger } from "../config/logger.js";
 import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
 // 7-25: 学科码唯一真相源(同时也是 journals.discipline_code 生成列的规则源), 别再另立映射表
-import { toDisciplineCode, GENERIC_DISCIPLINE_CODE } from "../services/recommendation/discipline-mapping.js";
+import { journalDisciplineIs, journalDisciplineMatches } from "../services/journals/journal-sql.js";
 
 /**
  * Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单。
@@ -189,7 +189,11 @@ export async function journalRoutes(app: FastifyInstance) {
       //   同口径。**只放宽读**, 写路径(seed / patch / enrich)保持严格租户隔离。
       const conditions: any[] = [or(isNull(journals.tenantId), eq(journals.tenantId, tenantId))];
 
-      if (discipline) conditions.push(eq(journals.discipline, discipline));
+      // 7-28 (#5) 学科码收口: 原来是 `eq(journals.discipline, discipline)` —— 打**原始列**全等,
+      //   国内刊原始列存中文分类名("临床医学"), 等不上前端传的 "medicine" → 列表页学科筛选对
+      //   2242 本国内刊恒 0 条。改打生成列(与下方 meta/disciplines 的 GROUP BY 同口径, 下拉框
+      //   写"medicine 812 本"点进去就必是 812 本)。
+      if (discipline) conditions.push(journalDisciplineIs(discipline));
       if (partition) conditions.push(eq(journals.partition, partition));
       if (ifMin) conditions.push(gte(journals.impactFactor, parseFloat(ifMin)));
       if (ifMax) conditions.push(lte(journals.impactFactor, parseFloat(ifMax)));
@@ -378,16 +382,22 @@ export async function journalRoutes(app: FastifyInstance) {
     try {
       const tenantId = request.tenantId;
 
+      // 7-28 (#5) 学科码收口: 原来 `GROUP BY journals.discipline` 按**原始列**分组 —— 国内刊
+      //   存的是几百个中文分类名("临床医学"/"内科学"/"综合性医药卫生"…), 国际刊存英文码,
+      //   桶碎成几百个且两套口径混在一起, 前端既拿不到"medicine 还剩几本", 下拉框选出来的中文名
+      //   拿去查列表(现在打 discipline_code)也对不上。改按生成列分组: 恒定 14 个桶(13 码 + generic),
+      //   与 GET /journals 的 discipline 筛选、daily-cron 选刊器完全同口径。
+      //   字段名保持 `discipline` 不变(前端契约), 值变成学科码 —— 前端已有 code→中文标签映射表。
       const result = await db
         .select({
-          discipline: journals.discipline,
+          discipline: journals.disciplineCode,
           count: sql<number>`COUNT(*)`,
         })
         .from(journals)
         // 7-25 修(同一个病, 第三处): 共享池 tenant_id IS NULL → 严格相等让学科下拉框恒为空,
         //   前端筛选器直接不可用。与 GET /journals 列表同口径, 否则下拉框和列表还会对不上。
         .where(or(isNull(journals.tenantId), eq(journals.tenantId, tenantId)))
-        .groupBy(journals.discipline)
+        .groupBy(journals.disciplineCode)
         .orderBy(sql`COUNT(*) DESC`);
 
       return reply.send({ code: "ok", data: result });
@@ -430,13 +440,13 @@ export async function journalRoutes(app: FastifyInstance) {
     //   改法: 直接复用 discipline-mapping.ts 的 toDisciplineCode(全项目唯一真相源, 也是生成列
     //   discipline_code 的规则源) + 查生成列。**不再维护第二套映射表**。
     //   generic(综合刊/学报)一并放行, 与 daily-cron 选刊器 `code = X OR code = generic` 同口径。
+    //   7-28 (#5): 这段内联逻辑抽进 journal-sql.ts 的 journalDisciplineMatches —— 当时这里写对了,
+    //   但另外 8 处消费方还在读原始列, 所以判据必须有唯一归宿而不是"这一处写对"。
+    //   入参可能是用户手填的自由文本(小程序 body.discipline), 归一不出具体学科时 helper 返回
+    //   null → 不加学科条件, 而不是掉进 generic 把 1139 本综合刊全捞出来。
     if (discipline) {
-      const code = toDisciplineCode(discipline);
-      conditions.push(
-        code === GENERIC_DISCIPLINE_CODE
-          ? eq(journals.disciplineCode, GENERIC_DISCIPLINE_CODE)
-          : or(eq(journals.disciplineCode, code), eq(journals.disciplineCode, GENERIC_DISCIPLINE_CODE))
-      );
+      const discCond = journalDisciplineMatches(discipline);
+      if (discCond) conditions.push(discCond);
     }
 
     // 按业务线筛选影响因子范围（国内核心客户一般投IF<10的期刊）

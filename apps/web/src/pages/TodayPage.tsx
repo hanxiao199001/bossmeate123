@@ -8,6 +8,8 @@ import { api } from "../utils/api";
 import { useAuthStore } from "../hooks/useAuthStore";
 import Greeting from "../components/dashboard/Greeting";
 import OnboardingChecklist from "../components/OnboardingChecklist"; // 7-05 老板首登向导
+import { AGENT_PLATFORMS, VIDEO_PLATFORMS, platformShortLabel } from "../utils/platforms";
+import { statusLabel, statusColor } from "../components/StatusBadge";
 
 interface TodayContent {
   id: string;
@@ -66,16 +68,6 @@ interface OpsBriefing {
   };
 }
 
-const PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号", wechat: "公众号" };
-const CONTENT_STATUS: Record<string, { label: string; cls: string }> = {
-  draft: { label: "草稿", cls: "bg-gray-100 text-gray-600" },
-  generating: { label: "生成中", cls: "bg-blue-50 text-blue-600" },
-  generated: { label: "已生成", cls: "bg-emerald-50 text-emerald-600" },
-  published: { label: "已发布", cls: "bg-indigo-50 text-indigo-600" },
-  needs_review: { label: "待审·质检未过", cls: "bg-amber-50 text-amber-700" },
-  failed: { label: "失败", cls: "bg-rose-50 text-rose-600" },
-  archived: { label: "已归档", cls: "bg-gray-100 text-gray-400" },
-};
 const TASK_STATUS: Record<string, { label: string; cls: string }> = {
   pending: { label: "排队中", cls: "bg-gray-100 text-gray-600" },
   claimed: { label: "执行中", cls: "bg-blue-50 text-blue-600" },
@@ -311,7 +303,7 @@ export default function TodayPage() {
   };
 
   // PR-W3: 一键派发 — 视频→本地Agent(dispatch), 文章→服务器发布(/publish)
-  const AGENT_PLATFORMS = new Set(["douyin", "wechat_video"]);
+  // 平台归属见 utils/platforms.ts(publishVia), 本页不再自建 Set
   const [picking, setPicking] = useState<TodayContent | null>(null);
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const [dispatching, setDispatching] = useState(false);
@@ -609,7 +601,7 @@ export default function TodayPage() {
           <div className="space-y-1.5">
             {manualTasks.map((t) => (
               <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800 min-w-0">
-                <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
+                <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 shrink-0">{platformShortLabel(t.platform)}</span>
                 <span className="font-medium shrink-0 whitespace-nowrap">{t.accountName}</span>
                 <span className="text-gray-600 truncate min-w-0 flex-1">已填好停在发布页 — 去浏览器点【发布】</span>
                 <button onClick={() => void finishTask(t.id, "published", t.contentId, t.platform)} disabled={finishing === t.id}
@@ -620,7 +612,7 @@ export default function TodayPage() {
             ))}
             {failedTasks.map((t) => (
               <div key={t.id} className="flex items-center gap-2 text-sm text-gray-800 min-w-0">
-                <span className="px-1.5 py-0.5 rounded text-xs bg-rose-100 text-rose-700 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
+                <span className="px-1.5 py-0.5 rounded text-xs bg-rose-100 text-rose-700 shrink-0">{platformShortLabel(t.platform)}</span>
                 <span className="font-medium shrink-0 whitespace-nowrap">{t.accountName}</span>
                 <span className="text-rose-600 truncate min-w-0 flex-1">{friendlyError(t.error, t.status)}</span>
                 <button onClick={() => void finishTask(t.id, "cancel")} disabled={finishing === t.id}
@@ -658,7 +650,7 @@ export default function TodayPage() {
                 <div className="space-y-1">
                   {roi.topContents.map((c) => (
                     <Link key={c.contentId} to={`/content/${c.contentId}`} className="flex items-center gap-2 text-sm hover:bg-gray-50 px-2 -mx-2 py-0.5 rounded">
-                      <span className="text-xs text-gray-400 shrink-0">{PLATFORM_LABEL[c.platform] ?? c.platform}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{platformShortLabel(c.platform)}</span>
                       <span className="text-gray-800 truncate flex-1">{c.title ?? "(无标题)"}</span>
                       <span className="text-xs text-indigo-600 shrink-0">{c.views.toLocaleString()} 阅读</span>
                     </Link>
@@ -723,7 +715,7 @@ export default function TodayPage() {
               const idle = a.publishedToday === 0 && a.queuedToday === 0;
               return (
                 <div key={a.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${idle ? "border-amber-200 bg-amber-50/40" : "border-gray-100"}`}>
-                  <span className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600 shrink-0">{PLATFORM_LABEL[a.platform] ?? a.platform}</span>
+                  <span className="px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600 shrink-0">{platformShortLabel(a.platform)}</span>
                   <span className="text-sm text-gray-800 truncate flex-1">{a.accountName}</span>
                   <span className={`text-xs shrink-0 ${idle ? "text-amber-600" : "text-gray-400"}`}>
                     {idle ? "今日空着" : `已发 ${a.publishedToday}${a.queuedToday ? ` · 队列 ${a.queuedToday}` : ""}`}
@@ -749,7 +741,7 @@ export default function TodayPage() {
             ) : (
               <div className="space-y-1">
                 {g.list.map((c) => {
-                  const st = CONTENT_STATUS[c.status] ?? { label: c.status, cls: "bg-gray-100 text-gray-500" };
+                  const st = { label: statusLabel(c.status), cls: statusColor(c.status) };
                   const isVideo = c.type === "video";
                   const eligible = data.accounts.filter((a) => (isVideo ? AGENT_PLATFORMS.has(a.platform) : !AGENT_PLATFORMS.has(a.platform)));
                   const isPicking = picking?.id === c.id;
@@ -825,9 +817,9 @@ export default function TodayPage() {
                       {metricFor === c.id && (
                         <div className="ml-2 mb-2 p-3 rounded-lg border border-gray-200 bg-gray-50 flex flex-wrap items-end gap-2">
                           <select value={mPlatform} onChange={(e) => setMPlatform(e.target.value)} className="text-xs px-2 py-1 border border-gray-200 rounded-lg">
-                            <option value="wechat">公众号</option>
-                            <option value="douyin">抖音</option>
-                            <option value="wechat_video">视频号</option>
+                            {["wechat", ...VIDEO_PLATFORMS].map((p) => (
+                              <option key={p} value={p}>{platformShortLabel(p)}</option>
+                            ))}
                           </select>
                           <label className="text-xs text-gray-500">阅读<input value={mViews} onChange={(e) => setMViews(e.target.value)} className="ml-1 w-16 px-1 py-1 border border-gray-200 rounded" /></label>
                           <label className="text-xs text-gray-500">涨粉<input value={mFollowers} onChange={(e) => setMFollowers(e.target.value)} className="ml-1 w-14 px-1 py-1 border border-gray-200 rounded" /></label>
@@ -847,7 +839,7 @@ export default function TodayPage() {
                                 onClick={() => togglePick(a.id)}
                                 className={`text-xs px-2 py-1 rounded-lg border ${pickedIds.has(a.id) ? "border-indigo-500 bg-indigo-600 text-white" : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300"}`}
                               >
-                                {PLATFORM_LABEL[a.platform] ?? a.platform} · {a.accountName}
+                                {platformShortLabel(a.platform)} · {a.accountName}
                               </button>
                             ))}
                           </div>
@@ -881,7 +873,7 @@ export default function TodayPage() {
               return (
                 <div key={t.id} className="flex items-center gap-2 py-1 min-w-0">
                   <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${st.cls}`}>{st.label}</span>
-                  <span className="text-xs text-gray-400 shrink-0">{PLATFORM_LABEL[t.platform] ?? t.platform}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{platformShortLabel(t.platform)}</span>
                   <span className="text-sm text-gray-800 shrink-0 whitespace-nowrap">{t.accountName}</span>
                   {(t.status === "failed" || t.status === "login_expired") && <span className="text-xs text-rose-500 truncate min-w-0 flex-1">{friendlyError(t.error, t.status)}</span>}
                 </div>

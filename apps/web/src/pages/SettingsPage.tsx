@@ -9,6 +9,7 @@ import PageHeader from "../components/ui/PageHeader";
 import { toast } from "../components/Toast";
 import { useAuthStore } from "../hooks/useAuthStore";
 import { IconMonitor } from "../components/ui/Icons";
+import { platformShortLabel } from "../utils/platforms";
 
 interface WechatConfig {
   appId: string;
@@ -31,7 +32,7 @@ interface AgentDevice {
   accounts?: Array<{ accountName: string; platform: string }>; // PR-A16: 该设备持有登录态的账号
 }
 
-const AGENT_PLATFORM_LABEL: Record<string, string> = { douyin: "抖音", wechat_video: "视频号" };
+
 
 function formatLastSeen(lastSeenAt: string | null): string {
   if (!lastSeenAt) return "从未上线";
@@ -575,7 +576,7 @@ export default function SettingsPage() {
                           <div className="text-xs text-gray-500 mt-0.5 truncate">
                             持有登录:{" "}
                             {d.accounts!
-                              .map((a) => `${AGENT_PLATFORM_LABEL[a.platform] ?? a.platform}·${a.accountName}`)
+                              .map((a) => `${platformShortLabel(a.platform)}·${a.accountName}`)
                               .join("、")}
                           </div>
                         )}

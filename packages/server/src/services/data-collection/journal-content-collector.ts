@@ -14,6 +14,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { keywords, journals } from "../../models/schema.js";
 import { eq, and, desc, or, ilike, sql, isNull, isNotNull, ne, gt } from "drizzle-orm";
+import { journalDisciplineIs, journalDisciplineMatches } from "../journals/journal-sql.js";
 import { createEntry } from "../knowledge/knowledge-service.js";
 import {
   fetchJournalCoverMultiSource,
@@ -243,7 +244,12 @@ export async function collectJournalContent(params: {
   const tokens = cleanedTopic.split(/\s+/).filter((t) => t.length >= 2);
   const journalConds: any[] = [];
   if (issnMatch) journalConds.push(ilike(journals.issn, issnMatch[0]));
-  journalConds.push(ilike(journals.discipline, `%${topic}%`));
+  // 7-28 (#5) 学科码收口: 原来是 `ilike(journals.discipline, '%<主题词>%')` —— 打**原始列**做
+  //   子串匹配, 国内刊存中文分类名、国际刊存英文码, 同一个主题词最多命中其中一边。
+  //   改走 helper 归一到生成列; 主题词是自由文本, 归一不出具体学科时返回 null → 这一条候选
+  //   直接不加(下面还有 6 层刊名/ISSN 候选兜着), 而不是掉进 generic 把综合刊全捞出来。
+  const topicDiscCond = journalDisciplineMatches(topic);
+  if (topicDiscCond) journalConds.push(topicDiscCond);
   journalConds.push(ilike(journals.name, `%${topic}%`));
   journalConds.push(ilike(journals.nameEn, `%${topic}%`));
   if (cleanedTopic && cleanedTopic !== topic) {
@@ -255,7 +261,10 @@ export async function collectJournalContent(params: {
     journalConds.push(ilike(journals.name, `%${tok}%`));
     journalConds.push(ilike(journals.nameEn, `%${tok}%`));
   }
-  if (hotKeywords.length > 0) journalConds.push(ilike(journals.discipline, `%${hotKeywords[0]}%`));
+  if (hotKeywords.length > 0) {
+    const hotDiscCond = journalDisciplineMatches(hotKeywords[0]); // 同上: 生成列 + 归一不出就不加
+    if (hotDiscCond) journalConds.push(hotDiscCond);
+  }
   // PR B.13：原始用户输入也作为候选（与 topic 相同时跳过避免重复）。同 PR B.11 的 5 层 fallback。
   const rawPrompt = params.rawUserPrompt;
   if (rawPrompt && rawPrompt !== topic) {
@@ -523,7 +532,11 @@ export async function collectJournalContent(params: {
     try {
       const peerConds: any[] = [];
       if ((journal as any).casPartition) peerConds.push(eq(journals.casPartition, (journal as any).casPartition));
-      else if (journal.discipline) peerConds.push(eq(journals.discipline, journal.discipline));
+      // 7-28 (#5) 学科码收口: 原来是 `eq(journals.discipline, journal.discipline)` —— 打原始列
+      //   **字面全等**, 只有两本刊的中文分类名一字不差才算同学科("临床医学" ≠ "内科学" ≠
+      //   "综合性医药卫生"), 而国内刊光医学口就有几十个分类名 → 同档对比基本恒空。
+      //   改按生成列精确分桶(不放 generic: 同档对比要的是对口刊, 综合刊混进来没有可比性)。
+      else if (journal.discipline) peerConds.push(journalDisciplineIs(journal.discipline));
       if (peerConds.length > 0) {
         const ifv = journal.impactFactor;
         const peers = await db

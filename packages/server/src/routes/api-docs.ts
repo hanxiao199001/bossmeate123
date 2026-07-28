@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { PLATFORM_IDS } from "../services/platforms/capabilities.js";
 
 export async function apiDocsRoutes(app: FastifyInstance) {
   /**
@@ -159,7 +160,7 @@ export async function apiDocsRoutes(app: FastifyInstance) {
             type: "object",
             properties: {
               id: { type: "string", format: "uuid" },
-              platform: { type: "string", enum: ["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu"] },
+              platform: { type: "string", enum: [...PLATFORM_IDS] }, // 见 services/platforms/capabilities.ts
               accountName: { type: "string" },
               isVerified: { type: "boolean" },
               status: { type: "string", enum: ["active", "disabled", "expired"] },
@@ -1207,7 +1208,7 @@ export async function apiDocsRoutes(app: FastifyInstance) {
                     type: "object",
                     required: ["platform", "accountName", "credentials"],
                     properties: {
-                      platform: { type: "string", enum: ["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu"] },
+                      platform: { type: "string", enum: [...PLATFORM_IDS] }, // 见 services/platforms/capabilities.ts
                       accountName: { type: "string" },
                       credentials: { type: "object" },
                       groupName: { type: "string" },

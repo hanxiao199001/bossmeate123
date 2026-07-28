@@ -1,7 +1,7 @@
 /**
  * P0：article lifecycle state machine（5-9 / 5-10 工期）。
  *
- * 6 个状态：draft → generating → (generated | failed) → published → archived
+ * 状态全集 / 转移表见 ./status-vocabulary.ts（7 个状态，含 PR-U2 的 needs_review）。
  * 旧 enum reviewing/approved 已 migration 回填为 generated（migrate.ts 末尾 P0 段）。
  *
  * 设计要点：
@@ -15,42 +15,15 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { isAllowed, type ArticleStatus } from "./status-vocabulary.js";
 
 /** P0-A2 user 强约束：error_message 不超过 500 字符（防超长 stacktrace 撑爆 DB / UI）。 */
 export const MAX_ERROR_MESSAGE_LENGTH = 500;
 
-export type ArticleStatus =
-  | "draft"
-  | "generating"
-  | "failed"
-  | "generated"
-  | "needs_review"   // PR-U2: 质检未过, 待人工复核(不可直接发)
-  | "published"
-  | "archived";
-
-export const ARTICLE_STATUSES: readonly ArticleStatus[] = [
-  "draft",
-  "generating",
-  "failed",
-  "generated",
-  "needs_review",
-  "published",
-  "archived",
-] as const;
-
-/**
- * 合法状态转移表：key=fromStatus，value=允许的 toStatus 列表。
- * 不在列表的转移会被 transitionStatus 拒绝（InvalidTransitionError reason='disallowed'）。
- */
-export const ALLOWED_TRANSITIONS: Readonly<Record<ArticleStatus, readonly ArticleStatus[]>> = {
-  draft: ["generating", "archived"],
-  generating: ["generated", "failed", "needs_review"], // PR-U2: 质检未过 → needs_review
-  failed: ["generating", "archived"], // 重试 / 放弃
-  generated: ["published", "draft", "archived"], // 发布 / 回退编辑 / 归档
-  needs_review: ["generated", "draft", "archived"], // 人工采用 / 退回编辑 / 弃
-  published: ["archived"],
-  archived: [],
-} as const;
+// 7-28 阶段1-B: 词表(状态全集 + 转移表 + isAllowed)已拆到零依赖的 status-vocabulary.ts,
+// 让前端一致性守卫能直接 import 做真行为断言(不必再读源码正则)。这里原样再导出, 消费方零改动。
+export type { ArticleStatus } from "./status-vocabulary.js";
+export { ARTICLE_STATUSES, ALLOWED_TRANSITIONS, isAllowed } from "./status-vocabulary.js";
 
 export class InvalidTransitionError extends Error {
   public readonly code = "INVALID_TRANSITION";
@@ -70,12 +43,6 @@ export class InvalidTransitionError extends Error {
     super(`${reasonMsg}（id=${articleId}）`);
     this.name = "InvalidTransitionError";
   }
-}
-
-/** 纯函数：判断转移是否合法（不查 DB）。 */
-export function isAllowed(from: ArticleStatus, to: ArticleStatus): boolean {
-  const next = ALLOWED_TRANSITIONS[from];
-  return Array.isArray(next) && next.includes(to);
 }
 
 export interface TransitionOptions {

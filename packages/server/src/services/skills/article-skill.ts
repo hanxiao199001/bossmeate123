@@ -30,7 +30,8 @@ import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
 import { platformAccounts, tenants, journals } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
-import { isDomesticKind, toJournalKind } from "../journals/journal-kind.js";
+import { buildJournalFieldContract } from "./journal-prompt-fields.js";
+import { ARTICLE_PROMPT_VERSION } from "./prompt-version.js";
 import { nanoid } from "nanoid";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 import { pickHookPatterns } from "../../data/hook-patterns.js";
@@ -128,100 +129,97 @@ interface QualityReport {
 // ============ 图文线 Skill ============
 
 /**
- * 7-21 纯国内核心刊判定 — 决定是否注入"正文分区/IF 禁写"红线。
- *   纯国内刊 = 有中文核心标签(北大核心/CSSCI/CSSCI扩展/CSCD) 且 **不含 sci-core**。
- *   严格排除骑墙刊(含 sci-core): 它们分区可能是 enrichment 有据的(backlog-C), 禁写会误伤 ——
- *   这正是 6577b9a 全局禁写被回滚的原因。纯国内刊不在 SCI 分区体系, 禁写 100% 安全。
+ * 7-28 阶段1-C: 国内刊判定/指引 + prompt 字段契约已收口到 `journal-prompt-fields.ts`
+ * (与 ##已知期刊数据##/##未公开字段##/##禁止字段##/密度要求 四个块同源生成, 见该文件头注释)。
+ *
+ * 这里保留 re-export 是为了不打断既有 import 路径(单测与 title 侧都从 article-skill 取)。
+ * **新代码请直接 import `journal-prompt-fields.js`**, 别再从本文件转一手。
  */
-const CN_CORE_TAGS = ["pku-core", "cssci", "cssci-ext", "cscd"];
-export function isPureDomesticJournal(catalogs: string[] | null | undefined): boolean {
-  const cats = catalogs || [];
-  return cats.some((c) => CN_CORE_TAGS.includes(c)) && !cats.includes("sci-core");
-}
+export { isPureDomesticJournal, buildDomesticJournalGuidance } from "./journal-prompt-fields.js";
 
-/**
- * 7-28 (#2/#3): 国内刊分支判定 + 专属写作指引 — 抽成纯函数, 单测可直接断言 prompt 组装结果。
- *
- * 判定口径与 title-generator.ts 统一: **有中文核心目录标签 且 无真实国际 IF(>0)** = 国内刊。
- * 修死代码: 旧式 `cats.length>0 && !(ifText && !ifText.includes("未知"))` 里 ifText 无 IF 时是
- * "N/A"(恒真值, 不含"未知") → 整个表达式恒 false → 7-21 改动3 的国内刊分支上线以来**从未走到过**。
- *
- * 复合影响因子(#3): 万方回填的 composite_impact_factor(447 本医学刊)接进生成 —— 国内刊无 JCR IF
- * 但有复合 IF 时作为国内口径指标给 LLM, 强制全称+口径标注, 防被简写成"影响因子 X"冒充 SCI 指标。
- * 字段双路径: collector 产出叫 compositeIF, batch 直查 DB 行(drizzle)叫 compositeImpactFactor。
- *
- * 禁写清单动态化: 旧文案硬说"没有精确录用率/审稿周期数据", 但 knownFields 一直会渲染 DB 里真实的
- * reviewCycle/acceptanceRate —— 两处自相矛盾会让 LLM 犯懵。现按"本刊真没有的字段"动态生成禁写项。
- */
-export function buildDomesticJournalGuidance(j: {
-  catalogs?: string[] | null;
-  impactFactor?: number | null;
-  compositeIF?: number | null;           // collector 路径字段名
-  compositeImpactFactor?: number | null; // DB 直查路径字段名
-  reviewCycle?: string | null;
-  acceptanceRate?: number | null;
-  discipline?: string | null;
-  // 7-28: journal_kind 判定要用的其余信号(全 optional, 传得到就用) —— 少了它们只会退回
-  //   "catalogs 非空 && 无 IF" 的老口径, 不会误判成国内刊。
-  partition?: string | null;
-  casPartition?: string | null;
-  catalogType?: string | null;
-  cscdLevel?: string | null;
-  pkuCoreLevel?: string | null;
-  cnNumber?: string | null;
-}): { isDomestic: boolean; guidance: string; compositeIF: number | null } {
-  const cats = j.catalogs || [];
-  const hasIF = j.impactFactor != null && j.impactFactor > 0; // PR #209: IF<=0 是占位值, 当"无 IF"
-  // 7-28 (③b): 判定收口到 journal_kind 单一真相源(替换 `cats.length > 0` 这半条启发式)。
-  //   `isDomesticKind` = kind 落 'cn'(纯国内)或 'both'(骑墙); 再叠加"无真实 IF"这一条不变 ——
-  //   IF>0 就按国外刊写, IF<=0 是占位值当无 IF(PR #209)。
-  //   相对老口径的唯一变化是**把裂缝刊捞回来**: 只写了 pku_core_level/cscd_level 而 catalogs
-  //   为空的刊(enricher orchestrator:280-289 的产物), 老口径判它"不是国内刊" → 拿不到国内刊
-  //   写作指引、被按 SCI 口径写。其余情形结果与老口径逐条一致。
-  const isDomestic = isDomesticKind(toJournalKind(j)) && !hasIF;
-  const cifRaw = j.compositeIF ?? j.compositeImpactFactor ?? null;
-  const compositeIF = !hasIF && cifRaw != null && cifRaw > 0 ? cifRaw : null;
-  if (!isDomestic) return { isDomestic, guidance: "", compositeIF };
-  // 身份组合区分度: 三核心 > 北大+CSSCI > 纯 CSCD (与库内分布一致, 让 LLM 拿捏权威分量)
-  const idTags: string[] = [];
-  if (cats.includes("pku-core")) idTags.push("北大核心");
-  if (cats.includes("cssci")) idTags.push("CSSCI（南大核心）来源期刊");
-  if (cats.includes("cssci-ext")) idTags.push("CSSCI 扩展版来源期刊");
-  if (cats.includes("cscd")) idTags.push("CSCD（中国科学引文数据库）");
-  const idWeight = idTags.length >= 3 ? "三核心齐收（分量最重的一档国内核心）"
-    : (cats.includes("pku-core") && cats.includes("cssci")) ? "北大核心 + CSSCI 双核心（国内社科顶配）"
-    : cats.includes("pku-core") ? "北大核心（评职称/毕业最认的硬通货）"
-    : "国内核心收录";
-  // 禁写/缺失清单按真实数据动态生成: JCR IF/中科院分区/JCR 分区对国内刊恒禁; 录用率/审稿周期看 DB。
-  const missing: string[] = ["JCR/SCI 影响因子(IF)", "中科院分区", "JCR 分区"];
-  const forbidden: string[] = ["JCR/SCI 口径的 IF 数字", `"X区"/"中科院X区"/"JCR Qx" 等分区表述`];
-  if (j.acceptanceRate == null) { missing.push("精确录用率"); forbidden.push("具体录用率百分比"); }
-  if (!j.reviewCycle) { missing.push("精确审稿周期"); forbidden.push("具体审稿天数/周期"); }
-  const haves: string[] = [];
-  if (compositeIF != null) haves.push(`复合影响因子 ${compositeIF.toFixed(3)}（知网/万方口径，国内影响力指标）—— 可以写，但必须写全"复合影响因子"并注明国内口径，🚫 严禁写成"影响因子 ${compositeIF.toFixed(3)}"/"IF ${compositeIF.toFixed(3)}"冒充 SCI/JCR 指标`);
-  if (j.reviewCycle) haves.push(`审稿周期 ${j.reviewCycle}（DB 真实数据，见##已知期刊数据##）—— 可如实写`);
-  if (j.acceptanceRate != null) haves.push(`精确录用率（见##已知期刊数据##）—— 可如实写`);
-  const guidance = `
+// ============ 7-28 阶段1-C: 主 prompt 的静态块 ============
+//
+// 原状: `generateJournalAIContent` 里一个 204 行的模板字面量, 22 个 PR 层层 append, 81 条禁止指令,
+//   从不删除、从不合并、块与块之间零交叉校验 —— 这是 4 次"prompt 自相矛盾"事故的温床。
+// 现状: 拆成有名字的块。**不含插值的块**提到这里当模块常量(可被单测直接读, 也让方法体只剩接线),
+//   **含插值的块**留在方法体内就地拼(见 const prompt = [...] 的组装处)。
+// 字段相关的四个块(已知数据/未公开/禁止字段/密度要求)不在这里 —— 它们由 journal-prompt-fields.ts
+//   的 buildJournalFieldContract 同源生成, 那才是矛盾检测能成立的前提。
+// 改这些块的文本 = 改 prompt 内容 → 记得按 prompt-version.ts 的规则 bump ARTICLE_PROMPT_VERSION。
 
-## ⚠️ 本刊是【国内核心期刊】—— 按国内口径写，别套 SCI 那一套
-**本刊没有：${missing.join("、")}。** 这不是数据缺失，是国内核心刊本来就不用这套 SCI 指标体系来衡量。
-${haves.length ? `**本刊真实有的国内口径数据（只许用这些，别的数字一律不许出现）：**\n${haves.map((s) => `- ${s}`).join("\n")}\n` : ""}🚫 **绝对禁止**在标题或正文写：${forbidden.join("、")}。
-   写了 = 编造 = 生成后校验会拦下转人工复核 = 这篇白写，还占了别人的产能。
-
-**国内核心刊的卖点主线，按这个顺序写（这才是国内作者真正认的东西）：**
-① 权威身份（最硬的卖点）：${idWeight}。收录情况：${idTags.join("、") || "国内核心"}。
-   讲清"这是什么级别的刊、在评职称/毕业/项目结题里认不认" —— 这比 IF 对国内作者实在得多。
-② 学科定位：${j.discipline || "见收录方向"}方向。说清它在这个学科里是什么位置、适合哪类研究主题。
-③ 投稿方向：收什么类型稿件（论著/综述/实证/个案）、谁该投（硕博毕业/评职称/一线教师医生）、怎么投得中。
-
-## 篇幅与密度（国内刊专属，破"无数据硬凑"死循环）
-- **目标 600-800 字**，讲清"什么级别的刊 + 适合谁投 + 怎么投"即可，**不硬凑 1600 字**。
-- 没有 SCI 数字不等于没有信息密度：身份组合、CSCD 核心/扩展库、学科分类、收录目录、
-  投稿方向、适配人群、评职称/毕业适用性${compositeIF != null ? "、复合影响因子（国内口径）" : ""}${j.reviewCycle ? "、审稿周期" : ""} —— 这些都是国内作者要的实打实信息，写满它们密度天然够。
-- **宁可短而实，不要长而空。** 通篇"认可度高/学术声誉好/值得一投"这类空话 = 不合格。
+/** 块: 小编口吻铁律 (7-03 老韩拍板) */
+const PROMPT_BLOCK_TONE = `## 小编口吻铁律 (7-03 老韩拍板 — 不是论文摘要, 是小编转述)
+1. 【身份与人称】全程以"小编"身份、第一人称口语化转述（"我翻了下它近几年的数据"），像把你研究过的期刊讲给读者听，不是客观陈述堆砌。
+2. 【每个硬数据都要带小编解读】报完数字必须跟一句你的主观判断，例："2.4 的 IF 在工程技术 3 区里不算亮眼，但胜在稳" / "5 个月录用，说实话在这个领域算快的"。只报数不评价 = 论文摘要腔，不合格。
+3. 【禁学术论文腔】🚫 严禁"本文/该刊具有/本刊系/综上所述/综上/呈现出/表明/据统计显示"这类论文式句式堆砌；想说"该刊具有较快的审稿速度"就改说"它审稿是真的快"。
+4. 【小编语气词】适量用"说实话 / 我翻了下 / 划重点 / 注意 / 讲真"拉近距离，但别过量——每段最多一处，全文不超过 5 处，堆多了油腻。
+5. 【人设优先】若下方注入了【账号人设】，以人设为准调整狠度/术语密度——"小编转述+给判断"是基调，具体口吻跟人设走；无人设时默认"贴心学术小编"（热心、有判断、不端着）。
+6. 【真实为界】口语化只改"怎么说"，不改"说什么"——所有数字/事实仍严格来自 ##已知期刊数据##，主观判断只能基于这些真数据做，严禁为了口气顺编数据。
 `;
-  return { isDomestic, guidance, compositeIF };
-}
+
+/** 块: 叙事口吻 + 正文语言要求 (PR #184) */
+const PROMPT_BLOCK_NARRATION = `
+【叙事口吻】
+- recommendation 不要写成干巴巴的总结，要有个人观点和态度（像资深编辑而非百科词条）
+- scopeDescription 要专业但不枯燥，适当加入「热门方向」「近年趋势」等吸引读者的表述
+- editorComment 要极口语化，像和朋友聊天（"说实话这本刊..."、"赶毕业投这个！"）
+
+【正文语言要求】(PR #184)
+- 正文以**中文为主**, 英文只用于期刊名、必要专业术语缩写(IF/SCI/OA 等), 不要整句英文或中英文生硬混杂。
+- 🚫🚫 **严禁元话术**: 绝对不要出现 "由于缺乏...数据" / "无法详细分析" / "暂无统一披露" / "数据未公布" / "缺少相关数据" 这类自暴其短的句子。某项没数据就**直接不写那部分**, 当它不存在, 绝不解释为什么没写。`;
+
+/** 块: 深度分析章节说明 (V7 task #11 的 4 个 HTML 字段) */
+const PROMPT_BLOCK_DEEP_ANALYSIS = `
+【深度分析章节】（V7 task #11，4 个独立 HTML 字段）
+🚫 严格禁止基于上方未提及的字段编造数据。
+🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
+- ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
+- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，风险较低可列入备选 / 谨慎评估 / 强烈避雷"）。🚫 严禁"放心投稿/放心冲/必中/稳过"等替读者拍板的承诺话术（7-03 老韩红线）。**无 CAR 数据时返回 null**。
+- scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
+- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。🚫 **若上方数据中已给出 APC 具体金额, 必须按该金额表述(如"APC 约 USD 3350"), 严禁写"未公开/未披露/未明确/通常 OA 期刊版面费较高"这类模糊或泛化说法**(数据明摆着却说"未公开"是误导)。`;
+
+/** 块: videoScript 数字人口播脚本规范 (6-26 口播强化) */
+const PROMPT_BLOCK_VIDEO_SCRIPT = `
+【videoScript】数字人口播脚本 — 独立于图文, 发抖音/视频号. ⚠️ 这是"说"的稿子不是"写"的稿子, 标准比图文更高, 当成爆款短视频文案认真写 (6-26 口播强化):
+- 长度: **220-320 字**纯文本 (中文 ~4 字/秒 → 目标 55-80 秒; 短一点完播率更高也更省合成费). 🚫 严禁 HTML / markdown / emoji / 分点 / 小标题 — 就是一段能一口气念下来的话.
+- 口播铁律 (违反就废, 写完默念一遍, 拗口就重写):
+  · **对"一个人"说**, 全程用"你"——"你是不是""你要是""告诉你""帮你省事". 🚫 不准"广大作者""各位""大家".
+  · **短句**为主, 一句一个意思, 像说话不像念书. 能口语就口语: 用"说白了""先说结论""划重点""别急""说几个关键的"取代书面连接词.
+  · **数字说人话**: "差不多三个月""一千五百块美金左右""十篇里能中七八篇", 🚫 不要"约 12 周""录用率约 78%"这种书面腔.
+- **开场 3 秒钩子** (第一句话, 最重要, 决定观众划不划走): 必须是下面任一型, 张嘴就砸结论/痛点, 🚫 严禁"今天给大家介绍一本期刊"这类温吞开场:
+  · 痛点扎心型: "投了三个月还卡在外审? 这本审稿快到离谱."
+  · 数字冲击型: "影响因子 5 分多, 录用率却高得不像话."
+  · 反常识/捡漏型: "别再死磕大刊了, 这本捡漏神刊很多人还不知道."
+  · 身份直呼型: "赶毕业的硕博听好了, 这本可能是你的救命稻草."
+  · 悬念前置型: "有本 SCI 审稿快、录用友好还便宜, 但有一类人千万别投 — 先说是哪本."
+- **中段留钩子防划走** (完播关键): 在"投稿数据"讲完后埋一句悬念再继续, 例: "不过有个坑得提醒你""最关键的一点还在后面""但先别急着投".
+- **五段骨架** (段间用句号自然连, 🚫 不要露出段落标题/编号):
+  1. 钩子 (一句, 见上).
+  2. 报刊定位 (一句话): 刊名 + 学科方向 + IF + 分区, 分区**逐字原文搬运** (PR #232). 例: "说的是 X 期刊, 公共卫生方向的 SCI, 影响因子 X, 中科院 X 区."
+  3. 投稿数据 (3-5 个真实数据点, 口语化, 边说边带态度): 录用难度 → 审稿周期 → APC → 风险. 例: "这个价在同档里算良心的."
+  4. 适合谁 / 避开谁 (落到具体人): "适合三类人冲… 但你要是做 Y 方向的, scope 对不上, 别硬投."
+  5. 行动号召 (一句, 最多两个动作, 可留互动): "想看更多选刊关注我, 拿不准的私信问." 或 "这刊到底冲不冲? 评论区聊聊."
+- 数据红线 (同图文正文, 不可破): 分区原文搬运 (PR #232); 收录状态如实, 不写"未被 SCI 收录"否定句 (PR #230/#233); 没有的数据不编造 (PR #229); APC 有就报数字、没有不提 (PR #228); 🚫 严禁"必看/封神/包过/稳过/水刊"等违规夸张词.
+- 缺关键数据 → 该段聚焦学科 + scope 讲, 但全文仍要 220+ 字, 🚫 绝不写"暂无数据/数据未公开".`;
+
+/** 块: 输出 JSON schema */
+const PROMPT_BLOCK_OUTPUT_JSON = `请输出纯 JSON（不要 markdown）：
+{
+  "title": "按照上面指定的标题风格生成的标题",
+  "openingHook": "开头钩子导语（60-120字/2-3句），文章的第一段, 决定读者划不划走, 也是评分'选题与钩子'维度读的开头。必须按【下方指定的开头钩子模式】写: 用读者真实处境/痛点场景切入(卡审稿/被拒/赶毕业/选刊纠结/评职压力), 小编第一人称口吻(像跟朋友说话), 落到本刊能解决什么。🚫 严禁'该刊是一本…'/'随着…的发展'/'今天给大家介绍'式平铺温吞开场。🚫 钩子里任何数字/分区/判断必须真实(红线, 无数据就用开放式提问, 不给假答案)。",
+  "scopeDescription": "收稿范围的详细描述（200-400字），分总述和具体方向列表。用HTML格式，可用<p>和<strong>标签。说明期刊聚焦什么领域、欢迎什么类型的稿件、有什么特色。要专业准确但不枯燥。",
+  "recommendation": "推荐总结（150-300字），综合点评期刊的优势、适合什么样的作者投稿，用HTML格式。要有态度和个人观点，不要像百科全书。",
+  "editorComment": "一句话小编点评（15-30字），极口语化、接地气，像朋友间推荐，如'说实话审稿快到离谱，赶毕业的同学冲！'",
+  "highlightTip": "一个划重点提示（20-40字），提炼最核心的投稿建议或数据亮点",
+  "ifPrediction": "影响因子走势预测的简短描述，如'预测今年涨至15分'，如果无法预测就返回null",
+  "rating": 推荐星级1-5的数字,
+  "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无 IF 历史数据则返回 null（禁止写空话）。",
+  "carRiskAnalysis": "章 2 — HTML，引用真实数据。无 CAR 数据则返回 null（禁止写空话）。",
+  "scopeAndCitations": "章 3 — HTML，引用真实数据。无引用数据则只写收稿定位, 禁止提'缺数据'。",
+  "submissionAdvice": "章 4 — HTML，引用真实数据。有几项写几项, 没有的不提。",
+  "videoScript": "数字人口播脚本，纯文本无 HTML/分点，**220-320 字**(目标 55-80 秒)。第一句是开口3秒强钩子(痛点/数字/反常识/身份/悬念，绝不温吞)。五段一口气念下来：钩子 + 报刊定位 + 投稿数据 + 适合谁/避开谁 + 行动号召；中段留一句悬念防划走。对一个人说话(多用你)、短句、数字说人话。仅供数字人朗读，不进图文。"
+}`;
+
 
 export class ArticleSkill implements ISkill {
   readonly name = "article";
@@ -440,6 +438,10 @@ export class ArticleSkill implements ISkill {
         tags: article.tags,
         metadata: {
           wordCount: article.wordCount,
+          // 7-28 阶段1-C: prompt 版本号落库 —— 质量下滑时才能归因到"哪次 prompt 改动",
+          //   也是阶段4 反馈闭环的硬前置(没版本号, 效果数据混着两版 prompt, 均值没意义)。
+          //   bump 规则见 prompt-version.ts。
+          promptVersion: ARTICLE_PROMPT_VERSION,
           qualityScore: quality.totalScore,
           qualityPassed: quality.passed,
           aiScore: quality.aiScore,
@@ -480,6 +482,7 @@ export class ArticleSkill implements ISkill {
         tags: v.article.tags,
         metadata: {
           wordCount: v.article.wordCount,
+          promptVersion: ARTICLE_PROMPT_VERSION, // 7-28 阶段1-C: 副版本同样落 prompt 版本号
           qualityScore: v.quality.totalScore,
           qualityPassed: v.quality.passed,
           aiScore: v.quality.aiScore,
@@ -1351,146 +1354,65 @@ export class ArticleSkill implements ISkill {
       ? `\n【真实补充数据 — 深度分析必须基于此】\n${enrichmentLines.join("\n")}\n`
       : "";
 
-    // 5-23 PR #162 Phase 2: 改 "字段缺=未知" → "字段缺=不列出" + 显式 ##未公开字段## 块
-    // 让 AI 清楚哪些字段没数据, 文章中**完全不要提及** (PR #184 砍兜底话术, 见下方 unknownBlock)
-    const knownFields: string[] = [];
-    const unknownFields: string[] = [];
-    knownFields.push(`- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`);
-    if (journal.discipline) knownFields.push(`- 学科：${journal.discipline}`); else unknownFields.push("学科");
-    // 7-28 修 "N/A" 恒真值(#2): 旧判断 `ifText && !ifText.includes("未知")` 对无 IF 的 "N/A" 恒真 →
-    //   把"影响因子：N/A"塞进##已知期刊数据##(等于教 LLM 写 N/A 或自己编个数)。改判 hasIF(数值>0),
-    //   无 IF 归##未公开字段##(文中完全不提)。
-    if (hasIF) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
-    // 7-28 (#3): 复合影响因子(知网/万方口径)接进生成 —— 判定/口径与国内刊分支共用纯函数(见文件头部)。
-    const domesticParts = buildDomesticJournalGuidance(journal);
-    if (domesticParts.compositeIF != null) {
-      const cifText = domesticParts.compositeIF.toFixed(3);
-      knownFields.push(`- 复合影响因子（知网/万方口径，国内影响力指标，**不是 JCR 影响因子/IF**）：${cifText}。正文提及必须写全"复合影响因子"并注明国内口径，🚫 严禁简写成"影响因子 ${cifText}"/"IF ${cifText}"冒充 SCI/JCR 指标`);
-    }
-    // PR #232 (5-23): 分区/新锐分区字段加 [原文搬运] 标记 — 防 AI 改数字(3→2)/改顺序("3区材料科学"→"材料科学2区").
-    if (journal.casPartition || journal.partition) knownFields.push(`- 分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
-    if (journal.casPartitionNew) knownFields.push(`- 新锐分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartitionNew}`); else unknownFields.push("新锐分区"); // PR #229: 空也声明, 防 AI 编造; PR #232: 加原文搬运标记
-    // PR #235 (5-23): 录用率两路径 — LetPub 48 本给精确 %, ablesci ~2200 本给模糊词 (容易/较易/中等/较难/困难).
-    if (journal.acceptanceRate != null) {
-      knownFields.push(`- 录用率：${(journal.acceptanceRate >= 1 ? journal.acceptanceRate : journal.acceptanceRate * 100).toFixed(0)}%`);
-    } else if ((journal as { acceptanceDifficulty?: string | null }).acceptanceDifficulty) {
-      knownFields.push(`- 投稿难度：${(journal as { acceptanceDifficulty: string }).acceptanceDifficulty}（ablesci 定性评价, 非精确录用率）`);
-    } else { unknownFields.push("录用率"); }
-    if (journal.reviewCycle) knownFields.push(`- 审稿周期：${journal.reviewCycle}`); else unknownFields.push("审稿周期");
-    if (journal.publisher) knownFields.push(`- 出版商：${journal.publisher}`); else unknownFields.push("出版商");
-    if ((journal as any).foundingYear) knownFields.push(`- 创刊年：${(journal as any).foundingYear}`); else unknownFields.push("创刊年");
-    if ((journal as any).country) knownFields.push(`- 出版国：${(journal as any).country}`); else unknownFields.push("出版国");
-    // PR #228 (5-23): APC 双路径合一 — apcFee 列空但 publicationCosts.apc(JSONB) 有值的情况, 也算"已知"。
-    //   原 bug: knownFields 只看 apcFee, 把 APC 塞进 ##未公开字段## 列表;
-    //   而 enrichmentLines 看 publicationCosts.apc, 又告诉 AI "版面费 3350 USD"。
-    //   AI 看到矛盾, 选信"未公开"那边写"未公开具体金额"。
-    const apcKnown_pc = (journal as { apcFee?: number | null }).apcFee ?? journal.promptPublicationCosts?.apc ?? null;
-    const apcCurrency_pc = journal.promptPublicationCosts?.currency || "USD";
-    if (apcKnown_pc != null && apcKnown_pc > 0) {
-      knownFields.push(`- 版面费 (APC)：${apcCurrency_pc} ${apcKnown_pc}`);
-    } else if (apcKnown_pc === 0) {
-      knownFields.push(`- 版面费 (APC)：免费 (无 APC)`);
-    } else {
-      unknownFields.push("版面费");
-    }
-    // 7-03 B-①: 年发文量注入正文(现只标题用, 正文没有)— 提升数据密度
-    if ((journal as any).annualVolume) knownFields.push(`- 年发文量：约 ${(journal as any).annualVolume} 篇/年`);
-    // 预警名单只覆盖国际(SCI)刊; 国内刊不在其适用范围, 不做"不在预警名单"的正面断言(避免误导)
-    const inWarnScope = journal.isWarningList || typeof journal.impactFactor === "number" || !!journal.partition || !!(journal as any).jcrFull;
-    if (journal.isWarningList) knownFields.push("- ⚠️ 在中科院预警名单中");
-    else if (inWarnScope) knownFields.push("- 不在中科院预警名单中");
-
-    // PR #184 (5-20): 收录状态注入 — 严格按真实字段, 防止非 SCI 期刊被当 SCI 写
-    const indexStatuses: string[] = [];
-    const wosLevel = journal.promptJcrFull?.wosLevel;
-    if (wosLevel) indexStatuses.push(`WOS ${wosLevel}`); // SCIE / SSCI / ESCI / AHCI
-    const cats = journal.catalogs || [];
-    if (cats.includes("cssci")) indexStatuses.push("CSSCI（南大核心）");
-    if (cats.includes("pku-core")) indexStatuses.push("北大核心");
-    if (cats.includes("cscd")) indexStatuses.push("CSCD（中国科学引文数据库）");
-    if (journal.catalogType === "sci" || journal.catalogType === "sci-core") {
-      if (!wosLevel) indexStatuses.push("SCI 收录");
-    }
-    if (indexStatuses.length > 0) {
-      // PR #207/#230/#233: 反误导 — 覆盖 SCIE/SSCI/AHCI/ESCI; 强力禁"未被 SCI/SSCI 收录"等否定句.
-      //   PR #233 (5-23): 双收录场景 (wosLevel="SCIE, SSCI") 之前只匹配首个=SCIE, 漏掉 SSCI 标签
-      //   导致 AI 误以为 SSCI 是"未明确"标签, 写出"未被 SSCI 收录". 改 matchAll 列全所有命中等级.
-      const wosAllMatches = Array.from(indexStatuses.join(" ").matchAll(/\b(SCIE|SSCI|AHCI|ESCI)\b/gi));
-      const wosTags = Array.from(new Set(wosAllMatches.map((m) => m[1].toUpperCase())));
-      const wosTagsJoin = wosTags.join("/");
-      const scieNote = wosTags.length > 0 ? `（**关键约束**：该刊被 ${wosTagsJoin} 收录(WoS 等级官方证据)。文章正文**绝对禁止**写"未被 SCI 收录"/"未被 SSCI 收录"/"非 SCI 期刊"/"非 SSCI 期刊"/"目前没有被 SCI/SSCI 收录"等任何否定收录的句子, 也禁止写"投稿前请确认单位/学校是否认可此类期刊"这类暗示未收录的话术。${wosTags.includes("SCIE") ? "另: SCIE 是 SCI 的现行官方名称, 二者同义。" : ""}${wosTags.length > 1 ? `该刊为多重收录(${wosTagsJoin}), 文中可如实表述为"${wosTagsJoin} 双重/多重收录"。` : ""}）` : "";
-      knownFields.push(`- 收录情况：${indexStatuses.join("、")}（文章中描述收录情况必须严格按此, 不得拔高）${scieNote}`);
-    } else {
-      // PR #225 (5-23): 软化 — wosLevel 字段空≠真未被收录(LetPub 数据可能未覆盖到该刊)。
-      //   原文案"严禁称 SCI"导致 AI 主动写"未被 SCI 收录"误导用户。改为中性: 不假称 + 不主动否认.
-      knownFields.push(`- 收录情况：本系统未明确记录该刊的 WOS/核心收录等级（**不代表未收录**, 可能仅是数据未覆盖）。文章中**绝对不要**主动声称该刊"未被 SCI 收录"/"未被 SSCI 收录"/"非 SCI 期刊"等否定性表述；如确需提及收录,请用中性说法(如"相关数据库收录情况以期刊官网为准")。**也不得**主动声称其为"SCI 期刊"/"SSCI 期刊"/"核心期刊"/"顶刊"（避免拔高）。`);
-    }
-
-    // PR #184: 砍 "据公开资料尚无统一披露" 教唆 (运营反馈这是 AI 感来源).
-    // 缺数据的字段 → 文章里**完全不提**, 而非自暴 "暂无数据".
-    const unknownBlock = unknownFields.length > 0
-      ? `\n##未公开字段## (以下字段无数据, 文章中**完全不要提及这些字段**, 禁止出现"暂无/未公开/据公开资料尚无/由于缺乏...数据"等任何说法)：${unknownFields.join("、")}\n`
-      : "";
-
-    // 5-23 PR #167: 4 字段黑名单 — backfill 报告确认这 4 字段 DB 0 源覆盖 (AI 编源 100% 确认)
-    // 任何场景下都不允许出具体值. 仅允许模糊词 (较高/较低/适中/相对宽松/较快/较慢/标准)
-    const blacklistBlock = `
-##禁止字段## (BossMate database 缺失数据, 严禁虚构以下 4 类具体值)
-- **创刊年 / founded in / 创办于**: 禁止提具体年份, 禁止"可追溯至 XXXX"、"创办于 XXXX"。若必须提及, 用"历史悠久的"或"近年新创"等模糊词
-- **出版国 / 出版地 / based in / country**: 禁止具体国家名 (如"瑞士"、"美国"、"英国"). 若必须提及, 用"国际期刊"或"业内"等中性词
-- **录用率**: 仅允许"较高 / 较低 / 适中 / 相对宽松 / 难度较大"等模糊词. **禁止具体百分比** (除非 ##已知期刊数据## 给了 acceptanceRate 字段)
-- **审稿周期**: 仅允许"较快 / 较慢 / 标准 / 周期合理"等模糊词. **禁止具体周数** (除非 ##已知期刊数据## 给了 reviewCycle 字段)
-
-违反任一 → validator 拦截 → 文章排除推荐池 (无效产出, 浪费 token).
-`;
+    // ===== 7-28 阶段1-C: 字段相关的四个块由**同一份契约**生成 =====
+    //   ##已知期刊数据##(能写什么) / ##未公开字段##(禁止提) / ##禁止字段##(黑名单) / 密度要求(必须写)
+    //   —— 这四块以前各写各的, 块与块之间零交叉校验, 于是"既禁写又要求写"的矛盾复发了 4 次
+    //   (PR #228 / #225 / #233 / 7-28)。LLM 收到矛盾指令的理性选择是编一个 → 被防编造闸拦下
+    //   → 转人工待审, 这正是"国内刊文章少 / 待审堆积"的直接成因之一。
+    //   现在四块全部出自 buildJournalFieldContract(纯函数, 内含 assertNoContradiction 断言:
+    //   requiredFields ∩ forbiddenFields === ∅, 开发期抛错 / 生产期记 incident 并自动修正)。
+    //   详见 journal-prompt-fields.ts 头注释。
+    const fieldContract = buildJournalFieldContract(journal);
+    // 刊名不归字段契约管(它永远可写、永远有值), 单独置顶一行。
+    const knownDataLines = [
+      `- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`,
+      ...fieldContract.knownLines,
+    ];
+    const unknownBlock = fieldContract.unknownBlock;
+    const blacklistBlock = fieldContract.blacklistBlock;
+    // 7-28 阶段1-C 修的实际 bug: 国际刊分支这条密度规则原本是**手写死字符串**
+    //   ("每 200 字至少 1 个具体数字(IF/两套分区/审稿周期/录用率/版面费/年发文量)"), 无论 DB
+    //   里有没有这些字段一律照点名 —— 与上面 ##未公开字段## 的"完全不要提及"直接对撞。
+    //   现在与国内刊分支同源生成: 只点名 densityKeys(= 真有数据 ∩ 没被禁写)。
+    const densityRule = fieldContract.densityRule;
 
     // 7-03 老韩②: 图位标记清单（按本刊真实数据动态生成; 无数据图位不出现在清单里）
     const imageSlotBlock = buildImageSlotPromptBlock(journal as unknown as Record<string, unknown>);
 
-    // 7-21 改动3 + 7-28 修死代码(#2): 国内刊独立生成口径。
-    //   判定 = 有中文核心目录标签 且 无真实国际 IF(>0), 与 title-generator 口径统一, 逻辑抽到
-    //   buildDomesticJournalGuidance 纯函数(文件头部, 有单测)。旧式 `!(ifText && !ifText.includes("未知"))`
-    //   对 "N/A" 恒 false → 该分支上线以来从未走到, 国内刊一直被当国际刊逼着凑 SCI 数字。
+    // 7-21 改动3 + 7-28 修死代码(#2): 国内刊独立生成口径(判定见 buildDomesticJournalGuidance)。
     //   动机(生产实测): 主 prompt 的"每200字1个硬数据(IF/分区/审稿/录用率)"+"标题会挑数字做噱头"
     //   对国内刊是逼编造的死循环 —— 国内核心刊 IF 覆盖 7.8%、分区 0.3%, 根本没有这些数, LLM 只能编。
     //   7-21 那批 11 篇国内刊里 6 篇(54.5%)正文编造被评分器压到红线分。治本 = 换一套国内刊真正有的卖点。
-    const isDomesticJournal = domesticParts.isDomestic;
-
+    const isDomesticJournal = fieldContract.isDomestic;
     // 7-21 纯国内刊 = 有中文核心标签(北大核心/CSCD/CSSCI) 且 **不含 sci-core**。
-    //   独立于 isDomesticJournal(卖点分支): 后者靠 ifText, enrichment 会给骑墙刊填 IF 让它走国际分支;
-    //   本判定纯看 catalogs, 只为下面"正文无据分区禁写"强约束定范围。
-    //   严格排除骑墙刊(含 sci-core): 它们分区可能是 enrichment 有据的(backlog-C), 误伤它们正是 6577b9a 被回滚的原因。
-    //   纯国内刊本就不在 LetPub 的 SCI 分区体系里, enrichment 也补不到分区 → 禁写分区 100% 正确、零副作用。
-    const isPureDomestic = isPureDomesticJournal(cats);
-    // 7-28: 指引文本由 buildDomesticJournalGuidance 组装(禁写清单按 DB 真实字段动态生成,
-    //   复合IF/审稿周期/录用率有值时明确"可写+口径", 不再与 ##已知期刊数据## 自相矛盾)。
-    const domesticGuidance = domesticParts.guidance;
+    //   独立于 isDomesticJournal(卖点分支): 后者叠加"无真实 IF", enrichment 给骑墙刊填了 IF 就会
+    //   走国际分支; 本判定纯看 catalogs, 定的是"正文分区/IF 禁写"红线的适用范围。
+    const isPureDomestic = fieldContract.isPureDomestic;
+    const domesticGuidance = fieldContract.domesticGuidance;
 
-    const prompt = `你是这个学术期刊推荐公众号的小编——替读者翻过这本期刊全部资料的人。你的任务不是写论文摘要，而是用自己的话把这本刊**转述**给读者，边报数据边给你的主观判断。根据以下期刊信息，生成内容。
-${domesticGuidance}
-
+    // 7-28 阶段1-C: prompt 按"有名字的块"组装(静态块见文件头部 PROMPT_BLOCK_*)。
+    //   用 join("\n") 而不是拼一个大字面量: 块的边界就是换行边界, 增删一块不会牵动别块的空行。
+    const prompt = [
+      // 角色与任务 + 国内刊专属指引(非国内刊为空串)
+      `你是这个学术期刊推荐公众号的小编——替读者翻过这本期刊全部资料的人。你的任务不是写论文摘要，而是用自己的话把这本刊**转述**给读者，边报数据边给你的主观判断。根据以下期刊信息，生成内容。
+${domesticGuidance}`,
+      // 已知期刊数据 / 未公开字段 / 禁止字段 / 补充数据 —— 全部出自 fieldContract
+      `
 ##已知期刊数据## (文章中所有具体数字必须来自这里, 严禁编造)
-${knownFields.join("\n")}
-${unknownBlock}${blacklistBlock}${enrichmentBlock}
-## 小编口吻铁律 (7-03 老韩拍板 — 不是论文摘要, 是小编转述)
-1. 【身份与人称】全程以"小编"身份、第一人称口语化转述（"我翻了下它近几年的数据"），像把你研究过的期刊讲给读者听，不是客观陈述堆砌。
-2. 【每个硬数据都要带小编解读】报完数字必须跟一句你的主观判断，例："2.4 的 IF 在工程技术 3 区里不算亮眼，但胜在稳" / "5 个月录用，说实话在这个领域算快的"。只报数不评价 = 论文摘要腔，不合格。
-3. 【禁学术论文腔】🚫 严禁"本文/该刊具有/本刊系/综上所述/综上/呈现出/表明/据统计显示"这类论文式句式堆砌；想说"该刊具有较快的审稿速度"就改说"它审稿是真的快"。
-4. 【小编语气词】适量用"说实话 / 我翻了下 / 划重点 / 注意 / 讲真"拉近距离，但别过量——每段最多一处，全文不超过 5 处，堆多了油腻。
-5. 【人设优先】若下方注入了【账号人设】，以人设为准调整狠度/术语密度——"小编转述+给判断"是基调，具体口吻跟人设走；无人设时默认"贴心学术小编"（热心、有判断、不端着）。
-6. 【真实为界】口语化只改"怎么说"，不改"说什么"——所有数字/事实仍严格来自 ##已知期刊数据##，主观判断只能基于这些真数据做，严禁为了口气顺编数据。
-
-## 排版铁律 (7-03 短段落 + 图文交替)
+${knownDataLines.join("\n")}
+${unknownBlock}${blacklistBlock}${enrichmentBlock}`,
+      PROMPT_BLOCK_TONE,
+      // 排版铁律 + 图位标记清单
+      `## 排版铁律 (7-03 短段落 + 图文交替)
 1. 所有 HTML 正文字段一律切成**短段落**：每个 <p> 最多 3 句、不超过 100 字；一个意思一段，宁可多段不要长段。
 2. 200 字以上的分析章节必须拆成至少 2-3 个 <p>，🚫 严禁整章挤成一个大 <p>。
 3. 重点结论/数字用 <strong> 标出（每段最多一处）。
 ${imageSlotBlock ? `${imageSlotBlock}
 - 标记写法：在 scopeDescription / ifHistoryAnalysis / scopeAndCitations / submissionAdvice / recommendation 这些 HTML 字段里，用独立段落 <p>{{IMG:xxx}}</p> 插入。
-` : ""}
-## 数据密度与卖点兑现 (7-03 供给侧强化)
-${isDomesticJournal ? `1. 【密度—国内刊口径】把上方"国内核心刊卖点主线"的信息(身份组合/CSCD等级/学科分类/收录目录/投稿方向/适配人群)写扎实, 每 200 字有一个实打实的信息点(身份/学科/投稿方向, 以及 ##已知期刊数据## 里真实有的国内字段如复合影响因子/审稿周期; **JCR IF/中科院分区一律不写**——本刊没有)。
-2. 【卖点兑现—国内刊口径】核心卖点是权威身份, 不是 SCI 数字。开头首段用"什么级别的刊+适合谁"切入(如"评职称还差一篇北大核心? 这本${journal.discipline || ""}方向的双核心刊值得看"), 严禁用 JCR IF/分区做噱头; 无据的录用率/审稿天数也不许编来当噱头。` : `1. 【密度】各分析章节必须把 ##已知期刊数据## 里的硬指标自然写进正文, 数据密度约每 200 字至少 1 个具体数字/指标(IF/两套分区/审稿周期/录用率/版面费/年发文量), 少写空泛评价、多用真数字支撑。
-2. 【卖点兑现】上述数据里的亮点(审稿快 / 分区高 / 免版面费 / 录用友好等)是本文核心卖点, 也是标题会挑来做噱头的点。开头首段必须挑最亮的 1-2 个做痛点承诺切入(如"还在为审稿半年发愁? 这本 X 周就出结果"), 正文再逐一兑现展开。**凡开头/标题承诺的数字, 正文必须出现并给出场景, 严禁承诺了不兑现(标题吹的数正文一定要有)。**`}
+` : ""}`,
+      // 数据密度与卖点兑现(国内/国际同源生成) + 缺失字段纪律 + 结尾行动块 + 分区约束 + 纯国内刊红线
+      `## 数据密度与卖点兑现 (7-03 供给侧强化)
+${densityRule}
 3. 【缺失字段纪律 — 严禁推断制造矛盾】##已知期刊数据## 里没有的字段(如分区/录用率/收录状态空缺), 只能写"暂无数据"或直接不提, **严禁自行推断"未被 WOS/SCIE 收录" / "未标注" / "可能不是SCI" / "或许"等**。尤其: 有中科院分区却推断"未被WOS收录"是自相矛盾的低级错误——有分区就说明被收录, 缺 JCR 数据只写"JCR 分区暂无数据", 不许反推"未收录"。
 ## 结尾行动块 (7-03 实用性)
 文章结尾必须给一个读者"能直接抄走"的行动块(而非空泛结语), 三选二或全给: ① 投稿 checklist(如"投稿前自查: □ 至少2个独立实验的统计分析 □ Cover Letter 突出与 scope 契合 □ 格式按官网模板"); ② 时间线(如"审稿约 X 周 → 大修 Y 周 → 录用"); ③ 避坑三条(该刊常见拒稿雷区)。用真实数据/scope 填充, 缺数据的条目跳过不硬编。
@@ -1502,8 +1424,9 @@ ${isPureDomestic ? `\n🚫🚫🚫 【纯国内核心刊 — 正文分区/IF 禁
 本刊是纯国内核心期刊(北大核心/CSSCI/CSCD, 非 SCI), **客观上没有中科院分区、没有 JCR 分区、没有影响因子**。
 **正文里一个分区字、一个 IF 数字都不许出现** —— 严禁写 "1区"/"2区"/"3区"/"4区"/"一区/二区/三区/四区"/"中科院X区"/"JCR Qx"/"X区顶刊"/"IF X.X"/"影响因子 X.X"。
 不要因为"这类刊感觉该有个分区"就顺手编一个 —— 没有就是没有。写了 = 编造 = 生成后校验立刻揪出来把这篇打成红线分转人工 = 白写一篇还占产能。
-（7-21 实测: 人口研究/中国科学物理学 两篇纯国内刊正文各编了个"1区"/"2区", 就栽在这。本刊分区数据栏是空的, 正文提分区必是你编的。）` : ""}
-
+（7-21 实测: 人口研究/中国科学物理学 两篇纯国内刊正文各编了个"1区"/"2区", 就栽在这。本刊分区数据栏是空的, 正文提分区必是你编的。）` : ""}`,
+      // 标题硬约束
+      `
 ## 标题硬约束 (PR #180 + #183 + #184)
 1. 【期刊名可选】期刊名(${journalName})可放标题也可不放; 若期刊名超过 20 个字符, **优先不放标题**(避免吞掉噱头), 改放副标题/正文。标题要先吸引人, 不是先报刊名。
 2. 【完整性】严禁出现悬空对比 (如 "A vs " 后面没有 B)、截断、半句话。每个标题都必须是完整通顺的一句。
@@ -1525,67 +1448,18 @@ ${isPureDomestic ? `\n🚫🚫🚫 【纯国内核心刊 — 正文分区/IF 禁
     - 改顺序: DB "3区材料科学" 严禁写成 "材料科学3区" / "材料科学2区"(顺序必须是"X区Y学科"的原样)
     - 简化截取: DB "3区材料科学" 严禁只写 "3区" 而省略"材料科学", 也不得只写"材料科学"省略"3区"
     - 二次格式化: 严禁加"的"/"是"/"为"等连接词重组, 必须整体引用
-    正确做法: 原 DB "3区材料科学" → 文章引用必须写 "新锐分区为 3区材料科学" / "该刊属 3区材料科学" 等保留完整原文的句式。这条规则比规则 #15 优先级更高: #15 防"无中生有", #16 防"有中改字"。
-
+    正确做法: 原 DB "3区材料科学" → 文章引用必须写 "新锐分区为 3区材料科学" / "该刊属 3区材料科学" 等保留完整原文的句式。这条规则比规则 #15 优先级更高: #15 防"无中生有", #16 防"有中改字"。`,
+      // 本次标题风格 / 学科定制 / 叙事主线
+      `
 【本次标题风格】
 ${chosenStyle}
 ${disciplineHint}
-${angleHint}
-
-【叙事口吻】
-- recommendation 不要写成干巴巴的总结，要有个人观点和态度（像资深编辑而非百科词条）
-- scopeDescription 要专业但不枯燥，适当加入「热门方向」「近年趋势」等吸引读者的表述
-- editorComment 要极口语化，像和朋友聊天（"说实话这本刊..."、"赶毕业投这个！"）
-
-【正文语言要求】(PR #184)
-- 正文以**中文为主**, 英文只用于期刊名、必要专业术语缩写(IF/SCI/OA 等), 不要整句英文或中英文生硬混杂。
-- 🚫🚫 **严禁元话术**: 绝对不要出现 "由于缺乏...数据" / "无法详细分析" / "暂无统一披露" / "数据未公布" / "缺少相关数据" 这类自暴其短的句子。某项没数据就**直接不写那部分**, 当它不存在, 绝不解释为什么没写。
-
-【深度分析章节】（V7 task #11，4 个独立 HTML 字段）
-🚫 严格禁止基于上方未提及的字段编造数据。
-🚫 如某章节缺关键数据 → 该字段直接返回 null (整章不渲染), **绝不要**写"由于缺乏数据无法分析"之类的占位话。宁可少一章, 不要有 AI 感的空话。
-- ifHistoryAnalysis（200-400 字）：基于"近 10 年 IF 历史"和"IF 预测"做趋势深度分析。引用具体年份和数字（如"从 2015 年 3.2 涨到 2024 年 7.8"），分析涨跌拐点，给出趋势判断。**无 IF 历史数据时返回 null**。
-- carRiskAnalysis（200-400 字）：基于"近 5 年 CAR 指数"和"风险等级 + 预警名单"分析国内学者投稿现状。给出明确建议（"国内学者占比逐年升至 X%，CAR 风险 low/mid/high，风险较低可列入备选 / 谨慎评估 / 强烈避雷"）。🚫 严禁"放心投稿/放心冲/必中/稳过"等替读者拍板的承诺话术（7-03 老韩红线）。**无 CAR 数据时返回 null**。
-- scopeAndCitations（200-400 字）：仅基于上方**已提供的可信字段**(学科/JCR分区/收录/版面费等)分析期刊定位与适配方向。🚫 收稿concepts/引用前10/自引率/CAR 等 OpenAlex 派生数据已全部下线, **严禁提及或编造这些**(被谁引用、引用生态、中国学者占比、自引率等一律不写)。**若除学科外无更多可信定位信息 → 该字段直接返回 null**。
-- submissionAdvice（300-500 字）：综合"版面费 / 录用率 / 审稿周期 / JCR 详细 / 年发文量"给投稿建议。明确：APC 多少 / 哪类作者适合冲 / 哪类避开 / 性价比评分。引用具体数字。**有几项写几项, 没有的不提**。🚫 **若上方数据中已给出 APC 具体金额, 必须按该金额表述(如"APC 约 USD 3350"), 严禁写"未公开/未披露/未明确/通常 OA 期刊版面费较高"这类模糊或泛化说法**(数据明摆着却说"未公开"是误导)。
-
-【videoScript】数字人口播脚本 — 独立于图文, 发抖音/视频号. ⚠️ 这是"说"的稿子不是"写"的稿子, 标准比图文更高, 当成爆款短视频文案认真写 (6-26 口播强化):
-- 长度: **220-320 字**纯文本 (中文 ~4 字/秒 → 目标 55-80 秒; 短一点完播率更高也更省合成费). 🚫 严禁 HTML / markdown / emoji / 分点 / 小标题 — 就是一段能一口气念下来的话.
-- 口播铁律 (违反就废, 写完默念一遍, 拗口就重写):
-  · **对"一个人"说**, 全程用"你"——"你是不是""你要是""告诉你""帮你省事". 🚫 不准"广大作者""各位""大家".
-  · **短句**为主, 一句一个意思, 像说话不像念书. 能口语就口语: 用"说白了""先说结论""划重点""别急""说几个关键的"取代书面连接词.
-  · **数字说人话**: "差不多三个月""一千五百块美金左右""十篇里能中七八篇", 🚫 不要"约 12 周""录用率约 78%"这种书面腔.
-- **开场 3 秒钩子** (第一句话, 最重要, 决定观众划不划走): 必须是下面任一型, 张嘴就砸结论/痛点, 🚫 严禁"今天给大家介绍一本期刊"这类温吞开场:
-  · 痛点扎心型: "投了三个月还卡在外审? 这本审稿快到离谱."
-  · 数字冲击型: "影响因子 5 分多, 录用率却高得不像话."
-  · 反常识/捡漏型: "别再死磕大刊了, 这本捡漏神刊很多人还不知道."
-  · 身份直呼型: "赶毕业的硕博听好了, 这本可能是你的救命稻草."
-  · 悬念前置型: "有本 SCI 审稿快、录用友好还便宜, 但有一类人千万别投 — 先说是哪本."
-- **中段留钩子防划走** (完播关键): 在"投稿数据"讲完后埋一句悬念再继续, 例: "不过有个坑得提醒你""最关键的一点还在后面""但先别急着投".
-- **五段骨架** (段间用句号自然连, 🚫 不要露出段落标题/编号):
-  1. 钩子 (一句, 见上).
-  2. 报刊定位 (一句话): 刊名 + 学科方向 + IF + 分区, 分区**逐字原文搬运** (PR #232). 例: "说的是 X 期刊, 公共卫生方向的 SCI, 影响因子 X, 中科院 X 区."
-  3. 投稿数据 (3-5 个真实数据点, 口语化, 边说边带态度): 录用难度 → 审稿周期 → APC → 风险. 例: "这个价在同档里算良心的."
-  4. 适合谁 / 避开谁 (落到具体人): "适合三类人冲… 但你要是做 Y 方向的, scope 对不上, 别硬投."
-  5. 行动号召 (一句, 最多两个动作, 可留互动): "想看更多选刊关注我, 拿不准的私信问." 或 "这刊到底冲不冲? 评论区聊聊."
-- 数据红线 (同图文正文, 不可破): 分区原文搬运 (PR #232); 收录状态如实, 不写"未被 SCI 收录"否定句 (PR #230/#233); 没有的数据不编造 (PR #229); APC 有就报数字、没有不提 (PR #228); 🚫 严禁"必看/封神/包过/稳过/水刊"等违规夸张词.
-- 缺关键数据 → 该段聚焦学科 + scope 讲, 但全文仍要 220+ 字, 🚫 绝不写"暂无数据/数据未公开".
-请输出纯 JSON（不要 markdown）：
-{
-  "title": "按照上面指定的标题风格生成的标题",
-  "openingHook": "开头钩子导语（60-120字/2-3句），文章的第一段, 决定读者划不划走, 也是评分'选题与钩子'维度读的开头。必须按【下方指定的开头钩子模式】写: 用读者真实处境/痛点场景切入(卡审稿/被拒/赶毕业/选刊纠结/评职压力), 小编第一人称口吻(像跟朋友说话), 落到本刊能解决什么。🚫 严禁'该刊是一本…'/'随着…的发展'/'今天给大家介绍'式平铺温吞开场。🚫 钩子里任何数字/分区/判断必须真实(红线, 无数据就用开放式提问, 不给假答案)。",
-  "scopeDescription": "收稿范围的详细描述（200-400字），分总述和具体方向列表。用HTML格式，可用<p>和<strong>标签。说明期刊聚焦什么领域、欢迎什么类型的稿件、有什么特色。要专业准确但不枯燥。",
-  "recommendation": "推荐总结（150-300字），综合点评期刊的优势、适合什么样的作者投稿，用HTML格式。要有态度和个人观点，不要像百科全书。",
-  "editorComment": "一句话小编点评（15-30字），极口语化、接地气，像朋友间推荐，如'说实话审稿快到离谱，赶毕业的同学冲！'",
-  "highlightTip": "一个划重点提示（20-40字），提炼最核心的投稿建议或数据亮点",
-  "ifPrediction": "影响因子走势预测的简短描述，如'预测今年涨至15分'，如果无法预测就返回null",
-  "rating": 推荐星级1-5的数字,
-  "ifHistoryAnalysis": "章 1 — HTML，引用真实数据。无 IF 历史数据则返回 null（禁止写空话）。",
-  "carRiskAnalysis": "章 2 — HTML，引用真实数据。无 CAR 数据则返回 null（禁止写空话）。",
-  "scopeAndCitations": "章 3 — HTML，引用真实数据。无引用数据则只写收稿定位, 禁止提'缺数据'。",
-  "submissionAdvice": "章 4 — HTML，引用真实数据。有几项写几项, 没有的不提。",
-  "videoScript": "数字人口播脚本，纯文本无 HTML/分点，**220-320 字**(目标 55-80 秒)。第一句是开口3秒强钩子(痛点/数字/反常识/身份/悬念，绝不温吞)。五段一口气念下来：钩子 + 报刊定位 + 投稿数据 + 适合谁/避开谁 + 行动号召；中段留一句悬念防划走。对一个人说话(多用你)、短句、数字说人话。仅供数字人朗读，不进图文。"
-}`;
+${angleHint}`,
+      PROMPT_BLOCK_NARRATION,
+      PROMPT_BLOCK_DEEP_ANALYSIS,
+      PROMPT_BLOCK_VIDEO_SCRIPT,
+      PROMPT_BLOCK_OUTPUT_JSON,
+    ].join("\n");
 
     // 5-23 PR #162 Phase 2: 双重硬约束 (system + user 各重复一次) — 防 AI 凭训练记忆编 IF / 录用率 / 创刊年
     const baseSystemPrompt = `你是学术期刊公众号的小编（口吻：第一人称转述+主观判断，禁论文腔）兼期刊数据分析专家（纪律：数据只认给定真值），输出严格JSON格式。

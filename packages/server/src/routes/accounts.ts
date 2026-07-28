@@ -23,9 +23,18 @@ import { buildAuthorizeUrl, resolveDouyinAppConfig, signOauthState } from "../se
 import { runLoginKeepalive, getLastKeepaliveSummary, isKeepaliveRunning } from "../services/publisher/login-keepalive.js";
 import { env } from "../config/env.js";
 import { requirePermission } from "../middleware/permission.js";
+import {
+  PLATFORM_CAPABILITIES,
+  PLATFORM_IDS,
+  SEMI_AUTO_PLATFORMS,
+  platformShortLabel,
+} from "../services/platforms/capabilities.js";
+
+// 平台枚举来自 PLATFORM_CAPABILITIES(唯一真相源); zod 的 enum 要求非空元组, 故做一次断言转换。
+const platformEnum = z.enum(PLATFORM_IDS as unknown as [string, ...string[]]);
 
 const createAccountSchema = z.object({
-  platform: z.enum(["wechat", "baijiahao", "toutiao", "zhihu", "xiaohongshu", "douyin", "wechat_video"]),
+  platform: platformEnum,
   accountName: z.string().min(1),
   credentials: z.record(z.any()).optional().default({}),
   groupName: z.string().optional(),
@@ -95,8 +104,7 @@ export async function accountRoutes(app: FastifyInstance) {
       for (const a of accounts) {
         if (typeof a.accountName === "string" && a.accountName.startsWith("待登录") && a.accountId) {
           const nick = (a.metadata as Record<string, unknown> | null)?.realNickname;
-          const platLabel = a.platform === "douyin" ? "抖音" : a.platform === "wechat_video" ? "视频号" : a.platform;
-          const realName = (typeof nick === "string" && nick) ? nick : `${platLabel}·${a.accountId}`;
+          const realName = (typeof nick === "string" && nick) ? nick : `${platformShortLabel(a.platform)}·${a.accountId}`;
           a.accountName = String(realName).slice(0, 100);
           db.update(platformAccounts).set({ accountName: a.accountName }).where(eq(platformAccounts.id, a.id)).catch(() => { /* 自愈失败不影响列表 */ });
         }
@@ -149,15 +157,24 @@ export async function accountRoutes(app: FastifyInstance) {
    */
   app.get("/accounts/platforms", { preHandler: requirePermission("accounts.read") }, async (request, reply) => {
     try {
-      const platforms = [
-        { id: "wechat", name: "微信公众号", icon: "💬", credentialFields: ["appId", "appSecret"], description: "需要AppID和AppSecret" },
-        { id: "baijiahao", name: "百家号", icon: "📰", credentialFields: ["accessToken"], description: "需要百家号开放平台AccessToken" },
-        { id: "toutiao", name: "头条号", icon: "📱", credentialFields: ["accessToken"], description: "需要头条号开放平台AccessToken" },
-        { id: "zhihu", name: "知乎", icon: "🔍", credentialFields: ["cookie", "columnId"], description: "需要登录Cookie和专栏ID（可选）" },
-        { id: "xiaohongshu", name: "小红书", icon: "📕", credentialFields: ["cookie"], description: "需要登录Cookie" },
-        { id: "douyin", name: "抖音", icon: "🎵", credentialFields: ["clientKey", "clientSecret", "accessToken"], description: "需要抖音开放平台OAuth授权" },
-        { id: "wechat_video", name: "视频号", icon: "📹", credentialFields: ["appId", "appSecret"], description: "需要公众号绑定视频号" },
-      ];
+      // 全部字段来自 services/platforms/capabilities.ts(唯一真相源), 这里只做接口形状适配。
+      // 顺带把路由/半自动等判据一起吐出来, 供外部集成方判断该平台怎么发。
+      const platforms = PLATFORM_IDS.map((id) => {
+        const c = PLATFORM_CAPABILITIES[id]!;
+        return {
+          id: c.id,
+          name: c.label,
+          shortName: c.shortLabel ?? c.label,
+          icon: c.icon,
+          credentialFields: c.credentialFields.map((f) => f.key),
+          credentialFieldSpecs: c.credentialFields,
+          description: c.credentialHint,
+          contentKind: c.contentKind,
+          publishVia: c.publishVia,
+          semiAuto: c.semiAuto,
+          browserLogin: c.browserLogin,
+        };
+      });
       return { code: "OK", data: platforms };
     } catch (err) {
       logger.error({ err }, "获取平台列表失败");
@@ -202,9 +219,8 @@ export async function accountRoutes(app: FastifyInstance) {
         })
         .returning();
 
-      // 半自动平台(抖音/视频号/小红书): 第三方无稳定发布 API, 内容人工发布。账号只是矩阵"名字标签",
-      // 无凭证时跳过 API 验证、直接视为就绪(有凭证仍正常验证)。
-      const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
+      // 半自动平台(见 platforms/capabilities.ts 的 semiAuto): 第三方无稳定发布 API, 内容人工发布。
+      // 账号只是矩阵"名字标签", 无凭证时跳过 API 验证、直接视为就绪(有凭证仍正常验证)。
       // PR-P2: "有凭证"按值判断 — 前端可能提交 {clientKey:"",...} 空占位, 只看 key 数会误判去走 API 验证
       const hasCreds = body.credentials && Object.values(body.credentials).some(
         (v) => (typeof v === "string" ? v.trim().length > 0 : v != null)
@@ -406,7 +422,7 @@ export async function accountRoutes(app: FastifyInstance) {
       }
 
       // PR-P2: 半自动平台空凭证 → 直接就绪(人工发布不需要 API), 也让存量"验证失败"账号一键修复
-      const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
+      // 7-28: 这里原本又抄了一遍 SEMI_AUTO_PLATFORMS(与本文件上方那份重复), 现统一读 capabilities 表
       const credsEmpty = !Object.values(credentialsForVerify).some(
         (v) => (typeof v === "string" ? v.trim().length > 0 : v != null)
       );

@@ -10,6 +10,7 @@ import { db, closePool } from "../models/db.js";
 import { journals, platformAccounts } from "../models/schema.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID, SYSTEM_RECOMMENDATION_USER_ID } from "../config/system-recommendation.js";
 import { generateTitles } from "../services/content-engine/title-generator.js";
+import { journalDisciplineMatches } from "../services/journals/journal-sql.js";
 
 function arg(n: string): string | undefined { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : undefined; }
 
@@ -25,7 +26,10 @@ async function main() {
   }
   // 6-25 修: 原 discCond 用裸 "AND ..."/空 sql`` 塞进 and() → 空时 "and )" 语法错(42601)、有值时双 AND。改条件数组拼接。
   const conds = [eq(journals.status, "active"), isNotNull(journals.impactFactor)];
-  if (disc) conds.push(sql`${journals.discipline} ILIKE ${"%" + disc + "%"}`);
+  // 7-28 (#5): 账号 disciplines 存的是学科码, 旧写法 ILIKE **原始列** → 只能抽到国际刊, 样片
+  //   永远看不到国内刊效果。改走生成列 helper(与选刊器同口径)。
+  const discCond = journalDisciplineMatches(disc);
+  if (discCond) conds.push(discCond);
   const [j] = jid
     ? await db.select().from(journals).where(eq(journals.id, jid)).limit(1)
     : await db.select().from(journals).where(and(...conds)).orderBy(sql`random()`).limit(1);

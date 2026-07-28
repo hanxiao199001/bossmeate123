@@ -81,9 +81,12 @@ async function main() {
           OR ${journals.cscdLevel} IS NOT NULL
           OR ${journals.pkuCoreLevel} IS NOT NULL
         )`,
-        // --medical-only: 只留医学国内刊(discipline=medicine 或 刊名含医学词根)。万方医学网只收医学刊, 非医学刊白抓。
+        // --medical-only: 只留医学国内刊(discipline_code=medicine 或 刊名含医学词根)。万方医学网只收医学刊, 非医学刊白抓。
+        // 7-28 (#5): 原来是 `discipline = 'medicine'` 打**原始列**全等 —— 国内刊原始列存中文
+        //   分类名("临床医学"), 这一半条件对本脚本(只跑国内刊)恒 false, 全靠刊名正则兜着,
+        //   分类名是医学但刊名不含词根的(如《中华护理教育》以外的"XX 科学通报"类)整批漏掉。
         ...(medicalOnly
-          ? [sql`(${journals.discipline} = 'medicine' OR ${journals.name} ~ '医|药|护理|临床|外科|内科|眼|口腔|中医')`]
+          ? [sql`(${journals.disciplineCode} = 'medicine' OR ${journals.name} ~ '医|药|护理|临床|外科|内科|眼|口腔|中医')`]
           : []),
       ),
     )) as WanfangCandidateRow[];

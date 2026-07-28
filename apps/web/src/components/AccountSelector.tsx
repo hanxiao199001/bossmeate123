@@ -15,7 +15,7 @@
  */
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { PLATFORM_META, platformShortLabel } from "../utils/i18n";
+import { platformShortLabel, platformIcon, isBrowserLoginPlatform } from "../utils/platforms";
 
 export interface SelectorAccount {
   id: string;
@@ -43,7 +43,7 @@ export interface AccountSelectorProps {
 }
 
 /** PR-S6: 走"浏览器登录态推草稿箱"的半自动平台 */
-const SEMI_LOGIN_PLATFORMS = new Set(["douyin", "wechat_video"]);
+
 
 export default function AccountSelector({
   accounts,
@@ -122,9 +122,7 @@ export default function AccountSelector({
                   aria-label={`全选 ${platformShortLabel(p)}`}
                 />
               )}
-              {PLATFORM_META[p]?.icon && (
-                <span className="text-sm leading-none">{PLATFORM_META[p].icon}</span>
-              )}
+              <span className="text-sm leading-none">{platformIcon(p)}</span>
               <span className="text-xs font-medium text-slate-500">{platformShortLabel(p)}</span>
               <span className="text-xs text-slate-400">({list.length})</span>
             </div>
@@ -145,7 +143,7 @@ export default function AccountSelector({
                   />
                   <span className="text-sm text-slate-700 flex-1 truncate">{a.accountName}</span>
                   {/* PR-S6: 抖音/视频号看登录态(推草稿前置); 其余平台看 API 验证 */}
-                  {SEMI_LOGIN_PLATFORMS.has(a.platform) && a.loginStatus !== undefined ? (
+                  {isBrowserLoginPlatform(a.platform) && a.loginStatus !== undefined ? (
                     a.loginStatus === "logged_in" ? (
                       <span className="text-xs text-emerald-600" title="已登录·可推草稿">✓ 已登录</span>
                     ) : (

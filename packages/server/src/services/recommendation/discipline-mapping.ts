@@ -103,6 +103,23 @@ export function toDisciplineCode(raw: string | null | undefined): DisciplineCode
 }
 
 /**
+ * 归一到**具体**学科码; 归一不出具体学科(空值 / 只匹配到综合刊兜底)时返回 null。
+ *
+ * 为什么要有这个而不是直接用 toDisciplineCode(): toDisciplineCode 的契约是"100% 覆盖",
+ * 任何输入都会落到一个码, 兜不住就给 generic。这个契约对**选刊槽位**是对的(综合刊通吃),
+ * 但对**自由文本**(用户输入的主题词 / 热词, 如 "糖尿病" / "元宇宙")就成了陷阱 ——
+ * 它们不该被当成"综合学科", 照单全收会让 `discipline_code = 'generic'` 匹配到全部 1139 本
+ * 综合刊, 噪声比不加学科条件还大。
+ *
+ * 铁律: **入参是学科槽位/下拉框值** → 用 toDisciplineCode(要 generic 兜底);
+ *       **入参是自由文本** → 用 resolveDisciplineCode, 拿到 null 就**不加学科条件**。
+ */
+export function resolveDisciplineCode(raw: string | null | undefined): DisciplineCode | null {
+  const code = toDisciplineCode(raw);
+  return code === GENERIC_DISCIPLINE_CODE ? null : code;
+}
+
+/**
  * 由 RULES 生成等价的 Postgres CASE 表达式 —— migration 回填与 TS 共用这一份规则。
  * @param col 期刊 discipline 列的 SQL 引用(如 `discipline` 或 `j.discipline`)
  */

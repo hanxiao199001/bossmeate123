@@ -321,7 +321,11 @@ export async function adminRoutes(app: FastifyInstance) {
         // PR #175: 精准模式 — 用户指定 journalIds, 每个 journal 选 1 个 fresh keyword
         for (const jid of body.journalIds) {
           // 查 journal discipline → 选该学科 fresh keyword
-          const [j] = await db.select({ discipline: journals.discipline }).from(journals).where(eq(journals.id, jid)).limit(1);
+          // 7-28 (#5) 学科码收口: 原来读**原始列** discipline 直接丢给 selectCandidates ——
+          //   它匹配的是 `keywords.category`, 存的是学科码(medicine/education…), 而国内刊原始列
+          //   存的是中文分类名("临床医学") → 精准模式对国内刊恒选不到对口热词, 每次都掉进下面
+          //   的全学科 fallback(等于"精准模式"这个功能对 2242 本国内刊完全不生效, 且不报错)。
+          const [j] = await db.select({ discipline: journals.disciplineCode }).from(journals).where(eq(journals.id, jid)).limit(1);
           const disc = j?.discipline ? [j.discipline] : null;
           const kws = await selectCandidates({ disciplines: disc, cooldownDays: 30, poolSize: 5 });
           // fallback: 全学科

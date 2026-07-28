@@ -196,7 +196,9 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           // PR #242 (5-23): 加 videoScript — PR #241 输出该字段, bridge 读 metadata.videoScript
           //   触发 DVH 90 秒视频朗读. 缺则 fallback 老 extractNarration (title + body 前 80 字).
           const metaMerge: Record<string, unknown> = {};
-          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe"]) {
+          // 7-28 阶段1-C: promptVersion 必须在白名单里, 否则 ArticleSkill 写的版本号会被这层过滤掉,
+          //   落库的内容又变成"不知道是哪版 prompt 写的"(见 prompt-version.ts)。
+          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion"]) {
             if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
           }
           await db

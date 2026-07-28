@@ -46,6 +46,7 @@ import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation
 import { encryptCredentials } from "../utils/crypto.js";
 import { transitionToStatus } from "../services/articles/state-machine.js";
 import { dispatchVideoToAgent } from "../services/publisher/agent-dispatch.js";
+import { AGENT_PLATFORMS, isAgentPlatform, platformShortLabel } from "../services/platforms/capabilities.js";
 
 type AgentDevice = typeof agentDevices.$inferSelect;
 
@@ -209,7 +210,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         if (uid) set.accountId = uid;
         // 6-19: 系统占位名 → 真实名(优先昵称, 退而"平台·账号号")。用户自定义改过的名绝不覆盖。
         //   系统占位名 = "待登录·X" 开头, 或 已被惰性自愈成 "平台·uid"(重新扫码带回昵称时升级成昵称)。
-        const platLabel = acc.platform === "douyin" ? "抖音" : acc.platform === "wechat_video" ? "视频号" : acc.platform;
+        const platLabel = platformShortLabel(acc.platform);
         const curName = typeof acc.accountName === "string" ? acc.accountName : "";
         const isSystemName = curName.startsWith("待登录")
           || (!!acc.accountId && curName === `${platLabel}·${acc.accountId}`)
@@ -235,9 +236,10 @@ export async function agentPublishRoutes(app: FastifyInstance) {
     authed.post("/agent/accounts/create", async (request, reply) => {
       const device = request.agentDevice!;
       const b = (request.body ?? {}) as { platform?: string };
-      const platform = b.platform === "douyin" ? "douyin" : b.platform === "wechat_video" ? "wechat_video" : null;
-      if (!platform) return reply.code(400).send({ code: "BAD_REQUEST", message: "platform 须为 douyin | wechat_video" });
-      const label = platform === "douyin" ? "抖音" : "视频号";
+      // 只允许建"派单给本地 Agent"的平台(见 platforms/capabilities.ts publishVia=agent)
+      const platform = b.platform && isAgentPlatform(b.platform) ? b.platform : null;
+      if (!platform) return reply.code(400).send({ code: "BAD_REQUEST", message: `platform 须为 ${[...AGENT_PLATFORMS].join(" | ")}` });
+      const label = platformShortLabel(platform);
       const [acc] = await db
         .insert(platformAccounts)
         .values({
@@ -297,7 +299,7 @@ export async function agentPublishRoutes(app: FastifyInstance) {
         .from(platformAccounts)
         .where(and(
           eq(platformAccounts.tenantId, device.tenantId),
-          inArray(platformAccounts.platform, ["douyin", "wechat_video"]),
+          inArray(platformAccounts.platform, [...AGENT_PLATFORMS]),
         ))
         .orderBy(desc(platformAccounts.createdAt));
       return { code: "OK", data: { accounts: rows } };

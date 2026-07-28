@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import PageHeader from "../components/ui/PageHeader";
+import { platformShortLabel } from "../utils/platforms";
 
 type RangeDays = 7 | 30 | 90;
 
@@ -65,11 +66,7 @@ interface EffectDashboard {
   emptyDimensions: { accounts: boolean; ranking: boolean; trend: boolean; disciplines: boolean };
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  wechat: "公众号", douyin: "抖音", wechat_video: "视频号",
-  xiaohongshu: "小红书", zhihu: "知乎", baijiahao: "百家号", toutiao: "头条号",
-};
-const platformLabel = (p: string) => PLATFORM_LABEL[p] ?? p;
+
 
 const DISC_LABEL: Record<string, string> = {
   medicine: "医学", psychology: "心理", engineering: "工程", economics: "经管",
@@ -226,7 +223,7 @@ export default function EffectDashboardPage() {
                       {sortedAccounts.map((a, i) => (
                         <tr key={a.accountId ?? `p-${i}`} className="border-b border-slate-50 hover:bg-slate-50/50">
                           <td className="py-2 px-3 text-slate-800 font-medium">{a.accountName}</td>
-                          <td className="py-2 px-3 text-slate-500">{platformLabel(a.platform)}</td>
+                          <td className="py-2 px-3 text-slate-500">{platformShortLabel(a.platform)}</td>
                           <td className="py-2 px-3 text-slate-600 text-right">{a.publishedCount}</td>
                           <td className="py-2 px-3 text-slate-900 text-right font-medium">{fmt(a.totalViews)}</td>
                           <td className="py-2 px-3 text-slate-600 text-right">{fmt(a.avgViews)}</td>

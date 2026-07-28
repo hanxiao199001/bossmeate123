@@ -21,7 +21,7 @@ import { buildJournalKindSql } from "../services/journals/journal-kind.js";
 import { MIGRATIONS } from "../models/migrations.js";
 
 /** 快照来源 migration。新加重建列的 migration 后, 这里要一起改成新版本号。 */
-const SNAPSHOT_SOURCE_MIGRATION = "029_journals_journal_kind";
+const SNAPSHOT_SOURCE_MIGRATION = "030_journals_journal_kind_rebuild";
 
 /**
  * 🧊 冻结快照 —— migration 029 固化进生产库的 journal_kind 生成列表达式。
@@ -29,8 +29,8 @@ const SNAPSHOT_SOURCE_MIGRATION = "029_journals_journal_kind";
  * ⚠️ 这不是"期望值", 是"生产库现状"。**不要为了让测试变绿而重新生成它**。
  */
 const FROZEN_JOURNAL_KIND_SQL = `CASE
-    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> ''), false) AND NOT coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'intl'
-    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> ''), false) AND coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'both'
+    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> '' OR btrim(coalesce(cas_partition_new, '')) <> '' OR (btrim(coalesce(jcr_full->>'wosLevel', '')) <> '' OR (jsonb_typeof(jcr_full->'jifSubjects') = 'array' AND jsonb_array_length(jcr_full->'jifSubjects') > 0) OR (jsonb_typeof(jcr_full->'jciSubjects') = 'array' AND jsonb_array_length(jcr_full->'jciSubjects') > 0))), false) AND NOT coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'intl'
+    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> '' OR btrim(coalesce(cas_partition_new, '')) <> '' OR (btrim(coalesce(jcr_full->>'wosLevel', '')) <> '' OR (jsonb_typeof(jcr_full->'jifSubjects') = 'array' AND jsonb_array_length(jcr_full->'jifSubjects') > 0) OR (jsonb_typeof(jcr_full->'jciSubjects') = 'array' AND jsonb_array_length(jcr_full->'jciSubjects') > 0))), false) AND coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'both'
     WHEN coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'cn'
     ELSE 'unknown'
   END`;

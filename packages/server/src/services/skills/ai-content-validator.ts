@@ -14,6 +14,7 @@
 
 import type { JournalInfo } from "../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "./journal-template.js";
+import { hasDbFact } from "../compliance/fabrication-criteria.js";
 
 // ============ 校验结果 ============
 
@@ -713,6 +714,22 @@ export function extractClaimedFacts(body: string): ClaimedFact[] {
 /**
  * 把 claims 与 DB journal 行对照, 偏差 / fabricated 返 ValidationIssue.
  *
+ * ══ 这是四道反编造判据里的**第 ②道**(读取侧「与 DB 不符」) ══
+ * 总纲(四道分别管什么/在哪生效/为什么不能互相替代)见
+ * `services/compliance/fabrication-criteria.ts` 的文件头。
+ *
+ * 7-28 复核结论: **仍在被调用, 保留**。
+ *   调用方: `services/skills/article-skill.ts:1174`(ArticleSkill 生成期, 唯一一处)。
+ *   产出: severity=warning 的 ValidationIssue → 落 metadata.warnings, 推荐池 feed 过滤
+ *         hasWarnings 不展示。**不拦发布**(拦截由判据①在发布期的确定性硬闸做)。
+ *   它与判据① 的定义域是**互补**的, 谁也替代不了谁:
+ *     · ① 只在 **DB 该字段为空** 时判编造 —— 管的是国内刊(IF/分区本来就没有)那一半;
+ *     · ② 只在 **DB 该字段有值** 时比容差 —— 管的是国际刊"DB IF=2.6, 正文写 14.7"那一半,
+ *          这种在 ① 眼里"有源"就放行了。
+ *   7-28 收口的是它们**共用的底层判据**("值为空"的定义、字段名清单), 不是把两者合并。
+ *   ⚠️ 提取正则**刻意不与 ① 共用**: 这一侧要 capture 出数值做容差比对, 且经 PR#171
+ *      调过精度(排除 Q1 / 近10年 / SVG 坐标等假阳性), 与 ① "只问出现了没有"的宽口径契约不同。
+ *
  * 规则:
  * - DB 字段 NULL + claim 非空 → severity=warning 'fabricated' (DB 无数据 AI 却编了)
  * - DB 字段有值, claim 偏差超阈值 → severity=warning 'stale_or_wrong'
@@ -732,7 +749,11 @@ export function verifyClaimsAgainstDb(
     const dbValue = journal[c.field];
 
     // case 1: DB 无, claim 有 → fabricated
-    if (dbValue == null || dbValue === "") {
+    // 7-28 (#6): 改用共享的 hasDbFact —— 原来这里是全项目**第四套**"值为空"写法
+    //   (`== null || === ""`), 与 content-check.ts 里的三套都不同, 同一行数据不同函数不同结论。
+    //   口径统一到"只有 null/undefined 算没有"(理由见 fabrication-criteria.ts 的长注释);
+    //   `partition=''` 这类脏值该在写入侧洗干净, 不该由校验器猜。
+    if (!hasDbFact(dbValue)) {
       issues.push({
         severity: "warning",
         field: c.field,

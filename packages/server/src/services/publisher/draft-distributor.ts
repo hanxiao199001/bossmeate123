@@ -36,7 +36,11 @@ const POOL_WINDOW_DAYS = 7; // 可发池回看窗口: 太老的文章时效性�
  * ⚠️ 7-27 把"未评上分"(旧名 sixdim_degraded)从这里**移出去了** —— 当天零产出的直接死因:
  *   质检 LLM 一超时, 20/25 条内容全被当"信任事故"剔除。"评分器挂了"≠"内容有问题"。
  */
-export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy"];
+// 7-28 (#6) 补 ai_fabricated_journal: 本篇关联到 LLM 编出来的影子刊(journals.data_source
+//   = 'ai_fabricated')。这是**判据⑤**的硬红线 —— 反编造的另外三道判据校的都是"数字有没有源",
+//   而影子刊的每个数字都能在那条假记录里找到"源", 三道闸全绿, 但整本刊不存在。
+//   判定是确定性的(一个字段值, 零推断), 所以拦得起; 只有它进红线, "未核实"那档走队尾(见 TAIL_REASONS)。
+export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy", "ai_fabricated_journal"];
 
 /**
  * "没评上分"的 reason(不是"分低")。sixdim_degraded 是 7-27 前的旧名, 库里有存量, 一并识别。
@@ -55,8 +59,23 @@ export const UNSCORED_REASONS = new Set(["quality_check_unavailable", "sixdim_de
  */
 export const GATE_UNAVAILABLE_REASONS = new Set(["quality_gate_unavailable"]);
 
-/** 排队尾的全部 reason: 没评上分 + 闸没检查成。有分/检查全过的内容优先占名额。 */
-export const TAIL_REASONS = new Set([...UNSCORED_REASONS, ...GATE_UNAVAILABLE_REASONS]);
+/**
+ * 7-28 (#6) 判据⑤ 的软档: 源刊未过分体系可信门槛(batch-worker 生成期打的标)。
+ *
+ * 缺口背景: `verification.ts` 的 isUnverifiedJournal 此前**发布链路一道闸都没读** ——
+ *   batch-worker 标上的 `unverified_source_journal` 既不在红线(会剔除)也不在队尾(会降权),
+ *   等于和完全核实过的内容平起平坐抢草稿箱名额。
+ *
+ * 为什么是队尾不是红线: 7-28 刚把国内刊改成"目录成员资格"判定, 而目录字段本身还有回填缺口;
+ *   现在一刀切拦截 = 复刻 7-27 的零产出事故("我们的判定还不完备" ≠ "内容有问题")。
+ *   排队尾既让核实过的内容优先, 又零停产风险。真·假刊那一档(ai_fabricated)走红线, 见上。
+ */
+export const UNVERIFIED_SOURCE_REASONS = new Set(["unverified_source_journal"]);
+
+/** 排队尾的全部 reason: 没评上分 + 闸没检查成 + 源刊未核实。检查全过 + 源刊核实过的优先占名额。 */
+export const TAIL_REASONS = new Set([
+  ...UNSCORED_REASONS, ...GATE_UNAVAILABLE_REASONS, ...UNVERIFIED_SOURCE_REASONS,
+]);
 
 /** 纯函数: 该 status/待审原因能否进可发池(红线剔除, 其余包括"未评上分"放行) */
 export function passesReasonGate(status: string | null, needsReviewReason: string | null | undefined): boolean {
@@ -205,7 +224,9 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
 
   // 7-21 发布前编造硬闸(确定性兜底): 纯国内刊正文出现 DB 无据的 IF/分区 → 不进草稿箱, 标 needs_review/body_fabrication。
   //   即使生成侧 prompt 漏网、六维分侥幸过线, 也发不出去。骑墙刊(含sci-core)豁免。复用 checkBodyFabrication。
-  const { checkBodyFabricationForPublish } = await import("../compliance/content-check.js");
+  // 7-28 (#6): 改调 checkPublishJournalGate —— 同一次查库同时给出判据①(正文编造)与
+  //   判据⑤(源刊可信度)。原来只调 checkBodyFabricationForPublish(它现在是这个函数的薄封装)。
+  const { checkPublishJournalGate } = await import("../compliance/content-check.js");
   // 7-27 出稿健康闸(确定性兜底, 零 LLM/零 DB): 占位文/空/截断/复读 → 不进草稿箱, 标 needs_review/output_unhealthy。
   //   ⚠️ 关键: 这道闸放在**不看 status** 的位置 —— 上面的 reasonPassed 对 status=generated 是**无条件放行**的,
   //   7-27 那篇标题="抱歉，AI暂时无法响应，请稍后重试。"、六维 80 分、status=generated 的废稿正是从这个口子溜进草稿箱的。
@@ -232,7 +253,24 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     const journalId = cMeta.journalId ?? null;
     // 7-25: 多刊盘点(roundup)的 metadata 带 journalIds 而非 journalId, 原来这里一律当"无期刊"放行。
     const journalIds = Array.isArray(cMeta.journalIds) ? cMeta.journalIds : null;
-    const fab = await checkBodyFabricationForPublish({ body: c.body, journalId, journalIds });
+    const jGate = await checkPublishJournalGate({ body: c.body, journalId, journalIds });
+    // 7-28 (#6) 判据⑤ 硬红线: 关联刊是 LLM 编出来的影子刊 → 整本刊不存在, 比任何数字编造都严重。
+    //   放在正文编造闸**之前**: 影子刊的数字全都"有源"(源就是那条假记录), 正文编造闸必然放行。
+    if (jGate.aiFabricatedJournal) {
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "ai_fabricated_journal", aiFabricatedJournal: true })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, c.id));
+      logger.warn({ contentId: c.id, journalId, journalIds }, "草稿分发硬闸: 关联刊是 AI 编造的影子刊(data_source=ai_fabricated), 剔除不进草稿箱, 转 needs_review");
+      void import("../ops/incidents.js").then((m) => m.recordIncident({
+        kind: "ai_fabricated_journal",
+        severity: "error",
+        tenantId,
+        message: `草稿分发拦下影子刊内容(contentId=${c.id})`.slice(0, 500),
+        detail: { contentId: c.id, stage: "draft_distribute", journalId, journalIds },
+      })).catch(() => { /* 告警旁路, 不阻塞分发 */ });
+      continue;
+    }
+    const fab = jGate.fabrication;
     if (fab.length > 0) {
       await db.update(contents)
         .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "body_fabrication", bodyFabrication: fab })}::jsonb`, updatedAt: new Date() })
@@ -240,6 +278,11 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       logger.warn({ contentId: c.id, journalId, fab }, "草稿分发硬闸: 正文编造无据IF/分区, 剔除不进草稿箱, 转 needs_review");
       continue;
     }
+    // 7-28 (#6) 判据⑤ 软档: 源刊未过分体系可信门槛 → **不剔除**, 排队尾(核实过的先占名额)。
+    //   两条来源都认: ① 生成期 batch-worker 标的 unverified_source_journal(见下方 TAIL_REASONS);
+    //   ② 这里现查的结果 —— 覆盖 batch-worker 那道够不着的两类: 租户自己触发的生成
+    //   (那道只在 SYSTEM 租户下判)、以及根本不走 batch-worker 的 roundup 多刊盘点。
+    if (jGate.unverifiedJournal) unscoredIds.add(c.id);
     const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
     // 7-28 ②d: 把"闸没检查成"(quality_gate_unavailable)也归进队尾组 —— 与"没评上分"同一逻辑:
     //   不剔除(内容本身没查出问题), 但让检查全过的内容先占名额。

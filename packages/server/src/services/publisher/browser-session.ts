@@ -23,6 +23,7 @@ import { db } from "../../models/db.js";
 import { platformAccounts } from "../../models/schema.js";
 import { encryptCredentials, decryptCredentials } from "../../utils/crypto.js";
 import { logger } from "../../config/logger.js";
+import { definePlatformMap } from "../platforms/capabilities.js";
 
 const puppeteerExtra: any = (puppeteerExtraImport as any)?.default ?? puppeteerExtraImport;
 const StealthPlugin: () => any = (StealthPluginImport as any)?.default ?? StealthPluginImport;
@@ -126,7 +127,12 @@ async function douyinPageLoggedIn(page: Page): Promise<boolean> {
   } catch { return false; }
 }
 
-export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
+/**
+ * 扫码登录的**行为配置**(含 puppeteer 判定函数, 所以不能进纯数据的 capabilities 表)。
+ * key 集合由 PLATFORM_CAPABILITIES.browserLogin 校验 —— 表里标了 browserLogin 却没配置,
+ * 或配置了表里没标, 都在模块加载时直接抛错(而不是线上"该平台扫码入口神秘消失")。
+ */
+export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = definePlatformMap<PlatformLoginConfig>("browserLogin", {
   douyin: {
     loginUrl: "https://creator.douyin.com",
     // 登录后跳 creator-micro/home; 放宽为"在 creator.douyin.com 且不在 login 页"
@@ -145,7 +151,7 @@ export const BROWSER_LOGIN_PLATFORMS: Record<string, PlatformLoginConfig> = {
     sessionCookies: ["sessionid", "wxuin"],
     cookieDomains: ["weixin.qq.com", "qq.com"],
   },
-};
+});
 
 // ===== 会话表 =====
 export type QrLoginStatus = "starting" | "waiting" | "waiting_sms" | "success" | "expired" | "failed";

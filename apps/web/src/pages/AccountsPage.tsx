@@ -1,7 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "../components/Toast";
 import { api } from "../utils/api";
-import { PLATFORM_META } from "../utils/i18n";
+import {
+  PLATFORM_CAPABILITIES,
+  PLATFORM_IDS,
+  SEMI_AUTO_PLATFORMS,
+  isBrowserLoginPlatform,
+  isVideoPlatform,
+  platformIcon,
+  platformLabel,
+} from "../utils/platforms";
 import PageHeader from "../components/ui/PageHeader";
 import VoiceCloneRecorder from "../components/settings/VoiceCloneRecorder";
 
@@ -36,41 +44,14 @@ interface Account {
   updatedAt: string;
 }
 
-// ===== 平台配置 ===== (6-11 施工包A: 收口到 utils/i18n.ts 的 PLATFORM_META,8 份重复表合一)
+// ===== 平台配置 =====
+// 7-28 阶段1-B: 本页原先自带 SEMI_AUTO_PLATFORMS + CREDENTIAL_FIELDS 两张表(与服务端
+// routes/accounts.ts 各写一份, 已经漂过)。现全部读 utils/platforms.ts, 后者与后端
+// services/platforms/capabilities.ts 有逐字段一致性守卫测试。
+const CREDENTIAL_FIELDS: Record<string, ReadonlyArray<{ key: string; label: string; type: "input" | "textarea" | "password"; placeholder: string; required: boolean }>> =
+  Object.fromEntries(PLATFORM_IDS.map((id) => [id, PLATFORM_CAPABILITIES[id]!.credentialFields]));
 
-// PR-P2: 半自动平台 — 第三方无稳定发布 API, 内容人工发布, 凭证选填(账号=矩阵号标签)
-const SEMI_AUTO_PLATFORMS = new Set(["douyin", "wechat_video", "xiaohongshu"]);
-
-const CREDENTIAL_FIELDS: Record<string, Array<{ key: string; label: string; type: "input" | "textarea" | "password"; placeholder: string; required: boolean }>> = {
-  wechat: [
-    { key: "appId", label: "AppID", type: "input", placeholder: "微信公众号AppID", required: true },
-    { key: "appSecret", label: "AppSecret", type: "password", placeholder: "微信公众号AppSecret", required: true },
-  ],
-  baijiahao: [
-    { key: "accessToken", label: "AccessToken", type: "textarea", placeholder: "百家号开放平台的AccessToken", required: true },
-  ],
-  toutiao: [
-    { key: "accessToken", label: "AccessToken", type: "textarea", placeholder: "头条号开放平台的AccessToken", required: true },
-  ],
-  zhihu: [
-    { key: "cookie", label: "Cookie", type: "textarea", placeholder: "浏览器登录知乎后获取的Cookie", required: true },
-    { key: "columnId", label: "专栏ID（可选）", type: "input", placeholder: "如 my-column", required: false },
-  ],
-  xiaohongshu: [
-    { key: "cookie", label: "Cookie", type: "textarea", placeholder: "浏览器登录小红书后获取的Cookie", required: true },
-  ],
-  douyin: [
-    { key: "clientKey", label: "Client Key", type: "input", placeholder: "抖音开放平台 Client Key", required: true },
-    { key: "clientSecret", label: "Client Secret", type: "password", placeholder: "抖音开放平台 Client Secret", required: true },
-    { key: "accessToken", label: "Access Token", type: "textarea", placeholder: "OAuth2 授权获取的 access_token", required: true },
-    { key: "openId", label: "Open ID", type: "input", placeholder: "用户 open_id（授权回调返回）", required: false },
-  ],
-  wechat_video: [
-    { key: "appId", label: "AppID", type: "input", placeholder: "公众号 AppID（需绑定视频号）", required: true },
-    { key: "appSecret", label: "AppSecret", type: "password", placeholder: "公众号 AppSecret", required: true },
-  ],
-};
-
+// 账号状态词表(platform_accounts.status/isVerified 派生, 与 contents.status 无关)
 const STATUS_LABELS: Record<string, string> = {
   verified: "已验证",
   expired: "已过期",
@@ -469,7 +450,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
   };
 
   // 获取可用平台列表
-  const availablePlatforms = ["全部", ...Object.keys(PLATFORM_META)];
+  const availablePlatforms = ["全部", ...PLATFORM_IDS];
   const availableGroups = ["全部", ...groups];
 
   // 过滤账号列表
@@ -569,8 +550,8 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                   onChange={(e) => setSelectedPlatform(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
                 >
-                  {Object.entries(PLATFORM_META).map(([key, info]) => (
-                    <option key={key} value={key}>{info.label}</option>
+                  {PLATFORM_IDS.map((key) => (
+                    <option key={key} value={key}>{platformLabel(key)}</option>
                   ))}
                 </select>
               </div>
@@ -827,12 +808,11 @@ const handleScopeChange = async (accountId: string, scope: string) => {
         ) : (
           <div className="space-y-6">
             {Object.entries(accountsByPlatform).map(([platformKey, platformAccounts]) => {
-              const platformInfo = PLATFORM_META[platformKey];
               return (
                 <div key={platformKey}>
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="text-2xl">{platformInfo.icon}</span>
-                    <h3 className="text-lg font-bold text-gray-900">{platformInfo.label}</h3>
+                    <span className="text-2xl">{platformIcon(platformKey)}</span>
+                    <h3 className="text-lg font-bold text-gray-900">{platformLabel(platformKey)}</h3>
                     <span className="text-xs text-gray-400">({platformAccounts.length})</span>
                   </div>
 
@@ -922,7 +902,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                                 <option value="domestic">国内核心</option>
                                 <option value="international">国外期刊</option>
                               </select>
-                              {(account.platform === "douyin" || account.platform === "wechat_video") && dvhCatalog.length > 0 && (() => {
+                              {isVideoPlatform(account.platform) && dvhCatalog.length > 0 && (() => {
                                 const boundPreview = dvhCatalog.find((d) => d.key === account.dvhTemplate)?.preview;
                                 return (<>
                                 {boundPreview && <img src={boundPreview} alt="形象" title="当前数字人形象" className="w-6 h-6 rounded object-cover border border-fuchsia-200" />}
@@ -1048,7 +1028,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                           {/* 操作按钮 */}
                           <div className="flex items-center gap-2 ml-4">
                             {/* PR-S4: 抖音/视频号 — 登录状态 + 扫码登录 (推草稿箱前置条件) */}
-                            {["douyin", "wechat_video"].includes(account.platform) && (
+                            {isBrowserLoginPlatform(account.platform) && (
                               <>
                                 {/* 6-17 #4: 抖音/视频号发布走本地Agent → 徽标看"Agent设备是否在线", 不再用服务器扫码态(会显示"已登录"实则发不出) */}
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${

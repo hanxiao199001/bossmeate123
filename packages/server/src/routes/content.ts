@@ -16,8 +16,9 @@ import {
 // PR #131 (5-12): system tenant article 全 user 可读（类似 PR #115 journals 全局共享 idiom）
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { auditContent } from "../services/risk-control/audit-content.js";
-import { generateDouyinCaption, generateDouyinCaptionVariants } from "../services/publisher/douyin-caption.js";
+import { generateDouyinCaption, generateDouyinCaptionVariants, type VideoPlatform } from "../services/publisher/douyin-caption.js";
 import { enqueueDraftPush, getDraftPushJob } from "../services/publisher/draft-push.js";
+import { isVideoPlatform } from "../services/platforms/capabilities.js";
 
 /** PR #131: 读权 — user 自己 OR system tenant（推荐池全局可读，但写仍 strict） */
 const READABLE_TENANT_FILTER = (tenantId: string) =>
@@ -1061,7 +1062,8 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
     const { id } = request.params as { id: string };
     const q = request.query as { force?: string; platform?: string };
     const force = q?.force === "true";
-    const platform = q?.platform === "wechat_video" ? "wechat_video" as const : "douyin" as const;
+    // 文案风格按视频平台走(归属见 services/platforms/capabilities.ts contentKind), 非视频平台兜底 douyin
+    const platform = (isVideoPlatform(q?.platform ?? "") ? q!.platform! : "douyin") as VideoPlatform;
     try {
       const caption = await generateDouyinCaption({ contentId: id, tenantId: request.tenantId, force, platform });
       return { code: "OK", data: caption };
@@ -1081,7 +1083,8 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
     const b = (request.body ?? {}) as { count?: number; platform?: string };
     const count = b.count ?? (q.count ? parseInt(q.count, 10) : 3);
     const force = q.force === "true";
-    const platform = (b.platform ?? q.platform) === "wechat_video" ? "wechat_video" as const : "douyin" as const;
+    const reqPlatform = b.platform ?? q.platform ?? "";
+    const platform = (isVideoPlatform(reqPlatform) ? reqPlatform : "douyin") as VideoPlatform;
     try {
       const variants = await generateDouyinCaptionVariants({ contentId: id, tenantId: request.tenantId, count, force, platform });
       return { code: "OK", data: variants };

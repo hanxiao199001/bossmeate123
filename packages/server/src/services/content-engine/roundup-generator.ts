@@ -10,7 +10,8 @@ import { logger } from "../../config/logger.js";
 import { getProviders } from "../ai/provider-factory.js";
 import { generateJournalRoundupHtml, type RoundupData } from "../publisher/adapters/journal-roundup-template.js";
 import { journalScopeCondition } from "../recommendation/journal-scope.js";
-import { GENERIC_DISCIPLINE_CODE } from "../recommendation/discipline-mapping.js";
+import { journalDisciplineMatches } from "../journals/journal-sql.js";
+import { resolveDisciplineCode } from "../recommendation/discipline-mapping.js";
 
 // PR-N: 同一刊 N 天内不重复出现 (按租户)。可用 env 覆盖。
 const JOURNAL_REUSE_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
@@ -55,8 +56,13 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   // 7-28 (#4a) 学科口径对齐 migration 026: daily-cron 传的是学科码(education/medicine…), 旧
   //   `discipline ILIKE '%code%'` 匹配不上国内刊中文学科名("教育学") → 学科过滤形同虚设/漏刊。
   //   改打生成列 discipline_code(与 pickScopedFreshJournal 同口径); 综合刊(generic)可入池、
-  //   排序时对口刊优先(见下方 orderBy); 保留 ILIKE 兜底, 兼容管理端手填中文学科名的调用。
-  if (opts.discipline) conds.push(sql`(${journals.disciplineCode} = ${opts.discipline} OR ${journals.disciplineCode} = ${GENERIC_DISCIPLINE_CODE} OR ${journals.discipline} ILIKE ${"%" + opts.discipline + "%"})`);
+  //   排序时对口刊优先(见下方 orderBy)。
+  // 7-28 (#5) 收口: 原来是"生成列 = 码 OR 生成列 = generic OR **原始列 ILIKE**"三条件并联, 第三条
+  //   是为"管理端手填中文学科名"留的兜底 —— 但 toDisciplineCode 本来就吃中文分类名, 兜底纯属
+  //   多余, 而且它把原始列的读法留在了热路径上(下一个人照抄就是第 12 次犯病)。删掉, 只留 helper。
+  const discCode = resolveDisciplineCode(opts.discipline);
+  const discCond = journalDisciplineMatches(opts.discipline);
+  if (discCond) conds.push(discCond);
   if (opts.catalog) conds.push(sql`${journals.catalogs} @> ${JSON.stringify([opts.catalog])}::jsonb`);
   const scopeCond = journalScopeCondition(opts.scope);
   if (scopeCond) conds.push(scopeCond);
@@ -70,7 +76,9 @@ async function resolveJournals(opts: RoundupOptions): Promise<JRow[]> {
   //   它们永远霸榜 —— 冷却期一轮完又是同一批 48 本("盘点反复就那几本"的主因)。改: 对口学科优先
   //   (generic 综合刊只在对口不足时补位), 池内纯随机轮转; 15 天冷却(上方 NOT EXISTS)已保证不重复。
   return (await db.select(COLS).from(journals).where(and(...conds))
-    .orderBy(sql`(${journals.disciplineCode} = ${opts.discipline ?? ""}) DESC, random()`).limit(opts.count ?? 3)) as JRow[];
+    // 7-28 (#5): 排序也用**归一后**的码 —— 原来直接拿 opts.discipline 原样比, 管理端传中文
+    //   "教育学" 时这一条恒 false, "对口刊优先" 静默失效, 又退化成纯随机。
+    .orderBy(sql`(${journals.disciplineCode} = ${discCode ?? ""}) DESC, random()`).limit(opts.count ?? 3)) as JRow[];
 }
 
 function catalogLabels(j: JRow): string {

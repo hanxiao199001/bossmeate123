@@ -31,9 +31,13 @@
  * 改法: 新加一条 migration 走 DROP COLUMN + 重建 ADD COLUMN GENERATED, 并更新
  * `__tests__/journal-kind-generated-column-drift.test.ts` 的冻结快照。守卫测试会逼你做。
  *
- * 本文件**保持纯净**(零 import): migrations.ts 要 import 它, 不能被 drizzle/db 连带拉起来。
+ * 本文件**保持纯净**: migrations.ts 要 import 它, 不能被 drizzle/db 连带拉起来。
+ * 7-29 起允许 import **同样零依赖**的 `./intl-signal.js`(国际指标信号的单一真相源) ——
+ * 判据是"不许拉进任何带副作用/连 DB 的模块", 不是"一个 import 都不许有"。
  * 需要 drizzle SQL 条件的去 `journal-sql.ts`。
  */
+
+import { hasIntlSignal, buildIntlSignalSql } from "./intl-signal.js";
 
 export type JournalKind = "intl" | "both" | "cn" | "unknown";
 
@@ -65,14 +69,14 @@ const catalogList = (v: unknown): string[] =>
   Array.isArray(v) ? (v as unknown[]).map((x) => String(x)) : [];
 
 /**
- * 有国际指标?
- * 口径与改造前的 `journalScopeCondition('international')` 对齐(IF / 分区 **IS NOT NULL** 即算,
- * 不加 `>0` —— 加了会把 IF=0 的占位行踢出国外池, 属于"减法", 本轮只做加法),
- * 另**补上中科院分区**: 只有 cas_partition 的刊改造前两个 scope 都看不见, 这是纯增量修复。
+ * 有国际指标? —— 判据与列清单已收口到 `journals/intl-signal.ts`(单一真相源)。
+ *
+ * 7-29 修: 原实现挑的三列里 `cas_partition` **整列为空(0 行)**、`partition` 仅 40 行,
+ *   真正有数据的 `cas_partition_new`(2203) 和 `jcr_full`(4229) 一个没读 —— 等于三个信号
+ *   只有一个在工作, 704 本一线国际刊被判 unknown 对 scope 隐身。这不是"给 unknown 开后门",
+ *   是修一个读错列的 bug。为什么会连踩两次、以及三个判据为何取不同子集, 见 intl-signal.ts 文件头。
  */
-export function hasIntlSignal(j: JournalKindFields): boolean {
-  return j.impactFactor != null || nonEmpty(j.partition) || nonEmpty(j.casPartition);
-}
+export { hasIntlSignal };
 
 /**
  * 有国内信号? catalogs 非空 / CSCD / 北大核心 / 国内目录类型 / CN 刊号 / 复合影响因子。
@@ -134,13 +138,8 @@ const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x.replace(/'/g, "''
  */
 const boolish = (expr: string) => `coalesce(${expr}, false)`;
 
-/** 国际指标信号 SQL(= hasIntlSignal) */
-export function buildIntlSignalSql(p = ""): string {
-  // "partition" 必须加引号: 它在 Postgres 里是窗口函数关键字, 裸写在生成列表达式里有解析歧义风险。
-  return boolish(
-    `(${p}impact_factor IS NOT NULL OR btrim(coalesce(${p}"partition", '')) <> '' OR btrim(coalesce(${p}cas_partition, '')) <> '')`,
-  );
-}
+/** 国际指标信号 SQL(= hasIntlSignal 的孪生体) —— 同样收口在 intl-signal.ts */
+export { buildIntlSignalSql };
 
 /** 国内信号 SQL(= hasCnSignal) */
 export function buildCnSignalSql(p = ""): string {

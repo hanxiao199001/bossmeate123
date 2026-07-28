@@ -14,6 +14,18 @@
  *
  * ⚠️ `ai_fabricated`(LLM 编的影子刊, conf=30) 在两个体系里都判未核实 —— 它的"CN 刊号+主办方"
  *    也是编的，不能因为字段填满了就发权威背书。
+ *
+ * ══ 在四道反编造判据里的位置: 这是**第 ⑤道(源头侧)** ══
+ * 总纲见 `services/compliance/fabrication-criteria.ts` 的文件头。一句话版:
+ *   ①②④ 校的都是**数字**; 一篇讲影子刊的文章可以每个数字都"有源"(源就是那条假记录),
+ *   三道闸全绿, 而整本刊不存在。⑤ 是唯一一道问"这本刊的记录本身核实过没有"的判据。
+ *
+ * 消费方(7-28 收口后):
+ *   · 生成期 `batch-worker.ts:335` —— 标 needs_review/unverified_source_journal(仅 SYSTEM 租户)
+ *   · 客服播报护栏 `work-wechat/kf-responder.ts:289`
+ *   · 选刊器 SQL 侧 `journal-sql.ts#verifiedJournalCondition()`(同一份规则的 SQL 版)
+ *   · **发布期 `compliance/content-check.ts#checkPublishJournalGate()`** ← 7-28 (#6) 新接
+ *     —— 此前发布链路三道闸一道都没读它, 见那个函数的注释。
  */
 import { isCnVerified, toJournalKind, type JournalKindFields } from "./journal-kind.js";
 

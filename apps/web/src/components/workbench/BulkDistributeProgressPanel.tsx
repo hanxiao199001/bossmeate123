@@ -6,6 +6,7 @@
  */
 import { useEffect, useState, useRef } from "react";
 import { api } from "../../utils/api";
+import { platformShortLabel } from "../../utils/platforms";
 
 interface ItemResult {
   contentId: string;
@@ -41,9 +42,6 @@ export interface BulkDistributeProgressPanelProps {
   onClose: () => void;
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  douyin: "抖音", wechat_video: "视频号", wechat: "公众号", baijiahao: "百家号", toutiao: "头条", zhihu: "知乎", xiaohongshu: "小红书",
-};
 const STATUS_META: Record<string, { label: string; badge: string; row: string }> = {
   success: { label: "成功", badge: "bg-green-100 text-green-700", row: "bg-green-50" },
   failed:  { label: "失败", badge: "bg-red-100 text-red-700", row: "bg-red-50" },
@@ -177,7 +175,7 @@ export default function BulkDistributeProgressPanel({ batchId, onClose }: BulkDi
                     <li key={i} className={`flex items-center gap-2 px-2 py-1.5 rounded ${meta.row}`}>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${meta.badge}`}>{meta.label}</span>
                       <span className="flex-1 min-w-0 truncate text-gray-800">
-                        {PLATFORM_LABEL[it.platform] ?? it.platform} · {it.accountName}
+                        {platformShortLabel(it.platform)} · {it.accountName}
                       </span>
                       {it.status === "failed" && it.error && (
                         <span className="text-red-600 truncate max-w-[120px]" title={it.error}>{it.error}</span>

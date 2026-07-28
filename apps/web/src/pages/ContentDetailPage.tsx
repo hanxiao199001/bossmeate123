@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom"
 import { api } from "../utils/api";
 import { toast } from "../components/Toast";
 import StatusBadge, { statusLabel } from "../components/StatusBadge";
-import { PLATFORM_META, platformLabel } from "../utils/i18n";
+import { VIDEO_PLATFORMS, isAgentPlatform, platformIcon, platformLabel, platformShortLabel } from "../utils/platforms";
 import { escapeHtml, isSafeUrl, sanitizeHtml } from "../utils/sanitize";
 import RewriteSectionModal from "../components/RewriteSectionModal";
 import EditTimelineDrawer from "../components/EditTimelineDrawer";
@@ -514,14 +514,14 @@ export default function ContentDetailPage() {
     setPublishResults([]);
     try {
       // PR-S6: 统一入口 — 抖音/视频号走"推草稿箱"(浏览器登录态, 不要 API 凭证), 其余平台走 /publish
-      const SEMI = ["douyin", "wechat_video"];
+      // 平台归属见 utils/platforms.ts 的 publishVia(=agent), 本页不再自建数组
       // 6-11 合规: 取消「同步到抖音」勾选 → 本次发布剔除抖音账号
       const effectiveIds = syncToDouyin
         ? selectedAccountIds
         : selectedAccountIds.filter((aid) => accounts.find((a) => a.id === aid)?.platform !== "douyin");
       const selected = accounts.filter((a) => effectiveIds.includes(a.id));
-      const draftAccts = selected.filter((a) => SEMI.includes(a.platform));
-      const apiAccts = selected.filter((a) => !SEMI.includes(a.platform));
+      const draftAccts = selected.filter((a) => isAgentPlatform(a.platform));
+      const apiAccts = selected.filter((a) => !isAgentPlatform(a.platform));
       const collected: PublishResult[] = [];
 
       // Agent-3: 「本地 Agent」通道 — SEMI 账号改派发给本地 Agent (POST /agent-admin/dispatch),
@@ -1024,9 +1024,8 @@ export default function ContentDetailPage() {
 
                 {/* Agent-3: 发布通道切换 — 仅选中抖音/视频号账号时显示 */}
                 {(() => {
-                  const SEMI = ["douyin", "wechat_video"];
                   const semiSelected = accounts.filter(
-                    (a) => SEMI.includes(a.platform) && selectedAccountIds.includes(a.id)
+                    (a) => isAgentPlatform(a.platform) && selectedAccountIds.includes(a.id)
                   );
                   if (semiSelected.length === 0) return null;
                   return (
@@ -1380,15 +1379,15 @@ export default function ContentDetailPage() {
                         <div className="mt-4 p-4 bg-white rounded-lg text-left">
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-sm font-semibold text-gray-800">
-                              {captionPlatform === "wechat_video" ? "📹 视频号发布助手" : "🎵 抖音发布助手"}
+                              {platformIcon(captionPlatform)} {platformShortLabel(captionPlatform)}发布助手
                             </span>
                             <div className="flex items-center gap-1.5">
                               {/* PR-M2: 平台切换 — 切到哪个用哪个平台文案风格 */}
-                              {([["douyin", "🎵 抖音"], ["wechat_video", "📹 视频号"]] as const).map(([p, lbl]) => (
+                              {[...VIDEO_PLATFORMS].map((p) => (
                                 <button key={p}
-                                  onClick={() => { if (captionPlatform !== p) { setCaptionPlatform(p); setDouyinVariants(null); setDouyinPosted([]); } }}
+                                  onClick={() => { if (captionPlatform !== p) { setCaptionPlatform(p as typeof captionPlatform); setDouyinVariants(null); setDouyinPosted([]); } }}
                                   className={`text-xs px-2 py-0.5 rounded ${captionPlatform === p ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-                                >{lbl}</button>
+                                >{platformIcon(p)} {platformShortLabel(p)}</button>
                               ))}
                               {douyinVariants && (
                                 <button
@@ -1442,7 +1441,7 @@ export default function ContentDetailPage() {
                               <div>
                                 <div className="flex flex-wrap items-center gap-1.5 mb-2">
                                   <span className="text-sm text-gray-600">
-                                    {matrixAccounts.length} 个{captionPlatform === "wechat_video" ? "视频号" : "抖音"}账号:
+                                    {matrixAccounts.length} 个{platformShortLabel(captionPlatform)}账号:
                                   </span>
                                   {matrixAccounts.map((a) => (
                                     <span key={a.id} className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full">
@@ -1477,7 +1476,7 @@ export default function ContentDetailPage() {
                                   >{douyinLoading ? "生成中…" : "✨ 生成差异化文案"}</button>
                                 </div>
                                 <p className="mt-1.5 text-xs text-gray-400">
-                                  提示: 到 <Link to="/accounts" className="text-blue-600 hover:underline">账号管理</Link> 添加{captionPlatform === "wechat_video" ? "视频号" : "抖音"}矩阵号后, 文案会自动绑定账号、"已发"状态永久保存
+                                  提示: 到 <Link to="/accounts" className="text-blue-600 hover:underline">账号管理</Link> 添加{platformShortLabel(captionPlatform)}矩阵号后, 文案会自动绑定账号、"已发"状态永久保存
                                 </p>
                               </div>
                             )
@@ -1546,7 +1545,7 @@ export default function ContentDetailPage() {
                               </div>
                               <ol className="mt-3 text-xs text-gray-500 list-decimal list-inside space-y-0.5">
                                 <li>下载视频到手机（上方「下载视频」或复制链接在手机打开）</li>
-                                <li>每个号：打开{captionPlatform === "wechat_video" ? "视频号" : "抖音"} → ＋ → 选视频 → 复制对应账号的文案粘贴 → 发布</li>
+                                <li>每个号：打开{platformShortLabel(captionPlatform)} → ＋ → 选视频 → 复制对应账号的文案粘贴 → 发布</li>
                                 <li>发完一个勾一个，避免漏发 / 重发</li>
                               </ol>
                             </>
@@ -1586,7 +1585,7 @@ export default function ContentDetailPage() {
               {content.platforms.map((p, i) => (
                 <div key={i} className="flex items-center gap-3 text-sm">
                   <span className="text-gray-400">
-                    {PLATFORM_META[p.platform]?.icon || "🌐"}
+                    {platformIcon(p.platform)}
                   </span>
                   <span className="font-medium text-gray-700">
                     {platformLabel(p.platform)}

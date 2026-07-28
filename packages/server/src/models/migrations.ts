@@ -623,4 +623,28 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_journals_kind_pick ON journals (journal_kind, discipline_code, status);
     `,
   },
+  {
+    version: "030_journals_journal_kind_rebuild",
+    description:
+      "7-29 修 hasIntlSignal 读错列: 原信号只挑 impact_factor / partition / cas_partition, " +
+      "而生产实测 cas_partition **整列为空(0 行)**、partition 仅 40 行 —— 三个信号只有一个在真工作。" +
+      "真正有数据的 cas_partition_new(2203) 与 jcr_full(4229) 一个没读, 后果是 704 本一线国际刊" +
+      "(Elsevier 154 / Wiley 90 / Springer 46 …, ISSN 覆盖 704/704, 零 ai_fabricated)被判 " +
+      "journal_kind='unknown', 对 international scope 隐身, 选刊器永远选不到且日志不报错。" +
+      "本迁移按新信号定义重建生成列。jcr_full 判据要求真有 WoS 证据(wosLevel / jifSubjects / " +
+      "jciSubjects), 不是简单判非空 —— 实测 4229 行非空里有 123 行只带 isTopJournal 之类布尔标记, " +
+      "拿它当分区证据等于让'是不是顶刊'冒充分区。全表 8650 行重写是毫秒级。" +
+      "退回执行: 用 029 的表达式重建同名列即可。",
+    sql: `
+      ALTER TABLE journals DROP COLUMN IF EXISTS journal_kind;
+      ALTER TABLE journals ADD COLUMN journal_kind varchar(12)
+        GENERATED ALWAYS AS (CASE
+    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> '' OR btrim(coalesce(cas_partition_new, '')) <> '' OR (btrim(coalesce(jcr_full->>'wosLevel', '')) <> '' OR (jsonb_typeof(jcr_full->'jifSubjects') = 'array' AND jsonb_array_length(jcr_full->'jifSubjects') > 0) OR (jsonb_typeof(jcr_full->'jciSubjects') = 'array' AND jsonb_array_length(jcr_full->'jciSubjects') > 0))), false) AND NOT coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'intl'
+    WHEN coalesce((impact_factor IS NOT NULL OR btrim(coalesce("partition", '')) <> '' OR btrim(coalesce(cas_partition, '')) <> '' OR btrim(coalesce(cas_partition_new, '')) <> '' OR (btrim(coalesce(jcr_full->>'wosLevel', '')) <> '' OR (jsonb_typeof(jcr_full->'jifSubjects') = 'array' AND jsonb_array_length(jcr_full->'jifSubjects') > 0) OR (jsonb_typeof(jcr_full->'jciSubjects') = 'array' AND jsonb_array_length(jcr_full->'jciSubjects') > 0))), false) AND coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'both'
+    WHEN coalesce(((jsonb_typeof(catalogs) = 'array' AND jsonb_array_length(catalogs) > 0) OR btrim(coalesce(cscd_level, '')) <> '' OR btrim(coalesce(pku_core_level, '')) <> '' OR btrim(coalesce(catalog_type, '')) IN ('pku-core', 'cssci', 'cssci-ext', 'cscd', 'cstpcd') OR btrim(coalesce(cn_number, '')) <> '' OR composite_impact_factor IS NOT NULL), false) THEN 'cn'
+    ELSE 'unknown'
+  END) STORED;
+      CREATE INDEX IF NOT EXISTS idx_journals_kind_pick ON journals (journal_kind, discipline_code, status);
+    `,
+  },
 ];
