@@ -32,6 +32,34 @@
 3. **新增失败一律视为真回归嫌疑 = 阻塞项**，**不得带新失败合并**。你的 PR 让某个原本绿的测试变红 → 默认你的改动引入了回归，必须查清（是你改坏了功能，还是你合理改了行为但漏更新断言）再合。
 4. 判"漂移 vs 真回归"沿用三分法 + 加权红线：**死**（读已删文件）/**过时**（读活文件、功能可核实仍在）/**真回归嫌疑**（读活文件、断言的是行为/钱/数据链路/权限，却核不出功能还在）。拿不准算嫌疑，宁可多报。
 
+**基线怎么量（2026-07-29 补，规则 3 的前提条件）**
+
+规则 3 判的是"新增失败"，而"新增"是个**差值**——基线量错，整条护栏就空转。已经踩过两次：
+
+5. **必须在干净 worktree 上按 commit 跑，禁止在混着未提交改动的工作区量。**
+   多 agent 并行时主工作区同时躺着别人的在制改动，量出来的既不是上一个 commit 也不是你这个 commit。
+   > 教训：2026-07-25~28 连续几次报"零新增失败"，全建立在被污染的基线上。
+   > 2026-07-29 用干净 worktree 复核，真实 commit 基线是 **45 失败文件 / 41 用例**，
+   > 而当时以为的是 26/39 —— 差了 19 个文件，护栏等于几天没在工作。
+
+6. **worktree 必须 symlink `.env`。** `config/env.ts` 是 fail-fast 设计（`findEnvFile()` 找不到直接
+   throw），缺 `.env` 会让一批测试在 **import 期**就挂，看起来像"失败暴增"。
+   > **识别信号：两次运行的「总用例数」对不上 = 环境没对齐，此时任何对比都无效。**
+   > 实测漏 `.env` 时收集到 1929 个用例，对齐后是 2142 —— 先修环境，再看数字。
+
+```bash
+# 服务器上跑（Mac 跑不了 vitest，见 memory: vitest 本地跑不了→上服务器跑）
+MAIN=/home/projects/bossmate; WT=/tmp/wt_<commit>
+git -C "$MAIN" worktree add -q --detach "$WT" <commit>
+ln -s "$MAIN/node_modules"                 "$WT/node_modules"
+ln -s "$MAIN/.env"                         "$WT/.env"           # ← 别忘
+ln -s "$MAIN/packages/server/node_modules" "$WT/packages/server/node_modules"
+cd "$WT" && npx vitest run --reporter=basic
+```
+node_modules 用**绝对路径 symlink 指向主仓**：目录内部的相对 symlink 按物理路径解析，会落回主仓
+的 `.pnpm` 不会断。对照用 `comm -13 base.txt now.txt` 出"新增失败"、`comm -23` 出"修好的"，
+**别肉眼比清单**——40 行的清单人眼比不出 13 处差异。
+
 > 注：本护栏针对**测试基线**。发布期 hasWarnings 数据编造二次校验缺口（半兜底，仅前端 ⚠️+人判）属另一独立待决项，见 triage 附录，等老韩拍板，不在本护栏范围。
 
 ---
