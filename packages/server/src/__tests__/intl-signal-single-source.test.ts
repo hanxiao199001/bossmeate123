@@ -43,17 +43,36 @@ const ALLOWED = new Map<string, string>([
     "hasWosData 是刻意的窄子集: 回答'够不够渲染 WoS 版块'而非'是不是国际刊'(见该函数注释)",
   ],
   ["services/crawler/trusted-facts-validator.ts", "写入侧校验值本身合不合理, 不判有无"],
+  ["models/migrations.ts", "生成列 DDL 是 buildIntlSignalSql() 的输出快照, 不是另一套判据"],
 ]);
 
-/** "拿分区列做有无判断"的形态: truthiness / != null / !== '' / IS NOT NULL 等 */
+/**
+ * 目录级豁免: `scripts/` 是一次性运维脚本(体检/回填/取样), 不参与选刊·生成·发布任何链路。
+ * 它们里的分区判断错了只影响那一次人工执行的输出, 不会静默污染生产数据或让整批刊隐身 ——
+ * 与本守卫要防的失败模式不同, 强行收编只会逼人往白名单里塞路径, 反而稀释了白名单的意义。
+ */
+const ALLOWED_DIR_PREFIXES = ["scripts/"];
+
+/**
+ * "拿分区列做**有无**判断"的形态。
+ *
+ * ⚠️ 首版规则过宽, 把下面这些**取值**误判成判有无, 全是假阳性(7-29 首跑实测 21 处):
+ *   · `partition?: string`      —— 可选属性声明(`\bpartition\b\s*\?` 会命中 `?:`)
+ *   · `j.partition || "未知"`   —— 给默认值, 不是判有无
+ *   · `j.partition ?? "—"`      —— 同上
+ *   · `partition: j.partition || null` —— 传值
+ * 所以 `||` / `??` / 裸 `?` 一律不算, 只认真正当布尔用的形态: `!x` / `x &&` / 显式空值比较 /
+ * SQL 的 IS NULL·<>''。宁可漏报几处, 也别让守卫天天喊狼来了 —— 喊多了就没人看了。
+ */
 const BARE_PRESENCE_PATTERNS: RegExp[] = [
-  // j.casPartition ? / || / && —— truthiness 判有无
-  /\b(?:casPartition|partition)\b\s*(?:\?\?|\|\||&&|\?)/,
-  // != null / !== null / == null 这类显式空判
-  /\b(?:casPartition|partition)\b\s*[!=]==?\s*(?:null|undefined|"")/,
+  // !j.casPartition —— 取反判空
+  /![\w.]*\b(?:casPartition|partition)\b/,
+  // j.casPartition && —— 当守卫用
+  /\b(?:casPartition|partition)\b\s*&&/,
+  // != null / === null / !== "" 这类显式空判
+  /\b(?:casPartition|partition)\b\s*[!=]==?\s*(?:null|undefined|""|'')/,
   // SQL 侧: cas_partition IS NOT NULL / <> ''
   /\bcas_partition\b\s*(?:IS\s+(?:NOT\s+)?NULL|<>|!=)/i,
-  /\bcoalesce\(\s*(?:\w+\.)?cas_partition\b/i,
 ];
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -124,6 +143,7 @@ describe("扫描: 不许再有第四套分区判据", () => {
   for (const file of walk(SRC)) {
     const rel = relative(SRC, file).split("\\").join("/");
     if (ALLOWED.has(rel)) continue;
+    if (ALLOWED_DIR_PREFIXES.some((d) => rel.startsWith(d))) continue;
     readFileSync(file, "utf8").split("\n").forEach((text, i) => {
       const t = text.trim();
       if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return;
