@@ -45,6 +45,30 @@ interface BatchRowJob {
   autoRetryCount?: number;
 }
 
+/**
+ * 7-28 ②d: "质检闸没跑成"落 ops_incidents(旁路, 绝不影响生产)。
+ *
+ * 为什么要单独一类而不是复用 quality_check_unavailable: 后者的语义是"评分模型挂了, 这篇没评上分";
+ * 这里是"流水线/一致性校验整段抛异常, 这篇压根没被检查"。两者的排查方向完全不同
+ * (一个查 AI 额度/超时, 一个查代码异常/DB), 混一类会让简报给出错误的处置建议。
+ *
+ * 节流: 一次故障(如 DB 抖动)会连撞一整批, 10 分钟一条即可; 被压掉的次数带在 detail 里。
+ */
+function reportGateIncident(tenantId: string, contentId: string, reason: string, error: string): void {
+  void (async () => {
+    try {
+      const { recordIncidentThrottled } = await import("../ops/incidents.js");
+      await recordIncidentThrottled({
+        kind: "quality_gate_unavailable",
+        severity: "warn",
+        tenantId,
+        message: `生成后质检闸未跑成(${reason}): ${error.slice(0, 200)} — 该篇已转人工复核(不是内容有问题)`,
+        detail: { contentId, stage: "batch_worker", reason, error: error.slice(0, 300) },
+      }, { key: `quality_gate_unavailable:batch:${reason}` });
+    } catch { /* 告警旁路 */ }
+  })();
+}
+
 let worker: Worker<BatchRowJob> | null = null;
 
 export function startBatchWorker(): Worker<BatchRowJob> {
@@ -234,6 +258,11 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         // 铁律: 流水线任何失败只 warn, 文章按现状继续走, 绝不让提质把生产打挂。
         let sixDimPassedGate: boolean | null = null;
         let sixDimDegraded = false; // 7-03: 评分器两次均降级 → needs_review 标 degraded(区别于"质量不过"), 首过率统计排除
+        // 7-28 ②d: 质检流水线**整条抛异常**时, 原来 sixDimPassedGate 保持 null, 而下面的判据是
+        //   `sixDimPassedGate === false` 才转待审 —— null 等于通过, 于是"质检根本没跑"的文章
+        //   直接 status=generated 进可发池。异常 ≠ 通过。现在标 gateUnavailable, 转 needs_review,
+        //   reason = quality_gate_unavailable(**非红线**: 进草稿箱但排队尾, 见 draft-distributor)。
+        let gateUnavailable: string | null = null;
         try {
           const { runArticleQualityPasses, qualityPipelineMeta } = await import("../content-engine/quality-pipeline.js");
           const [cur] = await db
@@ -265,9 +294,17 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               { contentId: content.id, sixDimTotal: qp.qualityLoop.finalTotal, rounds: qp.qualityLoop.rounds, passed: qp.qualityLoop.passed, llmCalls: qp.llmCalls },
               "P0四件套: batch 路径提质完成"
             );
+          } else {
+            // 7-28 ②d(顺手捞到的第三处 open): 正文为空 → 质检整段被跳过, 而旧代码随后照样
+            //   transitionStatus(→"generated") —— 一篇空文章就这样进了可发池。
+            //   空正文既跑不了质检、本身也不是能发的内容, 一律转人工。
+            gateUnavailable = "empty_body";
           }
         } catch (e) {
-          logger.warn({ contentId: content.id, err: e instanceof Error ? e.message : e }, "P0四件套流水线失败(非阻塞), 文章按现状入库");
+          const msg = e instanceof Error ? e.message : String(e);
+          gateUnavailable = "quality_pipeline_error";
+          logger.warn({ contentId: content.id, err: msg }, "7-28 P0四件套流水线异常 → 判「质检没跑成」转 needs_review(异常 ≠ 通过)");
+          reportGateIncident(tenantId, content.id, "quality_pipeline_error", msg);
         }
 
         // 5. PR-U2 质检前置: 质检明确未过 → needs_review(待审, 不进可发); 否则 generated
@@ -285,7 +322,12 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           if (row.journalId) {
             const { journals: journalsTbl } = await import("../../models/schema.js");
             // 7-20: 多取 IF/复合IF/分区 供标题编造校验(国内刊这些字段常空 → 标题里出现即编造)
-            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate, impactFactor: journalsTbl.impactFactor, compositeImpactFactor: journalsTbl.compositeImpactFactor, partition: journalsTbl.partition, casPartition: journalsTbl.casPartition, casPartitionNew: journalsTbl.casPartitionNew, jcrFull: journalsTbl.jcrFull, confidence: journalsTbl.confidence, dataSource: journalsTbl.dataSource }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
+            // 7-28 ③c 解冻国内刊的关键一步: isUnverifiedJournal 走的是 toJournalKind + isCnVerified,
+            //   判国内刊靠的是**目录成员资格 + 刊号实体确认**(catalogs / cscd_level / pku_core_level /
+            //   catalog_type / cn_number+publisher)。这里若只投影 confidence/dataSource, 那几列一律 undefined
+            //   → 国内刊必然落回 isIntlVerified 那把国际尺子 → 88% 判未核实 → 内容照旧全标 needs_review,
+            //   解冻只体现在"选的刊更对口"、发不出去。所以投影必须覆盖判定读的全部字段。
+            const [jr] = await db.select({ reviewCycle: journalsTbl.reviewCycle, acceptanceRate: journalsTbl.acceptanceRate, impactFactor: journalsTbl.impactFactor, compositeImpactFactor: journalsTbl.compositeImpactFactor, partition: journalsTbl.partition, casPartition: journalsTbl.casPartition, casPartitionNew: journalsTbl.casPartitionNew, jcrFull: journalsTbl.jcrFull, confidence: journalsTbl.confidence, dataSource: journalsTbl.dataSource, catalogs: journalsTbl.catalogs, cscdLevel: journalsTbl.cscdLevel, pkuCoreLevel: journalsTbl.pkuCoreLevel, catalogType: journalsTbl.catalogType, cnNumber: journalsTbl.cnNumber, publisher: journalsTbl.publisher }).from(journalsTbl).where(eq(journalsTbl.id, row.journalId)).limit(1);
             if (jr) {
               dbFields = { reviewCycle: jr.reviewCycle, acceptanceRate: jr.acceptanceRate, impactFactor: jr.impactFactor, compositeImpactFactor: jr.compositeImpactFactor, partition: jr.partition, casPartition: jr.casPartition, casPartitionNew: jr.casPartitionNew, jcrFull: jr.jcrFull };
               // PR B 未核实源护栏: daily-cron(系统租户)回退选中的 conf<70/legacy_unknown 刊生成的内容 →
@@ -300,28 +342,64 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           if (!tc.ok) { titleBodyBad = { reason: "title_body_inconsistent", detail: { titleHits: tc.titleHits, riskSignal: tc.riskSignal } }; logger.warn({ contentId: content.id, ...tc }, "标题-正文矛盾(标题保录承诺 vs 正文风险信号), 转 needs_review"); }
           else if (!td.ok) { titleBodyBad = { reason: "title_data_fabricated", detail: { mismatches: td.mismatches } }; logger.warn({ contentId: content.id, mismatches: td.mismatches }, "标题数字正文无据(疑编造审稿/录用率), 转 needs_review"); }
           else if (unverifiedSrc) { titleBodyBad = { reason: "unverified_source_journal", detail: unverifiedSrc }; logger.warn({ contentId: content.id, journalId: row.journalId, ...unverifiedSrc }, "PR B: 源刊未核实(conf<70/legacy_unknown), daily-cron 回退命中, 转 needs_review 人工复核"); }
-        } catch { /* 一致性检查失败不阻塞生产 */ }
+        } catch (e) {
+          // 7-28 ②d: 原来这里是 `catch { /* 不阻塞生产 */ }` —— titleBodyBad 保持 null,
+          //   于是"三道一致性检查(标题-正文矛盾 / 标题数字编造 / 源刊未核实)一条都没跑成"的文章
+          //   直接 generated。这三道恰恰是**信任类**校验, 静默跳过等于把最该拦的那类风险放行。
+          //   改法与上面同源: 不判违规(那是冤枉内容), 判"闸没跑成" → needs_review 转人工。
+          const msg = e instanceof Error ? e.message : String(e);
+          gateUnavailable = gateUnavailable ?? "consistency_check_error";
+          logger.warn({ contentId: content.id, err: msg }, "7-28 标题-正文一致性检查异常 → 判「闸没跑成」转 needs_review(异常 ≠ 通过)");
+          reportGateIncident(tenantId, content.id, "consistency_check_error", msg);
+        }
         // PR-U2(调) 只在质检明确判不通过时转待审; 尊重原质检结论, 不再用分数二次卡(过严会误伤)
         // P0①: 六维质检(重写循环后)仍未过 → 同样转 needs_review, 低分文章人工可在管理端看到, 不阻塞生产
-        const failed = qPassed === false || sixDimPassedGate === false || titleBodyBad !== null;
+        // 7-28 ②d: gateUnavailable 也算 failed —— "没检查成"必须转待审, 不能默认放行。
+        const failed = qPassed === false || sixDimPassedGate === false || titleBodyBad !== null || gateUnavailable !== null;
         if (failed) {
           await transitionStatus(content.id, "generating", "needs_review");
           // 7-03: 区分待审原因 — 标题-正文矛盾 / 评分降级(分数不可信,需重评) / 质量真不过。首过率统计据 sixDimDegraded 排除降级样本。
           // 7-27 换 reason 名: 旧名 sixdim_degraded 让人读成"评了个降级的分"(→ 管理端当劣质内容),
           //   真相是**主+降级模型都没救回来, 这篇根本没评上分**。改叫 quality_check_unavailable,
           //   与"分低"彻底分开; 旧数据的 sixdim_degraded 仍被下游全部判据识别(见 draft-distributor 的 UNSCORED_REASONS)。
+          // 7-28 ②d: 原因优先级 —— 查出来的问题(红线/编造) > 没评上分 > 闸没跑成 > 单纯分低。
+          //   quality_gate_unavailable **不在** RED_LINE_REASONS 里: 检查器挂了不等于内容有问题,
+          //   内容照进草稿箱但排队尾(见 draft-distributor 的 TAIL_REASONS)。
           const reviewMeta = titleBodyBad
             ? { needsReview: true, needsReviewReason: titleBodyBad.reason, titleIssue: titleBodyBad.detail }
-            : sixDimDegraded ? { needsReview: true, needsReviewReason: "quality_check_unavailable" } : { needsReview: true };
+            : sixDimDegraded ? { needsReview: true, needsReviewReason: "quality_check_unavailable" }
+            : gateUnavailable ? { needsReview: true, needsReviewReason: "quality_gate_unavailable", gateUnavailable }
+            : { needsReview: true };
           await db.update(contents)
             .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(reviewMeta)}::jsonb` })
             .where(eq(contents.id, content.id));
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
-          logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded }, sixDimDegraded ? "质检不可用(主+降级模型均失败, 未评上分), 转 needs_review 待重评" : "PR-U2 质检未过, 转 needs_review 待人工复核");
+          logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded, gateUnavailable },
+            sixDimDegraded ? "质检不可用(主+降级模型均失败, 未评上分), 转 needs_review 待重评"
+            : gateUnavailable ? `质检闸没跑成(${gateUnavailable}), 转 needs_review 人工复核(≠ 内容有问题)`
+            : "PR-U2 质检未过, 转 needs_review 待人工复核");
         } else {
           await transitionStatus(content.id, "generating", "generated");
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
           logger.info({ rowId, contentId: content.id }, "P4 batch row 生成成功");
+        }
+        // 7-28 (#5) 修"冷却被误清空": 本行已产出内容(generated 或 needs_review), 把 daily-cron 入队时
+        //   写的占位冷却行(contentId NULL)回填 contentId —— 让它脱离下方 catch 分支"删 NULL 占位"的
+        //   误伤面, 也让 journal_usage 可按内容溯源。只回填近 2 天窗口(本次占位), 不碰历史 NULL 行
+        //   (避免旧占位被错误归因到本篇)。
+        if (row.journalId) {
+          try {
+            await db.update(journalUsage)
+              .set({ contentId: content.id })
+              .where(and(
+                eq(journalUsage.tenantId, tenantId),
+                eq(journalUsage.journalId, row.journalId),
+                isNull(journalUsage.contentId),
+                sql`${journalUsage.usedAt} > NOW() - interval '2 days'`,
+              ));
+          } catch (e) {
+            logger.warn({ rowId, journalId: row.journalId, e }, "#5 journal_usage 回填 contentId 失败(非阻塞)");
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -353,12 +431,17 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         // 6-17 #1: 生成彻底失败 → 回滚 daily-cron 入队时写的"占位"冷却(provisional, contentId 为空),
         // 否则这本刊被白锁 JOURNAL_COOLDOWN_DAYS 天却零产出(memory「今日推荐没新内容」根因)。
         // 只删 contentId 为空的占位行; roundup/成功内容写的冷却(带 contentId)不动。
+        // 7-28 (#5): 加 2 天时间窗 —— 原来无窗, 一次失败会把该刊**全部历史** NULL 占位行整锅删光,
+        //   15 天冷却被清零、该刊次日又可被选(重复推荐的另一主因)。占位行是本批入队时写的,
+        //   离最终失败最多小时级(3次退避重试), 2 天窗足够覆盖且伤不到历史冷却;
+        //   且成功行现已回填 contentId(见上), 窗口内也删不到它们。
         if (row.journalId) {
           try {
             await db.delete(journalUsage).where(and(
               eq(journalUsage.tenantId, tenantId),
               eq(journalUsage.journalId, row.journalId),
               isNull(journalUsage.contentId),
+              sql`${journalUsage.usedAt} > NOW() - interval '2 days'`,
             ));
             logger.info({ rowId, journalId: row.journalId }, "#1 生成失败, 已回滚占位冷却(该刊重新可选)");
           } catch (e) {

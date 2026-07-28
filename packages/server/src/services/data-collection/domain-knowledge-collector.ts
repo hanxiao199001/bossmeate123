@@ -16,6 +16,7 @@ import { ingestToKnowledge } from "./ingest-pipeline.js";
 import { db } from "../../models/db.js";
 import { journals, tenantIpProfiles } from "../../models/schema.js";
 import { eq } from "drizzle-orm";
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
 
 // ============ 核心逻辑 ============
@@ -210,7 +211,8 @@ async function extractFromJournalDB(tenantId: string): Promise<number> {
   const topJournals = await db
     .select()
     .from(journals)
-    .where(eq(journals.tenantId, tenantId))
+    // 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 行业知识提取恒空
+    .where(journalVisibleTo(tenantId))
     .limit(20);
 
   if (topJournals.length === 0) return 0;

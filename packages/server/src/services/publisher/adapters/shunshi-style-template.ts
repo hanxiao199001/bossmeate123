@@ -51,6 +51,7 @@
  */
 
 import { selfCitationRisk } from "../../../utils/self-citation-risk.js";
+import { toJournalKind, type JournalKindFields } from "../../journals/journal-kind.js";
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { renderOpeningHookBlock } from "../../skills/journal-template.js"; // 7-03 A 区块0
@@ -338,13 +339,21 @@ function renderBasicInfoBlock(journal: JournalInfo): string {
 
 // 6-17: 是否有 WoS/SCI 数据信号。国内刊(CSCD/CSSCI/北大核心中文刊)没有 JCR/IF/分区/CAR 这些概念,
 // 套用 WoS 版块只会满屏"未分区/数据采集中/暂无公开数据"占位 → 空洞。无信号则判为国内刊, 跳过这些版块。
+//
+// 7-28 (③b): "是国内刊还是国外刊"这一问不再在这里**猜**(原来靠"IF/分区/CAR 有没有值"反推),
+//   改读 journal_kind 单一真相源: kind='cn'(纯国内, 含只有 CSCD/北大核心的裂缝刊) → 一律跳过
+//   WoS 版块。kind='intl'/'both'(骑墙刊) 再看是否真有可渲染的数值 —— 有 kind 不代表有数据,
+//   IF=0 / 分区空串这类占位值仍然不该出图(保留 6-17 的空洞防护)。
 function hasWosData(journal: JournalInfo): boolean {
+  if (toJournalKind(journal as JournalKindFields) === "cn") return false;
   const raw = (journal as { jcrFull?: unknown }).jcrFull;
   const hasJif = isJcrFull(raw) && Array.isArray(raw.jifSubjects) && raw.jifSubjects.length > 0;
   const ifv = (journal as { impactFactor?: number | null }).impactFactor;
   const hasIf = typeof ifv === "number" && ifv > 0;
   const q = (journal as { partition?: string | null }).partition;
   const hasQ = typeof q === "string" && /^Q[1-4]$/i.test(q);
+  // 刻意不把 cas_partition 算进来: 它虽是国际信号(进 journal_kind), 但 WoS 版块渲的是
+  // JCR分区/IF趋势/CAR, 只有中科院分区一个值撑不起那几块, 放开只会退回 6-17 修掉的"满屏占位"。
   return hasJif || hasIf || hasQ;
 }
 

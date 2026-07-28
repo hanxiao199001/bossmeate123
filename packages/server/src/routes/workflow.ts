@@ -11,6 +11,7 @@ import { getProvider } from "../services/ai/provider-factory.js";
 import { db } from "../models/db.js";
 import { journals, styleAnalyses, learnedTemplates } from "../models/schema.js";
 import { eq, and, ilike, sql, desc } from "drizzle-orm";
+import { journalVisibleTo } from "../services/journals/journal-sql.js";
 import { fetchJournalCoverMultiSource, generateJournalDataCard, svgToDataUri } from "../services/crawler/journal-image-crawler.js";
 import { fetchOwnArticles, fetchPeerArticles, analyzeStyle, generateTemplates } from "../services/style-learner.js";
 import { retrieveForWorkflow } from "../services/knowledge/rag-retriever.js";
@@ -532,7 +533,8 @@ ${content}`;
             .from(journals)
             .where(
               and(
-                eq(journals.tenantId, tenantId),
+                // 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 事实核查查不到任何共享池刊
+                journalVisibleTo(tenantId),
                 sql`(${ilike(journals.name, `%${part}%`)} OR ${ilike(journals.nameEn, `%${part}%`)})`
               )
             )

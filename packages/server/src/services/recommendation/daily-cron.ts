@@ -23,8 +23,9 @@ import { env } from "../../config/env.js";
 import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
 import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
-import { journalScopeCondition } from "./journal-scope.js";
+import { journalScopeCondition, verifiedJournalCondition } from "../journals/journal-sql.js";
 import { DISCIPLINE_CODES, GENERIC_DISCIPLINE_CODE } from "./discipline-mapping.js";
+import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
   SYSTEM_RECOMMENDATION_TENANT_ID,
@@ -52,6 +53,58 @@ export const DISCIPLINE_ROTATION: Record<number, string[]> = {
   6: ["chemistry", "physics"],            // 周六
   0: [],                                  // 周日: 全学科 (补漏)
 };
+
+// ============ 7-28 ①a: 排产跳过点落库 ============
+//
+// 病根: 这个文件里有 17 个 `continue` / 早退点(学科配额满、期刊限流、选不出刊、选不出题、
+//   单项生成失败…), 其中**只有 1 个**(零产出)落了 ops_incidents, 其余全是 logger 一行。
+//   系统其实已经算出了"今天为什么没产出", 但这些数字只送去给人看, 而老板不看日志 ——
+//   等于系统知道、没人知道。这一段把它们统一接进告警流水, 次日简报自动念出来。
+//
+// 节流策略(照 incidents.ts 里那条注释的分法):
+//   - "一次故障连锁触发几十次"的(选刊/选题/生成失败, 每篇都会撞) → recordIncidentThrottled,
+//     10 分钟一条, 被压掉的次数带在 detail.suppressedSinceLastAlert 里, 信息不丢;
+//   - "一天最多一条、条数本身就是要看的量"的(零产出/产出不足/候选被跳过汇总) → recordIncident 直落。
+// 铁律: 全部旁路 —— 告警链路自己挂了绝不能反过来把每日排产搞挂。
+let incidentsModule: Promise<typeof import("../ops/incidents.js")> | null = null;
+
+/** 直落一条(用于"一天至多一条"的汇总类事件)。绝不抛错。 */
+async function reportCronIncident(input: {
+  kind: string; message: string; severity?: "error" | "warn"; tenantId?: string | null;
+  detail?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const { recordIncident } = await (incidentsModule ??= import("../ops/incidents.js"));
+    await recordIncident({
+      kind: input.kind, message: input.message.slice(0, 500),
+      severity: input.severity ?? "warn", tenantId: input.tenantId ?? null, detail: input.detail ?? null,
+    });
+  } catch { /* 告警旁路, 不影响排产 */ }
+}
+
+/** 节流落一条(用于"一次故障撞几十篇"的高频跳过点)。绝不抛错。 */
+function reportCronIncidentThrottled(input: {
+  kind: string; message: string; severity?: "error" | "warn"; tenantId?: string | null;
+  detail?: Record<string, unknown>; key: string;
+}): void {
+  void (async () => {
+    try {
+      const { recordIncidentThrottled } = await (incidentsModule ??= import("../ops/incidents.js"));
+      await recordIncidentThrottled({
+        kind: input.kind, message: input.message.slice(0, 500),
+        severity: input.severity ?? "warn", tenantId: input.tenantId ?? null, detail: input.detail ?? null,
+      }, { key: input.key });
+    } catch { /* 告警旁路, 不影响排产 */ }
+  })();
+}
+
+/**
+ * 7-28 ①b: 产出不足的黄色线。
+ * 原来只判 `totalProduced === 0` —— "目标 20 篇实际出了 1 篇"完全静默, 要等次日简报靠人眼看
+ * 「今日生成 1 篇」才发现。60% 这个比例对齐简报里已有的 OPS_MIN_DAILY_CONTENT 语感:
+ * 低于它算"明显不够"而不是"波动"(排产本身就有冷却/配对损耗, 卡太紧会天天黄灯变噪音)。
+ */
+export const LOW_OUTPUT_RATIO = 0.6;
 
 export interface DailyRecommendationResult {
   selectedKeywords: number;
@@ -246,6 +299,12 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 
   if (candidates.length === 0) {
     logger.warn("PR #130 daily-cron: 0 fresh keyword candidates (检查 keywords 抓取链路)");
+    // 7-28 ①a: 三级 fallback 都放宽到底还是零候选 = 选题链路真的干了 —— 这天必然零产出, 直接红
+    await reportCronIncident({
+      kind: "no_topic_available", severity: "error",
+      message: `每日排产: 候选选题为 0(已放宽到无 cooldown/全学科仍无) —— 今日必然零产出, 检查 keywords 抓取链路`,
+      detail: { fallbackLevel, todayDisciplines, targetTotal },
+    });
     return {
       selectedKeywords: 0, articlesEnqueued: 0, failures: [], batchIds: [],
       startedAt, finishedAt: new Date().toISOString(),
@@ -265,12 +324,16 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
   // Fallback: 如果 fallbackLevel >= 3, 期刊限流也放宽
   if (fallbackLevel >= 3) journalMaxPer30d = 10;
 
+  // 7-28 ①a: 四个裸 continue 的计数器 —— 原来这四处一行日志都没有, 于是"候选有 50 个却只入队 3 篇"
+  //   查不出是被哪一道闸吃掉的。逐条落 incident 会刷屏(候选池 50 起步), 所以计数 + 收尾汇总一条。
+  const skips = { quotaFull: 0, batchDup: 0, per24h: 0, per30d: 0, allUsed: 0 };
+
   for (const kw of candidates) {
     if (batchIds.length >= targetTotal) break;
     // PR #222: 配额模式 — 跳过不在配额内的学科 / 该学科已满额
     if (quota) {
       const cat = kw.category ?? "";
-      if (!quota[cat] || (perDisc.get(cat) ?? 0) >= quota[cat]) continue;
+      if (!quota[cat] || (perDisc.get(cat) ?? 0) >= quota[cat]) { skips.quotaFull++; continue; }
     }
 
     try {
@@ -283,11 +346,11 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
       // PR #183: 批内期刊唯一 — 找第一个 本批未用过 且 未达 30d 限流 的 journal
       let journalId: string | null = null;
       for (const r of recs) {
-        if (usedJournalIds.has(r.id)) continue; // 本批已用 → 跳过 (唯一性)
+        if (usedJournalIds.has(r.id)) { skips.batchDup++; continue; } // 本批已用 → 跳过 (唯一性)
         const use24h = journalUseCount24h.get(r.id) ?? 0;
-        if (use24h >= MAX_PER_JOURNAL_24H) continue;
+        if (use24h >= MAX_PER_JOURNAL_24H) { skips.per24h++; continue; }
         const use30d = await getJournal30dCount(r.id);
-        if (use30d >= journalMaxPer30d) continue;
+        if (use30d >= journalMaxPer30d) { skips.per30d++; continue; }
         journalId = r.id;
         break;
       }
@@ -297,6 +360,7 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
       }
       // 仍无 (该 keyword top5 全被本批用过) → 跳过该 keyword, 唯一性优先于凑满 10 篇
       if (!journalId) {
+        skips.allUsed++;
         logger.debug({ keyword: kw.keyword }, "PR #183 该 keyword top5 期刊本批已全用, 跳过保唯一");
         continue;
       }
@@ -346,6 +410,31 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
     },
   };
   logger.info(summary, `PR #172 daily-cron 完成 ${batchIds.length}/${candidates.length} (fallback=${fallbackLevel}, journals=${usedJournalIds.size})`);
+
+  // 7-28 ①a: 没凑够目标篇数时, 把"被哪道闸吃掉多少"一次性说清楚。
+  //   达标就不报 —— 跳过本身是正常的去重机制, 只有"跳到没凑够"才是要人管的事。
+  const totalSkipped = Object.values(skips).reduce((a, b) => a + b, 0);
+  if (batchIds.length < targetTotal && totalSkipped > 0) {
+    await reportCronIncident({
+      kind: "candidate_skipped", severity: "warn",
+      message: `每日排产只入队 ${batchIds.length}/${targetTotal} 篇: 学科配额满 ${skips.quotaFull} · 批内重刊 ${skips.batchDup} · 24h限流 ${skips.per24h} · 30天限流 ${skips.per30d} · top5全用完 ${skips.allUsed}`,
+      detail: { skips, enqueued: batchIds.length, targetTotal, candidates: candidates.length, fallbackLevel, failures: failures.slice(0, 5) },
+    });
+  }
+  // ①b 产出不足分级(零产出走下面 runDailyContentByType 的同名逻辑; 这条旧链路自己也要有)
+  if (batchIds.length === 0) {
+    await reportCronIncident({
+      kind: "zero_output", severity: "error",
+      message: `每日排产零入队(候选 ${candidates.length} 个全被跳过/失败)`,
+      detail: { skips, failures: failures.slice(0, 5), fallbackLevel },
+    });
+  } else if (batchIds.length < targetTotal * LOW_OUTPUT_RATIO) {
+    await reportCronIncident({
+      kind: "low_output", severity: "warn",
+      message: `每日排产只入队 ${batchIds.length}/${targetTotal} 篇(不足目标 ${Math.round(LOW_OUTPUT_RATIO * 100)}%)`,
+      detail: { skips, enqueued: batchIds.length, targetTotal, fallbackLevel, diversityStats: summary.diversityStats },
+    });
+  }
   return summary;
 }
 
@@ -463,17 +552,50 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
   return null;
 }
 
-/** 选一本 定位+学科 的刊。逐级兜底保证篇数=配置:
- *  ① 范围+学科+15天新刊(最佳) → ② 去冷却(同范围同学科里取最久未用) → ③ 去学科(保范围+新刊)
- *  → ④ 仅范围(最久未用) → ⑤ 去范围(仅新刊) → ⑥ 全放开(最久未用)。
- *  根因: 国内刊 discipline 大面积为空 + 小学科15天冷却耗尽, 严选会大量空名额; 兜底让每个名额都出刊。 */
+// 7-28 (#1) 未核实探索日配额: conf<70/legacy_unknown 刊生成的内容会被 batch-worker 标 needs_review
+//   (人工复核积压), 所以未核实新鲜池只能细水长流 —— 每租户每天最多 N 篇, env UNVERIFIED_DAILY_QUOTA
+//   可配(默认 2, 设 0 = 关闭探索层)。计数走当日 journal_usage×journals 联查(进程重启/多实例不丢数);
+//   生成失败回滚删 usage 行会自动释放当日配额。
+const UNVERIFIED_DAILY_QUOTA = (() => {
+  const n = Number(process.env.UNVERIFIED_DAILY_QUOTA);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2;
+})();
+async function unverifiedUsedToday(tenantId: string): Promise<number> {
+  const [r] = await db.select({ n: sql<number>`count(*)::int` })
+    .from(journalUsage)
+    .innerJoin(journals, eq(journalUsage.journalId, journals.id))
+    .where(and(
+      eq(journalUsage.tenantId, tenantId),
+      sql`${journalUsage.usedAt} >= date_trunc('day', now())`,
+      // 与 verification.ts 的 isUnverifiedJournal 同口径(7-28 起是**分体系**门槛:
+      //   国内刊看目录成员资格, 国际刊看 conf>=70) —— 两边必须同源, 否则配额会把
+      //   "已核实的国内刊"也算进探索额度, 白白吃掉每日 2 个名额。
+      sql`NOT ${verifiedJournalCondition()}`,
+    ));
+  return r?.n ?? 0;
+}
+
+/** 选一本 定位+学科 的刊。7-28 (#1) 层序重排, 铁律: **新鲜(15天冷却)优先于回头(LRU)** ——
+ *  冷却是产品承诺, 回头刊只能是最后手段; 未核实新鲜池按日配额小口放行(其内容会转 needs_review, 配额挡积压):
+ *  ①② 已核实+新鲜(对口→泛学科generic) → ③④ 未核实+新鲜(对口→泛学科, 日配额内)
+ *  → ⑤⑥ 已核实 LRU 回头刊(对口→泛学科) → ⑦-⑩ 产量红线 floor(已核实池整体为空才会走到:
+ *  全池新鲜→全池LRU→丢学科新鲜→全放开LRU, 不受配额限制, 宁发未核实/不对口也不空名额)。
+ *  修复动机: 旧层②(已核实+对口, LRU **无 fresh 条件**)只要 verified 对口池非空必然短路返回 ——
+ *  小学科 verified 池(如 5 本)新鲜耗尽后天天 LRU 回头同几本, 旧⑤-⑧ 永远到不了,
+ *  15 天冷却形同虚设("国际刊反复就那几本"的主因)。 */
 async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
   // 6-19 数据质量护栏: 排除 ai_fabricated(生成时 LLM 编造、IF/分区/录用率是假的)刊, 不让它们进每日生成。
   //   只排这一类: 正经的低可信/目录刊(国内核心常 confidence 为空)仍保留, 不误杀。
   const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
-  // 7-09 未核实护栏: 优先取 conf≥70 的已核实刊生成内容(避免用 legacy_unknown/低可信刊生成对外内容);
+  // 7-09 未核实护栏: 优先取已核实刊生成内容(避免用 legacy_unknown/低可信刊生成对外内容);
   //   verified 池枯竭再回退原逻辑, 保证每日篇数不因严选而空名额。
-  const verified = sql`(${journals.confidence} >= 70)`;
+  // 7-28 分体系门槛(③c): 原来一刀切 `confidence >= 70`, 而 trust-score 的加分项全是国际源
+  //   (crossref+20/doaj+10/letpub+20) —— 国内刊的天花板恰好是"进北大核心或CSCD核心库=70",
+  //   只在CSCD扩展库=60, 两个目录都不在=50, **永远过不了线** → 88% 国内刊在 SQL 层就被挡住
+  //   (实测 verified 427/3707, 综合性人文社科 0/122, 中国政治 0/43 —— 整个学科推不出一本刊),
+  //   于是国内槽位天天靠 ⑦⑧ 兜底层选刊, 内容还全被标 needs_review。
+  //   现在改判: 国内刊看**目录成员资格 + 刊号实体确认**, 国际刊维持 conf>=70(见 journal-sql.ts)。
+  const verified = verifiedJournalCondition();
   const sc = journalScopeCondition(scope); // SQL | null
   // 7-20 学科码归一(migration 026): 原本 `discipline ILIKE '%medicine%'` 匹配不上国内刊的
   //   中文分类名("临床医学"/"外科学"), 国内 verified 刊只有 137/2379 能进这一层。改打生成列
@@ -494,20 +616,32 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
     const [j] = await db.select({ id: journals.id }).from(journals).where(and(...cs)).orderBy(order as any).limit(1);
     return j?.id ?? null;
   };
-  // 分层(从严到宽, 命中即返回):
-  //   ①② 纯目标学科对口刊(discExact) verified — 教育号优先吃教育刊
-  //   ③④ 放开综合刊(discOrGeneric) — 目标学科刊枯竭(15天冷却耗尽)才回退, 日志标"因学科枯竭回退"
-  //   ⑤⑥ 仅 scope(丢 disc) — 保产量红线: 综合刊也枯竭时宁发不对口也不空名额(草稿池饿死比不对口更糟)
-  // 6-19 修"国外槽位漏国内刊": 兜底绝不丢 scope —— 只放宽 学科/冷却, 国内/国外定位始终保留。
-  const byExact = (await pick([active, verified, sc, discExact, fresh], rnd))
-    ?? (await pick([active, verified, sc, discExact], lru));
-  if (byExact) return byExact;
-  const byGeneric = (await pick([active, verified, sc, discOrGeneric, fresh], rnd))
-    ?? (await pick([active, verified, sc, discOrGeneric], lru))
-    ?? (await pick([active, sc, discOrGeneric, fresh], rnd))
+  // 分层(命中即返回)。6-19 修"国外槽位漏国内刊": 每一层都绝不丢 scope —— 只放宽 学科/可信度/冷却,
+  // 国内/国外定位始终保留。
+  // ①② 已核实+新鲜: 对口(discExact) → 泛学科(discOrGeneric)。教育号优先吃教育刊, 学科枯竭才吃综合刊。
+  const freshVerified = (await pick([active, verified, sc, discExact, fresh], rnd))
+    ?? (await pick([active, verified, sc, discOrGeneric, fresh], rnd));
+  if (freshVerified) return freshVerified;
+  // ③④ 未核实+新鲜(日配额内): 已核实新鲜池枯竭时小口探索新刊 —— 其内容会被 batch-worker 标
+  //   needs_review 人工复核, 配额(默认 2/天)防止把"重复"换成"积压"。
+  if (UNVERIFIED_DAILY_QUOTA > 0 && (await unverifiedUsedToday(tenantId)) < UNVERIFIED_DAILY_QUOTA) {
+    const freshUnverified = (await pick([active, sc, discExact, fresh], rnd))
+      ?? (await pick([active, sc, discOrGeneric, fresh], rnd));
+    if (freshUnverified) {
+      logger.info({ scope, discipline, quota: UNVERIFIED_DAILY_QUOTA }, "选刊: 已核实新鲜池枯竭, 日配额内放行未核实新鲜刊(内容将转 needs_review 复核)");
+      return freshUnverified;
+    }
+  }
+  // ⑤⑥ 已核实 LRU 回头刊(最后手段, 打破15天冷却但数据可信): 对口 → 泛学科。
+  const lruVerified = (await pick([active, verified, sc, discExact], lru))
+    ?? (await pick([active, verified, sc, discOrGeneric], lru));
+  if (lruVerified) { logger.info({ scope, discipline }, "选刊: 新鲜池全枯竭(含未核实配额), 回退已核实 LRU 回头刊(15天内重复, 最后手段)"); return lruVerified; }
+  // ⑦⑧ 产量红线 floor: 走到这说明该 scope 下已核实池整体为空(如国内小学科), 放开可信度保名额
+  //   (不受日配额限制 —— 配额只管"有已核实备选时别贪新", 没有备选时保产量优先)。
+  const byGeneric = (await pick([active, sc, discOrGeneric, fresh], rnd))
     ?? (await pick([active, sc, discOrGeneric], lru));
-  if (byGeneric) { logger.info({ scope, discipline }, "选刊: 目标学科对口刊已枯竭, 回退综合刊(generic)兜底"); return byGeneric; }
-  // 保产量最后两层: 学科+综合刊都枯竭, 仅按 scope 选(宁不对口不空名额)
+  if (byGeneric) { logger.warn({ scope, discipline }, "选刊: 已核实池为空, 回退未核实综合池兜底(将转 needs_review)"); return byGeneric; }
+  // ⑨⑩ 保产量最后两层: 学科+综合刊都枯竭, 仅按 scope 选(宁不对口不空名额, 草稿池饿死比不对口更糟)
   const byScope = (await pick([active, sc, fresh], rnd))
     ?? (await pick([active, sc], lru));
   if (byScope) logger.warn({ scope, discipline }, "选刊: 学科+综合刊池均枯竭, 仅按 scope 兜底(内容可能不对口)");
@@ -558,6 +692,11 @@ export async function runDailyContentByType(
   let roundupCount = 0;
   const uniqueJournals = new Set<string>();
   const usedDisc = new Set<string>();
+  // 7-28 ①b: 目标 = 各类型 cfg.count 之和。原来这个数根本没被算出来过 —— 于是"目标 20 实际 1"
+  //   与"目标 1 实际 1"在日志里长得一模一样, 只有零产出才有告警。
+  const targetTotal = Object.values(cq).reduce((n, c) => n + (Math.floor(Number(c?.count)) || 0), 0);
+  // 7-28 ①a: 名额是怎么蒸发的(选不出题/选不出刊), 收尾时一并带进告警 detail
+  const skipped = { noTopic: 0, noJournal: 0 };
 
   for (const [type, cfg] of Object.entries(cq)) {
     if (!cfg.count) continue;
@@ -607,7 +746,19 @@ export async function runDailyContentByType(
             tenantId: SYS, sourcePlatform: "onboarding",
           });
           const pick = cands[0];
-          if (!pick) { logger.info({ tenantId: SYS }, "PR-V1 选题池无可用新题, 跳过"); continue; }
+          if (!pick) {
+            logger.info({ tenantId: SYS }, "PR-V1 选题池无可用新题, 跳过");
+            // 7-28 ①a: 这个 continue 原来只有 info 一行 —— 选题池空掉 = 该类型天天静默零产,
+            //   而"我配了 topicPool 却没出内容"是运营最容易一头雾水的场景。
+            skipped.noTopic++;
+            reportCronIncidentThrottled({
+              kind: "no_topic_available", severity: "warn", tenantId: SYS,
+              message: `选题池无可用新题(onboarding 池 7 天冷却内全用过) — topicPool 类型本次跳过`,
+              detail: { tenantId: SYS, type, discipline },
+              key: `no_topic:${SYS}`,
+            });
+            continue;
+          }
           const { generateByFormat } = await import("../content-engine/format-generators.js");
           const gen = await generateByFormat({
             tenantId: SYS, userId: SYS_USER, topic: pick.keyword, format: "article",
@@ -643,7 +794,31 @@ export async function runDailyContentByType(
           await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, pick.id));
         } else if (type === "domestic" || type === "international") {
           const journalId = await pickScopedFreshJournal(SYS, type, discipline);
-          if (!journalId) { logger.info({ type, discipline }, "PR-O3 该范围无可用新刊, 跳过"); continue; }
+          if (!journalId) {
+            logger.info({ type, discipline }, "PR-O3 该范围无可用新刊, 跳过");
+            // 7-28 ①a: 十层兜底都选不出刊 = 该定位+学科的池子是空的, 这个名额直接蒸发。
+            //   原来只有一行 info, 于是"配了 8 篇国内医学只出了 3 篇"没有任何可查的痕迹。
+            skipped.noJournal++;
+            reportCronIncidentThrottled({
+              kind: "no_journal_available", severity: "warn", tenantId: SYS,
+              message: `选不出可用期刊[${type}·${discipline}](十层兜底全空) — 该名额空转, 需补该学科期刊或调整配额`,
+              detail: { tenantId: SYS, type, discipline },
+              key: `no_journal:${SYS}:${type}:${discipline}`,
+            });
+            continue;
+          }
+          // 7-28 ①a: 选到了, 但是**怎么选到的**? 破冷却的回头刊 / 不对口刊 = 该学科刊快用完了。
+          //   必须在写 journal_usage 占位行之前判, 否则刚写的那行会把自己算成"回头刊"(见 pick-degrade.ts)。
+          const degrade = await classifyPickDegrade(SYS, journalId, discipline);
+          if (degrade.degraded) {
+            logger.warn({ type, discipline, journalId, ...degrade }, "7-28 选刊降级到第⑤层以下");
+            reportCronIncidentThrottled({
+              kind: "journal_pool_exhausted", severity: "warn", tenantId: SYS,
+              message: describePickDegrade(type, discipline, degrade),
+              detail: { tenantId: SYS, type, discipline, journalId, ...degrade },
+              key: `journal_pool:${SYS}:${type}:${discipline}`,
+            });
+          }
           const cands = await selectCandidates({ disciplines: [discipline], cooldownDays: 0, poolSize: 5 });
           const topic = cands[0]?.keyword ?? discipline;
           const result = await createBatch({
@@ -653,6 +828,9 @@ export async function runDailyContentByType(
           });
           batchIds.push(result.batchId);
           uniqueJournals.add(journalId);
+          // 7-28 (#5): 这行是**占位冷却**(入队时 content 还没生成, contentId 只能为空)。
+          //   batch-worker 生成成功后会把近 2 天窗口内的占位行回填 contentId; 生成彻底失败的回滚
+          //   也只删 2 天窗口内 contentId 为空的行 —— 不再一次失败清光该刊全部历史冷却。
           await db.insert(journalUsage).values({ tenantId: SYS, journalId });
           if (cands[0]) await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, cands[0].id));
         }
@@ -660,17 +838,47 @@ export async function runDailyContentByType(
         const error = (err as Error).message || String(err);
         failures.push({ keyword: `${type}/${discipline}`, error });
         logger.warn({ type, discipline, err }, "PR-O3 单项生成失败(跳过)");
+        // 7-28 ①a: 生成失败原来只 warn 一行。一次故障会连撞几十篇(AI 挂/额度没了), 走节流,
+        //   被压掉的次数带在 detail.suppressedSinceLastAlert 里, 不会把别的告警淹掉。
+        reportCronIncidentThrottled({
+          kind: "generation_failed", severity: "warn", tenantId: SYS,
+          message: `单篇生成失败[${type}·${discipline}]: ${error.slice(0, 200)}`,
+          detail: { tenantId: SYS, type, discipline, error: error.slice(0, 300) },
+          key: `gen_failed:${SYS}:${type}`,
+        });
       }
     }
   }
   const totalProduced = batchIds.length + roundupCount;
+  // 7-28 ①a/①b: 运行事实(目标/实际/失败/名额蒸发)一并带进告警 detail —— 这正是"今天为什么
+  //   没产出"要的全部字段。scheduler 那边只 logger.info 就丢了, 落进 incident.detail 至少
+  //   在次日简报里点得开(轻表 pipeline_runs 见交接清单的下一步)。
+  const runFacts = {
+    tenant: SYS, types: Object.keys(cq), targetTotal, totalProduced,
+    articles: batchIds.length, roundup: roundupCount,
+    skipped, failures: failures.slice(0, 5), failureCount: failures.length,
+    uniqueJournals: uniqueJournals.size, disciplines: [...usedDisc],
+  };
   if (totalProduced === 0) {
     // 零产出告警: 别再静默停摆几天没人发现。失败明细一并打出, 便于定位(余额/冷却/候选枯竭)。
-    logger.error({ tenant: SYS, failures, types: Object.keys(cq) }, "⚠️ 每日生成零产出! 请检查 LLM 余额 / 期刊冷却 / 候选词。详见 failures");
+    logger.error({ ...runFacts }, "⚠️ 每日生成零产出! 请检查 LLM 余额 / 期刊冷却 / 候选词。详见 failures");
     // 7-25 运维告警: 光有日志没人看。落 ops_incidents → 次日 09:30 运营简报里红色置顶。
-    void import("../ops/incidents.js").then((m) => m.recordIncident({ kind: "zero_output", message: `每日生成零产出(失败 ${failures.length} 项)`, detail: { failures: failures.slice(0, 5), types: Object.keys(cq) } })).catch(() => { /* 告警旁路, 不影响生成流程 */ });
+    await reportCronIncident({
+      kind: "zero_output", severity: "error", tenantId: SYS,
+      message: `每日生成零产出(目标 ${targetTotal} 篇, 失败 ${failures.length} 项, 选不出题 ${skipped.noTopic} 次 / 选不出刊 ${skipped.noJournal} 次)`,
+      detail: runFacts,
+    });
+  } else if (targetTotal > 0 && totalProduced < targetTotal * LOW_OUTPUT_RATIO) {
+    // 7-28 ①b: 零产出与"目标 20 出了 1 篇"是两种病, 后者原来完全静默。
+    //   刻意是黄色不是红色: 系统还活着、还在出货, 只是明显不够 —— 要人看一眼配额/期刊池, 不用半夜爬起来。
+    logger.warn({ ...runFacts }, `⚠️ 每日生成产出不足: ${totalProduced}/${targetTotal} 篇`);
+    await reportCronIncident({
+      kind: "low_output", severity: "warn", tenantId: SYS,
+      message: `每日生成只出 ${totalProduced}/${targetTotal} 篇(不足目标 ${Math.round(LOW_OUTPUT_RATIO * 100)}%): 选不出题 ${skipped.noTopic} 次 · 选不出刊 ${skipped.noJournal} 次 · 生成失败 ${failures.length} 次`,
+      detail: runFacts,
+    });
   }
-  logger.info({ roundupCount, articles: batchIds.length, failures: failures.length, totalProduced }, "PR-O3 每日内容(按类型)生成完成");
+  logger.info({ roundupCount, articles: batchIds.length, failures: failures.length, totalProduced, targetTotal }, "PR-O3 每日内容(按类型)生成完成");
   return {
     selectedKeywords: batchIds.length, articlesEnqueued: totalProduced,
     failures, batchIds, startedAt, finishedAt: new Date().toISOString(),

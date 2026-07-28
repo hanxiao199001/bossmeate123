@@ -12,6 +12,7 @@ import { db } from "../../models/db.js";
 import { contents, contentPublishLog, journals, platformAccounts, tenants } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { GENERIC_DISCIPLINE_CODE, toDisciplineCode } from "../recommendation/discipline-mapping.js";
+import { classifyJournalScope } from "../journals/journal-kind.js";
 
 export interface SmartPair {
   articleId: string;
@@ -34,17 +35,13 @@ interface AccountLite {
 
 export type Scope = "domestic" | "international" | null;
 
-// 6-19: 把期刊判成 国内核心/国外期刊 (镜像 journal-scope.ts 的 journalScopeCondition, JS 版)。
-//   国内核心 = 有中文目录标签(catalogs 非空); 国外期刊 = 无中文标签且有 IF 或分区; 其余=未知(不限制)。
-function classifyScope(j: { catalogs: unknown; impactFactor: number | null; partition: string | null; name?: string | null }): Scope {
-  const cats = Array.isArray(j.catalogs) ? (j.catalogs as unknown[]) : [];
-  if (cats.length > 0) return "domestic";
-  if (j.impactFactor != null || (typeof j.partition === "string" && j.partition.length > 0)) return "international";
-  // 6-19: 三无数据(无目录/无IF/无分区)的刊按刊名语言兜底 — 刊名含中文=国内中文刊(如《高校应用数学学报》),
-  //   不再被判"未知"而绕过国内/国外定位过滤。纯英文名无指标仍判未知(不强判国外, 可能是不明来源刊)。
-  if (/[\u4e00-\u9fff]/.test(String(j.name ?? ""))) return "domestic";
-  return null;
-}
+// 7-28 ③: 本文件原有一份私有 classifyScope(6-19 写的"镜像 journal-scope.ts"的 JS 版)。
+//   已换用 journals/journal-kind.ts 的 classifyJournalScope —— 与生成列 journal_kind、
+//   verification.ts、journal-sql.ts 共用同一份规则, 不再维护第二套判定(7-25 学科码那次
+//   两套映射分叉的教训)。行为等价: 目录非空→domestic、有 IF/分区→international、
+//   三无但刊名含中文→domestic 的兜底一条不少。**当前严格等价**: 下面的投影只取
+//   catalogs/impactFactor/partition/name, 与老实现读的字段完全相同; classifyJournalScope
+//   还能认 cas_partition / cscd_level 等更多信号, 但那要先加投影, 属另一次决定, 本轮不动。
 
 /**
  * 7-25 值域统一: 分发侧学科一律用【学科码】(discipline-mapping 的 13 码 + generic)。
@@ -82,7 +79,7 @@ async function resolveArticle(
     }).from(journals).where(eq(journals.id, jid)).limit(1);
     if (j) {
       jDisc = j.disciplineCode || null; // 生成列理论上永不为空; 真为空按"无学科"处理
-      scope = classifyScope(j as any);
+      scope = classifyJournalScope(j);
     }
   } catch { /* noop */ }
   cache.set(jid, { discipline: jDisc, scope });

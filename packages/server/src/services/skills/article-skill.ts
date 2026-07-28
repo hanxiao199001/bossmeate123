@@ -30,6 +30,7 @@ import { persistJournalCover } from "../crawler/journal-cover-persist.js";
 import { db } from "../../models/db.js";
 import { platformAccounts, tenants, journals } from "../../models/schema.js";
 import { eq, and, inArray } from "drizzle-orm";
+import { isDomesticKind, toJournalKind } from "../journals/journal-kind.js";
 import { nanoid } from "nanoid";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
 import { pickHookPatterns } from "../../data/hook-patterns.js";
@@ -136,6 +137,90 @@ const CN_CORE_TAGS = ["pku-core", "cssci", "cssci-ext", "cscd"];
 export function isPureDomesticJournal(catalogs: string[] | null | undefined): boolean {
   const cats = catalogs || [];
   return cats.some((c) => CN_CORE_TAGS.includes(c)) && !cats.includes("sci-core");
+}
+
+/**
+ * 7-28 (#2/#3): 国内刊分支判定 + 专属写作指引 — 抽成纯函数, 单测可直接断言 prompt 组装结果。
+ *
+ * 判定口径与 title-generator.ts 统一: **有中文核心目录标签 且 无真实国际 IF(>0)** = 国内刊。
+ * 修死代码: 旧式 `cats.length>0 && !(ifText && !ifText.includes("未知"))` 里 ifText 无 IF 时是
+ * "N/A"(恒真值, 不含"未知") → 整个表达式恒 false → 7-21 改动3 的国内刊分支上线以来**从未走到过**。
+ *
+ * 复合影响因子(#3): 万方回填的 composite_impact_factor(447 本医学刊)接进生成 —— 国内刊无 JCR IF
+ * 但有复合 IF 时作为国内口径指标给 LLM, 强制全称+口径标注, 防被简写成"影响因子 X"冒充 SCI 指标。
+ * 字段双路径: collector 产出叫 compositeIF, batch 直查 DB 行(drizzle)叫 compositeImpactFactor。
+ *
+ * 禁写清单动态化: 旧文案硬说"没有精确录用率/审稿周期数据", 但 knownFields 一直会渲染 DB 里真实的
+ * reviewCycle/acceptanceRate —— 两处自相矛盾会让 LLM 犯懵。现按"本刊真没有的字段"动态生成禁写项。
+ */
+export function buildDomesticJournalGuidance(j: {
+  catalogs?: string[] | null;
+  impactFactor?: number | null;
+  compositeIF?: number | null;           // collector 路径字段名
+  compositeImpactFactor?: number | null; // DB 直查路径字段名
+  reviewCycle?: string | null;
+  acceptanceRate?: number | null;
+  discipline?: string | null;
+  // 7-28: journal_kind 判定要用的其余信号(全 optional, 传得到就用) —— 少了它们只会退回
+  //   "catalogs 非空 && 无 IF" 的老口径, 不会误判成国内刊。
+  partition?: string | null;
+  casPartition?: string | null;
+  catalogType?: string | null;
+  cscdLevel?: string | null;
+  pkuCoreLevel?: string | null;
+  cnNumber?: string | null;
+}): { isDomestic: boolean; guidance: string; compositeIF: number | null } {
+  const cats = j.catalogs || [];
+  const hasIF = j.impactFactor != null && j.impactFactor > 0; // PR #209: IF<=0 是占位值, 当"无 IF"
+  // 7-28 (③b): 判定收口到 journal_kind 单一真相源(替换 `cats.length > 0` 这半条启发式)。
+  //   `isDomesticKind` = kind 落 'cn'(纯国内)或 'both'(骑墙); 再叠加"无真实 IF"这一条不变 ——
+  //   IF>0 就按国外刊写, IF<=0 是占位值当无 IF(PR #209)。
+  //   相对老口径的唯一变化是**把裂缝刊捞回来**: 只写了 pku_core_level/cscd_level 而 catalogs
+  //   为空的刊(enricher orchestrator:280-289 的产物), 老口径判它"不是国内刊" → 拿不到国内刊
+  //   写作指引、被按 SCI 口径写。其余情形结果与老口径逐条一致。
+  const isDomestic = isDomesticKind(toJournalKind(j)) && !hasIF;
+  const cifRaw = j.compositeIF ?? j.compositeImpactFactor ?? null;
+  const compositeIF = !hasIF && cifRaw != null && cifRaw > 0 ? cifRaw : null;
+  if (!isDomestic) return { isDomestic, guidance: "", compositeIF };
+  // 身份组合区分度: 三核心 > 北大+CSSCI > 纯 CSCD (与库内分布一致, 让 LLM 拿捏权威分量)
+  const idTags: string[] = [];
+  if (cats.includes("pku-core")) idTags.push("北大核心");
+  if (cats.includes("cssci")) idTags.push("CSSCI（南大核心）来源期刊");
+  if (cats.includes("cssci-ext")) idTags.push("CSSCI 扩展版来源期刊");
+  if (cats.includes("cscd")) idTags.push("CSCD（中国科学引文数据库）");
+  const idWeight = idTags.length >= 3 ? "三核心齐收（分量最重的一档国内核心）"
+    : (cats.includes("pku-core") && cats.includes("cssci")) ? "北大核心 + CSSCI 双核心（国内社科顶配）"
+    : cats.includes("pku-core") ? "北大核心（评职称/毕业最认的硬通货）"
+    : "国内核心收录";
+  // 禁写/缺失清单按真实数据动态生成: JCR IF/中科院分区/JCR 分区对国内刊恒禁; 录用率/审稿周期看 DB。
+  const missing: string[] = ["JCR/SCI 影响因子(IF)", "中科院分区", "JCR 分区"];
+  const forbidden: string[] = ["JCR/SCI 口径的 IF 数字", `"X区"/"中科院X区"/"JCR Qx" 等分区表述`];
+  if (j.acceptanceRate == null) { missing.push("精确录用率"); forbidden.push("具体录用率百分比"); }
+  if (!j.reviewCycle) { missing.push("精确审稿周期"); forbidden.push("具体审稿天数/周期"); }
+  const haves: string[] = [];
+  if (compositeIF != null) haves.push(`复合影响因子 ${compositeIF.toFixed(3)}（知网/万方口径，国内影响力指标）—— 可以写，但必须写全"复合影响因子"并注明国内口径，🚫 严禁写成"影响因子 ${compositeIF.toFixed(3)}"/"IF ${compositeIF.toFixed(3)}"冒充 SCI/JCR 指标`);
+  if (j.reviewCycle) haves.push(`审稿周期 ${j.reviewCycle}（DB 真实数据，见##已知期刊数据##）—— 可如实写`);
+  if (j.acceptanceRate != null) haves.push(`精确录用率（见##已知期刊数据##）—— 可如实写`);
+  const guidance = `
+
+## ⚠️ 本刊是【国内核心期刊】—— 按国内口径写，别套 SCI 那一套
+**本刊没有：${missing.join("、")}。** 这不是数据缺失，是国内核心刊本来就不用这套 SCI 指标体系来衡量。
+${haves.length ? `**本刊真实有的国内口径数据（只许用这些，别的数字一律不许出现）：**\n${haves.map((s) => `- ${s}`).join("\n")}\n` : ""}🚫 **绝对禁止**在标题或正文写：${forbidden.join("、")}。
+   写了 = 编造 = 生成后校验会拦下转人工复核 = 这篇白写，还占了别人的产能。
+
+**国内核心刊的卖点主线，按这个顺序写（这才是国内作者真正认的东西）：**
+① 权威身份（最硬的卖点）：${idWeight}。收录情况：${idTags.join("、") || "国内核心"}。
+   讲清"这是什么级别的刊、在评职称/毕业/项目结题里认不认" —— 这比 IF 对国内作者实在得多。
+② 学科定位：${j.discipline || "见收录方向"}方向。说清它在这个学科里是什么位置、适合哪类研究主题。
+③ 投稿方向：收什么类型稿件（论著/综述/实证/个案）、谁该投（硕博毕业/评职称/一线教师医生）、怎么投得中。
+
+## 篇幅与密度（国内刊专属，破"无数据硬凑"死循环）
+- **目标 600-800 字**，讲清"什么级别的刊 + 适合谁投 + 怎么投"即可，**不硬凑 1600 字**。
+- 没有 SCI 数字不等于没有信息密度：身份组合、CSCD 核心/扩展库、学科分类、收录目录、
+  投稿方向、适配人群、评职称/毕业适用性${compositeIF != null ? "、复合影响因子（国内口径）" : ""}${j.reviewCycle ? "、审稿周期" : ""} —— 这些都是国内作者要的实打实信息，写满它们密度天然够。
+- **宁可短而实，不要长而空。** 通篇"认可度高/学术声誉好/值得一投"这类空话 = 不合格。
+`;
+  return { isDomestic, guidance, compositeIF };
 }
 
 export class ArticleSkill implements ISkill {
@@ -794,19 +879,26 @@ export class ArticleSkill implements ISkill {
    * PR 1（5-8 P0++）：把 AI 编造的期刊持久化到 journals 表，标 data_source='ai_fabricated' confidence=30。
    * 让 /admin/journals/audit 页能 SELECT 到这些低可信 row（PR 2 实施 audit）。
    *
-   * 去重：按 (tenantId, name) 查存在则仅刷 last_verified_at（不重复 INSERT）；
-   * 不存在则 INSERT 完整 row。tenantId 缺时跳过（公开 /try 路径无 tenant）。
+   * 去重：按刊名查**共享池 + 本租户自建刊**，命中则不再 INSERT。tenantId 缺时跳过（公开 /try 路径无 tenant）。
+   *
+   * 7-28 (④) 修去重恒不命中：原来查重条件是 `eq(journals.tenantId, tenantId)`，而线上 8743 本
+   *   共享刊的 tenant_id 是 **NULL**，`NULL = 'uuid'` 恒不成立 → 一本早就在共享池里的刊，
+   *   每个租户各插一条同名 `ai_fabricated` 影子刊（conf=30 的假数据，还会被选刊/客服看到）。
+   *   命中共享池刊时**只跳过、不写**：共享池是全局参考数据，租户侧无权改它的 last_verified_at
+   *   （读放宽、写严格）。只有命中自己的刊才刷时间戳。
    */
   async persistAIJournal(aiJournal: JournalInfo, tenantId?: string): Promise<void> {
     if (!tenantId) return; // 公开匿名路径无 tenant，不持久化
     const { eq, and } = await import("drizzle-orm");
+    const { journalVisibleTo } = await import("../journals/journal-sql.js");
     const [existing] = await db
-      .select({ id: journals.id })
+      .select({ id: journals.id, tenantId: journals.tenantId })
       .from(journals)
-      .where(and(eq(journals.tenantId, tenantId), eq(journals.name, aiJournal.name)))
+      .where(and(journalVisibleTo(tenantId), eq(journals.name, aiJournal.name)))
       .limit(1);
 
     if (existing) {
+      if (existing.tenantId === null) return; // 共享池已有同名刊 → 不插影子刊, 也不碰它
       await db
         .update(journals)
         .set({ lastVerifiedAt: new Date(), updatedAt: new Date() })
@@ -1265,8 +1357,16 @@ export class ArticleSkill implements ISkill {
     const unknownFields: string[] = [];
     knownFields.push(`- 名称：${journalName}${journal.abbreviation ? `（${journal.abbreviation}）` : ""}`);
     if (journal.discipline) knownFields.push(`- 学科：${journal.discipline}`); else unknownFields.push("学科");
-    // ifText 在前面构造 (来自 journal.impactFactor 或 ifHistory), 非 "未知" 才算 known
-    if (ifText && !ifText.includes("未知")) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
+    // 7-28 修 "N/A" 恒真值(#2): 旧判断 `ifText && !ifText.includes("未知")` 对无 IF 的 "N/A" 恒真 →
+    //   把"影响因子：N/A"塞进##已知期刊数据##(等于教 LLM 写 N/A 或自己编个数)。改判 hasIF(数值>0),
+    //   无 IF 归##未公开字段##(文中完全不提)。
+    if (hasIF) knownFields.push(`- 影响因子：${ifText}`); else unknownFields.push("影响因子");
+    // 7-28 (#3): 复合影响因子(知网/万方口径)接进生成 —— 判定/口径与国内刊分支共用纯函数(见文件头部)。
+    const domesticParts = buildDomesticJournalGuidance(journal);
+    if (domesticParts.compositeIF != null) {
+      const cifText = domesticParts.compositeIF.toFixed(3);
+      knownFields.push(`- 复合影响因子（知网/万方口径，国内影响力指标，**不是 JCR 影响因子/IF**）：${cifText}。正文提及必须写全"复合影响因子"并注明国内口径，🚫 严禁简写成"影响因子 ${cifText}"/"IF ${cifText}"冒充 SCI/JCR 指标`);
+    }
     // PR #232 (5-23): 分区/新锐分区字段加 [原文搬运] 标记 — 防 AI 改数字(3→2)/改顺序("3区材料科学"→"材料科学2区").
     if (journal.casPartition || journal.partition) knownFields.push(`- 分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartition || journal.partition}`); else unknownFields.push("分区");
     if (journal.casPartitionNew) knownFields.push(`- 新锐分区 [必须原文搬运, 不得改字/改顺序/简化]：${journal.casPartitionNew}`); else unknownFields.push("新锐分区"); // PR #229: 空也声明, 防 AI 编造; PR #232: 加原文搬运标记
@@ -1347,22 +1447,14 @@ export class ArticleSkill implements ISkill {
     // 7-03 老韩②: 图位标记清单（按本刊真实数据动态生成; 无数据图位不出现在清单里）
     const imageSlotBlock = buildImageSlotPromptBlock(journal as unknown as Record<string, unknown>);
 
-    // 7-21 改动3: 国内刊独立生成口径。
-    //   判定 = 有中文核心目录标签(cats) 且 无国际 IF(ifText 为空/未知)。国际刊(有 IF)完全不进此分支。
+    // 7-21 改动3 + 7-28 修死代码(#2): 国内刊独立生成口径。
+    //   判定 = 有中文核心目录标签 且 无真实国际 IF(>0), 与 title-generator 口径统一, 逻辑抽到
+    //   buildDomesticJournalGuidance 纯函数(文件头部, 有单测)。旧式 `!(ifText && !ifText.includes("未知"))`
+    //   对 "N/A" 恒 false → 该分支上线以来从未走到, 国内刊一直被当国际刊逼着凑 SCI 数字。
     //   动机(生产实测): 主 prompt 的"每200字1个硬数据(IF/分区/审稿/录用率)"+"标题会挑数字做噱头"
     //   对国内刊是逼编造的死循环 —— 国内核心刊 IF 覆盖 7.8%、分区 0.3%, 根本没有这些数, LLM 只能编。
     //   7-21 那批 11 篇国内刊里 6 篇(54.5%)正文编造被评分器压到红线分。治本 = 换一套国内刊真正有的卖点。
-    const isDomesticJournal = cats.length > 0 && !(ifText && !ifText.includes("未知"));
-    // 身份组合区分度: 三核心 > 北大+CSSCI > 纯 CSCD (与库内分布一致, 让 LLM 拿捏权威分量)
-    const idTags: string[] = [];
-    if (cats.includes("pku-core")) idTags.push("北大核心");
-    if (cats.includes("cssci")) idTags.push("CSSCI（南大核心）来源期刊");
-    if (cats.includes("cssci-ext")) idTags.push("CSSCI 扩展版来源期刊");
-    if (cats.includes("cscd")) idTags.push("CSCD（中国科学引文数据库）");
-    const idWeight = idTags.length >= 3 ? "三核心齐收（分量最重的一档国内核心）"
-      : (cats.includes("pku-core") && cats.includes("cssci")) ? "北大核心 + CSSCI 双核心（国内社科顶配）"
-      : cats.includes("pku-core") ? "北大核心（评职称/毕业最认的硬通货）"
-      : "国内核心收录";
+    const isDomesticJournal = domesticParts.isDomestic;
 
     // 7-21 纯国内刊 = 有中文核心标签(北大核心/CSCD/CSSCI) 且 **不含 sci-core**。
     //   独立于 isDomesticJournal(卖点分支): 后者靠 ifText, enrichment 会给骑墙刊填 IF 让它走国际分支;
@@ -1370,26 +1462,9 @@ export class ArticleSkill implements ISkill {
     //   严格排除骑墙刊(含 sci-core): 它们分区可能是 enrichment 有据的(backlog-C), 误伤它们正是 6577b9a 被回滚的原因。
     //   纯国内刊本就不在 LetPub 的 SCI 分区体系里, enrichment 也补不到分区 → 禁写分区 100% 正确、零副作用。
     const isPureDomestic = isPureDomesticJournal(cats);
-    const domesticGuidance = isDomesticJournal ? `
-
-## ⚠️ 本刊是【国内核心期刊】—— 按国内口径写，别套 SCI 那一套
-**本刊没有影响因子(IF)、没有中科院分区、没有 JCR 分区，也没有精确录用率/审稿周期数据。**
-这不是数据缺失，是国内核心刊本来就不用这套 SCI 指标体系来衡量。
-🚫 **绝对禁止**在标题或正文写任何 IF 数字、"X区"/"中科院X区"/"JCR Qx"、具体录用率百分比、具体审稿天数。
-   这些本刊都没有 —— 写了 = 编造 = 生成后校验会拦下转人工复核 = 这篇白写，还占了别人的产能。
-
-**国内核心刊的卖点主线，按这个顺序写（这才是国内作者真正认的东西）：**
-① 权威身份（最硬的卖点）：${idWeight}。收录情况：${idTags.join("、") || "国内核心"}。
-   讲清"这是什么级别的刊、在评职称/毕业/项目结题里认不认" —— 这比 IF 对国内作者实在得多。
-② 学科定位：${journal.discipline || "见收录方向"}方向。说清它在这个学科里是什么位置、适合哪类研究主题。
-③ 投稿方向：收什么类型稿件（论著/综述/实证/个案）、谁该投（硕博毕业/评职称/一线教师医生）、怎么投得中。
-
-## 篇幅与密度（国内刊专属，破"无数据硬凑"死循环）
-- **目标 600-800 字**，讲清"什么级别的刊 + 适合谁投 + 怎么投"即可，**不硬凑 1600 字**。
-- 没有 SCI 数字不等于没有信息密度：身份组合、CSCD 核心/扩展库、学科分类、收录目录、
-  投稿方向、适配人群、评职称/毕业适用性 —— 这些都是国内作者要的实打实信息，写满它们密度天然够。
-- **宁可短而实，不要长而空。** 通篇"认可度高/学术声誉好/值得一投"这类空话 = 不合格。
-` : "";
+    // 7-28: 指引文本由 buildDomesticJournalGuidance 组装(禁写清单按 DB 真实字段动态生成,
+    //   复合IF/审稿周期/录用率有值时明确"可写+口径", 不再与 ##已知期刊数据## 自相矛盾)。
+    const domesticGuidance = domesticParts.guidance;
 
     const prompt = `你是这个学术期刊推荐公众号的小编——替读者翻过这本期刊全部资料的人。你的任务不是写论文摘要，而是用自己的话把这本刊**转述**给读者，边报数据边给你的主观判断。根据以下期刊信息，生成内容。
 ${domesticGuidance}
@@ -1413,8 +1488,8 @@ ${imageSlotBlock ? `${imageSlotBlock}
 - 标记写法：在 scopeDescription / ifHistoryAnalysis / scopeAndCitations / submissionAdvice / recommendation 这些 HTML 字段里，用独立段落 <p>{{IMG:xxx}}</p> 插入。
 ` : ""}
 ## 数据密度与卖点兑现 (7-03 供给侧强化)
-${isDomesticJournal ? `1. 【密度—国内刊口径】把上方"国内核心刊卖点主线"的信息(身份组合/CSCD等级/学科分类/收录目录/投稿方向/适配人群)写扎实, 每 200 字有一个实打实的信息点(身份/学科/投稿方向, **不是 IF/分区/录用率**——本刊没这些)。
-2. 【卖点兑现—国内刊口径】核心卖点是权威身份, 不是数字。开头首段用"什么级别的刊+适合谁"切入(如"评职称还差一篇北大核心? 这本${journal.discipline || ""}方向的双核心刊值得看"), 严禁用 IF/分区/审稿天数做噱头。` : `1. 【密度】各分析章节必须把 ##已知期刊数据## 里的硬指标自然写进正文, 数据密度约每 200 字至少 1 个具体数字/指标(IF/两套分区/审稿周期/录用率/版面费/年发文量), 少写空泛评价、多用真数字支撑。
+${isDomesticJournal ? `1. 【密度—国内刊口径】把上方"国内核心刊卖点主线"的信息(身份组合/CSCD等级/学科分类/收录目录/投稿方向/适配人群)写扎实, 每 200 字有一个实打实的信息点(身份/学科/投稿方向, 以及 ##已知期刊数据## 里真实有的国内字段如复合影响因子/审稿周期; **JCR IF/中科院分区一律不写**——本刊没有)。
+2. 【卖点兑现—国内刊口径】核心卖点是权威身份, 不是 SCI 数字。开头首段用"什么级别的刊+适合谁"切入(如"评职称还差一篇北大核心? 这本${journal.discipline || ""}方向的双核心刊值得看"), 严禁用 JCR IF/分区做噱头; 无据的录用率/审稿天数也不许编来当噱头。` : `1. 【密度】各分析章节必须把 ##已知期刊数据## 里的硬指标自然写进正文, 数据密度约每 200 字至少 1 个具体数字/指标(IF/两套分区/审稿周期/录用率/版面费/年发文量), 少写空泛评价、多用真数字支撑。
 2. 【卖点兑现】上述数据里的亮点(审稿快 / 分区高 / 免版面费 / 录用友好等)是本文核心卖点, 也是标题会挑来做噱头的点。开头首段必须挑最亮的 1-2 个做痛点承诺切入(如"还在为审稿半年发愁? 这本 X 周就出结果"), 正文再逐一兑现展开。**凡开头/标题承诺的数字, 正文必须出现并给出场景, 严禁承诺了不兑现(标题吹的数正文一定要有)。**`}
 3. 【缺失字段纪律 — 严禁推断制造矛盾】##已知期刊数据## 里没有的字段(如分区/录用率/收录状态空缺), 只能写"暂无数据"或直接不提, **严禁自行推断"未被 WOS/SCIE 收录" / "未标注" / "可能不是SCI" / "或许"等**。尤其: 有中科院分区却推断"未被WOS收录"是自相矛盾的低级错误——有分区就说明被收录, 缺 JCR 数据只写"JCR 分区暂无数据", 不许反推"未收录"。
 ## 结尾行动块 (7-03 实用性)

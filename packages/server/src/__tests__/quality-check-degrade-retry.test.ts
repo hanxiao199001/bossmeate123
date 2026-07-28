@@ -20,7 +20,12 @@ vi.mock("../config/logger.js", () => ({
 }));
 
 const chatMock = vi.fn();
-vi.mock("../services/ai/chat-service.js", () => ({ chat: (...a: unknown[]) => chatMock(...a) }));
+vi.mock("../services/ai/chat-service.js", () => ({
+  chat: (...a: unknown[]) => chatMock(...a),
+  // 7-28 ②b: quality-check-v2 现在还用它把"chat 主备全挂"归到 timeout 类(靠类型而不是错误文案)。
+  //   mock 里补同义实现, 别让被测模块少一个 import 就整体挂掉。
+  isAiUnavailableError: (err: unknown) => err instanceof Error && err.name === "AiUnavailableError",
+}));
 
 vi.mock("../services/knowledge/knowledge-service.js", () => ({ semanticSearch: vi.fn(async () => []) }));
 

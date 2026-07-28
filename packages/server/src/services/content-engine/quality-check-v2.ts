@@ -13,7 +13,7 @@
  */
 
 import { logger } from "../../config/logger.js";
-import { chat } from "../ai/chat-service.js";
+import { chat, isAiUnavailableError } from "../ai/chat-service.js";
 import { isAiFallbackText } from "../ai/fallback-messages.js";
 import { semanticSearch } from "../knowledge/knowledge-service.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
@@ -95,19 +95,45 @@ export interface QualityCheckV2Result {
   dataDensity: string;
   degraded: boolean;
 
-  // v2 检查（保留不动）
+  // v2 检查
   redlineCheck: {
+    /**
+     * "这次检查**没查出** critical 违规"。
+     * ⚠️ 7-28: 它**不等于**"内容合规" —— 检查压根没跑成时它也是 true。
+     * 判"能不能发"必须 `passed && available` 两个都看(overallPassed 已经这么算)。
+     */
     passed: boolean;
     violations: Array<{ rule: string; snippet: string; severity: "critical" | "warning" }>;
+    /**
+     * 7-28 ②a: 这道检查**是否真的跑成了**。
+     * false = 规则检索挂了 / AI 没响应 / 输出解析不出来 —— 结论"不可用", 不是"合格"。
+     * 刻意与 passed 分成两个字段: "检查不可用" ≠ "违规"(7-27「0分≠未评分」的同类教训) ——
+     * 混成一个 boolean 的后果是二选一的灾难: 判 true 则坏了还在出货, 判 false 则评分器一抖
+     * 全部内容被当信任事故打死(7-27 零产出的原样重演)。
+     */
+    available: boolean;
+    /** 不可用的具体原因(rules_unavailable / ai_unavailable / parse_failed / error) */
+    unavailableReason?: string;
   };
   styleCheck: {
     consistency: number;      // 0-100 一致性分数
     deviations: string[];     // 风格偏差描述
+    /**
+     * 7-28 ②c: 同上。false 时 consistency 是**占位数字不是评估结果** ——
+     * 原来这里挂了硬返 75(及格线 50 → 必过), 等于给没检查过的内容发合格证。
+     * 现在不可用时把 style 项整个**移出** overallPassed 的计算(不再拿假数字背书),
+     * 但不因它单独把内容打成待审: 风格是修饰性维度, 不是安全闸(红线/平台才是)。
+     */
+    available: boolean;
+    unavailableReason?: string;
   };
   platformCheck: {
     platform: string;
     passed: boolean;
     issues: string[];
+    /** 7-28 ②c: 同 redline —— 平台规则查不了就不能判"能发" */
+    available: boolean;
+    unavailableReason?: string;
   };
 
   // v3 新增：HTML 字面量泄漏检测（同步本地正则，零 token 成本）
@@ -118,8 +144,26 @@ export interface QualityCheckV2Result {
   };
 
   overallPassed: boolean;     // 综合判定
+
+  /**
+   * 7-28 ②a/②c: 哪些检查"没能跑成"。非空 = **本次质检结论不完整**, 而不是"内容有问题"。
+   *
+   * 消费方铁律(与 7-27 的「未评上分 ≠ 0 分」完全同构):
+   *   - overallPassed 会因此为 false → 内容转 needs_review 走人工复核 ✅
+   *   - 但 needsReviewReason 必须写 QUALITY_GATE_UNAVAILABLE_REASON, **绝不能写红线类原因** ——
+   *     红线类会被 draft-distributor 永久剔除出草稿箱(留人工), 那是给"信任事故"准备的处置,
+   *     用在"我们自己的检查器挂了"上, 就是 7-27 零产出事故的原样重演。
+   */
+  unavailableChecks: Array<{ check: "redline" | "style" | "platform"; reason: string }>;
+
   feedback: string;
 }
+
+/**
+ * 7-28: 因"闸没检查成"转人工时统一用这个 needsReviewReason。
+ * draft-distributor 侧对应 GATE_UNAVAILABLE_REASONS —— **进池、排队尾、不当红线剔除**。
+ */
+export const QUALITY_GATE_UNAVAILABLE_REASON = "quality_gate_unavailable";
 
 // ============ 核心逻辑 ============
 
@@ -149,11 +193,21 @@ export async function qualityCheckV2(params: {
   // v3: 同步 HTML 字面量检测（无需 LLM，毫秒级）
   const htmlIntegrity = checkHtmlIntegrity(body);
 
+  // ==== 7-28 ②a/②c: 把"没检查成"从"检查通过"里拆出来 ====
+  const unavailableChecks: QualityCheckV2Result["unavailableChecks"] = [];
+  if (!redlineResult.available) unavailableChecks.push({ check: "redline", reason: redlineResult.unavailableReason ?? "unknown" });
+  if (!styleResult.available) unavailableChecks.push({ check: "style", reason: styleResult.unavailableReason ?? "unknown" });
+  if (platformResult && !platformResult.available) unavailableChecks.push({ check: "platform", reason: platformResult.unavailableReason ?? "unknown" });
+
   const overallPassed =
     sixDim.passed &&
-    redlineResult.passed &&
-    (styleResult.consistency >= 50) &&
-    (!platformResult || platformResult.passed) &&
+    // 红线: 既要没查出违规, 也要**真的查成了** —— 解析失败判合格是最坏的默认值
+    redlineResult.passed && redlineResult.available &&
+    // 风格: 检查不可用时把这一项整个移出判定(不拿硬编码的 75 分冒充"风格合格");
+    //   但不因它单独把内容打成待审 —— 风格是修饰性维度, 红线/平台才是安全闸。
+    (!styleResult.available || styleResult.consistency >= 50) &&
+    // 平台规则: 与红线同级 —— 查不了就不能判"能发"
+    (!platformResult || (platformResult.passed && platformResult.available)) &&
     htmlIntegrity.passed;
 
   const result: QualityCheckV2Result = {
@@ -164,24 +218,54 @@ export async function qualityCheckV2(params: {
     degraded: sixDim.degraded,
     redlineCheck: redlineResult,
     styleCheck: styleResult,
-    platformCheck: platformResult || { platform: "none", passed: true, issues: [] },
+    platformCheck: platformResult || { platform: "none", passed: true, issues: [], available: true },
     htmlIntegrity,
     overallPassed,
-    feedback: generateFeedback(sixDim, redlineResult, styleResult, platformResult, htmlIntegrity),
+    unavailableChecks,
+    feedback: generateFeedback(sixDim, redlineResult, styleResult, platformResult, htmlIntegrity, unavailableChecks),
   };
+
+  // 7-28: 闸没检查成 → 落 ops_incidents。语义与 quality_check_unavailable(没评上分)平行:
+  //   都是"我们的检查器挂了", 都转人工, 都**不是**内容违规。简报按 kind 分开汇总。
+  if (unavailableChecks.length > 0) {
+    reportGateUnavailable(tenantId, title, unavailableChecks);
+  }
 
   logger.info(
     {
       totalScore: result.totalScore,
       sixDimPassed: sixDim.passed,
       redlinePassed: result.redlineCheck.passed,
+      redlineAvailable: result.redlineCheck.available,
       styleConsistency: result.styleCheck.consistency,
+      unavailableChecks: unavailableChecks.map((u) => u.check),
       overallPassed: result.overallPassed,
     },
     "🔍 质检 V2 完成"
   );
 
   return result;
+}
+
+/** 7-28: "闸没检查成"落告警(旁路, 失败不影响质检结论)。同一租户 10 分钟一条, 免刷屏。 */
+function reportGateUnavailable(
+  tenantId: string,
+  title: string,
+  checks: QualityCheckV2Result["unavailableChecks"],
+): void {
+  void (async () => {
+    try {
+      const { recordIncidentThrottled } = await (incidentsModule ??= import("../ops/incidents.js"));
+      const names = checks.map((c) => `${c.check}(${c.reason})`).join("、");
+      await recordIncidentThrottled({
+        kind: "quality_gate_unavailable",
+        severity: "warn",
+        tenantId,
+        message: `质检闸未跑成: ${names} —— 该内容转人工复核(不是内容违规, 是检查器不可用): 《${title.slice(0, 40)}》`,
+        detail: { title: title.slice(0, 120), checks },
+      }, { key: `quality_gate_unavailable:${tenantId}` });
+    } catch { /* 告警旁路 */ }
+  })();
 }
 
 // ============ 红线校验 ============
@@ -194,11 +278,19 @@ async function checkRedlines(
   // 从 Sub-lib 2 检索相关红线规则
   const redlines = await safeSearch(tenantId, `${title} ${body.slice(0, 500)}`, "redline", 10);
 
-  if (redlines.length === 0) {
-    return { passed: true, violations: [] };
+  // 7-28 ②c: 检索**异常** ≠ 检索到 0 条。
+  //   前者是"规则库查不了"(向量库/DB 挂了) → 红线这道最高级别的闸等于没跑, 绝不能判通过;
+  //   后者是"这个租户本来就没配红线规则" → 是配置状态不是故障, 维持原样放行
+  //     (若把"空规则库"也判成不通过, 全部租户的内容会一夜之间集体转人工 —— 那是把
+  //      堵 fail-open 做成了 fail-shut, 同样是事故)。
+  if (!redlines.ok) {
+    return { passed: true, violations: [], available: false, unavailableReason: "rules_unavailable" };
+  }
+  if (redlines.results.length === 0) {
+    return { passed: true, violations: [], available: true };
   }
 
-  const rulesText = redlines.map((r) => r.content).join("\n");
+  const rulesText = redlines.results.map((r) => r.content).join("\n");
   const contentPreview = `${title}\n${body.slice(0, 2000)}`;
 
   try {
@@ -206,6 +298,9 @@ async function checkRedlines(
       tenantId,
       userId: "system",
       conversationId: "quality-redline",
+      // 7-28 ②b: 主备全挂**抛错**而不是把一句道歉文案当模型输出 ——
+      //   否则下面 match(/\{[\s\S]*\}/) 匹配不到 JSON, "AI 根本没响应"被记成"模型输出格式不对"。
+      throwOnExhausted: true,
       message: `请检查以下内容是否违反了任何红线规则。
 
 红线规则列表：
@@ -224,8 +319,14 @@ ${contentPreview}
       skillType: "quality_check",
     });
 
+    // 7-28 ②a: 这三条原来全是 `return { passed: true, violations: [] }` —— **红线是最高级别的
+    //   检查, 把"解析失败"默认成"合格"是最坏的默认值**。改成判"检查不可用"(available=false),
+    //   由 qualityCheckV2 统一转 needs_review; 对齐 kf-responder.ts:230「解析失败→转人工」的正确范式。
+    if (isAiFallbackText(response.content)) {
+      return { passed: true, violations: [], available: false, unavailableReason: "ai_unavailable" };
+    }
     const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { passed: true, violations: [] };
+    if (!jsonMatch) return { passed: true, violations: [], available: false, unavailableReason: "parse_failed" };
 
     const parsed = JSON.parse(jsonMatch[0]);
     const violations = parsed.violations || [];
@@ -233,9 +334,14 @@ ${contentPreview}
     return {
       passed: !violations.some((v: { severity: string }) => v.severity === "critical"),
       violations,
+      available: true,
     };
-  } catch {
-    return { passed: true, violations: [] };
+  } catch (err) {
+    logger.warn({ tenantId, err: errText(err) }, "7-28 红线校验不可用(转人工, ≠ 判违规)");
+    return {
+      passed: true, violations: [], available: false,
+      unavailableReason: isAiUnavailableError(err) ? "ai_unavailable" : "error",
+    };
   }
 }
 
@@ -249,11 +355,15 @@ async function checkStyleConsistency(
   // 从 Sub-lib 8 检索 IP 风格模板
   const styles = await safeSearch(tenantId, "IP风格 调性 写作风格", "style", 5);
 
-  if (styles.length === 0) {
-    return { consistency: 80, deviations: [] };
+  // 7-28 ②c: 同 checkRedlines —— 检索异常(库挂了)判"不可用"; 检索到 0 条(没配风格模板)维持原样。
+  if (!styles.ok) {
+    return { consistency: 75, deviations: [], available: false, unavailableReason: "rules_unavailable" };
+  }
+  if (styles.results.length === 0) {
+    return { consistency: 80, deviations: [], available: true };
   }
 
-  const styleDescriptions = styles.map((s) => s.content).join("\n");
+  const styleDescriptions = styles.results.map((s) => s.content).join("\n");
   const contentPreview = `${title}\n${body.slice(0, 1500)}`;
 
   try {
@@ -261,6 +371,7 @@ async function checkStyleConsistency(
       tenantId,
       userId: "system",
       conversationId: "quality-style",
+      throwOnExhausted: true, // 7-28 ②b
       message: `请检查内容与品牌 IP 风格的一致性。
 
 品牌风格定义：
@@ -278,16 +389,26 @@ consistency: 0-100 的一致性分数，80+ 为良好。`,
       skillType: "quality_check",
     });
 
+    // 7-28 ②c: 原来这两条硬返 consistency:75 —— 及格线是 50, 于是"风格检查挂了"永远变成"风格合格",
+    //   一个凭空造出来的数字替真实评估背了书。现在标 available=false, 上层不再拿它当依据。
+    if (isAiFallbackText(response.content)) {
+      return { consistency: 75, deviations: [], available: false, unavailableReason: "ai_unavailable" };
+    }
     const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { consistency: 75, deviations: [] };
+    if (!jsonMatch) return { consistency: 75, deviations: [], available: false, unavailableReason: "parse_failed" };
 
     const parsed = JSON.parse(jsonMatch[0]);
     return {
       consistency: Math.min(Math.max(parsed.consistency || 75, 0), 100),
       deviations: parsed.deviations || [],
+      available: true,
     };
-  } catch {
-    return { consistency: 75, deviations: [] };
+  } catch (err) {
+    logger.warn({ tenantId, err: errText(err) }, "7-28 风格一致性检查不可用(不再硬返 75 分冒充合格)");
+    return {
+      consistency: 75, deviations: [], available: false,
+      unavailableReason: isAiUnavailableError(err) ? "ai_unavailable" : "error",
+    };
   }
 }
 
@@ -301,17 +422,22 @@ async function checkPlatformRules(
   // 从 Sub-lib 9 检索平台规则
   const rules = await safeSearch(tenantId, `${platform} 平台规则 限制`, "platform_rule", 5);
 
-  if (rules.length === 0) {
-    return { platform, passed: true, issues: [] };
+  // 7-28 ②c: 同上 —— 检索异常判"不可用"; 0 条规则(没配)维持原样放行。
+  if (!rules.ok) {
+    return { platform, passed: true, issues: [], available: false, unavailableReason: "rules_unavailable" };
+  }
+  if (rules.results.length === 0) {
+    return { platform, passed: true, issues: [], available: true };
   }
 
-  const rulesText = rules.map((r) => r.content).join("\n");
+  const rulesText = rules.results.map((r) => r.content).join("\n");
 
   try {
     const response = await chat({
       tenantId,
       userId: "system",
       conversationId: "quality-platform",
+      throwOnExhausted: true, // 7-28 ②b
       message: `检查内容是否符合 ${platform} 平台的发布规则。
 
 平台规则：
@@ -325,13 +451,20 @@ ${body.slice(0, 1500)}
       skillType: "formatting",
     });
 
+    if (isAiFallbackText(response.content)) {
+      return { platform, passed: true, issues: [], available: false, unavailableReason: "ai_unavailable" };
+    }
     const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { platform, passed: true, issues: [] };
+    if (!jsonMatch) return { platform, passed: true, issues: [], available: false, unavailableReason: "parse_failed" };
 
     const parsed = JSON.parse(jsonMatch[0]);
-    return { platform, passed: parsed.passed !== false, issues: parsed.issues || [] };
-  } catch {
-    return { platform, passed: true, issues: [] };
+    return { platform, passed: parsed.passed !== false, issues: parsed.issues || [], available: true };
+  } catch (err) {
+    logger.warn({ tenantId, platform, err: errText(err) }, "7-28 平台规则检查不可用(转人工, ≠ 判违规)");
+    return {
+      platform, passed: true, issues: [], available: false,
+      unavailableReason: isAiUnavailableError(err) ? "ai_unavailable" : "error",
+    };
   }
 }
 
@@ -487,6 +620,9 @@ ${scorerView}
 }`,
       // 7-27: primary → 路由表 quality_check 槽(推理型 v4-pro); fallback → quality_check_fast 槽(qwen-plus)
       skillType: tier === "primary" ? "quality_check" : "quality_check_fast",
+      // 7-28 ②b: 主备全挂直接抛错。下面那行 isAiFallbackText 判据保留 —— 它防的是**别的路径**
+      //   (如上游把兜底文案原样透传)混进来, 两道判据不冲突, 少一道就少一层网。
+      throwOnExhausted: true,
     });
 
     // 7-27: chat() 主备全挂时**不抛错**, 而是返回一句兜底文案。原来这里只会得到
@@ -604,6 +740,9 @@ class QualityCheckAiUnavailable extends Error {
 /** 失败归类: timeout = AI 压根没给出内容(超时/主备全挂); degraded = 给了内容但评分不可用 */
 export function classifyQualityFailure(err: unknown): "timeout" | "degraded" {
   if (err instanceof QualityCheckAiUnavailable) return "timeout";
+  // 7-28 ②b: chat({throwOnExhausted}) 抛的"主备全挂"同属"AI 压根没给出内容"这一类,
+  //   靠类型判而不是靠错误文案里有没有 "timeout" 这个词(文案随时会改, 类型不会)。
+  if (isAiUnavailableError(err)) return "timeout";
   const msg = (err instanceof Error ? `${err.name} ${err.message}` : String(err ?? "")).toLowerCase();
   return /abort|timeout|timed out|etimedout|超时/.test(msg) ? "timeout" : "degraded";
 }
@@ -675,14 +814,33 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(Number.isFinite(v) ? v : 0, min), max);
 }
 
+const UNAVAILABLE_CHECK_LABEL: Record<string, string> = { redline: "红线校验", style: "风格一致性", platform: "平台规则" };
+const UNAVAILABLE_REASON_LABEL: Record<string, string> = {
+  rules_unavailable: "规则库查不了",
+  ai_unavailable: "AI 没响应",
+  parse_failed: "AI 输出解析不出来",
+  error: "检查异常",
+  unknown: "原因未知",
+};
+
 function generateFeedback(
   sixDim: SixDimResult,
   redline: QualityCheckV2Result["redlineCheck"],
   style: QualityCheckV2Result["styleCheck"],
   platform: QualityCheckV2Result["platformCheck"] | null,
-  htmlIntegrity?: QualityCheckV2Result["htmlIntegrity"]
+  htmlIntegrity?: QualityCheckV2Result["htmlIntegrity"],
+  unavailableChecks?: QualityCheckV2Result["unavailableChecks"],
 ): string {
   const parts: string[] = [];
+
+  // 7-28: "没检查成"排在最前, 且措辞必须与"违规"泾渭分明 —— 运营看到这句要知道
+  //   「内容本身没查出问题, 是我们的检查器当时不可用」, 而不是去删稿。
+  if (unavailableChecks && unavailableChecks.length > 0) {
+    const names = unavailableChecks
+      .map((u) => `${UNAVAILABLE_CHECK_LABEL[u.check] ?? u.check}(${UNAVAILABLE_REASON_LABEL[u.reason] ?? u.reason})`)
+      .join("、");
+    parts.push(`⚠️ 以下检查未能完成: ${names} —— 这不是内容违规, 是检查器当时不可用, 已转人工复核`);
+  }
 
   if (sixDim.totalScore >= 90) parts.push("内容质量优秀");
   else if (sixDim.passed) parts.push("内容质量达到 80 分发布线");
@@ -716,15 +874,26 @@ function generateFeedback(
 
 // ============ 工具 ============
 
+/**
+ * 7-28 ②c: 知识库检索 —— **失败态必须能被上层区分**。
+ *
+ * 旧版异常时 `return []`, 于是"检索挂了"和"这个租户没配规则"长得一模一样。
+ * 后果是 7-25「三道闸同源」的新同构点: semanticSearch 一挂, 红线 + 风格 + 平台
+ * 三道检查同时拿到空数组 → 三个都走"无规则可查 → passed" → 一次故障同时打穿三道闸。
+ * 三道闸只要都读同一份数据源, 就不是三道闸, 是一道闸抄了三遍(CLAUDE.md 里的原话)。
+ *
+ * 现在返回 { ok, results }: ok=false 明确是"查不了", 调用方据此判"不可用"而不是"通过"。
+ */
 async function safeSearch(
   tenantId: string,
   query: string,
   category: VectorCategory,
   limit: number
-) {
+): Promise<{ ok: boolean; results: Awaited<ReturnType<typeof semanticSearch>> }> {
   try {
-    return await semanticSearch({ tenantId, query, category, limit, minScore: 0.1 });
-  } catch {
-    return [];
+    return { ok: true, results: await semanticSearch({ tenantId, query, category, limit, minScore: 0.1 }) };
+  } catch (err) {
+    logger.warn({ tenantId, category, err: errText(err) }, "7-28 知识库检索失败 → 该道检查判「不可用」(不再当作无规则放行)");
+    return { ok: false, results: [] };
   }
 }

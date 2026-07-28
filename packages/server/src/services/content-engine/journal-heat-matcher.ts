@@ -14,6 +14,8 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals, keywords as keywordsTable } from "../../models/schema.js";
 import { eq, and, desc, isNotNull, sql } from "drizzle-orm";
+// 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 预加载恒空 → 热点-期刊匹配整条链恒空
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import type { HotKeywordItem, RawHotItem } from "../crawler/types.js";
 
 // ============ 类型定义 ============
@@ -151,11 +153,11 @@ export async function matchHeatWithJournals(
 
   const results: HeatMatchResult[] = [];
 
-  // 预加载租户的所有期刊
+  // 预加载租户可见的所有期刊(共享池 + 自建)
   const allJournals = await db
     .select()
     .from(journals)
-    .where(eq(journals.tenantId, tenantId));
+    .where(journalVisibleTo(tenantId));
 
   logger.info(
     { tenantId, totalJournals: allJournals.length, totalKeywords: hotKeywords.length },

@@ -277,6 +277,19 @@ export async function enrichJournal(
     failedFields.push("wanfang");
     errors["wanfang"] = err instanceof Error ? err.message : String(err);
   }
+  // 7-28 (③d) 为什么这里**不**顺手回写 catalogs（"定义裂缝刊"的成因，评估后决定不做）:
+  //   ① 病已经被 journal_kind 生成列治住 —— 只有 cscd_level/pku_core_level 而 catalogs 为空的刊
+  //      现在稳定归类为 'cn'，国内槽位可见、可信门槛也认它，裂缝本身不再致病（这条因此降级）。
+  //   ② catalogs 非空即"有目录"，merge 进去等于用**动态抓取值**改写一个原本由静态权威目录
+  //      (B.4-1 北大核心总览 / CSCD 目录)灌进来的列；而 catalogs 直接驱动对客文案的身份徽章
+  //      (renderDomesticCredentialBlock / article-skill idTags / title-generator idTags)——
+  //      写错一个 'pku-core' 就是对客户宣称"这是北大核心"，属信任事故，不是数据瑕疵。
+  //   ③ 供数源当前就是坏的: backlog-B —— wanfang-fetcher 的 detail URL 仍是过时的
+  //      `/Periodical/Detail/{id}`（现网是 `/Periodical/{id}`），orchestrator 这条万方详情链路
+  //      基本取不到数据。从一个已知失效的源回写权威列，正是 7-25 那次事故的配方
+  //      （"一次抓取失败"被升级成"永久数据污染 + 校验体系失效"）。
+  //   要做的话前置条件: 先修 backlog-B 的 URL、用真实刊逐字段验证 cscdLevelDynamic/pkuCoreDynamic
+  //   的准确率，再走"只追加不删除 + 只在本轮真写了等级列时才追加对应 tag"的加法式 merge。
   if (wanfangData?.cscdLevelDynamic && !journal.cscdLevel) {
     updates.cscdLevel = wanfangData.cscdLevelDynamic;
     successFields.push("cscd_level (wanfang dynamic)");

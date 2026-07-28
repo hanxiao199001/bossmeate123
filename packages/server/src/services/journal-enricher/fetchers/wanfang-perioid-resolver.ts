@@ -24,6 +24,7 @@
  */
 import { logger } from "../../../config/logger.js";
 import { fetchWanfangHtml } from "./wanfang-fetcher.js";
+import { isDomesticKind, toJournalKind } from "../../journals/journal-kind.js";
 
 /** med 子域期刊搜索入口（SSR）。待桌面验证；可被 env WANFANG_SEARCH_BASE 覆盖便于修补。 */
 const WANFANG_SEARCH_BASE =
@@ -187,15 +188,15 @@ export function getExistingPerioId(metadata: unknown): string | null {
 
 /**
  * 纯函数选池：从行集里挑"可自动富化的国内刊"。
- * 条件：①国内刊信号（catalogs 非空 OR cscdLevel OR pkuCoreLevel）
+ * 条件：①国内刊（journal_kind 落 cn/both，见 services/journals/journal-kind.ts）
  *      ②metadata.wanfang.perioId 为空（断点续跑：已解析过的跳过）
  *      ③有可搜索的中文刊名（≥3 字，万方按中文名/ISSN 搜）
  */
 export function selectWanfangCandidates(rows: WanfangCandidateRow[]): WanfangCandidateRow[] {
   return rows.filter((r) => {
-    const hasCatalogs = Array.isArray(r.catalogs) && r.catalogs.length > 0;
-    const isDomestic = hasCatalogs || !!r.cscdLevel || !!r.pkuCoreLevel;
-    if (!isDomestic) return false;
+    // 7-28 (③b): 国内刊判定收口到 journal_kind 单一真相源(原来这里手写了第 2 套启发式)。
+    //   kind='cn'(纯国内) 或 'both'(骑墙刊, 有国际指标又进中文目录) 都该去万方解析 perioId。
+    if (!isDomesticKind(toJournalKind(r))) return false;
     if (getExistingPerioId(r.metadata)) return false; // 已有 perioId，跳过
     if (!r.name || r.name.trim().length < 3) return false; // 刊名太短没法搜
     return true;

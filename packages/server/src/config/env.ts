@@ -129,6 +129,12 @@ const envSchema = z.object({
   // 7-14 每日生成硬上限: 账号驱动保底定向生成的总篇数天花板, 防号多时 LLM 调用失控。
   DAILY_GEN_HARD_CAP: z.coerce.number().int().min(1).default(40),
   DRAFT_PUSH_CRON_HOUR: z.coerce.number().min(0).max(23).default(8), // 每日几点(BJ)推
+  // 7-28 ①c 缺口自动补救: 两轮保底后仍有号没到下限 → 立刻用"放宽时效窗口"的老内容再补一轮。
+  //   只放宽**时效**(7 天 → 下面这个天数), 绝不放宽对口/质检/红线 —— 那是本轮要堵的 fail-open,
+  //   自己不能反向开口子。默认开; 出事想立刻停掉补救就设 false(生成/分发主链路不受影响)。
+  DRAFT_SHORTFALL_REMEDY_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  //   补救轮的可发池回看天数(必须 > 主轮的 7 天才有意义; 太长会推很旧的文章, 21 天 = 三周内)
+  DRAFT_SHORTFALL_REMEDY_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(21),
 
   // 7-06 ① 公众号效果数据回流 (services/metrics/wechat-stats-collector.ts)
   WECHAT_STATS_CRON_HOUR: z.coerce.number().min(0).max(23).default(9), // 每日几点(BJ)拉"昨日"getarticlesummary (T+1)

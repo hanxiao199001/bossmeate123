@@ -16,6 +16,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
 import { eq, isNull, desc, and, or, ilike, sql } from "drizzle-orm";
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import {
   fetchJournalCoverFromLetPub,
 } from "./journal-image-crawler.js";
@@ -82,7 +83,8 @@ export async function prefetchJournalCovers(
       .from(journals)
       .where(
         and(
-          eq(journals.tenantId, tenantId),
+          // 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 封面预取恒空(文章配图全走兜底)
+          journalVisibleTo(tenantId),
           eq(journals.status, "active"),
           or(
             ilike(journals.name, `%${jName}%`),
@@ -114,7 +116,8 @@ export async function prefetchJournalCovers(
       .from(journals)
       .where(
         and(
-          eq(journals.tenantId, tenantId),
+          // 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → 封面预取恒空(文章配图全走兜底)
+          journalVisibleTo(tenantId),
           eq(journals.status, "active"),
           or(
             ilike(journals.discipline, `%${topic}%`),

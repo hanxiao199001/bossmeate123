@@ -13,6 +13,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals, dailyRecommendations, tenants, keywordHistory } from "../../models/schema.js";
 import { eq, and, desc, or, ilike } from "drizzle-orm";
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { getTrendReport, type TrendLabel } from "../agents/keyword-trend.js";
 import { chat } from "../ai/chat-service.js";
@@ -264,13 +265,17 @@ export async function generateDailyRecommendations(
     const categoryCode = topic.category || inferCategoryFromKeyword(topic.keyword) || "general";
     const template = DISCIPLINE_TEMPLATES[categoryCode] || DEFAULT_TEMPLATE;
 
-    // 先查本租户期刊，如果没有则查全局期刊
-    let matchedJournals = await db
+    // 7-28 (④) 两头都修:
+    //   ① 第一轮原来是 `eq(journals.tenantId, tenantId)` 严格相等 —— 共享池 8743 本刊的
+    //      tenant_id 是 NULL, `NULL = 'uuid'` 恒不成立 → 第一轮**恒空**, 每次都掉进 fallback;
+    //   ② fallback 是**反向越界**: 完全不带 tenant 条件查全库, 把别的租户的自建刊也捞出来推给你。
+    //   一条 journalVisibleTo(共享池 + 本租户自建刊)同时治好两头, fallback 随之取消。
+    const matchedJournals = await db
       .select()
       .from(journals)
       .where(
         and(
-          eq(journals.tenantId, tenantId),
+          journalVisibleTo(tenantId),
           or(
             ilike(journals.discipline, `%${discipline}%`),
             ilike(journals.name, `%${topic.keyword}%`)
@@ -279,21 +284,6 @@ export async function generateDailyRecommendations(
       )
       .orderBy(desc(journals.impactFactor))
       .limit(3);
-
-    if (matchedJournals.length === 0) {
-      // Fallback: 查全局期刊（跨租户）
-      matchedJournals = await db
-        .select()
-        .from(journals)
-        .where(
-          or(
-            ilike(journals.discipline, `%${discipline}%`),
-            ilike(journals.name, `%${topic.keyword}%`)
-          )
-        )
-        .orderBy(desc(journals.impactFactor))
-        .limit(3);
-    }
 
     const heatChange =
       topic.score7d > 0

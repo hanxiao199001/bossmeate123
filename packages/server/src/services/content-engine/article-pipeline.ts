@@ -12,7 +12,7 @@
 import { logger } from "../../config/logger.js";
 import { chat } from "../ai/chat-service.js";
 import { retrieveForArticleV2 } from "../knowledge/rag-retriever-v2.js";
-import { qualityCheckV2 } from "./quality-check-v2.js";
+import { qualityCheckV2, QUALITY_GATE_UNAVAILABLE_REASON } from "./quality-check-v2.js";
 import { runArticleQualityPasses, qualityPipelineMeta, type QualityPipelineResult } from "./quality-pipeline.js";
 import { buildHookPromptBlock } from "../../data/hook-patterns.js";
 import { buildClicheBanPrompt } from "../../data/ai-cliche.js";
@@ -140,6 +140,14 @@ async function runSingleArticleVariant(
       ragSources: ragContext.sources,
       seoKeywords: outline.seoKeywords,
       pipeline: "article-pipeline-v2",
+      // 7-28 ②a: 哪几道闸没跑成, 无论过没过都留痕(排查用)
+      ...(finalQuality.unavailableChecks?.length ? { unavailableChecks: finalQuality.unavailableChecks } : {}),
+      // 因"闸没检查成"而没过 → 原因必须写清: draft-distributor 靠 needsReviewReason 区分
+      //   "红线剔除"与"排队尾"。写成红线类会把只是检查器挂了的内容永久打死(7-27 事故复刻);
+      //   不写则退化成普通"质量不过", 丢掉"该复核什么"的信息。
+      ...(!finalQuality.overallPassed && finalQuality.unavailableChecks?.length
+        ? { needsReview: true, needsReviewReason: QUALITY_GATE_UNAVAILABLE_REASON }
+        : {}),
       // P0四件套: 六维分/重写轮数/压缩/去AI腔 全量落 metadata, 管理端可见低分文章
       ...(qp ? qualityPipelineMeta(qp) : {}),
       variantIndex,

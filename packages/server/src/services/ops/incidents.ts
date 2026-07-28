@@ -28,7 +28,18 @@ export type IncidentKind =
   | "quality_check_degraded"    // 六维质检的分是**降级模型**给的(分数可用, 但可信度待审计)
   | "quality_check_unavailable" // 主模型 + 降级模型都失败 → 这篇**没评上分**(≠ 评了 0 分)
   | "output_unhealthy"          // 出稿健康闸拦下明显废稿(占位文/截断/复读/过短)
-  | "llm_cost_cap";             // LLM 日花费/调用硬上限熔断(billing/llm-guard.ts, 已停止生成类调用)
+  | "llm_cost_cap"              // LLM 日花费/调用硬上限熔断(billing/llm-guard.ts, 已停止生成类调用)
+  // ---- 7-28 ①目标闭环: 17 个"跳过点"此前只有一行 logger, 没人看 = 等于不存在 ----
+  //   命名口径: 说清"哪一步没达成", 而不是"哪个函数返回了 null"。简报直接照着 KIND_LABEL 念。
+  | "low_output"                // 今日产出低于目标(未到 60%) —— 零产出的"温水"版本, 原来完全静默
+  | "no_topic_available"        // 选不出可用新选题(候选池枯竭/全在冷却)
+  | "no_journal_available"      // 某定位+学科选不出任何刊 → 该名额直接空转
+  | "journal_pool_exhausted"    // 选到的是回头刊(破 15 天冷却)或不对口刊 = 该学科刊快用完了
+  | "candidate_skipped"         // 候选被学科配额/期刊限流大量跳过, 导致未达目标(旧按学科链路)
+  | "generation_failed"         // 单篇生成失败(排产环节, 非质检)
+  | "draft_shortfall"           // 公众号未达每日保底(草稿分发缺口)
+  | "draft_remedy_failed"       // 缺口自动补救本身失败
+  | "quality_gate_unavailable"; // 质检闸"没能跑成"(规则检索/红线解析/一致性检查异常) ≠ 内容违规
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -44,6 +55,15 @@ export const KIND_LABEL: Record<string, string> = {
   quality_check_unavailable: "六维质检不可用(这篇没评上分, 转人工复核)",
   output_unhealthy: "出稿健康闸拦截(占位文/截断/复读等废稿)",
   llm_cost_cap: "LLM 日上限熔断(已停止内容生成, 客服不受影响)",
+  low_output: "今日产出低于目标(没停产, 但明显不够)",
+  no_topic_available: "选不出可用选题(候选词枯竭/全在冷却)",
+  no_journal_available: "选不出可用期刊(该定位+学科名额空转)",
+  journal_pool_exhausted: "期刊池告急(只能用回头刊/不对口刊)",
+  candidate_skipped: "候选被配额/限流大量跳过(没凑够篇数)",
+  generation_failed: "单篇生成失败(排产环节)",
+  draft_shortfall: "公众号未达每日保底(草稿分发缺口)",
+  draft_remedy_failed: "草稿缺口自动补救失败",
+  quality_gate_unavailable: "质检闸不可用(没检查成, 已转人工; ≠ 内容违规)",
 };
 
 export interface RecordIncidentInput {

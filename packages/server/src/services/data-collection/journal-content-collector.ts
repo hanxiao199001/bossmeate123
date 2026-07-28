@@ -85,6 +85,8 @@ export interface JournalInfo {
   catalogType?: string | null;               // "sci" | "pku-core" | "cssci" | "cscd" 等
   catalogs?: string[];                       // 所属核心目录列表 ["cssci","pku-core","cscd"]
   coreLevel?: string | null;                 // "核心" | "扩展" | "来源"
+  cscdLevel?: string | null;                 // "核心库" | "扩展库"（B.4-1 静态目录，journal_kind 判定要用）
+  pkuCoreLevel?: string | null;              // "北大核心"（同上）
   frequency?: string | null;                 // "月刊" | "双月刊" | "季刊"
   compositeIF?: number | null;               // 复合影响因子（知网）
   comprehensiveIF?: number | null;           // 综合影响因子（知网）
@@ -587,6 +589,10 @@ export async function collectJournalContent(params: {
       catalogType,
       catalogs: catalogs.length > 0 ? catalogs : undefined,
       coreLevel,
+      // 7-28: CSCD/北大核心等级透传 —— 它们是"定义裂缝刊"的唯一国内信号(enricher 只写这两列、
+      //   不回写 catalogs), 不透传就会让 article-skill 的 journal_kind 判定看不见, 按国外刊写。
+      cscdLevel: (journal as any).cscdLevel ?? null,
+      pkuCoreLevel: (journal as any).pkuCoreLevel ?? null,
       frequency,
       compositeIF,
       comprehensiveIF,

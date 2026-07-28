@@ -230,6 +230,13 @@ export class QualityCheckerAgent extends BaseAgent {
   }
 
   private decide(qc: QualityCheckV2Result): DecisionStatus {
+    // 7-28 ②a: **"检查不可用" ≠ "违规"**。红线校验没跑成(规则库查不了/AI 没响应/解析失败)时
+    //   qc.redlineCheck.available=false 而 passed 仍是 true —— 绝不能让它掉进下面的 rejected 分支
+    //   (rejected → status=draft, 内容等于被判死刑; 而真相只是我们的检查器当时挂了)。
+    //   正确处置与 7-27「未评上分」一致: 转人工复核。
+    if (qc.unavailableChecks?.length) {
+      return "reviewing";
+    }
     // 红线致命违规 → 直接打回
     const criticalRedline = qc.redlineCheck.violations.some(
       (v) => v.severity === "critical"

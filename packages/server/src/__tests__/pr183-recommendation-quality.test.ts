@@ -64,7 +64,9 @@ describe("PR #183: daily-cron 批内期刊唯一 (#35)", () => {
 
   it("daily-cron: 选取循环含 usedJournalIds.has 唯一守卫", async () => {
     const src = await readSrc(CRON);
-    expect(src).toMatch(/if \(usedJournalIds\.has\(r\.id\)\) continue/);
+    // 7-28 ①a: 守卫本体不变, 只是 continue 前多了一句跳过计数(收尾汇总成 candidate_skipped 告警)。
+    //   断言放宽到"条件 + 跳过", 不再钉死 `) continue` 的字面写法。
+    expect(src).toMatch(/if \(usedJournalIds\.has\(r\.id\)\)[^\n]*continue/);
   });
 
   it("daily-cron: 兜底不再强塞 recs[0] (改 find 未用过的)", async () => {

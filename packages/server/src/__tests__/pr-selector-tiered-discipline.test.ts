@@ -24,21 +24,48 @@ describe("pickScopedFreshJournal 分层收窄", () => {
     expect(src).toMatch(/discOrGeneric\s*=\s*sql`\([\s\S]*?disciplineCode[\s\S]*?=\s*\$\{discipline\}\s*OR[\s\S]*?GENERIC_DISCIPLINE_CODE/);
   });
 
-  it("① 纯对口刊(discExact)优先: 前两层用 discExact, 命中即返回, 不掺 generic", async () => {
+  // 7-28 (#1) 新契约: 新鲜(fresh)优先于回头(LRU)。旧层②(verified+discExact 的 LRU **无 fresh**)
+  // 只要池非空必短路 → 小学科 verified 池新鲜耗尽后天天 LRU 回头同几本, 15 天冷却形同虚设。
+  it("①② 已核实+新鲜两层(对口→generic)命中即返回, 且两层都带 fresh", async () => {
     const src = await readSrc();
-    // byExact 用 discExact 两层, 且 if(byExact) return 提前返回
-    expect(src).toMatch(/const byExact\s*=[\s\S]*?discExact[\s\S]*?discExact[\s\S]*?;/);
-    expect(src).toMatch(/if\s*\(byExact\)\s*return byExact/);
+    expect(src).toMatch(/const freshVerified\s*=\s*\(await pick\(\[active,\s*verified,\s*sc,\s*discExact,\s*fresh\][\s\S]*?pick\(\[active,\s*verified,\s*sc,\s*discOrGeneric,\s*fresh\]/);
+    expect(src).toMatch(/if\s*\(freshVerified\)\s*return freshVerified/);
   });
 
-  it("③④ 学科枯竭才回退 generic, 且日志标'因学科枯竭回退'", async () => {
+  it("🚫 回归锁: 不允许再出现'verified+discExact 无 fresh 的 LRU'排在未核实新鲜层之前(旧层②小池死循环)", async () => {
     const src = await readSrc();
-    expect(src).toMatch(/const byGeneric\s*=[\s\S]*?discOrGeneric/);
-    expect(src).toMatch(/目标学科对口刊已枯竭.*回退综合刊|回退综合刊\(generic\)兜底/);
+    const fnStart = src.indexOf("async function pickScopedFreshJournal");
+    const fnBody = src.slice(fnStart, src.indexOf("runDailyContentByType", fnStart));
+    // LRU 回头层(lruVerified)必须出现在未核实新鲜层(freshUnverified)之后 —— 新鲜优先于回头
+    expect(fnBody.indexOf("freshVerified")).toBeGreaterThan(-1);
+    expect(fnBody.indexOf("freshUnverified")).toBeGreaterThan(-1);
+    expect(fnBody.indexOf("lruVerified")).toBeGreaterThan(fnBody.indexOf("freshUnverified"));
+    expect(fnBody.indexOf("freshUnverified")).toBeGreaterThan(fnBody.indexOf("freshVerified"));
   });
 
-  it("⑤⑥ 保产量红线: 最后两层仅 scope(丢 disc), 综合刊也枯竭时宁不对口不空名额", async () => {
+  it("③④ 未核实新鲜层受日配额闸(UNVERIFIED_DAILY_QUOTA, env 可配默认 2), 内容走 needs_review 复核", async () => {
     const src = await readSrc();
+    expect(src).toMatch(/UNVERIFIED_DAILY_QUOTA\s*>\s*0\s*&&\s*\(await unverifiedUsedToday\(tenantId\)\)\s*<\s*UNVERIFIED_DAILY_QUOTA/);
+    expect(src).toMatch(/process\.env\.UNVERIFIED_DAILY_QUOTA/);
+    expect(src).toMatch(/Number\.isFinite\(n\) && n >= 0 \? Math\.floor\(n\) : 2/); // 默认 2
+    expect(src).toMatch(/日配额内放行未核实新鲜刊/);
+    // 配额计数: 当日 journal_usage×journals 联查, 与 batch-worker isUnverifiedJournal 同口径
+    expect(src).toMatch(/date_trunc\('day', now\(\)\)/);
+    // 7-28 (③c): 门槛改**分体系**(国内刊看目录成员资格 / 国际刊仍 conf>=70), 口径不再内联写死在
+    //   这条 SQL 里, 而是取自 journal-sql.ts 的 verifiedJournalCondition() —— 断言改为锁"同源"。
+    expect(src).toMatch(/sql`NOT \$\{verifiedJournalCondition\(\)\}`/);
+    expect(src).toMatch(/import \{ journalScopeCondition, verifiedJournalCondition \}/);
+  });
+
+  it("⑤⑥ 已核实 LRU 回头刊降为最后手段(在所有新鲜层之后), 带日志", async () => {
+    const src = await readSrc();
+    expect(src).toMatch(/const lruVerified\s*=\s*\(await pick\(\[active,\s*verified,\s*sc,\s*discExact\],\s*lru\)[\s\S]*?pick\(\[active,\s*verified,\s*sc,\s*discOrGeneric\],\s*lru\)/);
+    expect(src).toMatch(/回退已核实 LRU 回头刊/);
+  });
+
+  it("⑦-⑩ 保产量红线 floor: 综合池兜底 + 最后仅 scope(丢 disc), 宁不对口不空名额", async () => {
+    const src = await readSrc();
+    expect(src).toMatch(/const byGeneric\s*=\s*\(await pick\(\[active,\s*sc,\s*discOrGeneric,\s*fresh\]/);
     // byScope 用 [active, sc, fresh] / [active, sc] — 不含 disc
     expect(src).toMatch(/const byScope\s*=\s*\(await pick\(\[active,\s*sc,\s*fresh\]/);
     expect(src).toMatch(/学科\+综合刊池均枯竭.*仅按 scope 兜底|仅按 scope 兜底\(内容可能不对口\)/);
@@ -48,10 +75,10 @@ describe("pickScopedFreshJournal 分层收窄", () => {
     const src = await readSrc();
     // 抽取 pickScopedFreshJournal 函数体, 确认没有一层丢掉 sc
     const fnStart = src.indexOf("async function pickScopedFreshJournal");
-    const fnBody = src.slice(fnStart, fnStart + 3000);
-    // 所有 pick([...]) 调用都应含 sc
+    const fnBody = src.slice(fnStart, src.indexOf("runDailyContentByType", fnStart));
+    // 所有 pick([...]) 调用都应含 sc (新层序共 10 层)
     const pickCalls = fnBody.match(/pick\(\[[^\]]*\]/g) || [];
-    expect(pickCalls.length).toBeGreaterThanOrEqual(6);
+    expect(pickCalls.length).toBeGreaterThanOrEqual(10);
     for (const c of pickCalls) expect(c).toContain("sc");
   });
 });

@@ -46,6 +46,18 @@ export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsiste
  */
 export const UNSCORED_REASONS = new Set(["quality_check_unavailable", "sixdim_degraded"]);
 
+/**
+ * 7-28 ②d: "闸没检查成"的 reason(batch-worker 的六维流水线异常 / 标题-正文一致性检查异常,
+ * quality-check-v2 的红线规则检索或解析失败)。与 UNSCORED_REASONS 同一套处理逻辑:
+ *   进池、排队尾、绝不当红线剔除 —— **"我们的检查器挂了" ≠ "内容有问题"**(7-27 血的教训)。
+ * 单列一个常量而不是塞进 UNSCORED_REASONS: 那个集合的语义是"没评上分", 混进来会让日后
+ * 读代码的人以为质检打了分。两者在排序时取并集(见 TAIL_REASONS)。
+ */
+export const GATE_UNAVAILABLE_REASONS = new Set(["quality_gate_unavailable"]);
+
+/** 排队尾的全部 reason: 没评上分 + 闸没检查成。有分/检查全过的内容优先占名额。 */
+export const TAIL_REASONS = new Set([...UNSCORED_REASONS, ...GATE_UNAVAILABLE_REASONS]);
+
 /** 纯函数: 该 status/待审原因能否进可发池(红线剔除, 其余包括"未评上分"放行) */
 export function passesReasonGate(status: string | null, needsReviewReason: string | null | undefined): boolean {
   if (status === "generated") return true;
@@ -71,6 +83,60 @@ export interface DraftDistributeReport {
   capPerAccount?: number;
   /** 7-14: 两轮保底后仍未达下限的号 (内容不足信号, 明确报告不静默) */
   shortfalls?: Array<{ accountId: string; accountName: string | null; assigned: number; target: number }>;
+  /** 7-28 ①c: 缺口自动补救的执行情况 (没触发时为 undefined) */
+  remedy?: {
+    attempted: boolean;
+    /** 未触发的原因: disabled / no_shortfall / no_extra_content */
+    skippedReason?: string;
+    windowDays?: number;
+    /** 补救轮实际推成功的条数 */
+    pushed?: number;
+    /** 补救前后的缺口号数 */
+    shortfallsBefore?: number;
+    shortfallsAfter?: number;
+    error?: string;
+  };
+}
+
+// ============ 7-28 ①c: 缺口补救 ============
+//
+// 决策记录(为什么是"自动补救"而不是"只告警"), 见交接报告:
+//   触发条件 = 两轮保底跑完、**实际推送完成后**仍有号没到 target。
+//   补救动作 = 只放宽【时效窗口】(7 天 → DRAFT_SHORTFALL_REMEDY_WINDOW_DAYS, 默认 21 天),
+//              把三周内还没被推过的老内容拿出来补给缺口号。
+//   刻意**不**放宽: 领域对口(相邻集之外宁缺, 7-14 既有产品决策)、六维质检、红线/编造/健康闸、
+//              一篇只推一个号。—— 这一轮任务的另一半就是在堵 fail-open, 补救逻辑自己不能反向开口子。
+//   防循环: ① 补救只跑一轮(内部函数无递归, 由 `remedy.attempted` 一次性标记);
+//           ② 天然幂等 —— 主轮推成功的内容立刻落 content_publish_log, 补救轮 buildFreshPool
+//              会把它们排除, 同一篇绝不会被推两次(重跑整个 cron 也一样);
+//           ③ env 开关 DRAFT_SHORTFALL_REMEDY_ENABLED(默认 true), 出事一秒关掉;
+//           ④ 补救本身抛错 → 落 draft_remedy_failed incident, 不影响主轮已推的结果。
+
+/** 记一条告警(旁路, 绝不抛错 —— 告警挂了不能反过来搞挂分发) */
+function reportDistIncident(input: {
+  kind: string; severity: "error" | "warn"; tenantId: string; message: string; detail: Record<string, unknown>;
+}): void {
+  void import("../ops/incidents.js")
+    .then((m) => m.recordIncident({
+      kind: input.kind, severity: input.severity, tenantId: input.tenantId,
+      message: input.message.slice(0, 500), detail: input.detail,
+    }))
+    .catch(() => { /* 告警旁路, 不阻塞分发 */ });
+}
+
+/**
+ * 今日各号已落 content_publish_log 的条数(北京时间日切)。
+ * 与 smart-assign 的 preload 同一口径 —— 缺口判定必须和分配时用的尺子一致, 否则会自相矛盾。
+ */
+async function countTodayLoad(tenantId: string): Promise<Map<string, number>> {
+  const bj = new Date(Date.now() + 8 * 3600_000); bj.setUTCHours(0, 0, 0, 0);
+  const since = new Date(bj.getTime() - 8 * 3600_000);
+  const rows = await db
+    .select({ accountId: contentPublishLog.accountId, n: sql<string>`COUNT(*)` })
+    .from(contentPublishLog)
+    .where(and(eq(contentPublishLog.tenantId, tenantId), gte(contentPublishLog.createdAt, since)))
+    .groupBy(contentPublishLog.accountId);
+  return new Map(rows.map((r) => [r.accountId, Number(r.n)]));
 }
 
 /** 单租户跑一轮 */
@@ -95,15 +161,18 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     report.skippedReason = "无启用中的公众号";
     return report;
   }
-  const nameById = new Map(accounts.map((a) => [a.id, a.accountName]));
 
-  // 2. 可发池: 近 7 天、article
+  // 2. 可发池构建 —— 7-28 抽成内部函数(唯一改动: 时效窗口 windowDays 变成参数)。
+  //    补救轮(①c)要用同一套闸门、同一套排序、只把回看窗口放宽, 复制一份判据 = 必然漂移
+  //    (fallback-messages.ts 注释里说的"检查器与被检查方各写一套判据"的经典失效)。
+  const buildFreshPool = async (windowDays: number): Promise<Array<{ id: string; title: string | null }>> => {
+  // 可发池: 近 N 天、article
   //    7-13 修复"草稿箱饿死": 草稿箱本身就是运营人工筛选台(推进去还要人工挑+手动发, 非自动群发),
   //    所以"质检没过但不危险"的文章应带分数流进草稿箱让运营挑 —— 质检门不该在草稿箱前二次拦死。
   //    纳入: status=generated(已过/人工采用) + needs_review 里"六维偏低"这类质量问题;
   //    仍排除的红线类(标题数据造假 title_data_fabricated / 标题正文矛盾 title_body_inconsistent)——
   //    信任事故不进草稿箱, 永远留人工. 判据读 metadata.needsReviewReason。
-  const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 3600_000);
+  const since = new Date(Date.now() - windowDays * 24 * 3600_000);
   // 剔除: 红线两类(信任事故)
   // 7-25 补 body_fabrication: 它是下方硬闸自己打的标(:112), 却不在红线名单里 —— 被拦下标记过的内容
   //   下一轮又能进池、再被同一道闸拦一次(白跑 + 日志刷屏)。编造是数据造假红线, 与标题编造同级。
@@ -172,7 +241,9 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       continue;
     }
     const reason = (c.metadata as { needsReviewReason?: string } | null)?.needsReviewReason;
-    if (c.status === "needs_review" && reason && UNSCORED_REASONS.has(reason)) unscoredIds.add(c.id);
+    // 7-28 ②d: 把"闸没检查成"(quality_gate_unavailable)也归进队尾组 —— 与"没评上分"同一逻辑:
+    //   不剔除(内容本身没查出问题), 但让检查全过的内容先占名额。
+    if (c.status === "needs_review" && reason && TAIL_REASONS.has(reason)) unscoredIds.add(c.id);
     pool.push({ id: c.id, title: c.title });
   }
   // 7-27: 有分的排前面, 没评上分的垫底(stable, 组内仍保持 createdAt desc)。
@@ -186,12 +257,11 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     pool.push(...scored, ...unscored);
     logger.info({ tenantId, scored: scored.length, unscored: unscored.length }, "7-27 可发池: 未评上分的内容排队尾(有分的优先)");
   }
-  if (pool.length === 0) {
-    report.skippedReason = "可发池为空";
-    return report;
-  }
+  if (pool.length === 0) return [];
 
-  // 3. 排除"已推过草稿/已发布"的文章 — 按 contentId 整篇排除 (一篇只推一个号, 推过任何号就不再推)
+  // 排除"已推过草稿/已发布"的文章 — 按 contentId 整篇排除 (一篇只推一个号, 推过任何号就不再推)。
+  // 7-28: 这一步同时是补救轮的**幂等保证** —— 主轮刚推成功的内容已落 content_publish_log,
+  //   补救轮在这里被自动排除, 同一篇绝不会推两次(整个 cron 重跑也一样)。
   const poolIds = pool.map((p) => p.id);
   const logged = await db
     .select({ contentId: contentPublishLog.contentId })
@@ -202,84 +272,183 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       inArray(contentPublishLog.status, ["success", "draft", "draft_pushed", "dispatched"]),
     ));
   const usedIds = new Set(logged.map((r) => r.contentId));
-  const fresh = pool.filter((p) => !usedIds.has(p.id));
-  report.poolSize = fresh.length;
-  if (fresh.length === 0) {
-    report.skippedReason = "可发池文章均已推过/发过";
-    return report;
-  }
-  const titleById = new Map(fresh.map((p) => [p.id, p.title]));
+  return pool.filter((p) => !usedIds.has(p.id));
+  }; // ← buildFreshPool 结束
 
-  // 4. 领域/定位匹配 (复用 smart-assign; dailyCap=每号 top-N; 内部已按质检分排序=top 候选先占坑)
-  const { pairs, unmatched, shortfalls } = await computeSmartPairs({
-    tenantId,
-    articleIds: fresh.map((p) => p.id),
-    accountIds: accounts.map((a) => a.id),
-    dailyCap: perAccount, // 上限
-    target,               // 7-14 保底下限: 两轮保底填到该数
-  });
-  // 7-14: 未达保底下限的号 — 明确报告(带号名), 不静默。内容不足时供运营/运维决定提量或补内容。
-  if (shortfalls && shortfalls.length > 0) {
-    report.shortfalls = shortfalls.map((s) => ({ ...s, accountName: nameById.get(s.accountId) ?? null }));
-    logger.warn(
-      { tenantId, target, cap: perAccount, pool: fresh.length, accounts: accounts.length, shortfalls: report.shortfalls },
-      `⚠️ 草稿分发: ${shortfalls.length}/${accounts.length} 个号未达保底(${target}篇/天) — 内容不足, 需提高生成量或补内容`,
-    );
-  }
-  if (pairs.length === 0) {
-    report.skippedReason = `无可配对内容 (unmatched=${unmatched.length})`;
-    return report;
-  }
-
-  // 5. 逐对推草稿 — 强制 draft_only; 单号失败(token 失效/API 挂)只记日志跳过, 不阻塞其他号
+  // 3. 逐对推草稿 — 强制 draft_only; 单号失败(token 失效/API 挂)只记日志跳过, 不阻塞其他号
   const byAccount = new Map<string, DraftPushAccountReport>();
   for (const a of accounts) {
     byAccount.set(a.id, { accountId: a.id, accountName: a.accountName, pushed: [], errors: [] });
   }
-  for (const pair of pairs) {
-    const acct = byAccount.get(pair.accountId);
-    if (!acct) continue;
-    try {
-      const results = await publishToAccounts({
-        contentId: pair.articleId,
-        tenantId,
-        accountIds: [pair.accountId],
-        forceOverride: true, // 内容已过质检/采用, 且只进草稿箱(人工后台终审), 跳 audit gate 与 bulk-distribute 同策略
-        overrideReason: "draft-distribute 草稿箱分发(仅建草稿, 运营后台终审)",
-        capabilityOverride: "draft_only",
-      });
-      const r = results[0];
-      if (r?.success) {
-        // 落 log 防重复推: status='draft_pushed' (区别于浏览器推草稿的 'draft' 与真发布的 'success')
-        await db.insert(contentPublishLog).values({
-          tenantId,
+  const pushPairs = async (
+    pairs: Array<{ articleId: string; accountId: string }>,
+    titleById: Map<string, string | null>,
+  ): Promise<number> => {
+    let pushedNow = 0;
+    for (const pair of pairs) {
+      const acct = byAccount.get(pair.accountId);
+      if (!acct) continue;
+      try {
+        const results = await publishToAccounts({
           contentId: pair.articleId,
-          accountId: pair.accountId,
-          status: "draft_pushed",
-          mediaId: r.mediaId ?? null,
-          initiatedBy: "draft_dist",
-        }).onConflictDoUpdate({
-          target: [contentPublishLog.contentId, contentPublishLog.accountId],
-          set: { status: "draft_pushed", mediaId: r.mediaId ?? null, initiatedBy: "draft_dist", updatedAt: new Date() },
+          tenantId,
+          accountIds: [pair.accountId],
+          forceOverride: true, // 内容已过质检/采用, 且只进草稿箱(人工后台终审), 跳 audit gate 与 bulk-distribute 同策略
+          overrideReason: "draft-distribute 草稿箱分发(仅建草稿, 运营后台终审)",
+          capabilityOverride: "draft_only",
         });
-        acct.pushed.push({ contentId: pair.articleId, title: titleById.get(pair.articleId) ?? null });
-        report.pushed++;
-      } else {
-        const error = (r?.error || r?.reason || r?.message || "推草稿失败").slice(0, 200);
+        const r = results[0];
+        if (r?.success) {
+          // 落 log 防重复推: status='draft_pushed' (区别于浏览器推草稿的 'draft' 与真发布的 'success')
+          await db.insert(contentPublishLog).values({
+            tenantId,
+            contentId: pair.articleId,
+            accountId: pair.accountId,
+            status: "draft_pushed",
+            mediaId: r.mediaId ?? null,
+            initiatedBy: "draft_dist",
+          }).onConflictDoUpdate({
+            target: [contentPublishLog.contentId, contentPublishLog.accountId],
+            set: { status: "draft_pushed", mediaId: r.mediaId ?? null, initiatedBy: "draft_dist", updatedAt: new Date() },
+          });
+          acct.pushed.push({ contentId: pair.articleId, title: titleById.get(pair.articleId) ?? null });
+          report.pushed++;
+          pushedNow++;
+        } else {
+          const error = (r?.error || r?.reason || r?.message || "推草稿失败").slice(0, 200);
+          acct.errors.push({ contentId: pair.articleId, error });
+          report.failed++;
+          logger.warn({ tenantId, accountId: pair.accountId, contentId: pair.articleId, error }, "草稿分发: 单篇失败, 跳过");
+        }
+      } catch (err) {
+        const error = (err instanceof Error ? err.message : String(err)).slice(0, 200);
         acct.errors.push({ contentId: pair.articleId, error });
         report.failed++;
-        logger.warn({ tenantId, accountId: pair.accountId, contentId: pair.articleId, error }, "草稿分发: 单篇失败, 跳过");
+        logger.warn({ tenantId, accountId: pair.accountId, contentId: pair.articleId, error }, "草稿分发: 单篇异常, 跳过");
       }
-    } catch (err) {
-      const error = (err instanceof Error ? err.message : String(err)).slice(0, 200);
-      acct.errors.push({ contentId: pair.articleId, error });
-      report.failed++;
-      logger.warn({ tenantId, accountId: pair.accountId, contentId: pair.articleId, error }, "草稿分发: 单篇异常, 跳过");
+    }
+    return pushedNow;
+  };
+
+  /**
+   * 7-28 ①c: **实推后**的真实缺口(不是配对时的预期缺口)。
+   * 为什么必须重算: computeSmartPairs 的 shortfalls 是"配对阶段没配上"的号, 而配上了却
+   * 推失败(token 失效/微信 API 挂)的号在它眼里是达标的 —— 那正是最需要补的情况。
+   * 口径与 smart-assign 的 preload 一致(今日 content_publish_log 全部状态计数)。
+   */
+  const computeEffectiveShortfalls = async (): Promise<DraftDistributeReport["shortfalls"]> => {
+    const load = await countTodayLoad(tenantId);
+    return accounts
+      .map((a) => ({ accountId: a.id, accountName: a.accountName ?? null, assigned: load.get(a.id) ?? 0, target }))
+      .filter((x) => x.assigned < target);
+  };
+
+  // 4. 主轮: 近 POOL_WINDOW_DAYS 天的可发池 → 领域/定位匹配 → 推
+  //    (复用 smart-assign; dailyCap=每号 top-N; 内部已按质检分排序=top 候选先占坑)
+  const fresh = await buildFreshPool(POOL_WINDOW_DAYS);
+  report.poolSize = fresh.length;
+  let unmatchedCount = 0;
+  if (fresh.length > 0) {
+    const titleById = new Map(fresh.map((p) => [p.id, p.title]));
+    const { pairs, unmatched } = await computeSmartPairs({
+      tenantId,
+      articleIds: fresh.map((p) => p.id),
+      accountIds: accounts.map((a) => a.id),
+      dailyCap: perAccount, // 上限
+      target,               // 7-14 保底下限: 两轮保底填到该数
+    });
+    unmatchedCount = unmatched.length;
+    if (pairs.length > 0) await pushPairs(pairs, titleById);
+  } else {
+    report.skippedReason = "可发池为空";
+  }
+
+  // 5. 7-28 ①c 缺口补救 —— 从"只 logger.warn"升级成"落库 + 真去补"
+  const shortBefore = await computeEffectiveShortfalls() ?? [];
+  report.shortfalls = shortBefore;
+  if (shortBefore.length > 0) {
+    logger.warn(
+      { tenantId, target, cap: perAccount, pool: report.poolSize, accounts: accounts.length, shortfalls: shortBefore },
+      `⚠️ 草稿分发: ${shortBefore.length}/${accounts.length} 个号未达保底(${target}篇/天) — 内容不足, 尝试放宽时效窗口补救`,
+    );
+
+    const remedyWindow = Math.max(POOL_WINDOW_DAYS + 1, Math.floor(env.DRAFT_SHORTFALL_REMEDY_WINDOW_DAYS));
+    if (!env.DRAFT_SHORTFALL_REMEDY_ENABLED) {
+      report.remedy = { attempted: false, skippedReason: "disabled(DRAFT_SHORTFALL_REMEDY_ENABLED=false)" };
+    } else {
+      try {
+        // 只放宽时效: 把 7 天窗口外、三周内、还没被推过的老内容拿出来补。
+        // 对口/质检/红线/健康闸**一律不放宽** —— buildFreshPool 里那几道闸原样跑第二遍。
+        const older = await buildFreshPool(remedyWindow);
+        const shortIds = new Set(shortBefore.map((s) => s.accountId));
+        if (older.length === 0) {
+          report.remedy = { attempted: false, skippedReason: "no_extra_content", windowDays: remedyWindow, shortfallsBefore: shortBefore.length };
+        } else {
+          const titleById2 = new Map(older.map((p) => [p.id, p.title]));
+          const { pairs: pairs2 } = await computeSmartPairs({
+            tenantId,
+            articleIds: older.map((p) => p.id),
+            accountIds: [...shortIds],   // 只补缺口号, 别顺手把达标号也塞满
+            dailyCap: perAccount,
+            target,
+          });
+          const pushed2 = pairs2.length > 0 ? await pushPairs(pairs2, titleById2) : 0;
+          report.remedy = {
+            attempted: true, windowDays: remedyWindow, pushed: pushed2,
+            shortfallsBefore: shortBefore.length,
+          };
+          logger.info({ tenantId, windowDays: remedyWindow, candidates: older.length, paired: pairs2.length, pushed: pushed2 },
+            "7-28 ①c 缺口补救轮完成(只放宽时效窗口, 对口/质检/红线不变)");
+        }
+      } catch (err) {
+        const msg = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+        report.remedy = { attempted: true, windowDays: remedyWindow, error: msg, shortfallsBefore: shortBefore.length };
+        logger.error({ tenantId, err: msg }, "7-28 ①c 缺口补救失败(主轮结果不受影响)");
+        reportDistIncident({
+          kind: "draft_remedy_failed", severity: "error", tenantId,
+          message: `草稿缺口自动补救失败: ${msg}`,
+          detail: { windowDays: remedyWindow, shortfallsBefore: shortBefore, error: msg },
+        });
+      }
+    }
+
+    // 补救后重算, 报告与告警都以**最终**缺口为准
+    const shortAfter = await computeEffectiveShortfalls() ?? [];
+    report.shortfalls = shortAfter;
+    if (report.remedy) report.remedy.shortfallsAfter = shortAfter.length;
+
+    if (shortAfter.length > 0) {
+      // 严重度分档: 还有号**一条都没有**(assigned=0) → 红(该号今天彻底没东西发);
+      //             只是没填满下限 → 黄(有货, 少了点)。
+      const starved = shortAfter.filter((s) => s.assigned === 0);
+      reportDistIncident({
+        kind: "draft_shortfall",
+        severity: starved.length > 0 ? "error" : "warn",
+        tenantId,
+        message: `${shortAfter.length}/${accounts.length} 个公众号未达每日保底(${target}篇)` +
+          (starved.length > 0 ? `, 其中 ${starved.length} 个号今日 0 篇` : "") +
+          `${report.remedy?.attempted ? `; 已自动补救(放宽到 ${report.remedy.windowDays} 天窗口)补进 ${report.remedy.pushed ?? 0} 篇` : ""}` +
+          ` — 内容不够分, 需提高生成量或补期刊/选题`,
+        detail: {
+          target, cap: perAccount, accounts: accounts.length,
+          poolSize: report.poolSize, unmatched: unmatchedCount,
+          shortfallsBefore: shortBefore, shortfallsAfter: shortAfter,
+          remedy: report.remedy ?? null,
+        },
+      });
+    } else {
+      logger.info({ tenantId, remedy: report.remedy }, "7-28 ①c 缺口已被补救轮填平, 不告警");
     }
   }
+
   report.perAccount = [...byAccount.values()];
+  // 主轮池空但补救轮补上了 → "可发池为空"这句已经不成立, 清掉免得报告自相矛盾
+  if (report.pushed > 0) report.skippedReason = undefined;
+  if (report.pushed === 0 && !report.skippedReason) {
+    report.skippedReason = unmatchedCount > 0 ? `无可配对内容 (unmatched=${unmatchedCount})` : "本轮无内容可推";
+  }
   logger.info(
-    { tenantId, pushed: report.pushed, failed: report.failed, pool: report.poolSize, unmatched: unmatched.length },
+    { tenantId, pushed: report.pushed, failed: report.failed, pool: report.poolSize, unmatched: unmatchedCount, remedy: report.remedy },
     "草稿分发: 租户完成",
   );
   return report;

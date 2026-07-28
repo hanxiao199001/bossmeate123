@@ -270,6 +270,10 @@ export const journals = pgTable(
     //   **Postgres 生成列, 只读** — 不要 insert/update 这一列, DB 会随 discipline 自动重算。
     //   规则源: services/recommendation/discipline-mapping.ts
     disciplineCode: varchar("discipline_code", { length: 20 }),
+    // 7-28 体系归一(migration 029): 'intl' 纯国外 | 'both' 骑墙(国际指标+国内目录) | 'cn' 国内 | 'unknown' 无信号。
+    //   **Postgres 生成列, 只读** — 不要 insert/update, DB 随 IF/分区/目录字段自动重算。
+    //   规则源: services/journals/journal-kind.ts (四套"国内刊"启发式定义的收口)
+    journalKind: varchar("journal_kind", { length: 12 }).$type<"intl" | "both" | "cn" | "unknown">(),
     partition: varchar("partition", { length: 20 }), // 分区: Q1 | Q2 | Q3 | Q4
     impactFactor: real("impact_factor"), // 影响因子
     annualVolume: integer("annual_volume"), // 年发文量

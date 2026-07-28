@@ -10,6 +10,7 @@
  *   ⚠️ sql 尽量幂等 (IF NOT EXISTS), 万一同条在不同库状态不一仍安全。
  */
 import { buildDisciplineCodeSql } from "../services/recommendation/discipline-mapping.js";
+import { buildJournalKindSql } from "../services/journals/journal-kind.js";
 
 export interface Migration {
   version: string;
@@ -600,6 +601,26 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
 
       -- 简报/矩阵按 (tenant, publish_mode) 分桶统计
       CREATE INDEX IF NOT EXISTS idx_pa_publish_mode ON platform_accounts (tenant_id, publish_mode);
+    `,
+  },
+  {
+    version: "029_journals_journal_kind",
+    description:
+      "7-28 期刊体系归一(生成列): journals 加 journal_kind ('intl'纯国外 / 'both'骑墙 / 'cn'国内 / 'unknown'无信号), " +
+      "表达式由 services/journals/journal-kind.ts 的 buildJournalKindSql() 生成。" +
+      "收口项目里 4 套各写各的'国内刊'启发式(journal-scope / wanfang-resolver / smart-assign / article-skill), " +
+      "并治好它们之间的**定义裂缝**: enricher 只写 cscd_level/pku_core_level 而不回写 catalogs → " +
+      "这类刊 catalogs 空且无 IF, 老口径判它'既不是国内刊也不是国外刊' → 对任何 scope 都不可见, " +
+      "选刊器永远选不到, 日志只打一句'对口刊枯竭'(看着完全正常)。归一后它们落 'cn', 国内槽位可见。" +
+      "同 026 的纪律: 改 journal-kind.ts 的信号定义不会自动生效 —— 必须新加 migration 走 DROP COLUMN + 重建 " +
+      "ADD COLUMN GENERATED, 并更新 __tests__/journal-kind-generated-column-drift.test.ts 的冻结快照。",
+    sql: `
+      ALTER TABLE journals DROP COLUMN IF EXISTS journal_kind;
+      ALTER TABLE journals ADD COLUMN journal_kind varchar(12)
+        GENERATED ALWAYS AS (${buildJournalKindSql()}) STORED;
+
+      -- 选刊热路径: pickScopedFreshJournal 按 (journal_kind, discipline_code, status) 过滤
+      CREATE INDEX IF NOT EXISTS idx_journals_kind_pick ON journals (journal_kind, discipline_code, status);
     `,
   },
 ];

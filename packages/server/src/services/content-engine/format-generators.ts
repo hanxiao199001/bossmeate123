@@ -242,12 +242,16 @@ export async function generateByFormat(req: GenerateRequest): Promise<GeneratedC
   }
 
   // 3. AI 生成
+  // 7-28 ②b: 主备全挂必须抛错。这里是**最危险的一处** —— 下面 `body: parsed.body || response.content`
+  //   会把"抱歉，AI暂时无法响应，请稍后重试。"整句当成文章正文落进 contents 表(topicPool 每日生成
+  //   走的就是这条路)。抛错后由 daily-cron 的 catch 接住 → 落 generation_failed 告警, 不产废稿。
   const response = await chat({
     tenantId,
     userId: req.userId,
     conversationId: `format-gen-${format}`,
     message: fullPrompt,
     skillType: "content_generation",
+    throwOnExhausted: true,
   });
 
   // 4. 解析结果

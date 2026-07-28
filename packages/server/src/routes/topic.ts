@@ -8,6 +8,9 @@ import type { FastifyInstance } from "fastify";
 import { db } from "../models/db.js";
 import { journals, contents } from "../models/schema.js";
 import { eq, and } from "drizzle-orm";
+// 7-28 (④): 期刊是全局共享参考数据(tenant_id 为 NULL), 严格相等会把整个共享池排除 → 选题工坊对
+//   任何共享池刊恒 404。统一走 journalVisibleTo(共享池 + 本租户自建刊)。
+import { journalVisibleTo } from "../services/journals/journal-sql.js";
 import { findHooks, generateTitles, generateArticle } from "../services/skills/topic-skill.js";
 import { logger } from "../config/logger.js";
 import { initialStatusFields } from "../services/articles/state-machine.js";
@@ -26,7 +29,7 @@ export async function topicRoutes(app: FastifyInstance) {
     const result = await db
       .select()
       .from(journals)
-      .where(and(eq(journals.id, journalId), eq(journals.tenantId, tenantId)))
+      .where(and(eq(journals.id, journalId), journalVisibleTo(tenantId)))
       .limit(1);
 
     if (result.length === 0) {
@@ -83,7 +86,7 @@ export async function topicRoutes(app: FastifyInstance) {
     const result = await db
       .select()
       .from(journals)
-      .where(and(eq(journals.id, journalId), eq(journals.tenantId, tenantId)))
+      .where(and(eq(journals.id, journalId), journalVisibleTo(tenantId)))
       .limit(1);
 
     if (result.length === 0) {
@@ -135,7 +138,7 @@ export async function topicRoutes(app: FastifyInstance) {
     const result = await db
       .select()
       .from(journals)
-      .where(and(eq(journals.id, journalId), eq(journals.tenantId, tenantId)))
+      .where(and(eq(journals.id, journalId), journalVisibleTo(tenantId)))
       .limit(1);
 
     if (result.length === 0) {

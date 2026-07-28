@@ -25,7 +25,8 @@ describe("PR #222: cron 读每学科配额", () => {
   });
   it("配额模式按学科封顶 + 跳过不在配额内的学科", async () => {
     const src = await readSrc(CRON);
-    expect(src).toMatch(/if \(!quota\[cat\] \|\| \(perDisc\.get\(cat\) \?\? 0\) >= quota\[cat\]\) continue;/);
+    // 7-28 ①a: 封顶逻辑不变, continue 前多了一句跳过计数(汇总成 candidate_skipped 告警)
+    expect(src).toMatch(/if \(!quota\[cat\] \|\| \(perDisc\.get\(cat\) \?\? 0\) >= quota\[cat\]\)[^\n]*continue;/);
     expect(src).toMatch(/perDisc\.set\(kw\.category/);
   });
 });

@@ -10,6 +10,8 @@ import { and, eq, ilike, or } from "drizzle-orm";
 import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { journals } from "../../models/schema.js";
+// 7-28 (④): 共享池刊 tenant_id 为 NULL, 严格相等 → generateForJournal 恒返回 null(静默不产视频)
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { toPromptIfHistory } from "../data-collection/journal-content-collector.js";
@@ -156,7 +158,7 @@ ${summary}
       const [row] = await db
         .select(JOURNAL_SELECT)
         .from(journals)
-        .where(and(eq(journals.id, journalIdFromMeta), eq(journals.tenantId, context.tenantId)))
+        .where(and(eq(journals.id, journalIdFromMeta), journalVisibleTo(context.tenantId)))
         .limit(1);
       if (row) return row;
     }
@@ -171,7 +173,7 @@ ${summary}
         .from(journals)
         .where(
           and(
-            eq(journals.tenantId, context.tenantId),
+            journalVisibleTo(context.tenantId),
             or(
               ilike(journals.name, `%${trimmed}%`),
               ilike(journals.nameEn, `%${trimmed}%`),
@@ -199,7 +201,7 @@ ${summary}
     const [row] = await db
       .select(JOURNAL_SELECT)
       .from(journals)
-      .where(and(eq(journals.id, journalId), eq(journals.tenantId, tenantId)))
+      .where(and(eq(journals.id, journalId), journalVisibleTo(tenantId)))
       .limit(1);
     if (!row) return null;
     const v7Scenes = this.hasEnricherData(row) ? await this.tryGenerateV7Scenes(row) : null;

@@ -45,6 +45,41 @@ function reportAiCallFailure(err: unknown, ctx: { provider: string; model: strin
   })();
 }
 
+/**
+ * 7-28 ②b: AI 主备全挂 —— 供**生产链路**捕获的显式失败。
+ *
+ * 为什么要有它: chat() 历史行为是主备全挂时**不抛错**, 返回一句中文兜底文案当 content。
+ *   对聊天场景这是友好提示; 对生成/质检链路却是"把故障伪装成正常输出" ——
+ *   7-27 事故的原型正是 title-generator 把这句兜底文案当成了候选标题, 一篇标题=占位文的
+ *   文章拿着六维 80 分溜进公众号草稿箱。28 个 chat() 调用点里当时只有 3 个检查这个文案。
+ *
+ * 改造策略(**折中, 不全量抛异常**, 理由见 chat() 的 throwOnExhausted 注释):
+ *   - 默认行为**零变化**(仍返回兜底文案) → 28 个调用点无一被动受影响;
+ *   - 新增 `throwOnExhausted: true` 逐点开启, 已开启的是"内容会落库/会对外"的生产链路;
+ *   - 另外新增结构化字段 `ChatResponse.ok` —— 不想改控制流的调用点可以只读它, 不必再抄字符串判据。
+ */
+export class AiUnavailableError extends Error {
+  /** 触发时选中的 provider/model(可能为 "none": 路由表空/全熔断) */
+  readonly provider: string;
+  readonly model: string;
+  /** no_model = 压根没选出模型; exhausted = 主备都调用失败 */
+  readonly kind: "no_model" | "exhausted";
+  constructor(kind: "no_model" | "exhausted", provider: string, model: string) {
+    super(kind === "no_model"
+      ? `AI 不可用: 无可用模型(路由表空或全部熔断) [${provider}/${model}]`
+      : `AI 不可用: 主备模型全部调用失败 [${provider}/${model}]`);
+    this.name = "AiUnavailableError";
+    this.kind = kind;
+    this.provider = provider;
+    this.model = model;
+  }
+}
+
+/** 判定一个异常是不是"AI 主备全挂"(跨 vitest 模块实例也成立, 不靠 instanceof) */
+export function isAiUnavailableError(err: unknown): boolean {
+  return err instanceof AiUnavailableError || (err instanceof Error && err.name === "AiUnavailableError");
+}
+
 export interface ChatRequest {
   tenantId: string;
   userId: string;
@@ -56,6 +91,20 @@ export interface ChatRequest {
   /** 7-06 生成参数透传(RoutedProvider/skills 链路用): 不传保持原默认(temperature 0.7 / 路由表 maxTokens) */
   temperature?: number;
   maxTokens?: number;
+  /**
+   * 7-28 ②b: 主备全挂时**抛 AiUnavailableError**, 而不是返回中文兜底文案当 content。
+   *
+   * 默认 false = 老行为(返回兜底文案)。**刻意不全量改成抛异常**:
+   *   - 客服/工坊对话(kf-responder / routes/chat / routes/work-wechat-kf)是实时链路,
+   *     用户在对面等着 —— 那里要的就是"一句人话兜底", 抛异常只会变成 500 白屏/无回复,
+   *     体验更差且这些链路的产物不会落进 contents 表对外发布;
+   *   - 28 个调用点里大多数是"分析/富化/打标"类旁路(data-collection / journal-enricher /
+   *     style-learning 等), 它们本就各有 JSON 解析失败的兜底路径, 强行抛异常等于把
+   *     "旁路降级"升级成"主流程报错", 与本次目标(堵 fail-open)方向相反。
+   *   - 真正危险的是**产物会落库、会对外**的链路(六维质检/红线校验/标题生成/正文生成):
+   *     那里"返回一句道歉文案"会被当成合法产物一路放行。这些点逐个开 true。
+   */
+  throwOnExhausted?: boolean;
 }
 
 export interface ChatResponse {
@@ -64,6 +113,14 @@ export interface ChatResponse {
   provider: string;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * 7-28 ②b: 这次调用**是否真的拿到了模型输出**。
+   *   false = content 是系统兜底文案(主备全挂/无可用模型), 不是模型说的话。
+   * 不想改控制流的调用点可以只读它做判断, 不必再各自抄一份兜底文案字符串
+   * (检查器与被检查方各写一套判据 = fallback-messages.ts 注释里那种经典失效)。
+   * 老调用点不读它 → 行为与改造前完全一致。
+   */
+  ok?: boolean;
 }
 
 // OpenAI 兼容接口的响应格式（DeepSeek / Qwen / OpenAI 均使用此格式）
@@ -294,12 +351,14 @@ async function chatWithSerialMode(
 
   if (!provider) {
     logger.error("无可用AI模型");
+    if (request.throwOnExhausted) throw new AiUnavailableError("no_model", "none", "none");
     return {
       content: AI_FALLBACK_NO_MODEL,
       model: "none",
       provider: "none",
       inputTokens: 0,
       outputTokens: 0,
+      ok: false,
     };
   }
 
@@ -336,6 +395,7 @@ async function chatWithSerialMode(
       provider: provider.name,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      ok: true,
     };
   } catch (err) {
     modelRouter.recordFailure(provider.name, provider.model);
@@ -361,6 +421,7 @@ async function chatWithSerialMode(
           provider: fallback.name,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
+          ok: true,
         };
       } catch (fallbackErr) {
         modelRouter.recordFailure(fallback.name, fallback.model);
@@ -372,12 +433,15 @@ async function chatWithSerialMode(
       }
     }
 
+    // 7-28 ②b: 生产链路(throwOnExhausted)要的是"知道失败了", 不是一句能被当成正文的道歉话
+    if (request.throwOnExhausted) throw new AiUnavailableError("exhausted", provider.name, provider.model);
     return {
       content: AI_FALLBACK_UNAVAILABLE,
       model: provider.model,
       provider: provider.name,
       inputTokens: 0,
       outputTokens: 0,
+      ok: false,
     };
   }
 }
@@ -396,12 +460,14 @@ async function chatWithRaceMode(
 
   if (!modelPair.primary) {
     logger.error("无可用AI模型");
+    if (request.throwOnExhausted) throw new AiUnavailableError("no_model", "none", "none");
     return {
       content: AI_FALLBACK_NO_MODEL,
       model: "none",
       provider: "none",
       inputTokens: 0,
       outputTokens: 0,
+      ok: false,
     };
   }
 
@@ -471,6 +537,7 @@ async function chatWithRaceMode(
         provider: winner.provider.name,
         inputTokens: winner.result.inputTokens,
         outputTokens: winner.result.outputTokens,
+        ok: true,
       };
     } else {
       // 竞速失败，等待另一个请求的结果
@@ -505,6 +572,7 @@ async function chatWithRaceMode(
           provider: loser.provider.name,
           inputTokens: loser.result.inputTokens,
           outputTokens: loser.result.outputTokens,
+          ok: true,
         };
       } else {
         modelRouter.recordFailure(loser.provider.name, loser.provider.model);
@@ -517,27 +585,34 @@ async function chatWithRaceMode(
         );
         reportAiCallFailure(loser.error, { provider: loser.provider.name, model: loser.provider.model, taskType, tenantId: request.tenantId });
 
+        if (request.throwOnExhausted) throw new AiUnavailableError("exhausted", modelPair.primary.name, modelPair.primary.model);
         return {
           content: AI_FALLBACK_UNAVAILABLE,
           model: modelPair.primary.model,
           provider: modelPair.primary.name,
           inputTokens: 0,
           outputTokens: 0,
+          ok: false,
         };
       }
     }
   } catch (error) {
+    // 7-28: throwOnExhausted 抛出的 AiUnavailableError 会经过这里 —— 必须原样往上抛,
+    //   否则又被吞成兜底文案(这个 catch 原本是给 Promise.race 自身异常兜底的)。
+    if (isAiUnavailableError(error)) throw error;
     logger.error(
       { error: error instanceof Error ? error.message : String(error) },
       "AI 竞速调用异常"
     );
 
+    if (request.throwOnExhausted) throw new AiUnavailableError("exhausted", modelPair.primary.name, modelPair.primary.model);
     return {
       content: AI_FALLBACK_UNAVAILABLE,
       model: modelPair.primary.model,
       provider: modelPair.primary.name,
       inputTokens: 0,
       outputTokens: 0,
+      ok: false,
     };
   }
 }

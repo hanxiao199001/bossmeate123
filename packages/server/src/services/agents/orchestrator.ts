@@ -12,6 +12,7 @@
 import { db } from "../../models/db.js";
 import { dailyContentPlans, tenants, contents, users, journals } from "../../models/schema.js";
 import { eq, and, gte, sql, ilike } from "drizzle-orm";
+import { journalVisibleTo } from "../journals/journal-sql.js";
 import { logger } from "../../config/logger.js";
 import { contentQueue } from "../task/queue.js";
 import { initialStatusFields } from "../articles/state-machine.js";
@@ -361,7 +362,7 @@ export class Orchestrator implements IAgent {
                 const [row] = await db
                   .select({ id: journals.id })
                   .from(journals)
-                  .where(and(eq(journals.tenantId, tenantIdCapture), ilike(journals.name, `%${searchName}%`)))
+                  .where(and(journalVisibleTo(tenantIdCapture), ilike(journals.name, `%${searchName}%`)))
                   .limit(1);
                 if (row) journalId = row.id;
               } catch (err) {

@@ -375,6 +375,69 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
       continue;
     }
 
+    // ==== 7-28 ①目标闭环: 排产/分发的"没达成"从日志升进简报 ====
+    //   共同措辞原则: 说清**该找谁做什么**。这几条几乎都不是技术故障, 是"料不够了", 运营自己能处理。
+
+    // 产出不足(≠ 零产出): 系统活着但明显不够 —— 黄色, 今天内看一眼配额与期刊池
+    if (inc.kind === "low_output") {
+      items.push({ level: "warn", text: `${inc.lastMessage} —— 到「内容工坊」看配额是否偏高、该学科期刊/选题是否见底。` });
+      continue;
+    }
+    // 期刊池告急: 已经在用回头刊/不对口刊了。这是**离"没内容可发"最近的一个先行指标**, 值得单独说。
+    if (inc.kind === "journal_pool_exhausted") {
+      items.push({
+        level: "warn",
+        text: `期刊池告急: 近 24h 有 ${inc.count} 次只能选到回头刊或不对口刊 —— 最后一条: ${inc.lastMessage.slice(0, 90)}。` +
+          `再不补刊, 接下来就是重复发同几本 / 内容不对口。到「期刊库」补该学科的刊, 或把该学科的日配额调低。`,
+      });
+      continue;
+    }
+    // 选不出刊/选不出题: 名额直接空转 —— 这就是"今天为什么少了几篇"的答案
+    if (inc.kind === "no_journal_available" || inc.kind === "no_topic_available") {
+      items.push({
+        level: inc.kind === "no_topic_available" ? "warn" : "warn",
+        text: `${KIND_LABEL[inc.kind]}: 近 24h ${inc.count} 次 —— ${inc.lastMessage.slice(0, 110)}`,
+      });
+      continue;
+    }
+    // 候选被配额/限流跳过: 去重机制吃掉了名额, 通常意味着配额与池子大小不匹配
+    if (inc.kind === "candidate_skipped") {
+      items.push({ level: "warn", text: `${inc.lastMessage.slice(0, 160)} —— 多为"配额比可用池子大", 调配额或补选题/期刊。` });
+      continue;
+    }
+    // 单篇生成失败(节流落库, count 是波数不是次数)
+    if (inc.kind === "generation_failed") {
+      items.push({
+        level: inc.count >= QUALITY_FAIL_ALERT_COUNT ? "alert" : "warn",
+        text: `生成失败近 24h 报了 ${inc.count} 波(同类 10 分钟只记 1 条, 实际更多) —— 最后一条: ${inc.lastMessage.slice(0, 90)}。先看 AI 额度与服务器日志。`,
+      });
+      continue;
+    }
+    // 分发缺口: 已经自动补救过一轮仍没填平才会落这条 —— 所以它天然是"补救也救不回来"的信号
+    if (inc.kind === "draft_shortfall") {
+      items.push({
+        level: inc.lastMessage.includes("今日 0 篇") ? "alert" : "warn",
+        text: `${inc.lastMessage.slice(0, 200)}`,
+      });
+      continue;
+    }
+    if (inc.kind === "draft_remedy_failed") {
+      items.push({ level: "alert", text: `草稿缺口自动补救本身失败(${inc.count} 次) —— 补救逻辑出错了, 需要技术看: ${inc.lastMessage.slice(0, 90)}` });
+      continue;
+    }
+    // 7-28 ②: 质检闸没跑成 —— 与 quality_check_unavailable(没评上分)平行的第二类"检查器挂了"。
+    //   措辞必须写死"不是内容违规", 否则运营会去删稿(7-27 把"没评上分"当信任事故剔除的同类误读)。
+    if (inc.kind === "quality_gate_unavailable") {
+      items.push({
+        level: inc.count >= QUALITY_FAIL_ALERT_COUNT ? "alert" : "warn",
+        text: `今日 ${inc.count} 波质检闸没跑成(红线/风格/平台规则查不了, 或一致性校验异常) → 相关内容已转人工复核。` +
+          `⚠️ 这**不是内容违规**, 是我们的检查器当时不可用, 内容本身没查出任何问题 —— ` +
+          `到「今日驾驶舱」待审列表复核放行即可, 别当废稿删; 反复出现让技术看知识库检索与 AI 额度。`,
+      });
+      todos.push(`质检闸不可用导致的待复核内容 —— 「今日驾驶舱」待审列表, 复核后可放行`);
+      continue;
+    }
+
     const label = KIND_LABEL[inc.kind] ?? inc.kind;
     const level: BriefItemLevel = inc.kind === "ledger_write_failed" || inc.kind === "zero_output" ? "alert" : "warn";
     items.push({ level, text: `${label} 近 24h 发生 ${inc.count} 次 —— 最后一条: ${inc.lastMessage.slice(0, 80)}` });

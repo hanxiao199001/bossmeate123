@@ -4,6 +4,7 @@
  *   红线: 只用传入的真实数据, 绝不编造 IF/分区/审稿/录用率 等任何数字。
  */
 import { chat } from "../ai/chat-service.js";
+import { isDomesticKind, toJournalKind } from "../journals/journal-kind.js";
 import { findAiFallbackText } from "../ai/fallback-messages.js";
 import { TITLE_PLACEHOLDER_RE } from "../publisher/output-health.js";
 import { logger } from "../../config/logger.js";
@@ -38,6 +39,7 @@ export interface TitleJournalData {
   extra?: string | null;        // 其它卖点(国人友好/创刊年等)
   catalogs?: string[] | null;   // 7-21: 中文核心目录标签(pku-core/cssci/cscd..) — 判国内刊 + 身份卖点
   cscdLevel?: string | null;    // CSCD 核心库/扩展库
+  pkuCoreLevel?: string | null; // 北大核心(7-28: 与 cscdLevel 一起构成"定义裂缝刊"的唯一国内信号)
 }
 
 const TITLE_DNA = `你是"Paper咨询与发表-SCI期刊推荐"公众号的标题手。你的标题是一张"利益清单",不卖文采,卖"投这本能得到什么"的确定性。
@@ -77,9 +79,16 @@ export async function generateTitles(opts: {
   const { tenantId, userId, journal } = opts;
   const count = opts.count ?? 5;
   // 7-21 改动3: 国内刊 = 有中文核心目录标签 且 无国际 IF。国际刊完全不进此分支。
+  // 7-28 (③b): "有中文核心目录标签"这半条收口到 journal_kind 单一真相源(与 article-skill 同源),
+  //   顺带把**定义裂缝刊**捞回来 —— 只写了 cscd_level/pku_core_level 而 catalogs 为空的刊,
+  //   老口径判它不是国内刊 → 标题按 SCI 口径生成 → 一定编 IF/分区。
+  //   只喂目录类字段(catalogs/cscdLevel/pkuCoreLevel): 本接口的 casPartition/jcrPartition 是
+  //   **展示用字符串**(可能是"无"/"未知"这类占位), 不能当国际信号喂给 journal_kind。
   const cats = journal.catalogs || [];
   const hasIf = journal.impactFactor != null && journal.impactFactor !== "" && !String(journal.impactFactor).includes("未知");
-  const isDomestic = cats.length > 0 && !hasIf;
+  const isDomestic = isDomesticKind(toJournalKind({
+    catalogs: cats, cscdLevel: journal.cscdLevel, pkuCoreLevel: journal.pkuCoreLevel,
+  })) && !hasIf;
 
   // 国内刊: 只喂身份/学科(它真有的), 不喂 IF/分区/审稿/录用率(它没有, 喂了标题就编)
   const idTags: string[] = [];
@@ -121,7 +130,11 @@ export async function generateTitles(opts: {
   const system = (opts.styleProfile ? `${TITLE_DNA}\n\n【该号补充风格】\n${opts.styleProfile}` : TITLE_DNA) + domesticTitleRule + toneSuffix;
   const message = `期刊真实数据(只用这些, 缺的不写):\n${data}\n请按上述风格产 ${count} 个候选标题, 严格 JSON 数组输出。`;
 
-  const resp = await chat({ tenantId, userId, conversationId: `title-gen-${Date.now()}`, message, skillType: "content_generation", systemPrompt: system } as any);
+  // 7-28 ②b: throwOnExhausted —— 7-27 事故的**源头一侧**修复。
+  //   下面 findAiFallbackText 那道过滤是"事后把兜底文案从候选里挑出来"(治标, 且依赖文案字面);
+  //   这里让主备全挂直接抛错, 调用方(batch-worker 的 try/catch → "保留原标题")天然接住,
+  //   连"兜底文案变成候选标题"这件事都不会发生。两道并存: 一道防这条链路, 一道防别的路径混进来。
+  const resp = await chat({ tenantId, userId, conversationId: `title-gen-${Date.now()}`, message, skillType: "content_generation", systemPrompt: system, throwOnExhausted: true } as any);
   const content = (resp as { content?: string }).content ?? "";
   // 解析 JSON 数组(容错: 抽第一个 [...] )
   let titles: string[] = [];
