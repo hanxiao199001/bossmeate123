@@ -19,6 +19,7 @@
  *   全被忽略, 最后改 ffmpeg burn-in)。backgroundImageUrl 传对了 ≠ 生效 —— 必须真跑一条视频看片验证。
  */
 import sharp from "sharp";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { tenants } from "../../models/schema.js";
@@ -183,6 +184,19 @@ export interface ProcessedBackground {
   height: number;
   orientation: BgOrientation;
   sizeBytes: number;
+  /** 7-29 内容指纹 — 入库时用来判重(同一张图反复"存入图库"会把 60 格占满) */
+  sha256: string;
+}
+
+/**
+ * 背景图内容指纹。用整文件 sha256 而不是 感知哈希/尺寸+大小:
+ *   - 我们要挡的是"同一个文件被反复勾选存入"这一种情况(运营从同一个文件夹里再选一次),
+ *     字节级相同就够了, 成本 ~10ms/10MB, 零依赖。
+ *   - 感知哈希(pHash)能挡"同图不同压缩", 但要引 sharp 重采样 + 汉明距离阈值调参,
+ *     还会误杀"同背景不同文案"的系列图 —— 代价与收益不成比例, 不做。
+ */
+export function hashBackgroundBuffer(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 export class BackgroundUploadError extends Error {
@@ -256,7 +270,10 @@ export async function processBackgroundUpload(args: {
   }
 
   logger.info({ tenantId, scope, remotePath, ...geo }, "dvh.bg.uploaded");
-  return { url, remotePath, width: geo.width, height: geo.height, orientation: geo.orientation, sizeBytes: buffer.length };
+  return {
+    url, remotePath, width: geo.width, height: geo.height, orientation: geo.orientation,
+    sizeBytes: buffer.length, sha256: hashBackgroundBuffer(buffer),
+  };
 }
 
 // ===== 系统背景图库 (SYSTEM 租户 config.automationConfig.dvhBackgrounds) =====
@@ -272,7 +289,17 @@ export interface DvhBackground {
   height: number;
   /** 删除时用来清 OSS 对象; 外部导入的 URL 没有 */
   remotePath?: string;
+  /** 入库时间 (= uploadedAt, 不再另开一个字段重复表达同一件事) */
   createdAt?: string;
+  /**
+   * 7-29 来源留痕 — 生成弹窗放开给运营勾选"存入图库"后, 图库不再只有管理员一个入口,
+   *   出现"这张谁传的、能不能删"时要能查。userId, 不存名字(名字会变, userId 不会)。
+   */
+  uploadedBy?: string;
+  /** "admin" = 设置页管理员上传; "generate" = 运营在生成弹窗勾选存入 */
+  source?: "admin" | "generate";
+  /** 内容指纹, 入库判重用。旧条目没有(见 hashBackgroundBuffer 注释) */
+  sha256?: string;
 }
 
 export const DVH_BACKGROUNDS_MAX = 60;
@@ -295,6 +322,10 @@ function normalize(e: DvhBackground): DvhBackground {
     height: Number(e.height) || 0,
     ...(e.remotePath ? { remotePath: String(e.remotePath).slice(0, 300) } : {}),
     ...(e.createdAt ? { createdAt: String(e.createdAt).slice(0, 40) } : {}),
+    // 7-29 来源留痕 + 指纹: normalize 是整表写回的必经之路, 不在这里透传就会被 saveDvhBackgrounds 悄悄抹掉
+    ...(e.uploadedBy ? { uploadedBy: String(e.uploadedBy).slice(0, 40) } : {}),
+    ...(e.source === "admin" || e.source === "generate" ? { source: e.source } : {}),
+    ...(e.sha256 ? { sha256: String(e.sha256).slice(0, 64) } : {}),
   };
 }
 
@@ -368,4 +399,91 @@ export async function saveDvhBackgrounds(list: DvhBackground[]): Promise<DvhBack
   await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
   logger.info({ count: clean.length }, "dvh.bg.library.saved");
   return clean;
+}
+
+// ===== 7-29 入库(运营在生成弹窗勾选「存入背景图库」走这里) =====
+
+/** 按内容指纹找图库里已有的同一张图。旧条目没 sha256, 查不到 → 当作新图(会多一条, 不会出错)。 */
+export async function findLibraryBackgroundByHash(sha256: string): Promise<DvhBackground | undefined> {
+  if (!sha256) return undefined;
+  const lib = await loadDvhBackgrounds();
+  return lib.find((b) => b.sha256 === sha256);
+}
+
+export type LibraryAddStatus = "added" | "duplicate" | "full";
+
+export interface LibraryAddResult {
+  status: LibraryAddStatus;
+  /** added → 新条目; duplicate → 图库里已有的那条; full → undefined */
+  entry?: DvhBackground;
+  backgrounds: DvhBackground[];
+  /** 给人看的一句话, 路由原样回前端 —— 满了/重复了必须说出来, 不能静默 */
+  message?: string;
+}
+
+/**
+ * 把一张**已经过 processBackgroundUpload(尺寸校验 + 内容审核)** 的图写进系统图库。
+ *
+ * ⚠️ 这是图库唯一的程序化写入口, 且只接受 ProcessedBackground —— 拿不到 ProcessedBackground
+ *   就意味着没走过那两道闸。别为了省事在别处直接拼 entry 塞进 saveDvhBackgrounds。
+ *
+ * 三种结果都返回而不抛错: 调用方(上传接口)此时图已经传好了, 本次生成还能用,
+ *   "没存进图库"不该让整个上传报失败 —— 但必须把原因带回前端说清楚。
+ */
+export async function addBackgroundToLibrary(args: {
+  processed: ProcessedBackground;
+  name?: string;
+  uploadedBy?: string;
+  source?: "admin" | "generate";
+}): Promise<LibraryAddResult> {
+  const { processed, uploadedBy, source = "generate" } = args;
+  const existing = await loadDvhBackgrounds();
+
+  // 1. 判重 — 同一张图反复勾选"存入图库"是最容易把 60 格占满的情况
+  const dup = processed.sha256 ? existing.find((b) => b.sha256 === processed.sha256) : undefined;
+  if (dup) {
+    logger.info({ id: dup.id, uploadedBy }, "dvh.bg.library.duplicate_skip");
+    return {
+      status: "duplicate", entry: dup, backgrounds: existing,
+      message: `图库里已经有同一张图了(「${dup.name}」), 没有重复存入 —— 直接选它就行`,
+    };
+  }
+
+  // 2. 容量 — 满了给明确提示, 不静默丢弃
+  if (existing.length >= DVH_BACKGROUNDS_MAX) {
+    logger.warn({ count: existing.length, uploadedBy }, "dvh.bg.library.full");
+    return {
+      status: "full", backgrounds: existing,
+      message: `背景图库已满(${DVH_BACKGROUNDS_MAX} 张), 这张没能存入 —— 本次生成照常可用; 要长期留着请让管理员在「设置 → 数字人背景图库」先删几张`,
+    };
+  }
+
+  const entry: DvhBackground = {
+    id: `bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    name: String(args.name || "背景").replace(/\.[^.]+$/, "").slice(0, 40) || "背景",
+    url: processed.url,
+    orientation: processed.orientation,
+    width: processed.width,
+    height: processed.height,
+    remotePath: processed.remotePath,
+    createdAt: new Date().toISOString(),
+    ...(uploadedBy ? { uploadedBy } : {}),
+    source,
+    ...(processed.sha256 ? { sha256: processed.sha256 } : {}),
+  };
+
+  const backgrounds = await saveDvhBackgrounds([...existing, entry]);
+
+  // saveDvhBackgrounds 会 slice(0, MAX)。并发下两个人同时入库可能把新条目截掉 —— 截掉了就照实说"满了",
+  //   绝不能返回 added 让人以为存好了(下次找不到才是最坑的)。
+  if (!backgrounds.some((b) => b.id === entry.id)) {
+    logger.warn({ count: backgrounds.length, uploadedBy }, "dvh.bg.library.full_after_save");
+    return {
+      status: "full", backgrounds,
+      message: `背景图库已满(${DVH_BACKGROUNDS_MAX} 张), 这张没能存入 —— 本次生成照常可用; 要长期留着请让管理员在「设置 → 数字人背景图库」先删几张`,
+    };
+  }
+
+  logger.info({ id: entry.id, uploadedBy, source, total: backgrounds.length }, "dvh.bg.library.added");
+  return { status: "added", entry, backgrounds, message: "已存入背景图库, 下次可直接选" };
 }

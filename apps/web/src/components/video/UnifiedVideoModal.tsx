@@ -86,32 +86,50 @@ export default function UnifiedVideoModal({
       .catch(() => { /* 拉不到就不显示下拉 */ });
   }, [open]);
   // 7-29 背景图: "" = 跟随形象/系统默认配置; "none" = 本次显式不要背景(黑底); 其它 = 图片公网 URL
-  //   系统图库由管理员在 设置页→数字人背景图库 维护; 「上传本地图」只对本次生成有效, 不进图库。
+  //   系统图库由管理员在 设置页→数字人背景图库 维护; 「上传本地图」默认只对本次生成有效,
+  //   勾了「存入背景图库」才会进图库(运营也能存, 图库是共享的; 有 60 张上限 + 自动判重兜底)。
   const [bgSel, setBgSel] = useState("");
   const [bgList, setBgList] = useState<Array<{ id: string; name: string; url: string; thumbUrl?: string; orientation: string }>>([]);
   const [bgUploaded, setBgUploaded] = useState<Array<{ url: string; name: string }>>([]);
   const [bgUploading, setBgUploading] = useState(false);
   const [bgError, setBgError] = useState<string | null>(null);
+  const [bgNotice, setBgNotice] = useState<string | null>(null);
+  // 默认不勾 —— 临时用一次的图才是常态, 别把图库塞满
+  const [bgSaveToLib, setBgSaveToLib] = useState(false);
   const bgFileRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    api.get("/admin/dvh-backgrounds")
+  const loadBgList = useCallback(() => {
+    return api.get("/admin/dvh-backgrounds")
       .then((r) => {
         const list = ((r.data as any)?.data?.backgrounds ?? (r.data as any)?.backgrounds ?? []) as typeof bgList;
         if (Array.isArray(list)) setBgList(list);
       })
       .catch(() => { /* 拉不到就只剩"默认/黑底/上传" 三个选项 */ });
-  }, [open]);
+  }, []);
+  useEffect(() => { if (open) void loadBgList(); }, [open, loadBgList]);
 
   const uploadBg = useCallback(async (file: File) => {
-    setBgUploading(true); setBgError(null);
+    setBgUploading(true); setBgError(null); setBgNotice(null);
+    const wantSave = bgSaveToLib;
     try {
       const fd = new FormData();
+      // 字段放在文件之前 append, 后端两种顺序都兼容(它把 part 走完才决定), 这里只是更直观
+      if (wantSave) fd.append("saveToLibrary", "1");
       fd.append("image", file);
       const r = await api.upload<{ url: string }>("/video/dvh-background", fd);
-      const url = ((r.data as any)?.data?.url ?? (r.data as any)?.url) as string;
+      const d = ((r.data as any)?.data ?? r.data) as {
+        url?: string; savedToLibrary?: boolean; libraryStatus?: string; libraryMessage?: string;
+      };
+      const url = d?.url;
       if (!url) throw new Error("上传返回异常");
-      setBgUploaded((prev) => [...prev, { url, name: file.name.slice(0, 20) }]);
+      if (wantSave && d.savedToLibrary) {
+        // 进了图库就别在"本次上传"里再挂一张一模一样的; 拉一次图库让它以图库条目的身份出现
+        await loadBgList();
+        setBgNotice(d.libraryMessage || "已存入背景图库,下次直接选");
+      } else {
+        setBgUploaded((prev) => [...prev, { url, name: file.name.slice(0, 20) }]);
+        // 勾了却没存进去(图库满了) → 必须说出来, 不能让人以为存好了
+        if (wantSave) setBgError(d.libraryMessage || "没能存入图库(本次生成仍可用)");
+      }
       setBgSel(url);
     } catch (e: any) {
       // 后端会说清"需要 9:16 竖版, 你传的是 4:3"之类, 原样展示
@@ -120,7 +138,7 @@ export default function UnifiedVideoModal({
       setBgUploading(false);
       if (bgFileRef.current) bgFileRef.current.value = "";
     }
-  }, []);
+  }, [bgSaveToLib, loadBgList]);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +292,8 @@ export default function UnifiedVideoModal({
     setBgSel("");    // 7-29 背景图同理: 单次生效, 关窗回默认
     setBgUploaded([]);
     setBgError(null);
+    setBgNotice(null);
+    setBgSaveToLib(false); // 勾选也只作用于本次会话, 关窗回默认(不勾)
     setError(null);
     setElapsedMs(0);
     onClose();
@@ -462,9 +482,24 @@ export default function UnifiedVideoModal({
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadBg(f); }}
                 />
               </div>
+              {/* 7-29 勾了就把这次上传的图存进系统图库(默认不勾: 临时用一次才是常态) */}
+              <label className="flex items-start gap-1.5 mt-2 text-[11px] text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={bgSaveToLib}
+                  onChange={(e) => setBgSaveToLib(e.target.checked)}
+                  disabled={submitting || bgUploading}
+                  className="mt-0.5"
+                />
+                <span>
+                  存入背景图库,下次直接选
+                  <span className="text-gray-400">(常用背景勾上,省得每次从电脑里翻;图库全员共用,最多 60 张)</span>
+                </span>
+              </label>
               {bgError && <p className="text-[11px] text-red-600 mt-1">{bgError}</p>}
+              {bgNotice && <p className="text-[11px] text-green-600 mt-1">✓ {bgNotice}</p>}
               <p className="text-[11px] text-gray-400 mt-1">
-                需 9:16 竖版(1080×1920)或 16:9 横版(1920×1080);上传的图只用于本次生成。系统图库由管理员在「设置」页维护。
+                需 9:16 竖版(1080×1920)或 16:9 横版(1920×1080);不勾上面那项时,上传的图只用于本次生成。系统图库也可在「设置」页管理。
               </p>
             </div>
 

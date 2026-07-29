@@ -2,7 +2,8 @@
  * 视频 API 路由
  *
  * POST /video/upload-images   上传图片素材
- * POST /video/dvh-background  上传数字人视频背景图(9:16/16:9 强校验 + 内容审核, 返回公网 URL)
+ * POST /video/dvh-background  上传数字人视频背景图(9:16/16:9 强校验 + 内容审核, 返回公网 URL;
+ *                             saveToLibrary=1 时顺手存进系统背景图库)
  * POST /video/compose         创建视频合成任务
  * GET  /video/status/:jobId   查询合成进度
  * GET  /video/list            获取视频列表
@@ -124,15 +125,41 @@ export async function videoRoutes(app: FastifyInstance) {
    *   - 强制 9:16 / 16:9 宽高比 + 短边 ≥720 (DVH submit 即扣费, 比例错了钱就白花)
    *   - 强制图片内容审核(背景图会进公开视频)
    *   - 返回**公网 URL** 而不是 remotePath —— 阿里云要自己去拉这张图
-   * 上传的图**不进系统图库**(那是管理员的 /admin/dvh-backgrounds), 只供本次生成使用。
+   * 默认**不进系统图库**(那是管理员的 /admin/dvh-backgrounds), 只供本次生成使用。
+   *
+   * 7-29 saveToLibrary: 勾了「存入背景图库,下次直接选」就顺手入库(不限管理员 —— 见下)。
+   *   - 参数从 query(?saveToLibrary=1) **和** multipart 字段两边都读: multipart 是流式的,
+   *     字段排在文件后面时读到文件时还不知道要不要入库, 所以先把文件收进内存、把所有 part 走完再决定。
+   *   - 权限: 运营也能存。图库本来就是共享资产, 运营才是天天用背景的人; 挡在 adminOnly 后面
+   *     等于"想存得先找老板", 这个功能就白做了。防乱塞靠 addBackgroundToLibrary 里的
+   *     判重 + 60 张上限 + uploadedBy 留痕, 而不是靠把人挡在门外。
+   *   - 入库的图直接落 SYSTEM 目录(scope=system): 决定入库是在**上传之前**就知道的,
+   *     所以是一次上传写对位置, 不需要 OSS 拷贝+删除; 也不会出现"图库条目指向某个租户目录"
+   *     这种日后清租户对象就失效的埋雷。
+   *   - ⚠️ 入库路径与临时路径共用同一个 processBackgroundUpload(尺寸校验 + 内容审核),
+   *     没有第二条写入口 —— 勾选存入图库绕不过任何一道闸。
    */
   app.post("/dvh-background", async (request, reply) => {
-    const { processBackgroundUpload, BackgroundUploadError } =
-      await import("../services/digital-human/background-library.js");
+    const {
+      processBackgroundUpload, BackgroundUploadError,
+      hashBackgroundBuffer, findLibraryBackgroundByHash, addBackgroundToLibrary,
+    } = await import("../services/digital-human/background-library.js");
+    const truthy = (v: unknown) => v === true || v === "1" || v === "true" || v === "on" || v === "yes";
     try {
       const tenantId = request.tenantId;
+      const q = (request.query ?? {}) as Record<string, unknown>;
+      let saveToLibrary = truthy(q.saveToLibrary);
+      let buf: Buffer | null = null;
+      let mimetype = "";
+      let filename = "";
+
       for await (const part of request.parts()) {
-        if (part.type !== "file") continue;
+        if (part.type === "field") {
+          if (part.fieldname === "saveToLibrary" && truthy(part.value)) saveToLibrary = true;
+          continue;
+        }
+        // 只收第一张 — 一次生成只有一个背景; 多余的文件流要 resume 掉, 否则迭代器卡住
+        if (buf) { part.file.resume(); continue; }
         const chunks: Buffer[] = [];
         let total = 0;
         for await (const chunk of part.file) {
@@ -142,16 +169,56 @@ export async function videoRoutes(app: FastifyInstance) {
           }
           chunks.push(chunk as Buffer);
         }
-        const r = await processBackgroundUpload({
-          buffer: Buffer.concat(chunks), mimetype: part.mimetype, tenantId, scope: "tenant",
+        buf = Buffer.concat(chunks);
+        mimetype = part.mimetype;
+        filename = part.filename || "";
+      }
+
+      if (!buf) return reply.code(400).send({ code: "NO_IMAGES", message: "请选择一张背景图" });
+
+      // 勾了入库: 先按内容指纹查一下图库里有没有同一张 —— 有就直接复用那条,
+      //   既不重复占一格, 也省掉一次 OSS 写入。(复用的是已过审的条目, 不是新内容进库)
+      if (saveToLibrary) {
+        const hit = await findLibraryBackgroundByHash(hashBackgroundBuffer(buf));
+        if (hit) {
+          return {
+            code: "OK",
+            data: {
+              url: hit.url, width: hit.width, height: hit.height, orientation: hit.orientation,
+              ...(hit.remotePath ? { remotePath: hit.remotePath } : {}),
+              savedToLibrary: true, libraryStatus: "duplicate",
+              libraryMessage: `图库里已经有同一张图了(「${hit.name}」), 直接选它就行`,
+            },
+          };
+        }
+      }
+
+      const r = await processBackgroundUpload({
+        buffer: buf, mimetype, tenantId, scope: saveToLibrary ? "system" : "tenant",
+      });
+
+      let library: { savedToLibrary: boolean; libraryStatus?: string; libraryMessage?: string } = { savedToLibrary: false };
+      if (saveToLibrary) {
+        const add = await addBackgroundToLibrary({
+          processed: r,
+          name: filename.replace(/\.[^.]+$/, "").slice(0, 40) || "背景",
+          uploadedBy: request.user?.userId,
+          source: "generate",
         });
-        // 只收第一张 — 一次生成只有一个背景
-        return {
-          code: "OK",
-          data: { url: r.url, width: r.width, height: r.height, orientation: r.orientation, remotePath: r.remotePath },
+        library = {
+          savedToLibrary: add.status === "added" || add.status === "duplicate",
+          libraryStatus: add.status,
+          ...(add.message ? { libraryMessage: add.message } : {}),
         };
       }
-      return reply.code(400).send({ code: "NO_IMAGES", message: "请选择一张背景图" });
+
+      return {
+        code: "OK",
+        data: {
+          url: r.url, width: r.width, height: r.height, orientation: r.orientation, remotePath: r.remotePath,
+          ...library,
+        },
+      };
     } catch (err) {
       if (err instanceof BackgroundUploadError) {
         return reply.code(400).send({ code: err.code, message: err.message });

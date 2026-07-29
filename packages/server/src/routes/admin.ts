@@ -1025,6 +1025,8 @@ export async function adminRoutes(app: FastifyInstance) {
           name: filename || "背景",
           url: r.url, orientation: r.orientation, width: r.width, height: r.height,
           remotePath: r.remotePath, createdAt: new Date().toISOString(),
+          // 7-29 来源留痕 + 内容指纹: 图库现在有两个入口(这里 / 生成弹窗勾选), 指纹让两边能互相判重
+          uploadedBy: request.user?.userId, source: "admin", sha256: r.sha256,
         });
       }
       if (added.length === 0) {
