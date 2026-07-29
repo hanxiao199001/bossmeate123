@@ -145,9 +145,21 @@ function reportDistIncident(input: {
 
 /**
  * 今日各号已落 content_publish_log 的条数(北京时间日切)。
- * 与 smart-assign 的 preload 同一口径 —— 缺口判定必须和分配时用的尺子一致, 否则会自相矛盾。
+ *
+ * **这是"今天这个号收到几条内容"的唯一口径**, 缺口(未达保底)判定一律用它。
+ * 与 smart-assign 的 preload 同一把尺子 —— 缺口判定必须和分配时用的尺子一致, 否则自相矛盾。
+ *
+ * ⚠️ 刻意**不按 status 过滤**: 一个号今天有没有拿到东西, 与它是被 draft-distribute 推的
+ * (status=draft_pushed)还是被管理后台 bulk-distribute 推的(status=success)无关 ——
+ * 都是"今天有内容进了这个号"。
+ *
+ * 7-29 导出给 ops/daily-briefing 复用。之前简报自己写了一份**只数 draft_pushed** 的统计,
+ * 于是当天报"5 个公众号未达保底", 而分发器报 1/7 —— 实测那 4 个号各有 1 条
+ * success/bulk_distribute 被简报漏数, 它们其实都 2/2 达标。后果不只是数字难看:
+ * 运营会去处理 4 个根本没问题的号, 而真正坏掉的那个(appid 失效, 0 篇)淹没在里面。
+ * 同一个判断两处各写各的 —— 与 7-28 分区判据那次同源, 不再重复。
  */
-async function countTodayLoad(tenantId: string): Promise<Map<string, number>> {
+export async function countTodayAccountLoad(tenantId: string): Promise<Map<string, number>> {
   const bj = new Date(Date.now() + 8 * 3600_000); bj.setUTCHours(0, 0, 0, 0);
   const since = new Date(bj.getTime() - 8 * 3600_000);
   const rows = await db
@@ -380,7 +392,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
    * 口径与 smart-assign 的 preload 一致(今日 content_publish_log 全部状态计数)。
    */
   const computeEffectiveShortfalls = async (): Promise<DraftDistributeReport["shortfalls"]> => {
-    const load = await countTodayLoad(tenantId);
+    const load = await countTodayAccountLoad(tenantId);
     return accounts
       .map((a) => ({ accountId: a.id, accountName: a.accountName ?? null, assigned: load.get(a.id) ?? 0, target }))
       .filter((x) => x.assigned < target);

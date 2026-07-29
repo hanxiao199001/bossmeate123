@@ -591,11 +591,30 @@ export async function collectTenantBriefing(
     db.select({ config: tenants.config, createdAt: tenants.createdAt }).from(tenants).where(eq(tenants.id, tenantId)).limit(1),
   ]);
 
+  // 「今日进草稿箱 N 条」是**字面展示**: 只数 draft-distribute 真推进草稿箱的(status=draft_pushed)。
   const pushedByAccount = new Map(draftRows.map((r) => [r.accountId, Number(r.count ?? 0)]));
-  const draftShortfalls = wechatAccounts
-    .map((a) => ({ accountName: a.accountName ?? "(未命名)", pushed: pushedByAccount.get(a.id) ?? 0, target }))
-    .filter((x) => x.pushed < x.target);
   const draftPushedToday = [...pushedByAccount.values()].reduce((n, x) => n + x, 0);
+
+  // 7-29 修: 缺口(未达保底)判定改用**分发器那把尺子** countTodayAccountLoad(全状态计数),
+  //   不再用上面这份只数 draft_pushed 的统计。
+  //   病症: 7-29 简报报"5 个公众号未达保底(各 1/2)", 而分发器同一天报 1/7 —— 实测那 4 个号
+  //   各有 1 条 status=success/bulk_distribute(管理后台批量推的)被简报漏数, 它们其实 2/2 达标。
+  //   危害不在数字难看: 运营会去查 4 个没问题的号, 而真正坏掉的那个(appid 40013 失效、全天 0 篇)
+  //   被淹在名单里。同一个判断两处各写各的, 与 7-28 分区判据那次同源。
+  //   兜底: 取不到就退回旧统计并告警, 简报绝不因此整份挂掉。
+  let loadByAccount = pushedByAccount;
+  try {
+    const { countTodayAccountLoad } = await import("../publisher/draft-distributor.js");
+    loadByAccount = await countTodayAccountLoad(tenantId);
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, tenantId },
+      "简报: 取分发器缺口口径失败, 退回 draft_pushed 计数(缺口数可能偏大)",
+    );
+  }
+  const draftShortfalls = wechatAccounts
+    .map((a) => ({ accountName: a.accountName ?? "(未命名)", pushed: loadByAccount.get(a.id) ?? 0, target }))
+    .filter((x) => x.pushed < x.target);
 
   // AI 客服 + 账号矩阵 —— 单点失败不该拖垮整份简报
   const kf = await getKfStats(tenantId, 1, 1).then(
