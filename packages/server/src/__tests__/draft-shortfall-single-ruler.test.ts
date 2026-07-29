@@ -71,8 +71,11 @@ describe("未达保底: 简报与分发器共用同一把尺子", () => {
   });
 
   it("取不到分发器口径时要降级不要整份挂掉(告警链路自己不能成为故障源)", () => {
-    const i = BRIEFING.indexOf("countTodayAccountLoad");
-    const around = BRIEFING.slice(Math.max(0, i - 400), i + 500);
+    // ⚠️ 别用 indexOf("countTodayAccountLoad") 定位: 首个命中在上方**注释**里, 窗口会取到
+    //    完全无关的代码(本测试第一版就栽在这, 假红一次)。锚定真正的调用语句。
+    const i = BRIEFING.indexOf("await countTodayAccountLoad(tenantId)");
+    expect(i, "找不到实际调用点").toBeGreaterThan(-1);
+    const around = BRIEFING.slice(Math.max(0, i - 300), i + 600);
     expect(around).toContain("catch");
     expect(around).toMatch(/logger\.warn/);
   });
