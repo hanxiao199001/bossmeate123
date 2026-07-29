@@ -52,6 +52,19 @@ class OssStorage implements IStorage {
         bucket: env.OSS_BUCKET,
         accessKeyId: env.OSS_ACCESS_KEY!,
         accessKeySecret: env.OSS_SECRET_KEY!,
+        // 7-30 secure: ali-oss 默认吐 http:// —— put().url 与 signatureUrl() 都是。
+        //   后果两类:
+        //     ① 管理页是 https, 浏览器按混合内容(mixed content)直接拦掉 http 图片 → 缩略图空白,
+        //        看着像"没存进去", 实际存了(7-29 背景图库实测就是这个现象)。
+        //     ② 签名 URL 同样是 http, DVH 音频/字幕靠它取件。阿里云服务端拉取现在不挑协议,
+        //        但哪天收紧到只收 https, 整条数字人链路会一起断 —— 那时候排查成本远高于现在加这一行。
+        //   为什么在这里而不是在消费方补: URL 是 storage 层产出的, 所有用它的地方(封面/音频/
+        //   视频/混剪素材/背景图, 23 个调用点)都有这个问题。在背景图那边补一次, 其余照旧是 http,
+        //   就变成"同一个问题在 N 处各修各的"。用官方 secure 选项也好过字符串替换 http→https:
+        //   后者遇到自定义域/内网端点会改错。
+        //   实测(生产桶 bossmate-media): 开 secure 后 put().url 与 signatureUrl() 都转 https,
+        //   且签名 URL 真下载得到(GET 200), 不是只换了前缀。
+        secure: true,
       });
       return this.client;
     } catch (err) {

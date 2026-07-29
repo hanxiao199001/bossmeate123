@@ -53,6 +53,9 @@ const client = new OSS({
   bucket: env.bucket,
   accessKeyId: env.accessKeyId,
   accessKeySecret: env.accessKeySecret,
+  // 与 services/storage/index.ts 同口径: 不加这行 result.url 是 http://,
+  // 写进 .env DVH_DEFAULT_BG_URL 后前端预览会被浏览器按混合内容拦掉。见那边的完整说明。
+  secure: true,
 });
 
 console.log(`[upload] 上传到 OSS key=${ossKey} ...`);
