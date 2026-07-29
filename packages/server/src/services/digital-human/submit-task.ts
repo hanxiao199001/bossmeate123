@@ -14,18 +14,35 @@ import { createDvhClient, $avatar20220130 } from "./client.js";
 import { resolveAvatarVoice, type TemplateId } from "./template-mapping.js";
 import { logger } from "../../config/logger.js";
 import { env } from "../../config/env.js";
+import { DVH_BG_NONE, assertBackgroundReachable } from "./background-library.js";
 
 export interface DvhSubmitOptions {
   text: string;
   templateId: TemplateId | string; // PR-X2: 目录扩展后支持自定义 key
   tenantId: string;
   title?: string;
+  /**
+   * 7-29 单次生成指定背景图 (系统图库选的 / 运营本地上传的公网 URL)。
+   * 传 DVH_BG_NONE("none") = 本次显式不要背景(压掉 mapping/env 上配的), 回 DVH 默认黑底。
+   */
+  backgroundUrl?: string;
 }
 
 export interface DvhSubmitResult {
   taskUuid: string;
   submitMs: number;
   requestId?: string;
+}
+
+/**
+ * 7-29 背景图优先级链: 单次指定 (opts.backgroundUrl) > 形象自带 (mapping.backgroundUrl)
+ *   > 全局默认 (env DVH_DEFAULT_BG_URL) > undefined (DVH 默认黑底)。
+ * 哨兵 DVH_BG_NONE 短路整条链 —— 否则运营选了"不用背景"还是会被 mapping/env 顶回来。
+ * (原 PR #243 只有后两级; 单次生成无法指定, 7-29 补上第一级。)
+ */
+export function resolveBackgroundUrl(optUrl?: string, mappingUrl?: string): string | undefined {
+  if (optUrl === DVH_BG_NONE) return undefined;
+  return optUrl || mappingUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
 }
 
 export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitResult> {
@@ -37,8 +54,10 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
   if (!mapping) throw new Error(`DVH templateId 不存在: ${opts.templateId}`);
 
   const client = createDvhClient();
-  // PR #243: 背景图选型 — per-template > env 全局 > undefined (走 DVH 默认黑底)
-  const backgroundImageUrl = mapping.backgroundUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
+  // PR #243 → 7-29 扩展: 背景图选型 — 单次指定 > per-template > env 全局 > undefined (走 DVH 默认黑底)
+  const backgroundImageUrl = resolveBackgroundUrl(opts.backgroundUrl, mapping.backgroundUrl);
+  // 7-29 可达性预检: submit 即扣费, 拉不到的背景图阿里云多半静默黑底(钱照扣)。在花钱之前拦掉。
+  if (backgroundImageUrl) await assertBackgroundReachable(backgroundImageUrl);
   // PR #244 (5-23): title 截 ≤ 60 字 (阿里云 DVH 限 64 字, 留 4 字 buffer)
   //   article.title 通常 18-40 字 (PR #185 限制), 但含长期刊名+钩子组合可能超 60.
   const safeTitle = ((opts.title || `BossMate DVH ${opts.templateId}`) as string).slice(0, 60);
@@ -95,6 +114,8 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
  */
 export async function submitDvhAudioTask(opts: {
   audioUrl: string; templateId: TemplateId | string; tenantId: string; title?: string; sampleRate?: number;
+  /** 7-29 同 submitDvhTask: 单次指定背景图; DVH_BG_NONE = 显式不要背景 */
+  backgroundUrl?: string;
 }): Promise<DvhSubmitResult> {
   const dvhTenantId = process.env.DVH_TENANT_ID;
   const appId = process.env.DVH_APP_ID;
@@ -104,7 +125,9 @@ export async function submitDvhAudioTask(opts: {
   if (!mapping) throw new Error(`DVH templateId 不存在: ${opts.templateId}`);
 
   const client = createDvhClient();
-  const backgroundImageUrl = mapping.backgroundUrl || process.env.DVH_DEFAULT_BG_URL || undefined;
+  // 7-29: 与文本驱动分支同一条优先级链 + 同一道可达性预检 (两个分支必须一致, 否则开关 DVH_AUDIO_DRIVEN 就换了行为)
+  const backgroundImageUrl = resolveBackgroundUrl(opts.backgroundUrl, mapping.backgroundUrl);
+  if (backgroundImageUrl) await assertBackgroundReachable(backgroundImageUrl);
   const safeTitle = ((opts.title || `BossMate DVH ${opts.templateId}`) as string).slice(0, 60);
   const req = new $avatar20220130.SubmitAudioTo2DAvatarVideoTaskRequest({
     tenantId: parseInt(dvhTenantId, 10),

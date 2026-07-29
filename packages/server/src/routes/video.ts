@@ -2,6 +2,7 @@
  * 视频 API 路由
  *
  * POST /video/upload-images   上传图片素材
+ * POST /video/dvh-background  上传数字人视频背景图(9:16/16:9 强校验 + 内容审核, 返回公网 URL)
  * POST /video/compose         创建视频合成任务
  * GET  /video/status/:jobId   查询合成进度
  * GET  /video/list            获取视频列表
@@ -60,7 +61,7 @@ export async function videoRoutes(app: FastifyInstance) {
     try {
       const tenantId = request.tenantId;
       const parts = request.parts();
-      const uploaded: Array<{ remotePath: string; width: number; height: number; sizeBytes: number }> = [];
+      const uploaded: Array<{ remotePath: string; url: string; width: number; height: number; sizeBytes: number }> = [];
 
       for await (const part of parts) {
         if (part.type !== "file") continue;
@@ -92,10 +93,13 @@ export async function videoRoutes(app: FastifyInstance) {
         // 上传到 storage
         const ext = part.mimetype === "image/png" ? "png" : part.mimetype === "image/webp" ? "webp" : "jpg";
         const remotePath = `${tenantId}/video-images/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-        await storage.upload(buf, remotePath, part.mimetype);
+        const url = await storage.upload(buf, remotePath, part.mimetype);
 
         uploaded.push({
           remotePath,
+          // 7-29: storage.upload 的返回值(OSS 公共读裸 URL / 本地相对路径)原来被丢掉了。
+          //   纯增量字段, 老调用方(VideoCreationPage → /video/compose 用 remotePath)不受影响。
+          url,
           width: meta.width ?? 0,
           height: meta.height ?? 0,
           sizeBytes: buf.length,
@@ -110,6 +114,50 @@ export async function videoRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error({ err }, "图片上传失败");
       return reply.code(500).send({ code: "INTERNAL_ERROR", message: "图片上传失败" });
+    }
+  });
+
+  /**
+   * POST /video/dvh-background — 7-29 运营为「本次数字人生成」上传本地背景图。
+   *
+   * 与 /upload-images 的区别(所以单开一个而不是加参数):
+   *   - 强制 9:16 / 16:9 宽高比 + 短边 ≥720 (DVH submit 即扣费, 比例错了钱就白花)
+   *   - 强制图片内容审核(背景图会进公开视频)
+   *   - 返回**公网 URL** 而不是 remotePath —— 阿里云要自己去拉这张图
+   * 上传的图**不进系统图库**(那是管理员的 /admin/dvh-backgrounds), 只供本次生成使用。
+   */
+  app.post("/dvh-background", async (request, reply) => {
+    const { processBackgroundUpload, BackgroundUploadError } =
+      await import("../services/digital-human/background-library.js");
+    try {
+      const tenantId = request.tenantId;
+      for await (const part of request.parts()) {
+        if (part.type !== "file") continue;
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for await (const chunk of part.file) {
+          total += (chunk as Buffer).length;
+          if (total > 10 * 1024 * 1024) {
+            return reply.code(400).send({ code: "FILE_TOO_LARGE", message: "背景图超过 10MB 限制" });
+          }
+          chunks.push(chunk as Buffer);
+        }
+        const r = await processBackgroundUpload({
+          buffer: Buffer.concat(chunks), mimetype: part.mimetype, tenantId, scope: "tenant",
+        });
+        // 只收第一张 — 一次生成只有一个背景
+        return {
+          code: "OK",
+          data: { url: r.url, width: r.width, height: r.height, orientation: r.orientation, remotePath: r.remotePath },
+        };
+      }
+      return reply.code(400).send({ code: "NO_IMAGES", message: "请选择一张背景图" });
+    } catch (err) {
+      if (err instanceof BackgroundUploadError) {
+        return reply.code(400).send({ code: err.code, message: err.message });
+      }
+      logger.error({ err }, "DVH 背景图上传失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "背景图上传失败" });
     }
   });
 

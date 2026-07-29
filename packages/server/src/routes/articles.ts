@@ -64,7 +64,7 @@ export async function articlesRoutes(app: FastifyInstance) {
   // POST /articles/:id/generate-dvh-video — 用户手动触发 article → 阿里数字人视频 (PR #140)
   app.post("/:id/generate-dvh-video", { preHandler: requirePermission("content.write") }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body as { templateId?: string; accountId?: string; voiceId?: string } | null) || {};
+    const body = (request.body as { templateId?: string; accountId?: string; voiceId?: string; backgroundUrl?: string } | null) || {};
 
     const [article] = await db
       .select()
@@ -109,6 +109,16 @@ export async function articlesRoutes(app: FastifyInstance) {
       });
     }
 
+    // 7-29 背景图: 只收系统图库 / 我们自己桶里的图 / "none"(显式黑底) —— 外部 URL 未过内容审核, 拒。
+    //   实际可达性在 submit 之前还有一道 HEAD 预检(见 background-library.assertBackgroundReachable)。
+    let backgroundUrl: string | undefined;
+    if (typeof body.backgroundUrl === "string" && body.backgroundUrl.trim()) {
+      const { validateGenerationBackgroundUrl } = await import("../services/digital-human/background-library.js");
+      const v = await validateGenerationBackgroundUrl(body.backgroundUrl);
+      if (!v.ok) return reply.code(400).send({ code: "BAD_BACKGROUND_URL", message: v.message });
+      backgroundUrl = v.value;
+    }
+
     // PR-Z4 套餐闸: 到期/月视频配额
     {
       const { checkBilling, logBillingDenied } = await import("../services/billing/plan.js");
@@ -139,9 +149,10 @@ export async function articlesRoutes(app: FastifyInstance) {
       conversationId: article.conversationId ?? null,
       journalId: (article.metadata as { journalId?: string } | null)?.journalId,
       clonedVoiceId, // 6-26 该号克隆音色 → DVH 用本人声音
+      ...(backgroundUrl ? { backgroundUrl } : {}), // 7-29 本次生成的背景图
     });
     logger.info(
-      { articleId: id, templateId, realMode: isRealMode() },
+      { articleId: id, templateId, backgroundUrl, realMode: isRealMode() },
       "PR #140 user-triggered article→DVH",
     );
     return { code: "OK", data: { articleId: id, templateId, status: "triggered", realMode: isRealMode() } };

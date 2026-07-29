@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../utils/api";
 import DvhCatalogManager from "../components/settings/DvhCatalogManager";
+import DvhBackgroundManager from "../components/settings/DvhBackgroundManager";
 import VoiceCatalogManager from "../components/settings/VoiceCatalogManager";
 import MembersManager from "../components/settings/MembersManager";
 import ContactMetaSection from "../components/ContactMetaSection";
@@ -702,6 +703,9 @@ export default function SettingsPage() {
         </div>
 
         <DvhCatalogManager />
+
+        {/* 7-29 数字人背景图库: 管理员传图 → 运营生成时可选(和形象库放一起) */}
+        <DvhBackgroundManager />
 
         {/* 7-10 音色库: 克隆音+预置音色管理(列表/改名/删除/试听) */}
         <VoiceCatalogManager />

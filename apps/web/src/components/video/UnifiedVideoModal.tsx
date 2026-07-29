@@ -12,7 +12,7 @@
  *
  * 原 components/workbench/ManualGenerateVideoModal.tsx 逻辑迁入此处后已删除。
  */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../utils/api";
 import { toast } from "../Toast";
@@ -85,6 +85,43 @@ export default function UnifiedVideoModal({
       })
       .catch(() => { /* 拉不到就不显示下拉 */ });
   }, [open]);
+  // 7-29 背景图: "" = 跟随形象/系统默认配置; "none" = 本次显式不要背景(黑底); 其它 = 图片公网 URL
+  //   系统图库由管理员在 设置页→数字人背景图库 维护; 「上传本地图」只对本次生成有效, 不进图库。
+  const [bgSel, setBgSel] = useState("");
+  const [bgList, setBgList] = useState<Array<{ id: string; name: string; url: string; thumbUrl?: string; orientation: string }>>([]);
+  const [bgUploaded, setBgUploaded] = useState<Array<{ url: string; name: string }>>([]);
+  const [bgUploading, setBgUploading] = useState(false);
+  const [bgError, setBgError] = useState<string | null>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    api.get("/admin/dvh-backgrounds")
+      .then((r) => {
+        const list = ((r.data as any)?.data?.backgrounds ?? (r.data as any)?.backgrounds ?? []) as typeof bgList;
+        if (Array.isArray(list)) setBgList(list);
+      })
+      .catch(() => { /* 拉不到就只剩"默认/黑底/上传" 三个选项 */ });
+  }, [open]);
+
+  const uploadBg = useCallback(async (file: File) => {
+    setBgUploading(true); setBgError(null);
+    try {
+      const fd = new FormData();
+      fd.append("image", file);
+      const r = await api.upload<{ url: string }>("/video/dvh-background", fd);
+      const url = ((r.data as any)?.data?.url ?? (r.data as any)?.url) as string;
+      if (!url) throw new Error("上传返回异常");
+      setBgUploaded((prev) => [...prev, { url, name: file.name.slice(0, 20) }]);
+      setBgSel(url);
+    } catch (e: any) {
+      // 后端会说清"需要 9:16 竖版, 你传的是 4:3"之类, 原样展示
+      setBgError(e?.message || "背景图上传失败");
+    } finally {
+      setBgUploading(false);
+      if (bgFileRef.current) bgFileRef.current.value = "";
+    }
+  }, []);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "generating_article" | "triggering_video">("idle");
@@ -130,7 +167,7 @@ export default function UnifiedVideoModal({
           cleanup();
           setPhase("triggering_video");
           try {
-            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) });
+            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
             setSubmitting(false);
             onTriggered?.({ mode: "pending_article", batchId, articleId: row.articleId });
             doClose();
@@ -158,7 +195,7 @@ export default function UnifiedVideoModal({
       if (lockedArticleId) {
         setSubmitting(true);
         try {
-          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) });
+          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
           toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
           setSubmitting(false);
           onTriggered?.({ mode: "direct", articleId: lockedArticleId });
@@ -179,7 +216,7 @@ export default function UnifiedVideoModal({
       try {
         const res = await api.post<{ mode: "direct" | "pending_article"; articleId?: string; batchId?: string }>(
           "/admin/generate-video",
-          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}) }
+          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) }
         );
         const data = res.data as any;
         if (data?.mode === "direct" && data?.articleId) {
@@ -234,6 +271,9 @@ export default function UnifiedVideoModal({
     setArticleIdInput("");
     setTopic("");
     setVoiceSel(""); // 7-10 临时音色只作用一次, 关窗即回默认
+    setBgSel("");    // 7-29 背景图同理: 单次生效, 关窗回默认
+    setBgUploaded([]);
+    setBgError(null);
     setError(null);
     setElapsedMs(0);
     onClose();
@@ -352,6 +392,80 @@ export default function UnifiedVideoModal({
                   </label>
                 ))}
               </div>
+            </div>
+
+            {/* 7-29 背景图: 系统图库 + 上传本地图 + 不用背景(黑底), 只对本次生成生效 */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">背景(本次生成)</label>
+              <div className="grid grid-cols-4 gap-2 max-h-44 overflow-y-auto pr-1">
+                {/* 默认: 跟随形象/系统配置 */}
+                <button
+                  type="button"
+                  onClick={() => setBgSel("")}
+                  disabled={submitting}
+                  className={`h-16 rounded-lg border text-[10px] leading-tight px-1 ${
+                    bgSel === "" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:border-gray-300"
+                  }`}
+                >默认<br />(跟随形象配置)</button>
+                {/* 显式黑底 */}
+                <button
+                  type="button"
+                  onClick={() => setBgSel("none")}
+                  disabled={submitting}
+                  className={`h-16 rounded-lg border text-[10px] leading-tight px-1 bg-gray-900 text-white ${
+                    bgSel === "none" ? "border-blue-500 ring-2 ring-blue-300" : "border-gray-700 hover:border-gray-500"
+                  }`}
+                >不用背景<br />(纯黑底)</button>
+                {/* 系统图库 */}
+                {bgList.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setBgSel(b.url)}
+                    disabled={submitting}
+                    title={`${b.name} (${b.orientation === "portrait" ? "竖版" : "横版"})`}
+                    className={`h-16 rounded-lg border overflow-hidden ${
+                      bgSel === b.url ? "border-blue-500 ring-2 ring-blue-300" : "border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    <img src={b.thumbUrl || b.url} alt={b.name} className="w-full h-full object-cover" loading="lazy" />
+                  </button>
+                ))}
+                {/* 本次上传的本地图(不进系统图库) */}
+                {bgUploaded.map((b) => (
+                  <button
+                    key={b.url}
+                    type="button"
+                    onClick={() => setBgSel(b.url)}
+                    disabled={submitting}
+                    title={`${b.name} (本次上传)`}
+                    className={`h-16 rounded-lg border overflow-hidden relative ${
+                      bgSel === b.url ? "border-blue-500 ring-2 ring-blue-300" : "border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    <img src={b.url} alt={b.name} className="w-full h-full object-cover" />
+                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] leading-none py-0.5">本次上传</span>
+                  </button>
+                ))}
+                {/* 上传本地图 */}
+                <button
+                  type="button"
+                  onClick={() => bgFileRef.current?.click()}
+                  disabled={submitting || bgUploading}
+                  className="h-16 rounded-lg border border-dashed border-gray-300 text-[10px] leading-tight text-gray-500 hover:border-blue-400 hover:text-blue-600 disabled:opacity-50"
+                >{bgUploading ? "上传中…" : <>＋<br />上传本地图</>}</button>
+                <input
+                  ref={bgFileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadBg(f); }}
+                />
+              </div>
+              {bgError && <p className="text-[11px] text-red-600 mt-1">{bgError}</p>}
+              <p className="text-[11px] text-gray-400 mt-1">
+                需 9:16 竖版(1080×1920)或 16:9 横版(1920×1080);上传的图只用于本次生成。系统图库由管理员在「设置」页维护。
+              </p>
             </div>
 
             {/* 7-10 音色库: 单次生成临时换音色, 不改账号绑定 */}

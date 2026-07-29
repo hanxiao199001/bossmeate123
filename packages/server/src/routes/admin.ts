@@ -76,6 +76,9 @@ const generateVideoSchema = z.object({
   topic: z.string().min(2).max(100).optional(),
   avatarTemplate: z.string().min(1).max(40).default("A_academic"), // 6-19 放开: 支持目录扩展的自定义形象key(接口用 resolveAvatarVoice 校验)
   voiceId: z.string().min(1).max(120).optional(), // 7-10 音色库: 单次生成临时音色(库内 voice_id), 只对 from_article 立即生效
+  // 7-29 背景图: 系统图库/本地上传的公网 URL, 或 "none"(显式黑底)。准入校验见 validateGenerationBackgroundUrl。
+  //   只对 from_article 立即生效; from_topic 由前端拿到 articleId 后再调 /articles/:id/generate-dvh-video 时传。
+  backgroundUrl: z.string().min(1).max(500).optional(),
 }).refine(
   (d) => (d.source === "from_article" ? !!d.articleId : !!d.topic),
   { message: "from_article 需 articleId; from_topic 需 topic" }
@@ -454,6 +457,14 @@ export async function adminRoutes(app: FastifyInstance) {
       if (isRealMode() && (!process.env.DVH_TENANT_ID || !process.env.DVH_APP_ID)) {
         return reply.code(503).send({ code: "NO_DVH", message: "DVH_REAL_MODE=true 但 DVH 凭证缺失" });
       }
+      // 7-29 背景图准入(同 /articles/:id/generate-dvh-video): 只收系统图库 / 自家桶 / "none"
+      let backgroundUrl: string | undefined;
+      if (body.backgroundUrl) {
+        const { validateGenerationBackgroundUrl } = await import("../services/digital-human/background-library.js");
+        const v = await validateGenerationBackgroundUrl(body.backgroundUrl);
+        if (!v.ok) return reply.code(400).send({ code: "BAD_BACKGROUND_URL", message: v.message });
+        backgroundUrl = v.value;
+      }
 
       if (body.source === "from_article" && body.articleId) {
         // 路径 A: 现有 article 直接生成视频 (复用 PR #140)
@@ -477,6 +488,7 @@ export async function adminRoutes(app: FastifyInstance) {
           conversationId: article.conversationId ?? null,
           journalId: (article.metadata as { journalId?: string } | null)?.journalId,
           clonedVoiceId: body.voiceId, // 7-10 音色库: 单次生成临时音色
+          ...(backgroundUrl ? { backgroundUrl } : {}), // 7-29 单次生成背景图
         });
         logger.info({ articleId: body.articleId, templateId, realMode: isRealMode() }, "PR #161 admin generate-video (from_article)");
         return {
@@ -966,6 +978,96 @@ export async function adminRoutes(app: FastifyInstance) {
     await db.update(tenants).set({ config: cfg }).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID));
     logger.info({ count: clean.length }, "PR-X2 DVH 形象目录已更新");
     return { code: "OK", data: { entries: clean } };
+  });
+
+  // ===== 7-29 数字人视频背景图库 (管理员维护, 全租户共享) =====
+  // 存储: SYSTEM 租户 config.automationConfig.dvhBackgrounds (同 dvhCatalog 范式)
+  // ⚠️ 图走 OSS 裸公网 URL, 依赖桶 bossmate-media 公共读 —— 见 background-library.ts 顶部注释。
+
+  /** GET /admin/dvh-backgrounds — 列表(不限管理员: 生成弹窗要读它给运营选图) */
+  app.get("/dvh-backgrounds", async () => {
+    const { loadDvhBackgrounds } = await import("../services/digital-human/background-library.js");
+    return { code: "OK", data: { backgrounds: await loadDvhBackgrounds() } };
+  });
+
+  /**
+   * POST /admin/dvh-backgrounds/upload — 管理员上传背景图, 校验通过后自动入库。
+   * multipart; 支持一次多张。任意一张不合格 → 整批 400 并说清哪张为什么(别让人猜)。
+   */
+  app.post("/dvh-backgrounds/upload", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const {
+      processBackgroundUpload, loadDvhBackgrounds, saveDvhBackgrounds,
+      BackgroundUploadError, DVH_BACKGROUNDS_MAX,
+    } = await import("../services/digital-human/background-library.js");
+    try {
+      const existing = await loadDvhBackgrounds();
+      const added: Array<Record<string, unknown>> = [];
+      for await (const part of request.parts()) {
+        if (part.type !== "file") continue;
+        if (existing.length + added.length >= DVH_BACKGROUNDS_MAX) {
+          return reply.code(400).send({ code: "LIBRARY_FULL", message: `系统背景图库最多 ${DVH_BACKGROUNDS_MAX} 张, 请先删掉一些` });
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for await (const chunk of part.file) {
+          total += (chunk as Buffer).length;
+          // 边收边卡, 别把 50MB(全局 multipart 上限)整个读进内存再判
+          if (total > 10 * 1024 * 1024) {
+            return reply.code(400).send({ code: "FILE_TOO_LARGE", message: `「${part.filename || "图片"}」超过 10MB 限制` });
+          }
+          chunks.push(chunk as Buffer);
+        }
+        const buf = Buffer.concat(chunks);
+        const filename = (part.filename || "背景").replace(/\.[^.]+$/, "").slice(0, 40);
+        const r = await processBackgroundUpload({ buffer: buf, mimetype: part.mimetype, tenantId: request.tenantId, scope: "system" });
+        added.push({
+          id: `bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+          name: filename || "背景",
+          url: r.url, orientation: r.orientation, width: r.width, height: r.height,
+          remotePath: r.remotePath, createdAt: new Date().toISOString(),
+        });
+      }
+      if (added.length === 0) {
+        return reply.code(400).send({ code: "NO_IMAGES", message: "请至少上传一张背景图" });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const saved = await saveDvhBackgrounds([...existing, ...(added as any)]);
+      logger.info({ added: added.length, total: saved.length }, "7-29 DVH 背景图库已新增");
+      return { code: "OK", data: { backgrounds: saved, added: added.length } };
+    } catch (err) {
+      if (err instanceof BackgroundUploadError) {
+        return reply.code(400).send({ code: err.code, message: err.message });
+      }
+      logger.error({ err }, "DVH 背景图上传失败");
+      return reply.code(500).send({ code: "INTERNAL_ERROR", message: "背景图上传失败" });
+    }
+  });
+
+  /** PATCH /admin/dvh-backgrounds — 整表覆盖(改名/排序)。删除请用 DELETE(要连带清 OSS 对象)。 */
+  app.patch("/dvh-backgrounds", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const body = (request.body ?? {}) as { backgrounds?: unknown[] };
+    const { saveDvhBackgrounds, DVH_BACKGROUNDS_MAX } = await import("../services/digital-human/background-library.js");
+    if (!Array.isArray(body.backgrounds) || body.backgrounds.length > DVH_BACKGROUNDS_MAX) {
+      return reply.code(400).send({ code: "BAD_REQUEST", message: `backgrounds 须为数组(≤${DVH_BACKGROUNDS_MAX})` });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const saved = await saveDvhBackgrounds(body.backgrounds as any);
+    return { code: "OK", data: { backgrounds: saved } };
+  });
+
+  /** DELETE /admin/dvh-backgrounds/:id — 出库 + 清 OSS 对象(清失败只 warn, 不能因此删不掉条目) */
+  app.delete("/dvh-backgrounds/:id", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { loadDvhBackgrounds, saveDvhBackgrounds } = await import("../services/digital-human/background-library.js");
+    const list = await loadDvhBackgrounds();
+    const hit = list.find((b) => b.id === id);
+    if (!hit) return reply.code(404).send({ code: "NOT_FOUND", message: "背景图不存在" });
+    const saved = await saveDvhBackgrounds(list.filter((b) => b.id !== id));
+    if (hit.remotePath) {
+      const { storage } = await import("../services/storage/index.js");
+      await storage.delete(hit.remotePath).catch((e) => logger.warn({ e, remotePath: hit.remotePath }, "DVH 背景图 OSS 对象删除失败(条目已出库)"));
+    }
+    return { code: "OK", data: { backgrounds: saved } };
   });
 
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // PR-Z4
