@@ -18,7 +18,9 @@ async function main() {
 
   // @ts-ignore ali-oss 运行时依赖
   const OSS = (await import("ali-oss")).default;
-  const client = new OSS({ endpoint, bucket, accessKeyId, accessKeySecret });
+  // secure: 体检脚本也要按生产同口径连, 否则它打印的签名 URL 是 http://,
+  //   而生产(storage/index.ts)已是 https —— 体检结果与线上不一致, 等于白检。
+  const client = new OSS({ endpoint, bucket, accessKeyId, accessKeySecret, secure: true });
   const key = `oss-check/ping-${Date.now()}.txt`;
 
   // ① 写(测 RAM 用户有没有 OSS 写权限 — 上次报的就是这步)

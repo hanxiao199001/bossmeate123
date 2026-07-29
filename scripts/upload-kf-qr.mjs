@@ -33,7 +33,9 @@ const buffer = await QRCode.toBuffer(kfLink, {
 console.log(`[qr] PNG 大小: ${(buffer.length / 1024).toFixed(1)} KB`);
 
 const OSS = (await import("ali-oss")).default;
-const client = new OSS(oss);
+// secure: 不加则 result.url 是 http://, 而这个 URL 是**客服二维码**要挂到页面/给客户扫的,
+//   https 页面下会被混合内容拦掉。与 services/storage/index.ts 同口径, 见那边完整说明。
+const client = new OSS({ ...oss, secure: true });
 console.log(`[upload] 上传 OSS key=${ossKey} ...`);
 const result = await client.put(ossKey, buffer, { headers: { "Content-Type": "image/png" } });
 console.log(`[upload] ✅ URL: ${result.url}`);
