@@ -23,6 +23,7 @@ import {
   SIX_DIM_WEAK_DIM_HINT,
 } from "./quality-thresholds.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
+import { extractJsonObject } from "./llm-json.js";
 
 // ============ 类型定义 ============
 
@@ -345,10 +346,11 @@ ${contentPreview}
     if (isAiFallbackText(response.content)) {
       return { passed: true, violations: [], available: false, unavailableReason: "ai_unavailable" };
     }
-    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    // 7-30: 同六维那处, 换成确定性 JSON 修复(剥围栏/剥 think/括号配平/去尾逗号), 见 llm-json.ts
+    const jsonMatch = extractJsonObject(response.content).value as Record<string, any> | null;
     if (!jsonMatch) return { passed: true, violations: [], available: false, unavailableReason: "parse_failed" };
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = jsonMatch;
     const violations = parsed.violations || [];
 
     return {
@@ -414,10 +416,11 @@ consistency: 0-100 的一致性分数，80+ 为良好。`,
     if (isAiFallbackText(response.content)) {
       return { consistency: 75, deviations: [], available: false, unavailableReason: "ai_unavailable" };
     }
-    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    // 7-30: 同六维那处, 换成确定性 JSON 修复(剥围栏/剥 think/括号配平/去尾逗号), 见 llm-json.ts
+    const jsonMatch = extractJsonObject(response.content).value as Record<string, any> | null;
     if (!jsonMatch) return { consistency: 75, deviations: [], available: false, unavailableReason: "parse_failed" };
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = jsonMatch;
     return {
       consistency: Math.min(Math.max(parsed.consistency || 75, 0), 100),
       deviations: parsed.deviations || [],
@@ -474,10 +477,11 @@ ${body.slice(0, 1500)}
     if (isAiFallbackText(response.content)) {
       return { platform, passed: true, issues: [], available: false, unavailableReason: "ai_unavailable" };
     }
-    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+    // 7-30: 同六维那处, 换成确定性 JSON 修复(剥围栏/剥 think/括号配平/去尾逗号), 见 llm-json.ts
+    const jsonMatch = extractJsonObject(response.content).value as Record<string, any> | null;
     if (!jsonMatch) return { platform, passed: true, issues: [], available: false, unavailableReason: "parse_failed" };
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = jsonMatch;
     return { platform, passed: parsed.passed !== false, issues: parsed.issues || [], available: true };
   } catch (err) {
     logger.warn({ tenantId, platform, err: errText(err) }, "7-28 平台规则检查不可用(转人工, ≠ 判违规)");
@@ -650,9 +654,17 @@ ${scorerView}
     //   不同的故障混成一类, 告警也就无从区分。先显式识别兜底文案, 标成 AI 不可用。
     if (isAiFallbackText(response.content)) throw new QualityCheckAiUnavailable("AI 兜底文案(模型超时/主备全挂), 未评分");
 
-    const jsonMatch = response.content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("六维评分输出无 JSON");
-    const parsed = JSON.parse(jsonMatch[0]);
+    // 7-30: 原来是 `match(/\{[\s\S]*\}/)` + JSON.parse —— 对推理型模型不够。
+    //   v4-pro 输出前跑思维链, reasoning/围栏/中途插话都会混进来; 而那个贪婪正则还会把
+    //   JSON 之后正文里任何一个 `}` 也吞进来。生产实测单日 28 次不可解析, 每次都白花一次
+    //   推理调用重打。改走确定性修复(剥围栏/剥 think/括号配平/去尾逗号/截断回退), 见 llm-json.ts。
+    const { value: parsedRaw, repairs } = extractJsonObject(response.content);
+    if (!parsedRaw || typeof parsedRaw !== "object") throw new Error("六维评分输出无 JSON");
+    const parsed = parsedRaw as Record<string, { score?: unknown; weakestSection?: unknown; fixHint?: unknown; justification?: unknown }>;
+    if (repairs.length > 0) {
+      logger.info({ tenantId, contentId, tier, repairs, model: response.model },
+        "P0① 六维评分 JSON 经修复后可解析(省下一次重打)");
+    }
 
     const dims = {} as Record<SixDimKey, SixDimDetail>;
     for (const key of Object.keys(SIX_DIM_WEIGHTS) as SixDimKey[]) {

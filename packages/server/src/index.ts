@@ -36,6 +36,7 @@ import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error.js";
 import { getProviders } from "./services/ai/provider-factory.js";
 import { assertLlmEndpointConfig } from "./services/ai/llm-endpoints.js";
+import { assertNoDegenerateFallback } from "./services/ai/model-router.js";
 import { initializeSkills } from "./services/skills/index.js";
 import { startContentWorker } from "./services/task/content-worker.js";
 import { startJournalEnrichWorker } from "./services/task/journal-enrich-worker.js";
@@ -219,6 +220,9 @@ async function bootstrap() {
   //   纯静态校验, 不发任何网络/计费请求; 生产遇 error 级配错直接 exit(别带病产废稿)。
   //   要联网确认接入点能通, 手跑 `pnpm --filter @bossmate/server llm:check`(只调免费的 /models)。
   assertLlmEndpointConfig();
+  // 7-30 假兜底自检: primary 与 fallback 解析到同一模型 = 主模型一挂即全线停(7-27 质检零产出的根)。
+  //   纯静态校验, 不发请求; 生产遇未声明的退化路由直接 exit, 别带病跑。
+  assertNoDegenerateFallback();
 
   // 初始化 AI 提供商
   const providers = getProviders();

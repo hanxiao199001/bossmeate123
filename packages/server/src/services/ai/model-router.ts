@@ -288,5 +288,85 @@ class ModelRouter {
   }
 }
 
+// ============ 7-30 假兜底守卫 ============
+//
+// 病史: `quality_check` 那行写着 primary=REASONER / fallback=CHAT, 看着有兜底; 而两个 env
+//   现在都是 deepseek-v4-pro → selectModel 的去重把 fallback 丢掉, getModelPair 里
+//   `fallback.model !== primary.model` 也永远 false → **主模型一挂就直接凉**。
+//   7-27 质检零产出事故就栽在这。当时补了注释, 但注释救不了下一个读代码的人 ——
+//   这个项目已经反复证明过(分区判据踩两次、保底口径两处各写各的)。
+//
+// 所以改成机器判定: 任何 primary 与 fallback 解析到**同一 provider + 同一模型**的路由,
+//   要么改成真兜底, 要么在下面显式声明"由哪个槽补偿", 而那个补偿槽会被一并校验
+//   (它自己不许退化, 且必须跨厂商)。写不出沉默的假兜底。
+
+/** 允许退化的路由 —— 必须写明由哪个槽补偿, 以及为什么不让路由层自己兜 */
+const DEGENERATE_FALLBACK_ALLOWED: Partial<Record<TaskType, { compensatedBy: TaskType; reason: string }>> = {
+  quality_check: {
+    compensatedBy: "quality_check_fast",
+    reason:
+      "刻意不让路由层自己兜: 若 quality_check 的 fallback 直接指向 qwen, 那 qwen 出的分会被记成 " +
+      "tier=primary, quality_check_degraded 告警就不会响 —— 等于丢掉『主模型不可用』这个信号。" +
+      "改由 quality-check-v2 显式把 skillType 切到 quality_check_fast(跨厂商 qwen-plus)升级, " +
+      "升级动作因此是可观测的(scorerModel + degraded incident 都落库)。",
+  },
+};
+
+export interface DegenerateFallbackIssue {
+  taskType: TaskType;
+  provider: string;
+  model: string;
+  /** 声明了补偿槽但补偿槽自己也不合格时的说明 */
+  problem: "undeclared" | "compensator_degenerate" | "compensator_same_vendor";
+}
+
+/**
+ * 纯函数: 找出所有"假兜底"(primary 与 fallback 完全相同)且未被正当补偿的路由。
+ * 与 selectModel 的去重条件逐字对应 —— 那里认为"相同"的, 这里就该判退化。
+ */
+export function findDegenerateFallbacks(): DegenerateFallbackIssue[] {
+  const route = buildTaskRoute();
+  const issues: DegenerateFallbackIssue[] = [];
+  const same = (a: ModelChoice, b: ModelChoice) =>
+    a.providerName === b.providerName && a.modelName === b.modelName;
+
+  for (const [tt, r] of Object.entries(route) as Array<[TaskType, { primary: ModelChoice; fallback: ModelChoice }]>) {
+    if (!same(r.primary, r.fallback)) continue;
+
+    const allow = DEGENERATE_FALLBACK_ALLOWED[tt];
+    const base = { taskType: tt, provider: r.primary.providerName, model: r.primary.modelName };
+    if (!allow) { issues.push({ ...base, problem: "undeclared" }); continue; }
+
+    // 补偿槽自己不能也是假兜底, 而且必须换厂商(同厂商同一批故障会一起挂)
+    const comp = route[allow.compensatedBy];
+    if (!comp || same(comp.primary, comp.fallback)) {
+      issues.push({ ...base, problem: "compensator_degenerate" });
+    } else if (comp.primary.providerName === r.primary.providerName) {
+      issues.push({ ...base, problem: "compensator_same_vendor" });
+    }
+  }
+  return issues;
+}
+
+/**
+ * 启动期自检。**只在启动时抛**, 不在 selectModel 里抛 ——
+ * 运行期抛会把一次配置失误放大成整条生成链路中断, 那比假兜底本身更糟。
+ */
+export function assertNoDegenerateFallback(): void {
+  const issues = findDegenerateFallbacks();
+  if (issues.length === 0) return;
+  const detail = issues
+    .map((i) => `  · ${i.taskType}: primary 与 fallback 都是 ${i.provider}/${i.model} (${i.problem})`)
+    .join("\n");
+  const msg =
+    "❌ 检测到假兜底路由(primary 与 fallback 解析到同一模型, 主模型一挂即全线停):\n" + detail +
+    "\n改法二选一: ① 把 fallback 换成**另一个厂商**的模型;" +
+    " ② 若刻意不让路由层自己兜(例如要保留『升级到降级槽』这个可观测动作)," +
+    " 在 model-router.ts 的 DEGENERATE_FALLBACK_ALLOWED 里声明补偿槽并写明理由。";
+  logger.error({ issues }, "model_router.degenerate_fallback");
+  if (env.NODE_ENV === "production") throw new Error(msg);
+  console.error(msg);
+}
+
 // 单例
 export const modelRouter = new ModelRouter();
