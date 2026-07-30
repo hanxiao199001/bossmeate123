@@ -125,16 +125,28 @@ export async function checkBudget(tenantId: string, estimateCents: number): Prom
   return { allowed: true, spend, budget };
 }
 
-/** DVH 成本预估: 250-350字≈90秒 (3.3字/秒), 钳在 30~120 秒。 */
+/**
+ * DVH 成本预估: 3.3 字/秒, 上钳 120 秒。
+ *
+ * 7-30 去掉 30 秒下限: 阿里云**按真实出片秒数结算, 没有起步价**(实测 54 字稿出片 9.66 秒,
+ *   账单 1.59 元 = 9.66 × 0.165)。原来的 `Math.max(30, …)` 会把短稿一律报成 4.95 元,
+ *   而实际 1.59 元 —— 差 3 倍, 费用条就失去参考价值了。
+ *   下限本是"宁可高报"的保守设计, 但高报 3 倍不叫保守叫失准。
+ */
 export function estimateDvhCents(narrationText: string): number {
-  const seconds = Math.min(120, Math.max(30, Math.round(narrationText.length / 3.3)));
+  const seconds = Math.min(120, Math.round(narrationText.length / DVH_CHARS_PER_SECOND));
   return Math.round(seconds * DVH_CENTS_PER_SECOND);
 }
 
-/** 口播稿语速基准: 250-350 字 ≈ 90 秒(5 月实测), 即 3.3 字/秒。 */
+/**
+ * 口播稿语速基准: 250-350 字 ≈ 90 秒(5 月实测), 即 3.3 字/秒。
+ *
+ * ⚠️ 7-30 首条真实短稿实测语速是 **5.6 字/秒**(54 字 → 9.66 秒), 比这个基准快得多。
+ *   但**一条样本不足以定常数**(语速受标点/数字/英文占比影响), 所以先不动 3.3,
+ *   等积累几十条 (contents.metadata.dvhDurationMs 有落库) 再用 p25 校准 ——
+ *   取 p25 而不是均值, 是因为预估宁可偏高不可偏低。
+ */
 export const DVH_CHARS_PER_SECOND = 3.3;
-/** 计费下限保护: 短稿也按 30 秒预估(宁可高报, 预算闸不能低估)。真实账单无起步价。 */
-export const DVH_ESTIMATE_MIN_SECONDS = 30;
 
 export interface DvhEstimate {
   chars: number;
@@ -152,10 +164,11 @@ export interface DvhEstimate {
  *   一个替运营估钱的数字, 宁可高报不能低报。
  *   而 estimateDvhCents 被文章链路 + 孤儿任务记账共用, 直接改它等于动生产计费口径, 所以另起一个。
  *
- * 只保留 30 秒下限(高报方向, 安全)。
+ * 7-30 起两者都不再有 30 秒下限(阿里云无起步价, 见 estimateDvhCents 注释)。
  */
 export function estimateDvhFromText(narrationText: string): DvhEstimate {
   const chars = String(narrationText ?? "").length;
-  const seconds = Math.max(DVH_ESTIMATE_MIN_SECONDS, Math.round(chars / DVH_CHARS_PER_SECOND));
+  // 7-30 同 estimateDvhCents: 去掉 30 秒下限(阿里云按真实秒数结算, 无起步价)
+  const seconds = Math.round(chars / DVH_CHARS_PER_SECOND);
   return { chars, seconds, cents: Math.round(seconds * DVH_CENTS_PER_SECOND) };
 }

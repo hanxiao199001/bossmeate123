@@ -57,7 +57,11 @@ interface ModelChoice {
 function buildTaskRoute(): Record<TaskType, { primary: ModelChoice; fallback: ModelChoice }> {
   return {
     content_generation:   { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT },     fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
-    requirement_analysis: { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
+    // 7-30 fallback 换成跨厂商: 原来是 deepseek/CHAT, 而 REASONER 与 CHAT 两个 env 现在都是
+    //   deepseek-v4-pro → selectModel 去重把 fallback 丢掉 = 主模型一挂即全线停。
+    //   这一条是假兜底守卫(assertNoDegenerateFallback)当场抓出来的, 之前只知道 quality_check 有问题。
+    //   与 quality_check 不同, 本槽没有"要保留升级动作可观测性"的理由, 所以直接改成真兜底。
+    requirement_analysis: { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "qwen", modelName: env.QWEN_MODEL_PLUS } },
     quality_check:        { primary: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_REASONER }, fallback: { providerName: "deepseek", modelName: env.DEEPSEEK_MODEL_CHAT } },
     // ⚠️ 7-27 质检降级槽 —— 全系统唯一没有**跨厂商**兜底的链路, 事故当天就栽在这里。
     //   为什么 quality_check 那一行等于没有兜底: DEEPSEEK_MODEL_REASONER 与 DEEPSEEK_MODEL_CHAT
