@@ -112,6 +112,19 @@ function unclosedTail(s: string): { stack: string[]; inStr: boolean } {
   return { stack, inStr };
 }
 
+/**
+ * 修复出来的结果必须**有实质内容**(至少一个键)。
+ *
+ * 反例: 输入只有 `"{"`, 补齐右括号后是 `{}` —— 语法合法但语义上是凭空造的空对象。
+ * 下游六维评分拿到 `{}` 会把六个维度全算成 0 分, 正是项目一直在消灭的
+ * "没评上分被当成评了 0 分"。修不出内容就该返回 null 让上层走重打/降级。
+ */
+function hasSubstance(v: unknown): boolean {
+  if (!v || typeof v !== "object") return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return Object.keys(v as Record<string, unknown>).length > 0;
+}
+
 function tryParse(text: string): unknown | null {
   try { return JSON.parse(text); } catch { return null; }
 }
@@ -155,7 +168,7 @@ export function extractJsonObject(raw: string | null | undefined): JsonExtractRe
     if (stack.length > 0) {
       const closed = body + (inStr ? '"' : "") + stack.reverse().join("");
       const p = tryParse(stripTrailingCommas(closed));
-      if (p && typeof p === "object") {
+      if (hasSubstance(p)) {
         repairs.push(inStr ? "close_unterminated_string" : "close_unbalanced");
         return { value: p, repairs };
       }
@@ -193,7 +206,7 @@ export function extractJsonObject(raw: string | null | undefined): JsonExtractRe
   for (let i = candidate.lastIndexOf("}"); i > first; i = candidate.lastIndexOf("}", i - 1)) {
     const attempt = stripTrailingCommas(candidate.slice(0, i + 1));
     const p = tryParse(attempt);
-    if (p && typeof p === "object") { repairs.push("progressive_truncate"); return { value: p, repairs }; }
+    if (hasSubstance(p)) { repairs.push("progressive_truncate"); return { value: p, repairs }; }
   }
 
   return { value: null, repairs };
