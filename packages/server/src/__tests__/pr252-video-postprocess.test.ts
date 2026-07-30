@@ -12,7 +12,9 @@ async function readSrc(rel: string): Promise<string> {
 const SUBMIT = "../services/digital-human/submit-task.ts";
 const QUERY = "../services/digital-human/query-task.ts";
 const POSTPROCESS = "../services/digital-human/video-postprocess.ts";
-const BRIDGE = "../services/digital-human/article-bridge.ts";
+// 7-30: produceVideo(以及它调 postprocess 的那段)从 article-bridge.ts 搬到了 produce-video.ts
+//   —— 文字稿直生要复用同一段合成逻辑, 不能让它继续挂在"article"名下。断言内容一字未改, 只改了看哪个文件。
+const BRIDGE = "../services/digital-human/produce-video.ts";
 
 describe("PR #252: 关闭 DVH 内嵌字幕", () => {
   it("submit-task subtitleEmbedded=false", async () => {

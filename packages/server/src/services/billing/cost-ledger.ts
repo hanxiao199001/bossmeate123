@@ -130,3 +130,32 @@ export function estimateDvhCents(narrationText: string): number {
   const seconds = Math.min(120, Math.max(30, Math.round(narrationText.length / 3.3)));
   return Math.round(seconds * DVH_CENTS_PER_SECOND);
 }
+
+/** 口播稿语速基准: 250-350 字 ≈ 90 秒(5 月实测), 即 3.3 字/秒。 */
+export const DVH_CHARS_PER_SECOND = 3.3;
+/** 计费下限保护: 短稿也按 30 秒预估(宁可高报, 预算闸不能低估)。真实账单无起步价。 */
+export const DVH_ESTIMATE_MIN_SECONDS = 30;
+
+export interface DvhEstimate {
+  chars: number;
+  seconds: number;
+  cents: number;
+}
+
+/**
+ * 7-30 文字稿直生用的成本预估 —— 与 estimateDvhCents **只差一处: 没有 120 秒上钳**。
+ *
+ * 为什么必须另开一个而不是直接改 estimateDvhCents:
+ *   estimateDvhCents 那个 `Math.min(120, …)` 在文章链路无害 —— videoScript 规格是 220-320 字
+ *   (≈90 秒), 永远撞不到钳位。但直生把字数控制权交给了运营, 600 字 ≈ 182 秒:
+ *   钳到 120 秒后预估 19.8 元, 而真实账单 30 元 —— **预算闸会漏放 10 元, 前端费用条会少报 10 元**。
+ *   一个替运营估钱的数字, 宁可高报不能低报。
+ *   而 estimateDvhCents 被文章链路 + 孤儿任务记账共用, 直接改它等于动生产计费口径, 所以另起一个。
+ *
+ * 只保留 30 秒下限(高报方向, 安全)。
+ */
+export function estimateDvhFromText(narrationText: string): DvhEstimate {
+  const chars = String(narrationText ?? "").length;
+  const seconds = Math.max(DVH_ESTIMATE_MIN_SECONDS, Math.round(chars / DVH_CHARS_PER_SECOND));
+  return { chars, seconds, cents: Math.round(seconds * DVH_CENTS_PER_SECOND) };
+}

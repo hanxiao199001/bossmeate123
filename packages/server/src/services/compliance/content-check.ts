@@ -77,7 +77,13 @@ export async function checkCompliance(text: string): Promise<ComplianceResult> {
 // 6-19: 生成阶段自动净化 — 把"无歧义的"绝对化/医疗/投稿过度承诺词替换成合规说法,
 // 让生成出来的内容/文案基本不带违规词(避免发布时才拦截 → 白烧 token + 白等生成)。
 // 故意不动学术语境常见且合法的词(第一作者/国家级期刊/最佳论文奖), 那些靠 checkCompliance 软词警告人工判。
-const SANITIZE_MAP: Array<[RegExp, string]> = [
+//
+// 7-30 拆成两段(顺序与拼接后的原表完全一致, 规则之间互不影响):
+//   COMPLIANCE_RULES = 真·违规词 → 也被 findUnambiguousViolations 当"红线词"用;
+//   DIRT_RULES       = LLM 拼接脏点(学科名叠字), 不是违规, 绝不能拿去拦人。
+// 拆开的原因: 文字稿直生要"命中就拒绝并明说哪个词", 需要复用这份**已经过筛的无歧义词表**,
+//   而不是再造一份 —— 再造一份就意味着两份词表迟早不一致。
+const COMPLIANCE_RULES: Array<[RegExp, string]> = [
   // 医疗红线
   [/根治/g, "改善"],
   [/治愈率/g, "有效率"],
@@ -93,19 +99,59 @@ const SANITIZE_MAP: Array<[RegExp, string]> = [
   [/闭眼[投冲]必中|投了?必中|必中无疑/g, "命中率相对较高"],
   // 赚钱类
   [/稳赚不赔|稳赚|躺赚/g, "有收益空间"],
-  // 7-05 脏点清理: 大类学科名叠字(LLM 拼接 discipline+分区串致"医学医学2区TOP"). 限已知学科名, 不误伤合法叠词。
-  [/(医学|生物学|工程技术|化学|物理学|材料科学|环境科学与生态学|环境科学|数学|农林科学|地球科学|计算机科学|药学|管理科学|经济学|心理学|社会学)(TOP)?\1/g, "$1$2"],
   // 绝对化(无歧义)
   [/绝无仅有/g, "较为少见"],
   [/全球首创|全球首发|全球第一|世界第一/g, "较早"],
   [/世界级/g, "高水平"],
   [/极致/g, "出色"],
 ];
+
+// 7-05 脏点清理: 大类学科名叠字(LLM 拼接 discipline+分区串致"医学医学2区TOP"). 限已知学科名, 不误伤合法叠词。
+// ⚠️ 这不是违规词 —— 只做净化, 不参与任何拦截判断。
+const DIRT_RULES: Array<[RegExp, string]> = [
+  [/(医学|生物学|工程技术|化学|物理学|材料科学|环境科学与生态学|环境科学|数学|农林科学|地球科学|计算机科学|药学|管理科学|经济学|心理学|社会学)(TOP)?\1/g, "$1$2"],
+];
+
+const SANITIZE_MAP: Array<[RegExp, string]> = [...COMPLIANCE_RULES, ...DIRT_RULES];
+
 export function sanitizeForCompliance(text: string | null | undefined): string {
   if (!text) return text ?? "";
   let out = String(text);
   for (const [re, rep] of SANITIZE_MAP) out = out.replace(re, rep);
   return out;
+}
+
+/** 命中的无歧义红线词 + 建议替换说法。 */
+export interface UnambiguousViolation {
+  /** 原文里实际出现的那个词(不是正则), 直接拿去给运营看 */
+  word: string;
+  /** 合规替换建议 = 生成侧净化时会换成的说法, 口径天然一致 */
+  suggest: string;
+}
+
+/**
+ * 7-30 找出文本里的"无歧义红线词"(医疗承诺 / 投稿保过 / 绝对化用语)。
+ *
+ * 与 checkCompliance 的分工:
+ *   - checkCompliance.hardHits = 政治高危词 → 封号级, 拦。
+ *   - checkCompliance.softHits = **有歧义**的绝对化词("第一""国家级""最佳"), 在学术语境里
+ *     大量合法(第一作者/国家级期刊/最佳论文奖) → 只警告, 拦了全是误伤。
+ *   - 本函数 = COMPLIANCE_RULES 那份**已经过筛的无歧义**词表 → 出现即违规, 可以放心拦。
+ *
+ * 为什么直生链路要用它: 文章链路的正文是 AI 按红线 prompt 写的、生成时还跑了
+ *   sanitizeForCompliance 自动净化; 运营手写的口播稿这两道全绕过去了。
+ */
+export function findUnambiguousViolations(text: string | null | undefined): UnambiguousViolation[] {
+  if (!text) return [];
+  const plain = String(text).replace(/<[^>]+>/g, "");
+  const out = new Map<string, string>(); // word → suggest, 天然去重
+  for (const [re, suggest] of COMPLIANCE_RULES) {
+    // 正则都带 g, 但 lastIndex 是有状态的 —— 每次新建一个, 别在模块级共享实例上 match
+    for (const m of plain.matchAll(new RegExp(re.source, re.flags))) {
+      if (m[0] && !out.has(m[0])) out.set(m[0], suggest);
+    }
+  }
+  return [...out].map(([word, suggest]) => ({ word, suggest }));
 }
 
 // 7-03 标题-正文一致性检查（行7 教训: 标题喊"稳发", 正文却"CAR 高风险, 建议避开" = 信任事故）。

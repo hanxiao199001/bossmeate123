@@ -9,6 +9,9 @@
  *  - 主题直生:     POST /admin/generate-video { source: "from_topic", topic, avatarTemplate }
  *                  → poll /batch/:id → POST /articles/:id/generate-dvh-video (原链路原样迁入);
  *  - 图片转视频:   /video/compose 三步向导太重不内嵌, 引导块 + 按钮跳 /video/create。
+ *  - 7-30 文字稿直生: POST /video/dvh-from-text { text, title?, templateId, voiceId?, backgroundUrl?, idempotencyKey }
+ *                  运营自己写好口播稿直接出片, 不生成文章、不调 LLM。
+ *                  形象/音色/背景三个选择器与其它 tab 完全共用(它们本来就与"文本从哪来"无关)。
  *
  * 原 components/workbench/ManualGenerateVideoModal.tsx 逻辑迁入此处后已删除。
  */
@@ -18,11 +21,12 @@ import { api } from "../../utils/api";
 import { toast } from "../Toast";
 import { DVH_TEMPLATES } from "../RecommendationCard";
 
-export type VideoModalTab = "article" | "topic" | "image";
+export type VideoModalTab = "article" | "topic" | "text" | "image";
 
 const TAB_LABELS: { key: VideoModalTab; label: string }[] = [
   { key: "article", label: "文章转数字人" },
   { key: "topic", label: "主题直生" },
+  { key: "text", label: "文字稿直生" },
   { key: "image", label: "图片转视频" },
 ];
 
@@ -30,6 +34,29 @@ interface BatchRow {
   status: string;
   articleId: string | null;
   errorMessage: string | null;
+}
+
+/** 7-30 文字稿直生: 口播稿字数闸(与服务端 routes/video.ts 的 zod 同值, 改一处必须改两处) */
+const NARRATION_MIN = 50;
+const NARRATION_MAX = 600;
+const ESTIMATE_DEBOUNCE_MS = 400;
+
+interface NarrationEstimate {
+  chars: number;
+  seconds: number;
+  yuan: number;
+  tooShort: boolean;
+  tooLong: boolean;
+  blocked: boolean;
+  blockMessage?: string;
+}
+
+/** 幂等键: 让"网络超时后重试"不会变成两条视频。crypto.randomUUID 在老环境/非 https 下没有, 兜个底。 */
+function newIdempotencyKey(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  } catch { /* 落到下面的兜底 */ }
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export interface UnifiedVideoModalProps {
@@ -139,6 +166,37 @@ export default function UnifiedVideoModal({
       if (bgFileRef.current) bgFileRef.current.value = "";
     }
   }, [bgSaveToLib, loadBgList]);
+
+  // 7-30 文字稿直生
+  const [narration, setNarration] = useState("");
+  const [narrationTitle, setNarrationTitle] = useState("");
+  const [estimate, setEstimate] = useState<NarrationEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  // 幂等键: 同一次"提交意图"复用一个 key(失败重试不会变成两条视频); 稿子/参数一改就换新的,
+  //   因为那已经是另一条视频了 —— 换形象重做一条是正当需求, 不该被幂等挡住。
+  const idemKeyRef = useRef<string>("");
+  useEffect(() => { idemKeyRef.current = ""; }, [narration, narrationTitle, avatar, voiceSel, bgSel]);
+
+  // 边打字边算钱(防抖 400ms)。顺带拿服务端的内容安全预检 —— 红线词在这里就变红,
+  //   而不是点了生成才被 400 拒(那时候人已经等了半天)。
+  useEffect(() => {
+    if (!open || tab !== "text") return;
+    const t = narration.trim();
+    if (!t) { setEstimate(null); return; }
+    // 服务端预估接口上限 5000 字; 再长就别发请求了(只会换来一串 toast), 本地直接判"超了"
+    if (t.length > 5000) {
+      setEstimate({ chars: t.length, seconds: 0, yuan: 0, tooShort: false, tooLong: true, blocked: false });
+      return;
+    }
+    setEstimating(true);
+    const timer = setTimeout(() => {
+      api.post<NarrationEstimate>("/video/dvh-estimate", { text: t, ...(narrationTitle.trim() ? { title: narrationTitle.trim() } : {}) })
+        .then((r) => setEstimate(((r.data as any)?.data ?? r.data) as NarrationEstimate))
+        .catch(() => { /* 预估拿不到不挡生成, 服务端还有硬闸 */ })
+        .finally(() => setEstimating(false));
+    }, ESTIMATE_DEBOUNCE_MS);
+    return () => { clearTimeout(timer); setEstimating(false); };
+  }, [open, tab, narration, narrationTitle]);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,6 +309,41 @@ export default function UnifiedVideoModal({
       return;
     }
 
+    // —— 7-30 文字稿直生 ——
+    if (tab === "text") {
+      const t = narration.trim();
+      if (t.length < NARRATION_MIN) { setError(`口播稿至少 ${NARRATION_MIN} 字`); return; }
+      if (t.length > NARRATION_MAX) { setError(`口播稿最多 ${NARRATION_MAX} 字, 当前 ${t.length} 字, 请拆成多条视频`); return; }
+      if (estimate?.blocked) { setError(estimate.blockMessage || "口播稿未通过内容检查"); return; }
+      // 二次确认必须**带上钱**: 这一步之后就是真扣费, 而运营在这个 tab 里是自己决定字数的
+      const sec = estimate?.seconds ?? Math.max(30, Math.round(t.length / 3.3));
+      const yuan = estimate?.yuan ?? Math.round(sec * 16.5) / 100;
+      if (!confirm(`这条口播稿 ${t.length} 字, 约 ${sec} 秒, 预估 ¥${yuan.toFixed(2)}。\n生成即产生费用且不可撤销, 确认生成?`)) return;
+
+      if (!idemKeyRef.current) idemKeyRef.current = newIdempotencyKey();
+      setSubmitting(true);
+      setElapsedMs(0);
+      try {
+        await api.post("/video/dvh-from-text", {
+          text: t,
+          templateId: avatar,
+          idempotencyKey: idemKeyRef.current,
+          ...(narrationTitle.trim() ? { title: narrationTitle.trim() } : {}),
+          ...(voiceSel ? { voiceId: voiceSel } : {}),
+          ...(bgSel ? { backgroundUrl: bgSel } : {}),
+        });
+        toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
+        setSubmitting(false);
+        onTriggered?.({ mode: "direct" });
+        doClose();
+      } catch (err: any) {
+        // 409 = 同稿在途(防双击), 文案由服务端给, 原样展示
+        setError(err?.message || "生成失败");
+        setSubmitting(false);
+      }
+      return;
+    }
+
     // —— 主题直生 ——
     if (tab === "topic") {
       if (topic.trim().length < 2) {
@@ -288,6 +381,11 @@ export default function UnifiedVideoModal({
     setPhase("idle");
     setArticleIdInput("");
     setTopic("");
+    // 7-30 口播稿是运营手打的, 关窗就清掉 —— 与其它字段一致(单次生效), 别把上一条的稿子留给下一次
+    setNarration("");
+    setNarrationTitle("");
+    setEstimate(null);
+    idemKeyRef.current = "";
     setVoiceSel(""); // 7-10 临时音色只作用一次, 关窗即回默认
     setBgSel("");    // 7-29 背景图同理: 单次生效, 关窗回默认
     setBgUploaded([]);
@@ -307,10 +405,13 @@ export default function UnifiedVideoModal({
   };
 
   const elapsedSec = Math.floor(elapsedMs / 1000);
+  const narrationLen = narration.trim().length;
+  const narrationBad = narrationLen < NARRATION_MIN || narrationLen > NARRATION_MAX || !!estimate?.blocked;
   const submitDisabled =
     submitting ||
     (tab === "article" && !lockedArticleId && !articleIdInput.trim()) ||
-    (tab === "topic" && topic.trim().length < 2);
+    (tab === "topic" && topic.trim().length < 2) ||
+    (tab === "text" && narrationBad);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -374,7 +475,7 @@ export default function UnifiedVideoModal({
                   />
                 </div>
               )
-            ) : (
+            ) : tab === "topic" ? (
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">主题 (topic)</label>
                 <input
@@ -386,6 +487,82 @@ export default function UnifiedVideoModal({
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
                 />
                 <p className="text-[11px] text-gray-400 mt-1">topic → 先生成 article → 再转数字人视频</p>
+              </div>
+            ) : (
+              /* 7-30 文字稿直生: 自己写稿 → 直接出片, 不生成文章、不调 LLM */
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    口播稿 <span className="text-gray-400 font-normal">(数字人一字不差照着念)</span>
+                  </label>
+                  <textarea
+                    value={narration}
+                    onChange={(e) => setNarration(e.target.value)}
+                    rows={7}
+                    placeholder={`直接写你要让数字人说的话, ${NARRATION_MIN}-${NARRATION_MAX} 字。\n例: 很多老师问, 中文核心到底难在哪…`}
+                    disabled={submitting}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm leading-relaxed focus:outline-none disabled:bg-gray-50 ${
+                      narrationLen > NARRATION_MAX || estimate?.blocked
+                        ? "border-red-400 focus:border-red-500"
+                        : "border-gray-300 focus:border-blue-500"
+                    }`}
+                  />
+                </div>
+
+                {/* 费用条: 字数 / 秒数 / 钱。运营在这个 tab 里自己决定字数, 没有这行等于放任烧钱 */}
+                <div
+                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs border ${
+                    narrationLen > NARRATION_MAX
+                      ? "bg-red-50 border-red-200 text-red-700"
+                      : narrationLen > 0 && narrationLen < NARRATION_MIN
+                        ? "bg-gray-50 border-gray-200 text-gray-500"
+                        : narrationLen > 400
+                          ? "bg-amber-50 border-amber-200 text-amber-800"
+                          : "bg-blue-50 border-blue-200 text-blue-800"
+                  }`}
+                >
+                  <span>
+                    <b>{narrationLen}</b> / {NARRATION_MAX} 字
+                    {narrationLen >= NARRATION_MIN && estimate && !estimate.tooLong && (
+                      <> · 约 <b>{estimate.seconds}</b> 秒 · 预估 <b>¥{estimate.yuan.toFixed(2)}</b></>
+                    )}
+                  </span>
+                  <span className="text-[11px] opacity-70">
+                    {estimating
+                      ? "计算中…"
+                      : narrationLen === 0
+                        ? "按 0.165 元/秒计费"
+                        : narrationLen < NARRATION_MIN
+                          ? `还差 ${NARRATION_MIN - narrationLen} 字`
+                          : narrationLen > NARRATION_MAX
+                            ? `超出 ${narrationLen - NARRATION_MAX} 字, 请拆成多条`
+                            : narrationLen > 400
+                              ? "偏长, 注意成本"
+                              : ""}
+                  </span>
+                </div>
+
+                {/* 内容安全预检: 红线词打字时就拦下来, 不等到花完钱 */}
+                {estimate?.blocked && (
+                  <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 leading-relaxed">
+                    ⚠️ {estimate.blockMessage}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    标题 <span className="text-gray-400 font-normal">(选填, 不填就取稿子开头)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={narrationTitle}
+                    onChange={(e) => setNarrationTitle(e.target.value)}
+                    placeholder="用于在内容管理里认出这条视频"
+                    maxLength={60}
+                    disabled={submitting}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
+                  />
+                </div>
               </div>
             )}
 
