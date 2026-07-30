@@ -89,6 +89,29 @@ function stripTrailingCommas(s: string): string {
   return out;
 }
 
+/**
+ * 扫一遍, 返回末尾未闭合的结构(供截断修复补齐)。
+ * `inStr` = 扫到结尾还在字符串里(说明截断发生在字符串中间, 要先补一个引号)。
+ */
+function unclosedTail(s: string): { stack: string[]; inStr: boolean } {
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (const ch of s) {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  return { stack, inStr };
+}
+
 function tryParse(text: string): unknown | null {
   try { return JSON.parse(text); } catch { return null; }
 }
@@ -124,7 +147,20 @@ export function extractJsonObject(raw: string | null | undefined): JsonExtractRe
     candidate = s.slice(first, end + 1);
     if (first > 0 || end < s.length - 1) repairs.push("brace_match");
   } else {
-    // ⑥ 配不平 = 多半被截断, 退而求其次: 从末尾往回找最后一个 `}` 再试
+    // ⑥ 配不平 = 多半被截断。**先按未闭合深度补齐**, 而不是往前找已有的 `}` ——
+    //   `{"a":{"score":8},"b":{"score":7` 这种缺两层右括号的, 往前找只能截到 `{"a":{...}`
+    //   (自己也不配平, 照样解析不了), 而补齐能把已经吐出来的 b 也保住。这个 bug 是测试抓到的。
+    const body = s.slice(first);
+    const { stack, inStr } = unclosedTail(body);
+    if (stack.length > 0) {
+      const closed = body + (inStr ? '"' : "") + stack.reverse().join("");
+      const p = tryParse(stripTrailingCommas(closed));
+      if (p && typeof p === "object") {
+        repairs.push(inStr ? "close_unterminated_string" : "close_unbalanced");
+        return { value: p, repairs };
+      }
+    }
+    // 补齐也不行(截断位置太靠前/结构already坏) → 退回"往前找最后一个 }"
     const last = s.lastIndexOf("}");
     if (last <= first) return { value: null, repairs };
     candidate = s.slice(first, last + 1);
@@ -142,9 +178,12 @@ export function extractJsonObject(raw: string | null | undefined): JsonExtractRe
     candidate = noTrailing;
   }
 
-  // ⑤ 全角引号
-  if (/[""'']/.test(candidate)) {
-    const ascii = candidate.replace(/[""]/g, '"').replace(/['']/g, "'");
+  // ⑤ 全角引号 → 半角。**必须用 unicode 转义**: 直接在源码里写全角引号, 会被编辑器/格式化
+  //   工具归一成 ASCII, 于是 replace 变成"ASCII 换 ASCII"的空操作 —— 这个 bug 是测试抓到的。
+  const FULLWIDTH_DQ = /[\u201c\u201d]/g;   // “ ”
+  const FULLWIDTH_SQ = /[\u2018\u2019]/g;   // ‘ ’
+  if (FULLWIDTH_DQ.test(candidate) || FULLWIDTH_SQ.test(candidate)) {
+    const ascii = candidate.replace(FULLWIDTH_DQ, '"').replace(FULLWIDTH_SQ, "'");
     parsed = tryParse(ascii);
     if (parsed && typeof parsed === "object") { repairs.push("fullwidth_quote"); return { value: parsed, repairs }; }
     candidate = ascii;
