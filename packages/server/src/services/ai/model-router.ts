@@ -349,8 +349,18 @@ export function findDegenerateFallbacks(): DegenerateFallbackIssue[] {
 }
 
 /**
- * 启动期自检。**只在启动时抛**, 不在 selectModel 里抛 ——
- * 运行期抛会把一次配置失误放大成整条生成链路中断, 那比假兜底本身更糟。
+ * 启动期自检 —— **只告警, 永不抛**。
+ *
+ * ⚠️ 7-30 血的教训: 这个函数第一版在 production 下 `throw`, 部署后服务**直接起不来**
+ *   (health 000), 因为 `requirement_analysis` 也是退化路由且未声明 —— 一个**早就存在**的
+ *   状态。对存量状态加一道会抛的断言, 等于自己制造停机: 断言想防的是"以后别再写出假兜底",
+ *   而它实际做的是"把历史欠账变成当场宕机"。
+ *
+ *   正确的分工:
+ *     · **测试**负责阻断 —— 新写出假兜底 → llm-json-repair.test.ts 红 → 合不进去(零线上风险)
+ *     · **运行期**只负责告知 —— 日志 error + ops_incident, 让存量欠账可见但不停服
+ *
+ *   同理适用于任何"给既有系统加校验"的场合: 先 warn 一段时间、看清存量面, 再考虑收紧。
  */
 export function assertNoDegenerateFallback(): void {
   const issues = findDegenerateFallbacks();
@@ -358,14 +368,20 @@ export function assertNoDegenerateFallback(): void {
   const detail = issues
     .map((i) => `  · ${i.taskType}: primary 与 fallback 都是 ${i.provider}/${i.model} (${i.problem})`)
     .join("\n");
-  const msg =
-    "❌ 检测到假兜底路由(primary 与 fallback 解析到同一模型, 主模型一挂即全线停):\n" + detail +
-    "\n改法二选一: ① 把 fallback 换成**另一个厂商**的模型;" +
-    " ② 若刻意不让路由层自己兜(例如要保留『升级到降级槽』这个可观测动作)," +
-    " 在 model-router.ts 的 DEGENERATE_FALLBACK_ALLOWED 里声明补偿槽并写明理由。";
-  logger.error({ issues }, "model_router.degenerate_fallback");
-  if (env.NODE_ENV === "production") throw new Error(msg);
-  console.error(msg);
+  logger.error(
+    { issues },
+    "⚠️ 假兜底路由(primary 与 fallback 同一模型, 主模型一挂即全线停):\n" + detail +
+      "\n改法: ① fallback 换成另一个厂商的模型; ② 刻意如此则在 DEGENERATE_FALLBACK_ALLOWED 声明补偿槽。",
+  );
+  // 旁路落 incident, 让它进次日简报而不是只躺在日志里
+  void import("../ops/incidents.js")
+    .then((m) => m.recordIncidentThrottled({
+      kind: "degenerate_fallback_route",
+      severity: "warn",
+      message: `${issues.length} 条路由是假兜底(主模型一挂即全线停): ${issues.map((i) => i.taskType).join(", ")}`,
+      detail: { issues },
+    }, { key: "degenerate_fallback_route" }))
+    .catch(() => { /* 告警旁路 */ });
 }
 
 // 单例
