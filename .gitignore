@@ -42,6 +42,7 @@ docker-compose.override.yml
 *.~*
 .~lock.*
 .gstack/
+.context/
 
 # === drift rescue PR #2 补充（2026-04-25）===
 # 运行时产物（顶层 data/ 是数据落盘目录；src/data/ 是源码 TS 静态模块，需 tracking）
