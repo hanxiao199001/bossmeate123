@@ -37,6 +37,8 @@ import { notifyStaffWithRetry } from "../work-wechat/kf-client.js";
 import { runFullHealthCheck, type FullHealth } from "./health-check.js";
 import { checkSupplierBalance, type SupplierBalanceResult } from "./supplier-balance.js";
 import { getIncidentSummary, KIND_LABEL, recordIncident, type IncidentCount } from "./incidents.js";
+// 7-30 感知①: 期刊池余量(“哪个学科的刊快用完了”) —— 与选刊器同源, 见 journals/pool-inventory.ts
+import { collectPoolBriefing } from "../journals/pool-inventory.js";
 
 // ============ 数据结构 ============
 
@@ -727,7 +729,7 @@ export async function collectTenantBriefing(
 /** 平台级采集(跨租户: 系统健康 + 供应商余额 + 异常事件流水) */
 export async function collectPlatformBriefing(now: Date = new Date()): Promise<PlatformBriefing> {
   const since = startOfBjDay(now);
-  const [health, supplier, incidents] = await Promise.all([
+  const [health, supplier, incidents, pool] = await Promise.all([
     runFullHealthCheck().catch((err) => {
       logger.warn({ err: err instanceof Error ? err.message : err }, "简报: 健康体检失败");
       return { status: "error" as const, timestamp: new Date().toISOString(), checks: {} };
@@ -741,9 +743,18 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
       };
     }),
     getIncidentSummary(24),
+    // 7-30 感知①: 期刊池余量。**追加一节, 不动上面任何判定** —— 它不是"出了什么事"(incident),
+    //   而是"还剩多少料", 是离"没内容可发"最近的先行指标, 只有它能在事故发生**之前**报出来。
+    //   collectPoolBriefing 自带 try/catch(绝不抛错), 所以这里不再包 .catch。
+    collectPoolBriefing(SYSTEM_RECOMMENDATION_TENANT_ID),
   ]);
   const { items, todos } = judgePlatform({ health, supplier, incidents });
-  return { health, supplier, incidents, items, todos, level: worstLevel(items) };
+  const allItems = [...items, ...pool.items];
+  return {
+    health, supplier, incidents,
+    items: allItems, todos: [...todos, ...pool.todos],
+    level: worstLevel(allItems),
+  };
 }
 
 // ============ 主流程 ============

@@ -35,6 +35,10 @@ export type IncidentKind =
   | "no_topic_available"        // 选不出可用新选题(候选池枯竭/全在冷却)
   | "no_journal_available"      // 某定位+学科选不出任何刊 → 该名额直接空转
   | "journal_pool_exhausted"    // 选到的是回头刊(破 15 天冷却)或不对口刊 = 该学科刊快用完了
+  // ---- 7-30 感知①: 与上面那条是**同一件事的两个时点**, 刻意分成两个 kind ----
+  //   exhausted = 事后实锤(已经降级了); forecast = 排产**前**就算出来"这几篇注定要降级"。
+  //   合成一个的话, "今天注定要降级"会被"今天已经降级了"的计数吞掉, 简报也分不清哪条是预警。
+  | "journal_pool_forecast"     // 排产前盘点发现: 某学科可选新刊为 0, 而今天还要给它排产
   | "candidate_skipped"         // 候选被学科配额/期刊限流大量跳过, 导致未达目标(旧按学科链路)
   | "generation_failed"         // 单篇生成失败(排产环节, 非质检)
   | "draft_shortfall"           // 公众号未达每日保底(草稿分发缺口)
@@ -61,6 +65,7 @@ export const KIND_LABEL: Record<string, string> = {
   no_topic_available: "选不出可用选题(候选词枯竭/全在冷却)",
   no_journal_available: "选不出可用期刊(该定位+学科名额空转)",
   journal_pool_exhausted: "期刊池告急(只能用回头刊/不对口刊)",
+  journal_pool_forecast: "期刊池预判(开工前就知道该学科没新刊了, 今天这几篇注定重复/串学科)",
   candidate_skipped: "候选被配额/限流大量跳过(没凑够篇数)",
   generation_failed: "单篇生成失败(排产环节)",
   draft_shortfall: "公众号未达每日保底(草稿分发缺口)",

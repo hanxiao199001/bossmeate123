@@ -16,12 +16,19 @@ async function readSrc(): Promise<string> {
 }
 
 describe("pickScopedFreshJournal 分层收窄", () => {
-  it("拆出 discExact(仅目标学科) 与 discOrGeneric(学科+综合刊)两个条件", async () => {
+  // 7-30 条件片段收口: discExact / discOrGeneric(以及 active / fresh)不再内联写在这里,
+  //   改由 journal-sql.ts 的 journalPoolCriteria() 统一给出 —— 期刊池盘点服务用的是**同一个
+  //   函数的返回值**。断言随之从"锁字面 SQL"改成"锁同源"(与 7-28 ③c 对 verified 的处理同一路数):
+  //   片段的定义本身由 journal-pool-criteria-single-source.test.ts 守。
+  it("六个条件片段全部取自 journalPoolCriteria(与盘点服务同源), 不在选刊器里内联拼 SQL", async () => {
     const src = await readSrc();
-    // discExact: 只匹配目标学科码
-    expect(src).toMatch(/discExact\s*=\s*sql`\(\$\{journals\.disciplineCode\}\s*=\s*\$\{discipline\}\)`/);
-    // discOrGeneric: 目标学科 OR generic
-    expect(src).toMatch(/discOrGeneric\s*=\s*sql`\([\s\S]*?disciplineCode[\s\S]*?=\s*\$\{discipline\}\s*OR[\s\S]*?GENERIC_DISCIPLINE_CODE/);
+    expect(src).toMatch(/const \{ active, verified, scope: sc, discExact, discOrGeneric, fresh \} =\s*[\s\S]{0,80}journalPoolCriteria\(\{ tenantId, scope, discipline \}\)/);
+    expect(src).toMatch(/import \{[^}]*journalPoolCriteria[^}]*\} from "\.\.\/journals\/journal-sql\.js"/);
+    // 🚫 回归锁: 选刊器里不许再出现自己拼的学科/冷却条件(那就是又造了第二套判据)
+    const fnStart = src.indexOf("async function pickScopedFreshJournal");
+    const fnBody = src.slice(fnStart, src.indexOf("runDailyContentByType", fnStart));
+    expect(fnBody).not.toMatch(/sql`\(\$\{journals\.disciplineCode\}/);
+    expect(fnBody).not.toMatch(/NOT EXISTS[\s\S]{0,120}journal_usage/);
   });
 
   // 7-28 (#1) 新契约: 新鲜(fresh)优先于回头(LRU)。旧层②(verified+discExact 的 LRU **无 fresh**)
@@ -54,7 +61,9 @@ describe("pickScopedFreshJournal 分层收窄", () => {
     // 7-28 (③c): 门槛改**分体系**(国内刊看目录成员资格 / 国际刊仍 conf>=70), 口径不再内联写死在
     //   这条 SQL 里, 而是取自 journal-sql.ts 的 verifiedJournalCondition() —— 断言改为锁"同源"。
     expect(src).toMatch(/sql`NOT \$\{verifiedJournalCondition\(\)\}`/);
-    expect(src).toMatch(/import \{ journalScopeCondition, verifiedJournalCondition \}/);
+    // 7-30: 同一行 import 里 journalScopeCondition 已被 journalPoolCriteria 取代(scope 片段现在
+    //   由条件组一并给出), 但"配额计数与选刊器同一把可信度尺子"这条约束不变。
+    expect(src).toMatch(/import \{[^}]*verifiedJournalCondition[^}]*\} from "\.\.\/journals\/journal-sql\.js"/);
   });
 
   it("⑤⑥ 已核实 LRU 回头刊降为最后手段(在所有新鲜层之后), 带日志", async () => {

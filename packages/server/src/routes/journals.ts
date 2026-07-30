@@ -18,6 +18,8 @@ import { journalEnrichQueue } from "../services/task/queue.js";
 import { shuffleFisherYates } from "../services/task/enrich-throttle.js";
 // 7-25: 学科码唯一真相源(同时也是 journals.discipline_code 生成列的规则源), 别再另立映射表
 import { journalDisciplineIs, journalDisciplineMatches } from "../services/journals/journal-sql.js";
+// 7-30 感知①: 期刊池余量盘点(与选刊器同源, 见 pool-inventory.ts 文件头)
+import { getPoolInventory } from "../services/journals/pool-inventory.js";
 
 /**
  * Day 2 PR B: 期刊 admin 编辑 v1 — 字段白名单。
@@ -403,6 +405,49 @@ export async function journalRoutes(app: FastifyInstance) {
       return reply.send({ code: "ok", data: result });
     } catch (err) {
       logger.error({ err }, "获取学科列表失败");
+      return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
+    }
+  });
+
+  // ============ 期刊池余量盘点(7-30 感知①)============
+  /**
+   * GET /journals/pool-health —— "哪个学科的刊快用完了"。
+   *
+   * 口径与选刊器 `daily-cron.pickScopedFreshJournal` **同源**(共用 journalPoolCriteria),
+   * 所以这里报的 freshVerified 就是选刊器第①层真正能选到的本数, 不是另算的一个近似值。
+   *
+   * ⚠️ 余量是**按租户**算的(冷却/用量都带 tenant), 但期刊表本身是共享池不按租户过滤 ——
+   *   与选刊器一致, 别在这里加 journalVisibleTo, 否则算出的池子比选刊器实际的小。
+   *
+   * 前端暂无页面; 先给运营/排障用 curl + 每日简报自动播报(见 pool-inventory.renderPoolBriefItems)。
+   */
+  app.get("/journals/pool-health", async (request, reply) => {
+    try {
+      const tenantId = request.tenantId;
+      const q = request.query as { windowDays?: string; scope?: string; onlyLow?: string };
+      const usageWindowDays = Number(q?.windowDays) > 0 ? Math.floor(Number(q.windowDays)) : undefined;
+      const inv = await getPoolInventory({ tenantId, usageWindowDays });
+      const scope = q?.scope === "domestic" || q?.scope === "international" ? q.scope : null;
+      const onlyLow = q?.onlyLow === "1" || q?.onlyLow === "true";
+      let rows = inv.rows;
+      if (scope) rows = rows.filter((r) => r.scope === scope);
+      if (onlyLow) rows = rows.filter((r) => r.low);
+      return reply.send({
+        code: "ok",
+        data: {
+          tenantId: inv.tenantId,
+          generatedAt: inv.generatedAt,
+          cooldownDays: inv.cooldownDays,
+          usageWindowDays: inv.usageWindowDays,
+          thresholds: inv.thresholds,
+          /** 对任何定位都不可见的刊(journal_kind='unknown'): 补数据的第一优先级 */
+          invisibleUnknown: inv.invisibleUnknown,
+          alerts: inv.alerts,
+          rows,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "期刊池盘点失败");
       return reply.status(500).send({ code: "error", message: "操作失败，请稍后重试" });
     }
   });

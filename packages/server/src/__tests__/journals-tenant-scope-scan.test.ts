@@ -44,10 +44,15 @@ const ALLOWLIST: Record<string, [number, string]> = {
     "写路径: POST /journals/seed(×2: 计数+查重名, 只能种自己的刊) / POST /journals/:id/enrich / POST /journals/enrich-all。" +
       "共享池的富化走 `pnpm journals:reenrich` 脚本, 不走租户 API。",
   ],
+  "services/journals/journal-sql.ts": [
+    1,
+    "helper 自身: journalOwnedBy 就是**写口径**的定义处(严格相等是它的全部意义)。" +
+      "7-30 修: 原先靠'它紧挨着 journalVisibleTo 的 isNull, 落在 ±180 窗口内'免检 —— 但中间陆续加进了" +
+      "journalDisciplineIs/Matches 两个 helper, 距离早已超过 180 字符, 这条一直在红。" +
+      "免检不该依赖'两个函数在文件里挨得够近'这种会被下一次编辑破坏的巧合, 改为显式白名单。" +
+      "它的严格性由下方'写口径 helper 存在且是严格相等'那条单独盯着。",
+  ],
 };
-// 注: helper 自身(services/journals/journal-sql.ts)不在白名单里也不会红 —— journalOwnedBy 的
-//   严格相等紧挨着 journalVisibleTo 的 isNull, 落在 ±180 字符窗口内被认成标准写法。
-//   它的严格性由下方"写口径 helper 存在且是严格相等"那条单独盯着。
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

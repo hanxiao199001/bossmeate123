@@ -50,8 +50,14 @@ describe("护栏 wire 防回归", () => {
     // verified 条件存在, 且被前置到 pick 首层
     // 7-14 单一流水线: 退役 A 路后只剩 pickScopedFreshJournal 一个选择器(pickFreshJournalStrict 随 A 路删除),
     //   conf≥70 门控仍在, 断言随实现演进从 ≥2 调到 ≥1。
-    const verifiedMatches = src.match(/confidence\}? >= 70|confidence >= 70/g) || [];
-    expect(verifiedMatches.length).toBeGreaterThanOrEqual(1); // pickScopedFreshJournal
+    // 7-30: 这条原来 match 的是 daily-cron 里的**注释文字** `confidence >= 70` —— 7-28 分体系
+    //   门槛落地后, 选刊器早就不再自己写这个数了(改调 verifiedJournalCondition()), 注释一搬家
+    //   断言就红, 而语义一点没变。改成锁两件真事:
+    //   ① 门槛的定义处仍然是 conf>=70(国际体系那一支);
+    //   ② 选刊器用的就是那份判据(经 journalPoolCriteria 拿到的 verified 片段), 没有自己拼。
+    const { buildIntlVerifiedSql } = await import("../services/journals/journal-kind.js");
+    expect(buildIntlVerifiedSql()).toMatch(/confidence, 0\) >= 70/);
+    expect(src).toMatch(/journalPoolCriteria\(\{ tenantId, scope, discipline \}\)/);
     // 7-21 分层收窄: disc 拆成 discExact/discOrGeneric, 首层 verified 优先语义不变(仍 active+verified+sc+学科+fresh),
     //   只是学科条件从 disc 改为 discExact(纯对口优先)。断言随实现更新, verified 前置到首层这点未变。
     expect(src).toMatch(/active, verified, sc, discExact, fresh/);

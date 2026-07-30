@@ -23,8 +23,9 @@ import { env } from "../../config/env.js";
 import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
 import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
-import { journalScopeCondition, verifiedJournalCondition } from "../journals/journal-sql.js";
-import { DISCIPLINE_CODES, GENERIC_DISCIPLINE_CODE } from "./discipline-mapping.js";
+import { verifiedJournalCondition, journalPoolCriteria } from "../journals/journal-sql.js";
+import { getPoolInventory, disciplineCn, type PoolInventory } from "../journals/pool-inventory.js";
+import { DISCIPLINE_CODES } from "./discipline-mapping.js";
 import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
@@ -446,7 +447,8 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 //   不含 generic —— 这里是"轮转生成哪些学科的内容", 综合刊(generic)只在选刊阶段兜底, 不作生成目标。
 const ALL_DISC_CODES: readonly string[] = DISCIPLINE_CODES;
 
-const JOURNAL_COOLDOWN_DAYS = Number(process.env.JOURNAL_REUSE_COOLDOWN_DAYS) || 15;
+// 7-30: 冷却天数不再在这里各读一遍 env —— 单一真相源是 journal-sql.ts 的 journalCooldownDays()
+//   (选刊器的 fresh 条件、盘点服务的余量估算都从那里取, 保证"15 天"只有一个定义)。
 
 /** PR-Z1: 给每个配了自己 contentQuota 的租户生成自有内容池 */
 async function runTenantOwnedDailyContent(): Promise<void> {
@@ -584,30 +586,16 @@ async function unverifiedUsedToday(tenantId: string): Promise<number> {
  *  小学科 verified 池(如 5 本)新鲜耗尽后天天 LRU 回头同几本, 旧⑤-⑧ 永远到不了,
  *  15 天冷却形同虚设("国际刊反复就那几本"的主因)。 */
 async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
-  // 6-19 数据质量护栏: 排除 ai_fabricated(生成时 LLM 编造、IF/分区/录用率是假的)刊, 不让它们进每日生成。
-  //   只排这一类: 正经的低可信/目录刊(国内核心常 confidence 为空)仍保留, 不误杀。
-  const active = and(eq(journals.status, "active"), sql`(${journals.dataSource} IS DISTINCT FROM 'ai_fabricated')`);
-  // 7-09 未核实护栏: 优先取已核实刊生成内容(避免用 legacy_unknown/低可信刊生成对外内容);
-  //   verified 池枯竭再回退原逻辑, 保证每日篇数不因严选而空名额。
-  // 7-28 分体系门槛(③c): 原来一刀切 `confidence >= 70`, 而 trust-score 的加分项全是国际源
-  //   (crossref+20/doaj+10/letpub+20) —— 国内刊的天花板恰好是"进北大核心或CSCD核心库=70",
-  //   只在CSCD扩展库=60, 两个目录都不在=50, **永远过不了线** → 88% 国内刊在 SQL 层就被挡住
-  //   (实测 verified 427/3707, 综合性人文社科 0/122, 中国政治 0/43 —— 整个学科推不出一本刊),
-  //   于是国内槽位天天靠 ⑦⑧ 兜底层选刊, 内容还全被标 needs_review。
-  //   现在改判: 国内刊看**目录成员资格 + 刊号实体确认**, 国际刊维持 conf>=70(见 journal-sql.ts)。
-  const verified = verifiedJournalCondition();
-  const sc = journalScopeCondition(scope); // SQL | null
-  // 7-20 学科码归一(migration 026): 原本 `discipline ILIKE '%medicine%'` 匹配不上国内刊的
-  //   中文分类名("临床医学"/"外科学"), 国内 verified 刊只有 137/2379 能进这一层。改打生成列
-  //   discipline_code 后 2379 本全可进。
-  // 7-21 分层收窄(修"generic 桶淹没目标学科"): 原 disc 是 `= discipline OR = generic`,
-  //   一层里目标学科与综合刊平权随机选。但 generic 桶(328本, 多是理工医综合刊)远大于单个学科池,
-  //   导致教育号配了 education(132本)却 80% 选到理工综合刊(实测教育对口率仅 29%)。
-  //   改: 先只选**目标学科对口刊**(discExact), 对口刊+相邻枯竭再放开 generic 兜底。
-  //   generic '综合刊/学报/规则未覆盖'仍在任何学科槽位可命中, 只是降到"目标学科不够时才用"。
-  const discExact = sql`(${journals.disciplineCode} = ${discipline})`;
-  const discOrGeneric = sql`(${journals.disciplineCode} = ${discipline} OR ${journals.disciplineCode} = ${GENERIC_DISCIPLINE_CODE})`;
-  const fresh = sql`NOT EXISTS (SELECT 1 FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId} AND ju.used_at > NOW() - make_interval(days => ${JOURNAL_COOLDOWN_DAYS}))`;
+  // 7-30 条件片段收口: active / verified / sc / discExact / discOrGeneric / fresh 六个片段
+  //   全部取自 journal-sql.ts 的 journalPoolCriteria() —— 与「期刊池盘点」
+  //   (services/journals/pool-inventory.ts, 回答"这个学科还剩几本可选")**同一份 WHERE**。
+  //   为什么必须同源: 盘点若另写一套条件, 算出的"余量"和选刊器实际能选到的不是同一批刊,
+  //   报表会说"还有 20 本"而选刊器一本都选不出 —— 比没有盘点更糟。这个项目已因"照着再写一遍"
+  //   犯过 5 次同类错(病史见 journals/intl-signal.ts 文件头)。
+  //   各片段自身的历史与权衡(6-19 排编造刊 / 7-09 未核实护栏 / 7-20 学科码归一 /
+  //   7-21 分层收窄 / 7-28 分体系门槛)已随片段一起搬进 journal-sql.ts 的注释, 不在此重复。
+  const { active, verified, scope: sc, discExact, discOrGeneric, fresh } =
+    journalPoolCriteria({ tenantId, scope, discipline });
   // 去冷却的层级按"最久未用"优先, 保证轮换(而非反复用同几本)
   const lru = sql`(SELECT max(ju.used_at) FROM journal_usage ju WHERE ju.journal_id = ${journals.id} AND ju.tenant_id = ${tenantId}) ASC NULLS FIRST`;
   const rnd = sql`random()`;
@@ -678,6 +666,94 @@ function pickTemplateId(weights: Record<string, number>): string {
   return "shunshi-style";
 }
 
+/**
+ * 7-30 感知①: **排产前**的期刊池预判。
+ *
+ * 此前系统只有事后归因(`classifyPickDegrade`: 选完看它是不是回头刊/不对口刊)。事后归因是对的,
+ * 但它回答不了"今天会不会出事" —— 而这个事实其实排产前就已经确定: 某学科新鲜已核实池 = 0、
+ * 今天却还要给它排 3 篇, 那这 3 篇**注定**要降级。把它记在降级发生之前, 运营才有机会当天补货。
+ *
+ * ⚠️ 这一轮**刻意不用它改变排产行为**(不跳过、不改配额、不换学科) —— 那是下一步"决策"的事。
+ *   感知与决策混在一起做, 两件都做不干净: 一个估算口径还没被生产数据验证过的模型, 不该立刻拿去
+ *   决定今天发不发内容。这里只做到"知道 + 报出来"。
+ *
+ * 绝不抛错: 观测失败当作没盘点(返回 null), 不能因为一次统计查询把每日排产打挂。
+ */
+async function preflightJournalPool(
+  tenantId: string,
+  cq: Record<string, { count: number; disciplines: string[] }>,
+): Promise<Record<string, unknown> | null> {
+  let inv: PoolInventory;
+  try {
+    inv = await getPoolInventory({ tenantId });
+  } catch (err) {
+    logger.warn({ err: String(err) }, "7-30 排产前期刊池盘点失败(跳过预判, 不影响排产)");
+    return null;
+  }
+  try {
+    // 今天真要排的 (定位 × 学科) 名额数 —— 与下面主循环 `discs[i % discs.length]` 同一个分配算法
+    const planned: Array<{ scope: "domestic" | "international"; discipline: string; slots: number }> = [];
+    for (const [type, cfg] of Object.entries(cq)) {
+      if (type !== "domestic" && type !== "international") continue;
+      const count = Math.floor(Number(cfg?.count)) || 0;
+      if (count <= 0) continue;
+      const discs = cfg.disciplines.length ? cfg.disciplines : ALL_DISC_CODES;
+      const per = new Map<string, number>();
+      for (let i = 0; i < count; i++) {
+        const d = discs[i % discs.length];
+        per.set(d, (per.get(d) ?? 0) + 1);
+      }
+      for (const [discipline, slots] of per) planned.push({ scope: type, discipline, slots });
+    }
+    const byKey = new Map(inv.rows.map((r) => [`${r.disciplineCode}|${r.scope}`, r]));
+    const doomed: Array<Record<string, unknown>> = [];
+    const tight: Array<Record<string, unknown>> = [];
+
+    for (const p of planned) {
+      const row = byKey.get(`${p.discipline}|${p.scope}`);
+      if (!row) continue;
+      const fact = {
+        scope: p.scope, discipline: p.discipline, slots: p.slots,
+        freshVerified: row.freshVerified, genericFreshVerified: row.genericFreshVerified,
+        verified: row.verified, total: row.total, exhaustedInDays: row.exhaustedInDays,
+      };
+      if (row.freshVerified <= 0) {
+        doomed.push(fact);
+        const scopeCn = p.scope === "domestic" ? "国内核心" : "国际刊";
+        // kind 与事后的 journal_pool_exhausted **刻意分开**: 那条是"已经降级了"的实锤,
+        //   这条是"开工前就注定要降级"的预警。合成一个的话预警会被实锤的计数吞掉。
+        reportCronIncidentThrottled({
+          kind: "journal_pool_forecast", severity: "warn", tenantId,
+          message:
+            `期刊池预判[${scopeCn}·${disciplineCn(p.discipline)}]: 今天要排 ${p.slots} 篇, 而该学科可选新刊 0 本` +
+            `(已核实共 ${row.verified} 本, 全在 ${inv.cooldownDays} 天冷却内; 综合刊还剩 ${row.genericFreshVerified} 本垫底)` +
+            ` —— 这几篇注定要降级(重复用刊或串到综合刊), 需补该学科期刊或调低配额`,
+          detail: { tenantId, phase: "pre_schedule", ...fact, cooldownDays: inv.cooldownDays },
+          key: `pool_forecast:${tenantId}:${p.scope}:${p.discipline}`,
+        });
+      } else if (row.low) {
+        tight.push(fact);
+      }
+    }
+    if (doomed.length > 0 || tight.length > 0) {
+      logger.warn({ doomed, tight }, "7-30 排产前期刊池预判: 有学科池已空/接近水位线");
+    }
+    return {
+      cooldownDays: inv.cooldownDays, usageWindowDays: inv.usageWindowDays,
+      plannedSlots: planned.reduce((n, p) => n + p.slots, 0),
+      doomed, tight,
+      alertDisciplines: inv.alerts.slice(0, 5).map((r) => ({
+        discipline: r.disciplineCode, scope: r.scope,
+        freshVerified: r.freshVerified, exhaustedInDays: r.exhaustedInDays,
+      })),
+      invisibleUnknown: inv.invisibleUnknown,
+    };
+  } catch (err) {
+    logger.warn({ err: String(err) }, "7-30 排产前期刊池预判失败(不影响排产)");
+    return null;
+  }
+}
+
 export async function runDailyContentByType(
   cq: Record<string, { count: number; disciplines: string[] }>,
   // PR-Z1 多租户隔离: 指定目标租户则内容落到该租户自己的池 (默认 SYSTEM 全局池, 向后兼容)
@@ -697,6 +773,8 @@ export async function runDailyContentByType(
   const targetTotal = Object.values(cq).reduce((n, c) => n + (Math.floor(Number(c?.count)) || 0), 0);
   // 7-28 ①a: 名额是怎么蒸发的(选不出题/选不出刊), 收尾时一并带进告警 detail
   const skipped = { noTopic: 0, noJournal: 0 };
+  // 7-30 感知①: 排产**之前**先盘一次期刊池, 把"今天注定要降级"记在降级发生之前(见下)
+  const poolPreflight = await preflightJournalPool(SYS, cq);
 
   for (const [type, cfg] of Object.entries(cq)) {
     if (!cfg.count) continue;
@@ -858,6 +936,9 @@ export async function runDailyContentByType(
     articles: batchIds.length, roundup: roundupCount,
     skipped, failures: failures.slice(0, 5), failureCount: failures.length,
     uniqueJournals: uniqueJournals.size, disciplines: [...usedDisc],
+    // 7-30 感知①: 排产前就已知的期刊池余量 —— 追问"今天为什么重复/不对口"时,
+    //   这一段能直接回答"因为开工前该学科就只剩 0 本", 而不用再去反推。
+    poolPreflight,
   };
   if (totalProduced === 0) {
     // 零产出告警: 别再静默停摆几天没人发现。失败明细一并打出, 便于定位(余额/冷却/候选枯竭)。
