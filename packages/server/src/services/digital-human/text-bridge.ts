@@ -163,16 +163,31 @@ export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<vo
       ...(produced.orphanTaskUuid ? { orphanTaskUuid: produced.orphanTaskUuid } : {}),
       durationMs: produced.durationMs,
       postprocessed: produced.postprocessed,
-      avatarCode: mapping.avatarCode,
-      avatarLabel: mapping.avatarLabel,
-      voiceCode: mapping.voiceCode,
-      voiceLabel: mapping.voiceLabel,
+      // ↓ 旧字段(下游/存量数据在用)保留, 但**改成以实际生效值为准**: 之前这里填的是
+      //   resolveAvatarVoice(templateId) 重算的"本该用什么", 兜底走占位样片时它照样是一份漂亮数据,
+      //   查证时看到"参数都对"却对不上片子 —— 7-31 排查绕圈子就是绕在这。
+      avatarCode: produced.effective?.avatarCode ?? mapping.avatarCode,
+      avatarLabel: produced.effective?.avatarLabel ?? mapping.avatarLabel,
+      voiceCode: produced.effective?.voiceCode ?? mapping.voiceCode,
+      voiceLabel: produced.effective?.voiceLabel ?? mapping.voiceLabel,
       // ⚠️ voiceOverride ≠ 一定生效: 文字驱动(默认)走 submitDvhTask, 音色只认 mapping.voiceCode;
       //   只有 DVH_AUDIO_DRIVEN=1 走 TTS 合成音频时 voiceId 才真正换声。与文章链路同一限制,
       //   落库记下来是为了事后能对上"这条为什么不是我选的声音"。
       ...(voiceId ? { voiceOverride: voiceId } : {}),
       templateId,
       ...(backgroundUrl ? { backgroundUrl } : {}),
+      // 7-31 🔴 "用户选了什么" 与 "实际用了什么" 分开记 —— 只有一份就永远查不清是哪一层丢的。
+      requested: {
+        templateId: String(templateId),
+        ...(voiceId ? { voiceId } : {}),
+        ...(backgroundUrl ? { backgroundUrl } : {}),
+      },
+      // effective 缺失 = 这条根本没提交到阿里云(见 fallbackReason), 那"参数不生效"就不是参数丢了
+      ...(produced.effective ? { effective: produced.effective } : {}),
+      ...(produced.fallbackReason ? { fallbackReason: produced.fallbackReason } : {}),
+      ...(produced.fallbackError ? { fallbackError: produced.fallbackError.slice(0, 300) } : {}),
+      // placeholder=true → 这条不是真渲染, 是占位样片; 别拿它去发布, 也别拿它评估形象/背景效果
+      ...(produced.fallbackReason && produced.fallbackReason !== "query_failed_orphan" ? { placeholder: true } : {}),
       source: "dvh",
       // ↓ 直生专属三件: 没有 sourceArticleId, 靠这三个字段自证身世
       sourceType: "custom_text",
@@ -228,10 +243,24 @@ export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<vo
       return;
     }
 
-    logger.info(
-      { videoContentId: row?.id, templateId, chars: text.length, realMode: produced.realMode },
-      "dvh.text.success",
-    );
+    // 7-31 🔴 success 只在**真拿到阿里云成片**时才报。
+    //   以前无论真渲染还是占位兜底都打同一条 dvh.text.success, 于是日志里满屏"成功"、
+    //   界面上也一路绿灯, 唯一的差别是个没人注意的 realMode 字段 —— 等于没有信号。
+    //   fallbackReason 存在 = 这条不是真渲染(占位样片/孤儿任务), 一律不许叫 success。
+    const logCtx = {
+      videoContentId: row?.id, templateId, chars: text.length, realMode: produced.realMode,
+      // 出片后再打一次"实际生效值" — 与 submit 前那条 dvh.submit.params 对照即可定位丢参数的层
+      requestedVoiceId: voiceId, requestedBackgroundUrl: backgroundUrl,
+      effective: produced.effective, fallbackReason: produced.fallbackReason,
+    };
+    if (produced.fallbackReason) {
+      logger.error(
+        { ...logCtx, orphanTaskUuid: produced.orphanTaskUuid, fallbackError: produced.fallbackError },
+        "dvh.text.placeholder — 落库了, 但这条不是真渲染(见 fallbackReason), 别当成品用",
+      );
+    } else {
+      logger.info(logCtx, "dvh.text.success");
+    }
   } catch (err) {
     logger.warn(
       { err: err instanceof Error ? err.message : err, tenantId, templateId },

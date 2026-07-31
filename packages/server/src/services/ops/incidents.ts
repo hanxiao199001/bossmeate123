@@ -45,7 +45,16 @@ export type IncidentKind =
   | "draft_remedy_failed"       // 缺口自动补救本身失败
   | "quality_gate_unavailable"  // 质检闸"没能跑成"(规则检索/红线解析/一致性检查异常) ≠ 内容违规
   // ---- 7-28 阶段1-C Prompt 治理 ----
-  | "prompt_contradiction";     // prompt 里同一字段既被要求写又被禁止写(LLM 只能编 → 被防编造闸拦下)
+  | "prompt_contradiction"      // prompt 里同一字段既被要求写又被禁止写(LLM 只能编 → 被防编造闸拦下)
+  // ---- 7-31 数字人(DVH): 四种"出片了但不是真出片", 此前全部只有一行 logger ----
+  //   共同点: 运营界面上都显示"生成成功"、内容管理里也确实躺着一条视频, 只有日志里那行
+  //   区分得出真假。日志没人天天看 = 等于没有 → 全部落库上简报。
+  //   按"钱"分档: orphaned 已扣费拿不到货(最贵), submit_failed/tts_failed 未扣费(白干),
+  //   mock_mode 是配置事故(一开就整天全是占位片)。
+  | "dvh_paid_task_orphaned"    // 已扣费但拿不到成片(submit 成功, query 失败/超时) —— 钱花了没货
+  | "dvh_submit_failed"         // 提交阿里云就失败(未扣费), 落库的是占位样片非真渲染
+  | "dvh_tts_failed"            // TTS 合成失败, 已**主动中止**提交(未扣费; 提交了必是哑巴视频)
+  | "dvh_mock_mode";            // DVH_REAL_MODE 未开: 本条是固定占位样片, 形象/背景/音色一律不生效
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -72,6 +81,10 @@ export const KIND_LABEL: Record<string, string> = {
   draft_remedy_failed: "草稿缺口自动补救失败",
   quality_gate_unavailable: "质检闸不可用(没检查成, 已转人工; ≠ 内容违规)",
   prompt_contradiction: "prompt 指令自相矛盾(同一字段既要求写又禁止写, 已自动修正; 需回看代码)",
+  dvh_paid_task_orphaned: "数字人视频钱花了没拿到货(任务已提交并扣费, 但取不回成片)",
+  dvh_submit_failed: "数字人视频提交失败(未扣费, 但界面显示成功、落库的是占位样片)",
+  dvh_tts_failed: "数字人配音合成失败(已主动中止, 未扣费; 提交了也必是哑巴视频)",
+  dvh_mock_mode: "数字人处于演示模式(DVH_REAL_MODE 未开, 出的全是固定占位样片)",
 };
 
 export interface RecordIncidentInput {

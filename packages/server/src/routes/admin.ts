@@ -948,7 +948,13 @@ export async function adminRoutes(app: FastifyInstance) {
   });
   app.get("/dvh-catalog", async () => {
     const { loadDvhCatalog } = await import("../services/digital-human/template-mapping.js");
-    return { code: "OK", data: { catalog: await loadDvhCatalog() } };
+    // 7-31 audioDriven 一并回给前端: 文字驱动(默认)下"音色"选择器是**不会生效**的
+    //   (阿里云 AudioInfo.voice 只认平台发音人 code, 音色只能跟随所选形象)。
+    //   前端据此禁用音色下拉并写明原因 —— 让运营选一个不生效的东西, 出片后只会变成"又一个 bug"。
+    return {
+      code: "OK",
+      data: { catalog: await loadDvhCatalog(), audioDriven: process.env.DVH_AUDIO_DRIVEN === "1" },
+    };
   });
   app.patch("/dvh-catalog", { preHandler: adminOnlyMiddleware }, async (request, reply) => {
     const body = (request.body ?? {}) as { entries?: unknown[] };

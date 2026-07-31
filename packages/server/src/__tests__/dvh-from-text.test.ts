@@ -225,9 +225,12 @@ describe("字数闸", () => {
 
 // ===== 3. 费用预估公式 =====
 describe("费用预估", () => {
-  it("公式: 3.3 字/秒 × 16.5 分/秒, 下限 30 秒", () => {
+  // 7-31 修一条**别的提交留下的死断言**: 8ad9ba2「去掉预估的 30 秒下限」改了 estimateDvhFromText,
+  //   但没同步这里, 于是这条从那次提交起就一直红(与本次三参数排查无关)。
+  //   现口径: 阿里云按真实秒数结算、无起步价, 所以预估也不再兜 30 秒。
+  it("公式: 3.3 字/秒 × 16.5 分/秒, 无 30 秒下限", () => {
     expect(estimateDvhFromText("字".repeat(330))).toEqual({ chars: 330, seconds: 100, cents: 1650 });
-    expect(estimateDvhFromText("字".repeat(10)).seconds).toBe(30); // 下限
+    expect(estimateDvhFromText("字".repeat(10)).seconds).toBe(3); // 10/3.3≈3, 不再钳到 30
   });
 
   it("🔴 600 字不许被 120 秒钳位: 老 estimateDvhCents 报 19.8 元, 真实约 30 元", () => {
