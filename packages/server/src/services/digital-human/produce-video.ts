@@ -22,7 +22,24 @@ import { queryDvhTaskUntilDone } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import type { TemplateId } from "./template-mapping.js";
+import type { DvhEffectiveParams } from "./submit-task.js";
 import { checkBudget, estimateDvhCents, recordCost, DVH_CENTS_PER_SECOND } from "../billing/cost-ledger.js";
+import { recordIncident, recordIncidentThrottled } from "../ops/incidents.js";
+
+/**
+ * 7-31 TTS 合成失败 → **主动中止**, 不提交阿里云。
+ *
+ * 与 BUDGET_EXCEEDED 同一档的"硬失败": 绝不退占位样片, 直接把原因抛给调用方。
+ * 理由是这条路上唯一确定的事就是"提交了也必废" —— 音频驱动模式下, 音频就是片子的全部内容,
+ * 拿一段静音去驱动口型, 产出的是**闭着嘴的哑巴视频**, 而阿里云照样按秒收钱。
+ * 与其花钱买一条注定要删的片子, 不如当场失败、让人看见。
+ */
+export class DvhTtsFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DvhTtsFailedError";
+  }
+}
 
 /**
  * 6-26 音频驱动修: 阿里云要去公网拉音频/字幕, 但本地存储后端返回相对路径 /storage/...
@@ -48,6 +65,22 @@ export interface ProducedVideo {
   durationMs: number;
   postprocessed: boolean;
   realMode: boolean;
+  /**
+   * 7-31 **真正发给阿里云**的形象/音色/背景。没有这个字段 = 这条片子根本没提交成功(见 fallbackReason),
+   *   所以"没有"本身就是证据 —— 别再拿 templateId 重算一遍冒充"实际用了什么"。
+   */
+  effective?: DvhEffectiveParams;
+  /**
+   * 7-31 这条不是真渲染时的原因:
+   *   mock_mode         = DVH_REAL_MODE 不是 "true"(整条链路都在放占位样片, 谁选什么都一样)
+   *   submit_failed     = 提交前/提交时就失败(形象码无权限、背景图不可达…), 未扣费
+   *   query_failed_orphan = 已扣费但拿不到成片(孤儿任务), 见 orphanTaskUuid
+   *
+   * 注: TTS 失败**不在这里** —— 那条直接抛 DvhTtsFailedError, 压根不产出 ProducedVideo。
+   */
+  fallbackReason?: "mock_mode" | "submit_failed" | "query_failed_orphan";
+  /** 兜底原因的错误摘要(给人看的一句话) */
+  fallbackError?: string;
 }
 
 /**
@@ -68,13 +101,32 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
   const { text, title, templateId, tenantId, clonedVoiceId, backgroundUrl } = opts;
   if (!isRealMode()) {
     const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false };
+    // 7-31 🔴 这条分支下"选什么形象/背景/音色都不生效"是必然的 —— 三个参数一个都没往阿里云发,
+    //   拿到的是固定占位样片。它以前只是静默返回, 于是从界面上看就像"参数丢了"。现在明写。
+    logger.warn(
+      { tenantId, templateId, DVH_REAL_MODE: process.env.DVH_REAL_MODE ?? "(未设置)" },
+      "dvh.produce.mock_mode — DVH_REAL_MODE 不是 'true', 本条返回占位样片, 形象/背景/音色一律不生效",
+    );
+    // 7-31 上简报: 生产上误关 DVH_REAL_MODE 的后果是"整天出片、条条是占位样片、界面全显示成功",
+    //   靠日志永远发现不了。走**节流版** —— 一旦误关就是每条都命中, 不限速会把 ops_incidents 刷屏
+    //   (与 llm_timeout 同一考虑); 这里要的是"有没有发生", 不是"发生了几次"。
+    void recordIncidentThrottled(
+      {
+        kind: "dvh_mock_mode", severity: "warn", tenantId,
+        message: `数字人处于演示模式(DVH_REAL_MODE=${process.env.DVH_REAL_MODE ?? "未设置"}), 出的是固定占位样片, 形象/背景/音色一律不生效`,
+        detail: { templateId, DVH_REAL_MODE: process.env.DVH_REAL_MODE ?? null },
+      },
+      { key: "dvh_mock_mode" },
+    );
+    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "mock_mode" };
   }
   // PR #261 (5-29): 防烧钱 — submit 即扣费 (0.165 元/秒). 一旦 query 拿到付费 videoUrl,
   //   之后任何失败都绝不退回 mock, 必须把付费产物落库. taskUuid/rawVideoUrl 提到 try 外保命.
   let taskUuid: string | undefined;
   let rawVideoUrl: string | undefined;
   let durationMs = 0;
+  // 7-31 真正发给阿里云的那份参数 — submit 成功才有值, 一路带回给调用方落 metadata
+  let effective: DvhEffectiveParams | undefined;
   // PR-W1 预算闸: submit 即扣费, 所以闸必须在 submit 之前。超限直接抛 — 不退 mock, 让调用方看到原因。
   const gate = await checkBudget(tenantId, estimateDvhCents(text));
   if (!gate.allowed) {
@@ -88,14 +140,31 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
     if (audioDriven) {
       // 合成音频(走配置的 TTS_PROVIDER, 建议 siliconflow/CosyVoice2 或 dashscope/qwen-tts; 要 wav)
       const tts = await ttsService.synthesize(tenantId, text, { format: "wav", ...(clonedVoiceId ? { voice: clonedVoiceId } : {}) });
+      // 7-31 🔴 TTS 静音降级闸 —— 必须在 submit(=扣费点) 之前。
+      //   TTSService 四个 provider 分支全是"合成失败 → silentMp3() 顶上"; 音频驱动下音频就是片子的
+      //   全部内容, 拿静音去驱动口型 = 一条闭着嘴的哑巴视频, 而阿里云照秒收钱。
+      //   以前 fellSilent 只进日志, 于是这条链路明知会废还照提交照扣费。现在当场中止。
+      if (tts.fellSilent) {
+        const reason = `TTS 合成失败降级为静音(provider=${process.env.TTS_PROVIDER ?? "未配置"}), 已中止提交 — 提交了必是哑巴视频且照样扣费`;
+        logger.error({ tenantId, templateId, clonedVoiceId, ttsProvider: process.env.TTS_PROVIDER ?? null }, `dvh.tts.silent_abort — ${reason}`);
+        void recordIncident({
+          kind: "dvh_tts_failed", severity: "error", tenantId,
+          message: reason,
+          detail: { templateId, clonedVoiceId: clonedVoiceId ?? null, ttsProvider: process.env.TTS_PROVIDER ?? null, chars: text.length },
+        });
+        throw new DvhTtsFailedError(`DVH_TTS_FAILED: ${reason}`);
+      }
+      // 7-31 存证: 音频驱动下音色**真生效**, 记下这条音频是用哪个 voice 合的
       // 阿里云需HTTPS拉音频。OSS私有桶→签名URL(限时有效、不公开); 本地→相对路径转公网base。submit前算好, 不可达直接抛(不白扣费)
       const audioUrl = toPublicUrl(await storage.getSignedUrl(tts.remotePath, 7200));
       const submit = await submitDvhAudioTask({
         audioUrl, templateId, tenantId, title,
         sampleRate: process.env.DVH_AUDIO_SAMPLE_RATE ? parseInt(process.env.DVH_AUDIO_SAMPLE_RATE, 10) : undefined,
         ...(backgroundUrl ? { backgroundUrl } : {}),
+        ...(clonedVoiceId ? { ttsVoice: clonedVoiceId } : {}),
       });
       taskUuid = submit.taskUuid;
+      effective = submit.effective;
       const query = await queryDvhTaskUntilDone(taskUuid);
       rawVideoUrl = query.videoUrl;   // ★ 付费产物到手
       durationMs = query.durationMs;
@@ -111,8 +180,15 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         logger.warn({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.audio.srt_gen_failed");
       }
     } else {
-      const submit = await submitDvhTask({ text, templateId, tenantId, title, ...(backgroundUrl ? { backgroundUrl } : {}) });
+      // 7-31 requestedVoiceId 只为存证: 文字驱动这条路音色只认 mapping.voiceCode(见 submit-task 注释),
+      //   传进去是为了让日志/metadata 能写出"用户要 X 但实际是 Y", 不是为了让它生效。
+      const submit = await submitDvhTask({
+        text, templateId, tenantId, title,
+        ...(backgroundUrl ? { backgroundUrl } : {}),
+        ...(clonedVoiceId ? { requestedVoiceId: clonedVoiceId } : {}),
+      });
       taskUuid = submit.taskUuid;
+      effective = submit.effective;
       const query = await queryDvhTaskUntilDone(taskUuid);
       rawVideoUrl = query.videoUrl;   // ★ 付费产物到手 — 此后不可丢
       durationMs = query.durationMs;
@@ -131,17 +207,36 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       subtitlesUrl,
       taskUuid,
     });
-    return { videoUrl: pp.videoUrl, rawVideoUrl, taskUuid, durationMs, postprocessed: pp.postprocessed, realMode: true };
+    return {
+      videoUrl: pp.videoUrl, rawVideoUrl, taskUuid, durationMs,
+      postprocessed: pp.postprocessed, realMode: true,
+      ...(effective ? { effective } : {}),
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // 7-31 TTS 硬失败原样上抛 —— 与 BUDGET_EXCEEDED 同档, **绝不退占位样片**。
+    //   放在最前面: 它发生在 submit 之前, 既没扣费也没 taskUuid, 下面几个分支一个都不该沾。
+    //   若掉进下面的 mock 兜底, 就又变回"界面显示成功、内容管理里躺着一条假视频"——正是本次要消灭的东西。
+    if (err instanceof DvhTtsFailedError) throw err;
     // ★ 已拿到付费视频却抛错 (理论上 postprocess 已兜底, 此为防御): 用原始付费 URL 落库, 绝不退 mock.
     if (rawVideoUrl) {
       logger.error({ err: msg, taskUuid, rawVideoUrl }, "dvh.bridge.kept_paid_video_despite_error");
-      return { videoUrl: rawVideoUrl, rawVideoUrl, taskUuid: taskUuid!, durationMs, postprocessed: false, realMode: true };
+      return {
+        videoUrl: rawVideoUrl, rawVideoUrl, taskUuid: taskUuid!, durationMs,
+        postprocessed: false, realMode: true,
+        ...(effective ? { effective } : {}),
+      };
     }
     // ★ submit 成功 (已扣费) 但 query 失败/超时: 阿里云任务可能仍在跑/已完成. 记 orphanTaskUuid 供后续 recover, 不静默吞.
     if (taskUuid) {
       logger.error({ err: msg, taskUuid }, "dvh.bridge.paid_task_orphaned_query_failed");
+      // 7-31 上简报: 这是**钱花了没拿到货**, 四种兜底里最贵的一种, 且 orphanTaskUuid 拿在手上
+      //   还能去阿里云捞回成片 —— 只写在日志里等于放弃这笔钱。不节流: 一条 = 一笔损失, 条数就是要看的量。
+      void recordIncident({
+        kind: "dvh_paid_task_orphaned", severity: "error", tenantId,
+        message: `数字人任务已提交并扣费, 但取不回成片(task ${taskUuid}) — 可凭该 taskUuid 去阿里云捞回`,
+        detail: { taskUuid, templateId, title: title.slice(0, 80), estimatedCents: estimateDvhCents(text), err: msg.slice(0, 300) },
+      });
       // PR-W1: submit 已扣费但拿不到实际时长 — 按预估记账, note 标孤儿供核对
       void recordCost({
         tenantId, kind: "dvh",
@@ -149,11 +244,32 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
       });
       const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-      return { ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false };
+      return {
+        ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false,
+        fallbackReason: "query_failed_orphan", fallbackError: msg,
+        ...(effective ? { effective } : {}),   // 已经提交过 = 参数确实发出去了, 留着对账
+      };
     }
     // submit 都没成功 — 未扣费, 正常 fallback mock.
-    logger.warn({ err: msg, templateId }, "dvh.bridge.real_failed_fallback_mock");
+    // 7-31 由 warn 升到 error: 真实模式下走到这里, 运营界面上仍然是"生成成功"、内容管理里也真有一条视频,
+    //   但那条是**固定占位样片** —— 形象/背景/音色当然全不对(压根没提交)。这正是 7-31 老板实测到的现象,
+    //   而 warn 级别在生产日志里几乎不会被人翻到, 于是看起来就成了"参数被吞了"。
+    logger.error(
+      { err: msg, tenantId, templateId, backgroundUrl, clonedVoiceId },
+      "dvh.bridge.real_failed_fallback_mock — 未提交成功, 本条落库的是占位样片, 非真渲染",
+    );
+    // 7-31 上简报: 没扣费, 但界面显示"生成成功"、内容管理里确实躺着一条视频(占位样片)。
+    //   运营会拿它当成品看、当成品发 —— 这比单纯的失败更坏, 必须有人知道。
+    void recordIncident({
+      kind: "dvh_submit_failed", severity: "error", tenantId,
+      message: `数字人视频提交失败(未扣费), 本条落库的是占位样片非真渲染: ${msg.slice(0, 200)}`,
+      detail: {
+        templateId, title: title.slice(0, 80),
+        backgroundUrl: backgroundUrl ?? null, clonedVoiceId: clonedVoiceId ?? null,
+        err: msg.slice(0, 300),
+      },
+    });
     const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false };
+    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "submit_failed", fallbackError: msg };
   }
 }

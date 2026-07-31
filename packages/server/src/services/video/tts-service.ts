@@ -80,6 +80,17 @@ export interface TTSResult {
   durationMs: number;    // 估算时长
   bytes: number;
   format: "mp3" | "wav";
+  /**
+   * 7-31 true = 这段"音频"其实是**静音占位**(合成失败或凭证没配, 见下面四个 provider 分支)。
+   *
+   * 【为什么必须暴露出来】以前 fellSilent 只进了一条 logger.info, 调用方拿到的 TTSResult
+   *   和成功时长得一模一样 —— 于是数字人链路照样把静音 wav 提交给阿里云, 照样按秒扣费,
+   *   产出一条**必然作废的哑巴视频**。明知会废还花钱, 只因为失败信号没往上传。
+   *
+   * 混剪链路(video/index.ts)保持原样: 那边多幕拼接, 单幕静音降级好过整条片子失败。
+   *   **要不要为静音买单, 由调用方自己判** —— 这里只负责如实说。
+   */
+  fellSilent: boolean;
 }
 
 export class TTSService {
@@ -161,6 +172,7 @@ export class TTSService {
       durationMs: estimateDurationMs(text),
       bytes: audio.length,
       format: fmt,
+      fellSilent,
     };
   }
 

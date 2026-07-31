@@ -9,9 +9,10 @@ vi.mock("../config/env.js", () => ({
   },
 }));
 const warnSpy = vi.fn();
+const errorSpy = vi.fn();
 const infoSpy = vi.fn();
 vi.mock("../config/logger.js", () => ({
-  logger: { info: infoSpy, warn: warnSpy, error: vi.fn(), debug: vi.fn() },
+  logger: { info: infoSpy, warn: warnSpy, error: errorSpy, debug: vi.fn() },
 }));
 vi.mock("../models/db.js", () => ({ db: {} }));
 
@@ -69,6 +70,7 @@ const baseOpts = {
 
 beforeEach(() => {
   warnSpy.mockClear();
+  errorSpy.mockClear();
   infoSpy.mockClear();
   isRealModeMock.mockReset();
   submitDvhTaskMock.mockReset();
@@ -76,7 +78,7 @@ beforeEach(() => {
 });
 
 describe("triggerDvhFromArticle", () => {
-  it("mock happy: DVH_REAL_MODE=false → fixture URL + insert success", async () => {
+  it("mock 模式: 照样落库, 但**不许报 success** — 报 placeholder(error 级)", async () => {
     isRealModeMock.mockReturnValue(false);
     const fakeDb = makeFakeDb({
       articleRow: { id: "art-1", title: "测试期刊", body: "<p>Lorem ipsum dolor sit amet</p>" },
@@ -85,7 +87,10 @@ describe("triggerDvhFromArticle", () => {
     expect(submitDvhTaskMock).not.toHaveBeenCalled();
     expect(queryDvhTaskMock).not.toHaveBeenCalled();
     expect(fakeDb.insert).toHaveBeenCalledTimes(1);
-    expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(true);
+    // 7-31 断言翻转: 以前这里断言的是 dvh.bridge.success —— 而这条根本不是真渲染, 是固定占位样片。
+    //   "占位片也报 success" 正是要消灭的东西(日志满屏成功, 真假只差一个没人看的 realMode 字段)。
+    expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(false);
+    expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.placeholder/.test(JSON.stringify(c)))).toBe(true);
   });
 
   it("dedup: 已有 sourceArticleId+source=dvh 命中 → 跳过 + 不 fetch article 不 insert", async () => {
@@ -108,7 +113,11 @@ describe("triggerDvhFromArticle", () => {
     expect(submitDvhTaskMock).toHaveBeenCalledTimes(1);
     expect(queryDvhTaskMock).not.toHaveBeenCalled();
     expect(fakeDb.insert).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls.some((c) => /dvh\.bridge\.real_failed_fallback_mock/.test(JSON.stringify(c)))).toBe(true);
-    expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(true);
+    // 7-31 由 warn 升到 error: 真实模式下没提交成功却照样落库一条"视频"(占位样片),
+    //   运营界面上看不出区别 —— 这是老板 7-31 实测"形象/背景/音色全不生效"的最可能形态, 必须是 error 级。
+    expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.real_failed_fallback_mock/.test(JSON.stringify(c)))).toBe(true);
+    // 7-31 同上翻转: 提交都没成功, 这条不配叫 success。落库照旧(占位样片有据可查), 但日志必须说实话。
+    expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(false);
+    expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.placeholder/.test(JSON.stringify(c)))).toBe(true);
   });
 });

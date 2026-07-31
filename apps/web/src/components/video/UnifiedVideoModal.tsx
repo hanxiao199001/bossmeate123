@@ -88,15 +88,30 @@ export default function UnifiedVideoModal({
   const [topic, setTopic] = useState("");
   const [avatar, setAvatar] = useState<string>(DVH_TEMPLATES[0].value);
   // PR-X2: 形象目录 — 从 /admin/dvh-catalog 拉, 失败回退默认 4 个
-  const [avatarOptions, setAvatarOptions] = useState<Array<{ value: string; label: string }>>([...DVH_TEMPLATES]);
+  //   7-31 顺带带回每个形象**自带的音色名** + 后端的 audioDriven 开关(见下面音色选择器)
+  const [avatarOptions, setAvatarOptions] = useState<Array<{ value: string; label: string; voiceLabel?: string }>>([...DVH_TEMPLATES]);
+  /**
+   * 7-31 音色能不能换, 取决于后端 DVH_AUDIO_DRIVEN:
+   *   false(默认, 文字驱动) → 阿里云 AudioInfo.voice 只认平台发音人 code, 音色**只能跟随所选形象**,
+   *     我们音色库里的 voice_id(TTS 命名空间)在这条路上塞不进去 → 选了也不生效。
+   *   true(音频驱动)        → 先用所选音色 TTS 合成音频再驱动口型, 音色真生效。
+   * 拉不到就按 false 处理: 宁可禁用一个其实能用的下拉, 也不让人选一个不生效的东西。
+   */
+  const [audioDriven, setAudioDriven] = useState(false);
   useEffect(() => {
     if (!open) return;
     api.get("/admin/dvh-catalog")
       .then((r) => {
-        const list = ((r.data as any)?.data?.catalog ?? (r.data as any)?.catalog ?? []) as Array<{ key: string; templateLabel?: string; avatarLabel?: string }>;
+        const d = ((r.data as any)?.data ?? r.data) as { catalog?: Array<{ key: string; templateLabel?: string; avatarLabel?: string; voiceLabel?: string }>; audioDriven?: boolean };
+        const list = (d?.catalog ?? []) as Array<{ key: string; templateLabel?: string; avatarLabel?: string; voiceLabel?: string }>;
         if (Array.isArray(list) && list.length > 0) {
-          setAvatarOptions(list.map((c) => ({ value: c.key, label: c.templateLabel || c.avatarLabel || c.key })));
+          setAvatarOptions(list.map((c) => ({
+            value: c.key,
+            label: c.templateLabel || c.avatarLabel || c.key,
+            ...(c.voiceLabel ? { voiceLabel: c.voiceLabel } : {}),
+          })));
         }
+        setAudioDriven(d?.audioDriven === true);
       })
       .catch(() => { /* 回退默认 */ });
   }, [open]);
@@ -243,7 +258,7 @@ export default function UnifiedVideoModal({
           cleanup();
           setPhase("triggering_video");
           try {
-            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
+            await api.post(`/articles/${row.articleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel && audioDriven ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
             setSubmitting(false);
             onTriggered?.({ mode: "pending_article", batchId, articleId: row.articleId });
             doClose();
@@ -271,7 +286,7 @@ export default function UnifiedVideoModal({
       if (lockedArticleId) {
         setSubmitting(true);
         try {
-          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
+          await api.post(`/articles/${lockedArticleId}/generate-dvh-video`, { templateId: avatar, ...(voiceSel && audioDriven ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) });
           toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
           setSubmitting(false);
           onTriggered?.({ mode: "direct", articleId: lockedArticleId });
@@ -292,7 +307,7 @@ export default function UnifiedVideoModal({
       try {
         const res = await api.post<{ mode: "direct" | "pending_article"; articleId?: string; batchId?: string }>(
           "/admin/generate-video",
-          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar, ...(voiceSel ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) }
+          { source: "from_article", articleId: articleIdInput.trim(), avatarTemplate: avatar, ...(voiceSel && audioDriven ? { voiceId: voiceSel } : {}), ...(bgSel ? { backgroundUrl: bgSel } : {}) }
         );
         const data = res.data as any;
         if (data?.mode === "direct" && data?.articleId) {
@@ -329,7 +344,7 @@ export default function UnifiedVideoModal({
           templateId: avatar,
           idempotencyKey: idemKeyRef.current,
           ...(narrationTitle.trim() ? { title: narrationTitle.trim() } : {}),
-          ...(voiceSel ? { voiceId: voiceSel } : {}),
+          ...(voiceSel && audioDriven ? { voiceId: voiceSel } : {}),  // 7-31 文字驱动下音色不生效, 就别发 —— 发了只会在存证里留一条假线索
           ...(bgSel ? { backgroundUrl: bgSel } : {}),
         });
         toast.success("数字人视频生成中，稍后在内容管理→视频类型查看");
@@ -680,14 +695,19 @@ export default function UnifiedVideoModal({
               </p>
             </div>
 
-            {/* 7-10 音色库: 单次生成临时换音色, 不改账号绑定 */}
+            {/* 7-10 音色库: 单次生成临时换音色, 不改账号绑定
+                7-31 文字驱动(audioDriven=false, 生产默认)下整体禁用 —— 这条路的音色只能跟随形象,
+                     以前是"能选、选了没用", 出片后只会被当成 bug 报上来。 */}
             {voiceOptions.length > 0 && (
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">音色(本次生成)</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  音色(本次生成)
+                  {!audioDriven && <span className="ml-1 text-[11px] font-normal text-amber-600">当前模式下音色跟随形象配置</span>}
+                </label>
                 <select
-                  value={voiceSel}
+                  value={audioDriven ? voiceSel : ""}
                   onChange={(e) => setVoiceSel(e.target.value)}
-                  disabled={submitting}
+                  disabled={submitting || !audioDriven}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-50"
                 >
                   <option value="">默认(账号绑定音色/系统音色)</option>
@@ -706,7 +726,15 @@ export default function UnifiedVideoModal({
                     </optgroup>
                   )}
                 </select>
-                <p className="text-[11px] text-gray-400 mt-1">只对本次生成生效; 想固定请到"账号管理"给账号绑音色</p>
+                {audioDriven ? (
+                  <p className="text-[11px] text-gray-400 mt-1">只对本次生成生效; 想固定请到"账号管理"给账号绑音色</p>
+                ) : (
+                  <p className="text-[11px] text-amber-600 mt-1 leading-relaxed">
+                    本条视频将使用<b>{avatarOptions.find((t) => t.value === avatar)?.voiceLabel || "所选形象自带的音色"}</b>。
+                    数字人当前走「文字驱动」，声音由阿里云按形象配的发音人合成，换不了音色库里的声音；
+                    要换请到「设置」页给这个形象改配音色，或联系技术开启音频驱动。
+                  </p>
+                )}
               </div>
             )}
 

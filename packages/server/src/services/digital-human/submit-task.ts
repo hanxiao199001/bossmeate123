@@ -26,12 +26,45 @@ export interface DvhSubmitOptions {
    * 传 DVH_BG_NONE("none") = 本次显式不要背景(压掉 mapping/env 上配的), 回 DVH 默认黑底。
    */
   backgroundUrl?: string;
+  /**
+   * 7-31 存证用: 调用方(运营)本次**请求**的音色 voice_id。
+   * ⚠️ 文字驱动这条路根本不用它 —— 阿里云 AudioInfo.voice 只认平台发音人 code(aixia/maoxiaomei…),
+   *   而我们音色库里存的是 TTS 侧的 voice_id(qwen-tts/cosyvoice 命名空间), 两套东西不通用, 硬塞会 submit 失败。
+   *   收进来只为了在日志/存证里写清"用户要的是 X, 实际用的是 Y", 否则这条永远只能靠猜。
+   */
+  requestedVoiceId?: string;
+}
+
+/**
+ * 7-31 **实际发给阿里云**的那一份参数 —— 与"用户选了什么"严格分开。
+ *
+ * 【为什么必须单独有这个】老板实测"形象/背景/音色全不生效"时, 唯一能查的是 metadata,
+ *   而当时 metadata 里记的是 resolveAvatarVoice(templateId) 重新算出来的值 = "本该用什么",
+ *   不是"真用了什么"。两者在 mock 兜底 / 背景被 none 短路 / 音色被忽略时会完全不同,
+ *   结果就是查证时看到一份"参数都对"的记录, 而片子是另一回事。
+ */
+export interface DvhEffectiveParams {
+  /** text = SubmitTextTo2DAvatarVideoTask(默认); audio = DVH_AUDIO_DRIVEN=1 的音频驱动 */
+  driveMode: "text" | "audio";
+  avatarCode: string;
+  avatarLabel: string;
+  /** 文字驱动 = 真正塞进 AudioInfo.voice 的平台发音人; 音频驱动 = 我们 TTS 用的 voice */
+  voiceCode: string;
+  voiceLabel?: string;
+  /** 真正塞进 VideoInfo.backgroundImageUrl 的值; 没有 = 这次压根没传背景(黑底) */
+  backgroundImageUrl?: string;
+  /** 调用方本次请求的背景("none" 也算), 与上一行不同就说明被优先级链改写了 */
+  requestedBackgroundUrl?: string;
+  /** 有值 = 用户选了音色但这条路把它忽略了(文字驱动的既定限制) */
+  ignoredVoiceRequest?: string;
 }
 
 export interface DvhSubmitResult {
   taskUuid: string;
   submitMs: number;
   requestId?: string;
+  /** 7-31 本次真正生效的参数(供上游落 metadata; 不是用户选的那一份) */
+  effective: DvhEffectiveParams;
 }
 
 /**
@@ -86,6 +119,24 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     logger.debug({ templateId: opts.templateId, backgroundImageUrl }, "dvh.submit.with_bg");
   }
 
+  // 7-31 🔴 花钱之前把"真正发出去的三件"打一条 info —— 出片不对时不必再猜是哪一层丢的。
+  //   注意打的是 req 里那份值, 不是入参: 中间任何一层改写(优先级链/哨兵/mapping 兜底)都会体现在这。
+  const effective: DvhEffectiveParams = {
+    driveMode: "text",
+    avatarCode: mapping.avatarCode,
+    avatarLabel: mapping.avatarLabel,
+    voiceCode: mapping.voiceCode,
+    voiceLabel: mapping.voiceLabel,
+    ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+    ...(opts.backgroundUrl ? { requestedBackgroundUrl: opts.backgroundUrl } : {}),
+    // 文字驱动只认 mapping.voiceCode, 用户选的音色在这条路上一定被忽略 —— 明写出来, 别让人再查一遍
+    ...(opts.requestedVoiceId ? { ignoredVoiceRequest: opts.requestedVoiceId } : {}),
+  };
+  logger.info(
+    { tenantId: opts.tenantId, templateId: opts.templateId, ...effective, speechRate: env.DVH_SPEECH_RATE },
+    "dvh.submit.params",
+  );
+
   const startedAt = Date.now();
   const resp = await client.submitTextTo2DAvatarVideoTaskWithOptions(req, new $Util.RuntimeOptions({}));
   const submitMs = Date.now() - startedAt;
@@ -103,7 +154,7 @@ export async function submitDvhTask(opts: DvhSubmitOptions): Promise<DvhSubmitRe
     { taskUuid, submitMs, templateId: opts.templateId, avatarLabel: mapping.avatarLabel, tenantId: opts.tenantId },
     "dvh.submit.ok",
   );
-  return { taskUuid, submitMs, requestId: resp.body?.requestId };
+  return { taskUuid, submitMs, requestId: resp.body?.requestId, effective };
 }
 
 
@@ -116,6 +167,8 @@ export async function submitDvhAudioTask(opts: {
   audioUrl: string; templateId: TemplateId | string; tenantId: string; title?: string; sampleRate?: number;
   /** 7-29 同 submitDvhTask: 单次指定背景图; DVH_BG_NONE = 显式不要背景 */
   backgroundUrl?: string;
+  /** 7-31 存证: 这条音频是用哪个音色合的(音频驱动下音色**真生效**, 与文字驱动相反) */
+  ttsVoice?: string;
 }): Promise<DvhSubmitResult> {
   const dvhTenantId = process.env.DVH_TENANT_ID;
   const appId = process.env.DVH_APP_ID;
@@ -145,6 +198,20 @@ export async function submitDvhAudioTask(opts: {
     }),
   });
 
+  // 7-31 与文字驱动同一条存证: 音频驱动下 voiceCode = 我们 TTS 真正用的音色(这条路才换得动声音)
+  const effective: DvhEffectiveParams = {
+    driveMode: "audio",
+    avatarCode: mapping.avatarCode,
+    avatarLabel: mapping.avatarLabel,
+    voiceCode: opts.ttsVoice || "(TTS 默认音色)",
+    ...(backgroundImageUrl ? { backgroundImageUrl } : {}),
+    ...(opts.backgroundUrl ? { requestedBackgroundUrl: opts.backgroundUrl } : {}),
+  };
+  logger.info(
+    { tenantId: opts.tenantId, templateId: opts.templateId, ...effective, audioUrl: opts.audioUrl },
+    "dvh.submit.params",
+  );
+
   const startedAt = Date.now();
   const resp = await client.submitAudioTo2DAvatarVideoTaskWithOptions(req, new $Util.RuntimeOptions({}));
   const submitMs = Date.now() - startedAt;
@@ -162,5 +229,5 @@ export async function submitDvhAudioTask(opts: {
     { taskUuid, submitMs, mode: "audio-driven", templateId: opts.templateId, avatarLabel: mapping.avatarLabel, tenantId: opts.tenantId },
     "dvh.submit.audio.ok",
   );
-  return { taskUuid, submitMs, requestId: resp.body?.requestId };
+  return { taskUuid, submitMs, requestId: resp.body?.requestId, effective };
 }
