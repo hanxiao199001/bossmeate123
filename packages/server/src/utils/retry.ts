@@ -15,29 +15,79 @@ export interface RetryOptions {
   shouldRetry?: (error: unknown, attempt: number) => boolean;
 }
 
+/** 带结构化状态码的错误 —— provider 层抛错时挂上, 免得下游靠解析文案猜 */
+export interface HttpishError extends Error {
+  status?: number;
+  statusCode?: number;
+  code?: string;
+}
+
 /**
- * 判断是否应该重试该错误
- * - 只重试 429 (Rate Limit) 和 5xx 错误
- * - 不重试 4xx 错误（除了 429）
+ * 8-02: 超时/中断**一律不重试**。
+ * 推理型模型超时是它自身属性(想久了), 立刻重试大概率再超时, 纯烧调用配额 ——
+ * 而调用配额有日硬上限(LLM_DAILY_CALL_CAP), 烧光了整条生成链路停摆。
+ * 注意这条判断必须排在状态码判断**之前**: abort 类错误可能同时带 5xx 文案。
  */
-function defaultShouldRetry(error: unknown, attempt: number): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+export function isAbortLike(error: Error): boolean {
+  const name = error.name ?? "";
+  const msg = error.message ?? "";
+  return (
+    name === "AbortError" ||
+    name === "TimeoutError" ||
+    /this operation was aborted|the operation was aborted|aborted|abort/i.test(msg) ||
+    /timed?\s*out|timeout|ETIMEDOUT/i.test(msg)
+  );
+}
+
+/** 从错误里取 HTTP 状态码: 先读结构化字段, 再退回解析文案 */
+export function extractStatus(error: Error): number | null {
+  const e = error as HttpishError;
+  // ① 结构化(provider 层已挂, 见 openai-compatible.ts) —— 唯一可靠的来源
+  const structured = e.status ?? e.statusCode;
+  if (typeof structured === "number" && structured >= 100 && structured < 600) return structured;
+
+  // ② 文案兜底。**只为兼容还没挂 status 的老抛错点**, 不是主路径。
+  //   8-02 教训: 原实现只认 /API (\d{3}):/ 这一种写法(带冒号), 而项目真实的抛错格式是
+  //   `${name} API 错误: ${status} - ${body}`(openai-compatible.ts:121) —— 中间是中文"错误:",
+  //   数字在冒号**后面**。两者永远匹配不上 → statusCode 恒 null → **对任何错误都不重试**,
+  //   包括真该重试的 429 限流和 5xx。这个 withRetry 当了很久的摆设。
+  const m =
+    error.message.match(/API\s*错误[:：]\s*(\d{3})/) ??   // 本项目 provider 的真实格式
+    error.message.match(/API\s*(\d{3})\s*[:：]/) ??        // 老格式(带冒号)
+    error.message.match(/\bstatus\s*[:=]?\s*(\d{3})\b/i) ??
+    error.message.match(/\b(429|5\d{2})\b/);               // 最后兜底: 裸状态码
+  return m ? parseInt(m[1]!, 10) : null;
+}
+
+/**
+ * 判断是否应该重试该错误。
+ *
+ * 重试: 429(限流) / 5xx(服务端) / 连接层瞬断(ECONNRESET、socket hang up、EAI_AGAIN…)
+ * 不重试: 超时/中断(见 isAbortLike) / 其余 4xx(参数错、鉴权错, 重试多少次都一样)
+ */
+export function defaultShouldRetry(error: unknown, _attempt: number): boolean {
+  if (!(error instanceof Error)) return false;
+
+  // ① 超时/中断 —— 最优先, 永不重试
+  if (isAbortLike(error)) return false;
+
+  // ② 状态码
+  const status = extractStatus(error);
+  if (status !== null) {
+    return status === 429 || (status >= 500 && status < 600);
   }
 
-  // 解析错误信息中的 HTTP 状态码
-  const statusMatch = error.message.match(/API (\d{3}):|Anthropic API (\d{3}):/);
-  const statusCode = statusMatch ? parseInt(statusMatch[1] || statusMatch[2]) : null;
-
-  if (statusCode === null) {
-    return false;
-  }
-
-  // 只重试 429 (Rate Limit) 和 5xx 错误
-  if (statusCode === 429 || (statusCode >= 500 && statusCode < 600)) {
+  // ③ 连接层瞬断: 这类是"根本没到达服务端", 重试很可能就好了
+  const code = (error as HttpishError).code ?? "";
+  const msg = error.message ?? "";
+  if (
+    /^(ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENOTFOUND)$/.test(code) ||
+    /socket hang up|ECONNRESET|EPIPE|EAI_AGAIN|network error|fetch failed/i.test(msg)
+  ) {
     return true;
   }
 
+  // ④ 认不出来的错误不重试 —— 保守: 宁可少重试, 也不要在未知错误上烧配额
   return false;
 }
 

@@ -71,11 +71,20 @@ describe("judgeLlmCap — 纯判定", () => {
     expect(v.reason).toContain("已停止内容生成");
   });
 
-  it("日调用次数触顶(花费不高) → 熔断, 提示典型是失败重试打转", () => {
+  // 8-02 断言翻转(红线 #13: 告警文案只陈述事实, 不写归因)。
+  //   原用例叫"提示典型是失败重试打转" —— 那句归因在 08-01 事故当天就是错的:
+  //   真实根因是行业月度一次性入队 593 行(平时 24), 每篇本就要 8~10 次调用, 与重试无关。
+  //   而这句话很有说服力, 把排查带偏了半天。现在文案只给事实 + 可验证的对照数据。
+  it("日调用次数触顶 → 熔断, 只给事实与可验证数据, **不给归因结论**", () => {
     const v = judgeLlmCap({ costCents: 100, calls: 2000 }, CAP);
     expect(v.allowed).toBe(false);
+    // ✅ 事实
     expect(v.reason).toContain("2000 次");
-    expect(v.reason).toContain("重试");
+    expect(v.reason).toContain("已停止内容生成");
+    // ✅ 可验证的线索: 均价, 且写明怎么对照
+    expect(v.reason).toContain("元/次");
+    // ❌ 不许再出现"典型是…"这类下结论的措辞
+    expect(v.reason).not.toContain("典型是");
   });
 
   it("上限设 0 = 该项不限; 两项都 0 或总开关关 → 永远放行", () => {

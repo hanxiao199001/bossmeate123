@@ -24,3 +24,9 @@ export const BATCH_WORKER_CONCURRENCY = 5;
 /** P4 失败 retry 指数退避（spec：30s / 2min / 5min）*/
 export const BATCH_RETRY_DELAYS_MS = [30_000, 120_000, 300_000];
 export const BATCH_MAX_AUTO_RETRY = 3;
+/**
+ * 8-02 撞 LLM 日上限时最多顺延几天(见 batch-worker 的顺延改造)。
+ * 5 天: 够扛过一次月度批量的自然摊平(593 行 ÷ 约 170 行/天 ≈ 3.5 天), 又不至于让
+ * 一行在队列里无限漂 —— 连续 5 天排不上说明配额长期不够, 那是要人调参的事, 该判失败让人看见。
+ */
+export const BATCH_MAX_DEFER_DAYS = 5;
