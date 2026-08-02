@@ -110,6 +110,21 @@ describe("时间语义守卫: 禁止已知会错的写法", () => {
     ).toEqual([]);
   });
 
+  it("🔴 禁止 date_trunc(..., now()) 这类**不含列名**的日界计算 —— 它按 session 时区(UTC)截断", () => {
+    // 这条是 8-02 部署后补的: 上一版规则要求括号里出现时间列名, 于是
+    // `date_trunc('day', now())` 整个漏网 —— 而它恰恰是**更危险**的一类:
+    //   ① 纯日界计算最容易写错时区(没有列名提示你这张表是 NAIVE 还是 TZ);
+    //   ② 读代码时也更不容易警觉("截断到天"看起来天经地义)。
+    // 实测代价: daily-cron 的未核实刊配额窗口因此变成 BJ 08:00→次日 08:00,
+    //   算出"今日已用 = 0"而真实是 30。
+    const hits = scan(/date_trunc\s*\([^)]*now\s*\(\s*\)/i).filter((h) => !ALLOW[h.rel]);
+    expect(
+      hits,
+      `发现 ${hits.length} 处。DB session 时区是 UTC, date_trunc('day', now()) 给的是 UTC 零点 = 北京 08:00。` +
+      `日界一律在 JS 侧用 startOfBjDay() 算好再传进来(drizzle 类型化比较对两类列都正确)。${fmt(hits)}`,
+    ).toEqual([]);
+  });
+
   it("🔴 禁止用 setHours(0,0,0,0) 造日界 —— 它取的是 Node 进程本地时区, 而 TZ 未设置", () => {
     const hits = scan(/setHours\s*\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)/).filter((h) => !ALLOW[h.rel]);
     expect(
