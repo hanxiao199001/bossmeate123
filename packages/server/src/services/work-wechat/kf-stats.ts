@@ -84,7 +84,10 @@ export async function getKfStats(tenantId: string, daysRaw = 7, unansweredLimit 
     .where(scope);
 
   // 2) 按天序列（同一 dateExpr 同时进 SELECT/GROUP BY/ORDER BY，无参数化差异）
-  const dateExpr = sql<string>`to_char(${kfMessages.createdAt} at time zone 'Asia/Shanghai', 'YYYY-MM-DD')`;
+  // 8-02: kf_messages.created_at 是 NAIVE(存 UTC)。原来的 `at time zone 'Asia/Shanghai'`
+  //   把 UTC 值当成北京时间又转了一次, **方向相反**(差 -8 小时) —— BJ 00:00~08:00 的消息会被
+  //   算进前一天。客服线尚未开通(近 10 天零消息)所以没暴露, 上线后会立刻爆出来。
+  const dateExpr = sql<string>`to_char(${kfMessages.createdAt} + interval '8 hours', 'YYYY-MM-DD')`;
   const dailyRows = await db.select({ date: dateExpr, ...bucketCols })
     .from(kfMessages)
     .innerJoin(kfConversations, eq(kfMessages.conversationId, kfConversations.id))

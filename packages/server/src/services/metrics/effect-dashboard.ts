@@ -122,7 +122,10 @@ export async function buildEffectDashboard(tenantId: string, rangeDays: RangeDay
       cm.metadata->>'source'     AS source,
       cm.metadata->>'accountId'  AS account_id,
       c.title                    AS title,
-      to_char(c.created_at, 'YYYY-MM-DD') AS content_created_at,
+      -- 8-02: contents.created_at 是 NAIVE(存 UTC), 裸 to_char 拿到的是 **UTC 日**。
+      -- 生成跑在 BJ 03:00(=UTC 前一天 19:00) → 实测 94%(562/600) 的内容被标成前一天。
+      -- 加 interval '8 hours' 对 NAIVE/TZ 两类列都正确(见 time-semantics-guard 文件头实测表)。
+      to_char(c.created_at + interval '8 hours', 'YYYY-MM-DD') AS content_created_at,
       c.metadata->>'journalId'   AS journal_id
     FROM content_metrics cm
     LEFT JOIN contents c ON c.id = cm.content_id

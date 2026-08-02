@@ -106,14 +106,15 @@ export async function dashboardRoutes(app: FastifyInstance) {
       // Token 趋势（最近7天，按天聚合）
       db
         .select({
-          date: sql<string>`DATE(${tokenLogs.createdAt})`.as("date"),
+          // 8-02: token_logs.created_at 是 NAIVE(存 UTC), 裸 DATE() 得到 UTC 日 → 标签整体偏一天
+          date: sql<string>`DATE(${tokenLogs.createdAt} + interval '8 hours')`.as("date"),
           tokens: sum(sql`${tokenLogs.inputTokens} + ${tokenLogs.outputTokens}`),
           calls: count(),
         })
         .from(tokenLogs)
         .where(and(eq(tokenLogs.tenantId, tenantId), gte(tokenLogs.createdAt, weekAgo)))
-        .groupBy(sql`DATE(${tokenLogs.createdAt})`)
-        .orderBy(sql`DATE(${tokenLogs.createdAt})`),
+        .groupBy(sql`DATE(${tokenLogs.createdAt} + interval '8 hours')`)
+        .orderBy(sql`DATE(${tokenLogs.createdAt} + interval '8 hours')`),
 
       // 5-17 P0 hero: 今日 system tenant 推荐文章 (24h 滚动窗口避免时区坑)
       db.select({ c: count() }).from(contents)

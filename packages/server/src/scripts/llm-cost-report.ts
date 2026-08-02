@@ -16,11 +16,13 @@ function yuan(cents: number | string): string {
 async function main() {
   const daysIdx = process.argv.indexOf("--days");
   const days = daysIdx > -1 ? Math.max(1, Number(process.argv[daysIdx + 1]) || 7) : 7;
-  const since = new Date();
-  since.setDate(since.getDate() - (days - 1));
-  since.setHours(0, 0, 0, 0);
+  // 8-02: 原来用 setHours(本地时区) + 裸 to_char(UTC 日) —— 拿它对账会与简报口径差一天。
+  const BJ = 8 * 3600_000;
+  const bjNow = new Date(Date.now() + BJ);
+  bjNow.setUTCHours(0, 0, 0, 0);
+  const since = new Date(bjNow.getTime() - (days - 1) * 86_400_000 - BJ);
 
-  const dayExpr = sql<string>`to_char(${costLedger.createdAt}, 'MM-DD')`;
+  const dayExpr = sql<string>`to_char(${costLedger.createdAt} + interval '8 hours', 'MM-DD')`;
   const perDay = await db
     .select({
       tenantId: costLedger.tenantId,
@@ -91,9 +93,11 @@ async function main() {
   }
 
   // 本月合计(按租户)
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  monthStart.setHours(0, 0, 0, 0);
+  // 8-02: 北京时区的本月 1 号零点(不混用 setDate 本地 / setUTCHours)
+  const mBj = new Date(Date.now() + BJ);
+  mBj.setUTCDate(1);
+  mBj.setUTCHours(0, 0, 0, 0);
+  const monthStart = new Date(mBj.getTime() - BJ);
   const monthly = await db
     .select({
       tenantId: costLedger.tenantId,
