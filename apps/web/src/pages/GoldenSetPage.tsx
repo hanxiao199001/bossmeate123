@@ -33,6 +33,38 @@ const LABEL_STYLE: Record<GoldenLabel, string> = {
   poor: "bg-rose-600 hover:bg-rose-700 border-rose-600",
 };
 
+/**
+ * 8-02 改版: 原因从"自由打字"改成"点选 + 可选补充"。
+ *
+ * 老板实测反馈: 很多"中/差"他说不出具体建议 —— 而这不是他的问题, 是设计的问题。
+ * 让人从空白开始描述"哪里不好"很难; 给一组选项去认, 容易得多, 而且结果更结构化。
+ * 这组词表同时就是日后「驳回原因」分类的雏形 —— 反馈闭环的输入定义。
+ */
+const REASON_OPTIONS: Record<GoldenLabel, string[]> = {
+  good: ["选题好", "数据扎实", "标题有钩子", "结构清楚", "读着像人写的", "对口精准"],
+  fair: [
+    "数据偏少",
+    "标题一般",
+    "开头不抓人",
+    "有套话/AI腔",
+    "结构松散",
+    "排版乱",
+    "长度不合适",
+    "对口一般",
+  ],
+  poor: [
+    "数据太少/空洞",
+    "数据可能是编的",
+    "期刊不对口",
+    "标题党/夸大",
+    "满篇AI腔",
+    "车轱辘话/重复",
+    "有事实错误",
+    "排版没法看",
+    "读不懂/逻辑乱",
+  ],
+};
+
 interface BlindJournal {
   name: string | null;
   impactFactor: string | number | null;
@@ -67,6 +99,23 @@ interface Stats {
   distribution?: Record<string, number>;
 }
 
+/** 点选的原因 + 手写补充 → 存进 reason 的单一字符串。用「·」分隔，日后提炼词表时好切分 */
+function buildReason(picked: string[], freeText: string): string {
+  const parts = [...picked];
+  const t = freeText.trim();
+  if (t) parts.push(t);
+  return parts.join(" · ");
+}
+
+/** 把存过的 reason 拆回「选中的选项」+「手写部分」，这样翻回来还能改 */
+function parseReason(stored: string | null, options: string[]): { picked: string[]; free: string } {
+  if (!stored) return { picked: [], free: "" };
+  const segs = stored.split(" · ").map((s) => s.trim()).filter(Boolean);
+  const picked = segs.filter((s) => options.includes(s));
+  const free = segs.filter((s) => !options.includes(s)).join(" · ");
+  return { picked, free };
+}
+
 export default function GoldenSetPage() {
   const [cards, setCards] = useState<BlindCard[]>([]);
   const [idx, setIdx] = useState(0);
@@ -79,6 +128,7 @@ export default function GoldenSetPage() {
   const [scores, setScores] = useState<SystemScores | null>(null);
   const [scoresLoading, setScoresLoading] = useState(false);
   const [bodyExpanded, setBodyExpanded] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]); // 点选的原因标签
   const reasonRef = useRef<HTMLTextAreaElement>(null);
 
   const card = cards[idx];
@@ -113,12 +163,15 @@ export default function GoldenSetPage() {
     void loadStats();
   }, [loadCards, loadStats]);
 
-  // 切换卡片时重置：理由回填自己之前标的、系统分收起、正文折叠复位
+  // 切换卡片时：把之前存的 reason 拆回「选项 + 手写」，系统分收起，正文折叠复位
   useEffect(() => {
-    setReason(card?.myReason ?? "");
+    const opts = card?.myLabel ? REASON_OPTIONS[card.myLabel as GoldenLabel] ?? [] : [];
+    const { picked: p, free } = parseReason(card?.myReason ?? null, opts);
+    setPicked(p);
+    setReason(free);
     setScores(null);
     setBodyExpanded(false);
-  }, [card?.id, card?.myReason]);
+  }, [card?.id, card?.myReason, card?.myLabel]);
 
   const fetchScores = useCallback(async (contentId: string) => {
     setScoresLoading(true);
@@ -132,57 +185,83 @@ export default function GoldenSetPage() {
     }
   }, []);
 
+  /**
+   * 落库。
+   *
+   * 🔴 8-02 修一个把数据毁掉的设计错误: 原本选完标签 900ms 就自动跳下一篇,
+   *    人根本来不及填理由 —— 而理由是这套标注唯一能让系统学到东西的部分。
+   *    现在改成: 选标签只落标签(不跳), 选/填完原因再手动下一篇。
+   */
   const annotate = useCallback(
-    async (label: GoldenLabel, opts: { advance?: boolean } = {}) => {
+    async (label: GoldenLabel, reasonOverride?: string) => {
       if (!card || saving) return;
       setSaving(true);
+      const finalReason = (reasonOverride ?? buildReason(picked, reason)).trim();
       try {
         await api.post("/golden-set/annotate", {
           contentId: card.id,
           label,
-          reason: reason.trim() || undefined,
+          reason: finalReason || undefined,
         });
-        // 本地同步，避免翻回来看到旧值
         setCards((prev) =>
-          prev.map((c) => (c.id === card.id ? { ...c, myLabel: label, myReason: reason.trim() || null } : c))
+          prev.map((c) => (c.id === card.id ? { ...c, myLabel: label, myReason: finalReason || null } : c))
         );
         void loadStats();
-        // 标完才允许看系统分
-        void fetchScores(card.id);
-        if (opts.advance !== false && idx < cards.length - 1) {
-          // 给 300ms 看一眼系统分再跳，不然刚出来就被翻走了
-          setTimeout(() => setIdx((i) => Math.min(i + 1, cards.length - 1)), 900);
-        }
+        void fetchScores(card.id); // 标完才允许看系统分
       } catch (e) {
         setErr(e instanceof Error ? e.message : "保存失败");
       } finally {
         setSaving(false);
       }
     },
-    [card, reason, saving, idx, cards.length, loadStats, fetchScores]
+    [card, picked, reason, saving, loadStats, fetchScores]
   );
 
-  // 快捷键
+  /** 选中标签 = 先把判断落库(不跳页), 让人有时间选原因 */
+  const pickLabel = useCallback(
+    (label: GoldenLabel) => {
+      setPicked([]); // 换标签时清空原因选项(good 和 poor 的选项不是一套)
+      void annotate(label, "");
+    },
+    [annotate]
+  );
+
+  /** 点选/取消一个原因 → 立刻补写回该条标注 */
+  const toggleReason = useCallback(
+    (r: string) => {
+      if (!card?.myLabel) return;
+      const next = picked.includes(r) ? picked.filter((x) => x !== r) : [...picked, r];
+      setPicked(next);
+      void annotate(card.myLabel as GoldenLabel, buildReason(next, reason));
+    },
+    [card?.myLabel, picked, reason, annotate]
+  );
+
+  const goNext = useCallback(() => {
+    setIdx((i) => Math.min(i + 1, cards.length - 1));
+  }, [cards.length]);
+
+  // 快捷键。注意: 1/2/3 只落标签**不跳页**, 跳页一律靠 Enter/→ —— 见 annotate 的注释
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inInput = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement;
       if (inInput) {
-        // 理由框里 Cmd/Ctrl+Enter = 保存当前标签并下一篇
-        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && card?.myLabel) {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
           e.preventDefault();
-          void annotate(card.myLabel as GoldenLabel);
+          if (card?.myLabel) void annotate(card.myLabel as GoldenLabel);
+          goNext();
         }
         return;
       }
-      if (e.key === "1") void annotate("good");
-      else if (e.key === "2") void annotate("fair");
-      else if (e.key === "3") void annotate("poor");
-      else if (e.key === "ArrowRight") setIdx((i) => Math.min(i + 1, cards.length - 1));
+      if (e.key === "1") pickLabel("good");
+      else if (e.key === "2") pickLabel("fair");
+      else if (e.key === "3") pickLabel("poor");
+      else if (e.key === "Enter" || e.key === "ArrowRight") goNext();
       else if (e.key === "ArrowLeft") setIdx((i) => Math.max(i - 1, 0));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [annotate, cards.length, card?.myLabel]);
+  }, [pickLabel, goNext, annotate, card?.myLabel]);
 
   const done = stats?.mine ?? 0;
   const target = stats?.target ?? 50;
@@ -277,10 +356,10 @@ export default function GoldenSetPage() {
                 {(["good", "fair", "poor"] as GoldenLabel[]).map((l, i) => (
                   <button
                     key={l}
-                    onClick={() => void annotate(l)}
+                    onClick={() => pickLabel(l)}
                     disabled={saving}
                     className={`w-full text-left px-3 py-2.5 rounded border text-white text-sm transition disabled:opacity-50 ${LABEL_STYLE[l]} ${
-                      card.myLabel === l ? "ring-2 ring-offset-1 ring-gray-800" : ""
+                      card.myLabel === l ? "ring-2 ring-offset-1 ring-gray-800" : "opacity-70 hover:opacity-100"
                     }`}
                   >
                     <span className="inline-block w-5 text-white/70">{i + 1}</span>
@@ -290,41 +369,62 @@ export default function GoldenSetPage() {
                 ))}
               </div>
 
-              <div className="mt-4">
-                <label className="text-xs text-gray-600 block mb-1">
-                  为什么？<span className="text-gray-400">（一句话，最值钱的部分）</span>
-                </label>
-                <textarea
-                  ref={reasonRef}
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  rows={3}
-                  placeholder="如：数据太少像凑字数 / 期刊不对口 / 标题没钩子 / 像 AI 写的"
-                  className="w-full text-sm border rounded p-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
-                />
-                <div className="text-[11px] text-gray-400 mt-1">
-                  这些理由会被提炼成「驳回原因」分类，是系统学会自我调整的输入
+              {/* 选完标签才出原因区 —— 没判断之前问"为什么"没有意义 */}
+              {card.myLabel && (
+                <div className="mt-4 pt-4 border-t">
+                  <label className="text-xs text-gray-600 block mb-2">
+                    {card.myLabel === "good" ? "好在哪？" : "问题在哪？"}
+                    <span className="text-gray-400">（点选，可多选；说不准就跳过）</span>
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(REASON_OPTIONS[card.myLabel as GoldenLabel] ?? []).map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => toggleReason(r)}
+                        className={`text-xs px-2 py-1 rounded-full border transition ${
+                          picked.includes(r)
+                            ? "bg-gray-900 text-white border-gray-900"
+                            : "bg-white text-gray-600 border-gray-300 hover:border-gray-500"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea
+                    ref={reasonRef}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    onBlur={() => card.myLabel && void annotate(card.myLabel as GoldenLabel)}
+                    rows={2}
+                    placeholder="上面没有的，这里补一句（可留空）"
+                    className="mt-2 w-full text-sm border rounded p-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  />
+                  <div className="text-[11px] text-gray-400 mt-1">
+                    这些会被提炼成「驳回原因」分类，是系统学会自我调整的输入
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="mt-4 flex items-center gap-2">
                 <button
                   onClick={() => setIdx((i) => Math.max(i - 1, 0))}
                   disabled={idx === 0}
-                  className="flex-1 text-xs px-2 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
+                  className="text-xs px-3 py-2 border rounded hover:bg-gray-50 disabled:opacity-40"
                 >
-                  ← 上一篇
+                  ←
                 </button>
                 <button
-                  onClick={() => setIdx((i) => Math.min(i + 1, cards.length - 1))}
+                  onClick={goNext}
                   disabled={idx >= cards.length - 1}
-                  className="flex-1 text-xs px-2 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
+                  className="flex-1 text-sm px-3 py-2 bg-gray-900 text-white rounded hover:bg-gray-800 disabled:opacity-40"
                 >
                   下一篇 →
                 </button>
               </div>
               <div className="text-[11px] text-gray-400 mt-2 text-center">
-                快捷键：1 好 · 2 中 · 3 差 · ← → 翻页
+                1/2/3 打分（不跳页）· Enter 或 → 下一篇
               </div>
             </div>
 
