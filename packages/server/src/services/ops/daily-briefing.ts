@@ -184,7 +184,14 @@ export function judgeTenant(s: TenantSignals): { items: BriefItem[]; todos: stri
   if (s.draftShortfalls.length > 0) {
     const detail = s.draftShortfalls.slice(0, 5).map((x) => `${x.accountName}(${x.pushed}/${x.target})`).join("、");
     const more = s.draftShortfalls.length > 5 ? ` 等 ${s.draftShortfalls.length} 个号` : "";
-    items.push({ level: "warn", text: `${s.draftShortfalls.length} 个公众号今日进草稿箱未达保底(${s.draftTargetPerAccount} 篇/天): ${detail}${more} —— 内容不够分, 需提高生成量。` });
+    // 8-02 去重后这条是草稿保底的**唯一**出口(平台级 draft_shortfall 渲染已关, 见 judgePlatform),
+    //   所以要把那边的严重度接过来: 有号今日 0 篇 = 红(那个号整天空转), 否则黄。
+    const anyZero = s.draftShortfalls.some((x) => x.pushed === 0);
+    items.push({
+      level: anyZero ? "alert" : "warn",
+      text: `${s.draftShortfalls.length} 个公众号今日进草稿箱未达保底(${s.draftTargetPerAccount} 篇/天): ${detail}${more}` +
+        `${anyZero ? "(其中有号今日 0 篇)" : ""} —— 内容不够分, 需提高生成量。`,
+    });
   }
 
   // ③ 发布失败/卡住(仅 auto 号 —— manual 号的"没人领"是常态, 见 TenantSignals.publishHealth 注释)
@@ -231,6 +238,7 @@ export function judgeTenant(s: TenantSignals): { items: BriefItem[]; todos: stri
   }
 
   // ⑥ 账号异常
+  // 8-02: 过滤条件与概况行的 countActionableAbnormal 必须一致 —— 那里已抽成函数, 这里只做展示
   const abnormalDetail = Object.entries(s.accounts.byHealth)
     .filter(([h]) => h !== "healthy" && h !== "disabled" && h !== "no_content_today")
     .map(([h, n]) => `${ACCOUNT_HEALTH_LABEL[h] ?? h} ${n} 个`)
@@ -244,6 +252,17 @@ export function judgeTenant(s: TenantSignals): { items: BriefItem[]; todos: stri
   }
 
   return { items, todos, usedPct };
+}
+
+/**
+ * 8-02 「需要人动手处理的异常号」数 —— 概况行与 ⑥ 账号异常条目**共用这一把尺子**。
+ * 排除 healthy / disabled / no_content_today: 前两个不是异常, 第三个是内容侧的事
+ * (今天没内容分给它), 不是账号坏了, 去账号矩阵也处理不了。
+ */
+export function countActionableAbnormal(byHealth: Record<string, number>): number {
+  return Object.entries(byHealth)
+    .filter(([h]) => h !== "healthy" && h !== "disabled" && h !== "no_content_today")
+    .reduce((n, [, c]) => n + Number(c ?? 0), 0);
 }
 
 export const ACCOUNT_HEALTH_LABEL: Record<string, string> = {
@@ -415,14 +434,12 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
       });
       continue;
     }
-    // 分发缺口: 已经自动补救过一轮仍没填平才会落这条 —— 所以它天然是"补救也救不回来"的信号
-    if (inc.kind === "draft_shortfall") {
-      items.push({
-        level: inc.lastMessage.includes("今日 0 篇") ? "alert" : "warn",
-        text: `${inc.lastMessage.slice(0, 200)}`,
-      });
-      continue;
-    }
+    // 8-02 去重: 与租户级②「N 个公众号未达保底」是**同一件事**(7-29 起两边已统一用分发器
+    //   那把尺子 countTodayAccountLoad, 数字必然相同)。实测同一天平台报🔴"1/7 个号未达保底"、
+    //   租户报🟡"Paper咨询与发表(0/2)" —— 同一个号、两个级别, 老板看到 2 条其实是 1 件事。
+    //   留租户那条: 它**点名到号**(能直接去处理), 这条只有比例。严重度已在那边接住(有号 0 篇→红)。
+    //   本条的"已自动补救补进 N 篇"仍留在 ops_incidents.detail 与今日驾驶舱, 不丢。
+    if (inc.kind === "draft_shortfall") continue;
     if (inc.kind === "draft_remedy_failed") {
       items.push({ level: "alert", text: `草稿缺口自动补救本身失败(${inc.count} 次) —— 补救逻辑出错了, 需要技术看: ${inc.lastMessage.slice(0, 90)}` });
       continue;
@@ -439,6 +456,11 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
       todos.push(`质检闸不可用导致的待复核内容 —— 「今日驾驶舱」待审列表, 复核后可放行`);
       continue;
     }
+
+    // 8-02 去重: 期刊池同一件事今天报了三处 —— 🔴池枯竭(collectPoolBriefing) + 🟡本条 forecast
+    //   + 📋待办。池简报那条写明"剩几本/几天后枯竭/两个可选动作", 严格覆盖本条且更可读。
+    //   本条走的是下面的兜底渲染(只会念一句 KIND_LABEL + 计数), 留着纯属刷屏。
+    if (inc.kind === "journal_pool_forecast") continue;
 
     const label = KIND_LABEL[inc.kind] ?? inc.kind;
     const level: BriefItemLevel = inc.kind === "ledger_write_failed" || inc.kind === "zero_output" ? "alert" : "warn";
@@ -508,7 +530,10 @@ export function renderBriefingText(
     const budgetPart = t.spend.usedPct !== null ? ` / 预算已用 ${t.spend.usedPct}%` : "";
     L.push(
       `${t.tenantName}: 生成 ${t.generatedToday} 条 · 进草稿箱 ${t.draftPushedToday} 条 · 发布 ${t.publishedToday} 条 · ` +
-      `账号 ${t.accounts.total}(异常 ${t.accounts.abnormal}) · 今日花费 ${yuan(t.spend.todayCents)} 元${budgetPart}`,
+      // 8-02 口径统一: 概况这里原来用 accounts.abnormal(含 no_content_today), 而上面「账号异常」
+      //   条目**故意排除** no_content_today(今天没内容不是账号的毛病)。实测同一天概况写 17、
+      //   条目写 3, 运营会以为漏报了 14 个。两处必须同一把尺子 —— 统一到条目那把(更严的)。
+      `账号 ${t.accounts.total}(需处理 ${countActionableAbnormal(t.accounts.byHealth)}) · 今日花费 ${yuan(t.spend.todayCents)} 元${budgetPart}`,
     );
   }
   if (tenantBriefs.length > 5) L.push(`…另有 ${tenantBriefs.length - 5} 个租户, 见今日驾驶舱`);
@@ -641,48 +666,15 @@ export async function collectTenantBriefing(
   );
   const summaryExt = matrix?.summary as { manualAccounts?: number; pendingManualUpload?: number } | undefined;
 
-  // 7-27 连续异常升级: 近 N 天逐日 生成/分发 数(北京时间日切)。查询失败只降级为"不升级", 不拖垮简报。
-  const streakDays = Math.max(2, Math.floor(env.OPS_ZERO_STREAK_DAYS));
-  let streakItems: BriefItem[] = [];
-  try {
-    const tenantCreatedAt = tenantRow?.createdAt ? new Date(tenantRow.createdAt as unknown as string) : null;
-    const tenantAgeDays = tenantCreatedAt ? (now.getTime() - tenantCreatedAt.getTime()) / 86_400_000 : Infinity;
-    if (tenantAgeDays >= streakDays) {
-      const windowStart = new Date(since.getTime() - (streakDays - 1) * 86_400_000);
-      const genRows = await db
-        .select({
-          day: sql<string>`to_char(${contents.createdAt} + interval '8 hours', 'YYYY-MM-DD')`,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(contents)
-        .where(and(
-          inArray(contents.tenantId, [tenantId, SYSTEM_RECOMMENDATION_TENANT_ID]),
-          gte(contents.createdAt, windowStart),
-        ))
-        .groupBy(sql`1`);
-      const distRows = await db
-        .select({
-          day: sql<string>`to_char(${contentPublishLog.createdAt} + interval '8 hours', 'YYYY-MM-DD')`,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(contentPublishLog)
-        .where(and(
-          eq(contentPublishLog.tenantId, tenantId),
-          gte(contentPublishLog.createdAt, windowStart),
-          inArray(contentPublishLog.status, ["draft_pushed", "success", "published_by_operator"]),
-        ))
-        .groupBy(sql`1`);
-      const genBy = new Map(genRows.map((r) => [r.day, Number(r.count ?? 0)]));
-      const distBy = new Map(distRows.map((r) => [r.day, Number(r.count ?? 0)]));
-      const perDay = Array.from({ length: streakDays }, (_, i) => {
-        const d = bjDateString(new Date(now.getTime() - i * 86_400_000));
-        return { generated: genBy.get(d) ?? 0, distributed: distBy.get(d) ?? 0 };
-      });
-      streakItems = judgeZeroStreak(perDay, streakDays);
-    }
-  } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : err, tenantId }, "简报: 连续异常统计失败, 本次不升级");
-  }
+  // 8-02 连续异常升级**已移到平台级**(collectPlatformBriefing → collectZeroStreakPlatform)。
+  //
+  // 【为什么搬走】8-02 自检实测: 这条在租户级判, 而生成数取的是"自己租户 + SYSTEM 共享池"
+  //   —— 四个租户读的是同一个池子, 一旦触发就是四份一模一样的 🚨。分发更糟: 线上 4 个 active
+  //   租户里 3 个(BossMate/测试团队/_system_recommendation)**一个可分发账号都没有**, 天天零分发、
+  //   天天触发; 唯一真跑业务的你好集团天天正常发, **从来不触发**。
+  //   当天简报里「连续 3 天零分发」一字不差印了 3 遍, 全部标红"今天必须有人处理"。
+  //   危害不是吵, 是把红色区污染成噪音区 —— 7-31 事故时老板是靠"视频没声音"发现的, 不是靠简报。
+  const streakItems: BriefItem[] = [];
 
   const signals: TenantSignals = {
     generatedToday: Number(genRow?.count ?? 0),
@@ -726,6 +718,74 @@ export async function collectTenantBriefing(
   };
 }
 
+/**
+ * 8-02 平台级连续异常升级(原租户级, 见 collectTenantBriefing 里搬走的注释)。
+ *
+ * 两条判定的分母都必须选对, 否则和搬走之前一样恒真:
+ *  - **生成**: 全平台合计(内容都进 SYSTEM 共享池, 按租户切没有意义)
+ *  - **分发**: 只统计**有可分发账号的租户**。空壳租户(0 个 active 微信号)天然零分发,
+ *    把它们算进分母 = 平台级同样恒真, 白搬一趟。判据是"有能力发却没发", 不是"没发"。
+ *
+ * 全平台一条都发不出去才喊 —— 这才是"分发链路断了"; 单个租户不发是它自己的事(有 A3 那条黄色管)。
+ */
+export async function collectZeroStreakPlatform(now: Date = new Date()): Promise<BriefItem[]> {
+  const streakDays = Math.max(2, Math.floor(env.OPS_ZERO_STREAK_DAYS));
+  try {
+    const since = startOfBjDay(now);
+    const windowStart = new Date(since.getTime() - (streakDays - 1) * 86_400_000);
+
+    // 有可分发账号的租户 = 至少 1 个 active 微信号。没有的租户不进分发分母。
+    const distributable = await db
+      .selectDistinct({ tenantId: platformAccounts.tenantId })
+      .from(platformAccounts)
+      .where(and(
+        eq(platformAccounts.platform, "wechat"),
+        eq(platformAccounts.status, "active"),
+      ));
+    const distributableIds = distributable.map((r) => r.tenantId).filter(Boolean) as string[];
+
+    // 全平台一个可分发账号都没有 → "零分发"没有意义(没人能发), 直接不判, 免得又成恒真。
+    // 早退放在查询之前: 后面两条统计白跑没必要。
+    if (distributableIds.length === 0) {
+      logger.info("简报: 全平台无可分发账号, 跳过连续零分发判定");
+      return [];
+    }
+
+    const genRows = await db
+      .select({
+        day: sql<string>`to_char(${contents.createdAt} + interval '8 hours', 'YYYY-MM-DD')`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(contents)
+      .where(gte(contents.createdAt, windowStart))
+      .groupBy(sql`1`);
+
+    const distRows = await db
+      .select({
+        day: sql<string>`to_char(${contentPublishLog.createdAt} + interval '8 hours', 'YYYY-MM-DD')`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(contentPublishLog)
+      .where(and(
+        inArray(contentPublishLog.tenantId, distributableIds),
+        gte(contentPublishLog.createdAt, windowStart),
+        inArray(contentPublishLog.status, ["draft_pushed", "success", "published_by_operator"]),
+      ))
+      .groupBy(sql`1`);
+
+    const genBy = new Map(genRows.map((r) => [r.day, Number(r.count ?? 0)]));
+    const distBy = new Map(distRows.map((r) => [r.day, Number(r.count ?? 0)]));
+    const perDay = Array.from({ length: streakDays }, (_, i) => {
+      const d = bjDateString(new Date(now.getTime() - i * 86_400_000));
+      return { generated: genBy.get(d) ?? 0, distributed: distBy.get(d) ?? 0 };
+    });
+    return judgeZeroStreak(perDay, streakDays);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "简报: 平台级连续异常统计失败, 本次不升级");
+    return [];
+  }
+}
+
 /** 平台级采集(跨租户: 系统健康 + 供应商余额 + 异常事件流水) */
 export async function collectPlatformBriefing(now: Date = new Date()): Promise<PlatformBriefing> {
   const since = startOfBjDay(now);
@@ -749,7 +809,9 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
     collectPoolBriefing(SYSTEM_RECOMMENDATION_TENANT_ID),
   ]);
   const { items, todos } = judgePlatform({ health, supplier, incidents });
-  const allItems = [...items, ...pool.items];
+  // 8-02: 连续异常升级由租户级搬到这里。🚨 是最响的一条, 排最前。
+  const streakItems = await collectZeroStreakPlatform(now);
+  const allItems = [...streakItems, ...items, ...pool.items];
   return {
     health, supplier, incidents,
     items: allItems, todos: [...todos, ...pool.todos],

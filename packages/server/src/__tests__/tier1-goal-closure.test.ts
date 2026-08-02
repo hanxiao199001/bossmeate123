@@ -233,9 +233,24 @@ describe("简报: 新 kind 都有人话标签与正确严重度", () => {
     expect(pool.text).toContain("补该学科的刊");
   });
 
-  it("分发缺口: 有号 0 篇 = 红, 只是没填满 = 黄", () => {
-    expect(one("draft_shortfall", 1, "2/3 个公众号未达每日保底(2篇), 其中 1 个号今日 0 篇").level).toBe("alert");
-    expect(one("draft_shortfall", 1, "1/3 个公众号未达每日保底(2篇)").level).toBe("warn");
+  // 8-02 去重: 平台级 draft_shortfall 不再渲染 —— 与租户级②「N 个公众号未达保底」是同一件事
+  //   (7-29 起两边同用 countTodayAccountLoad 这把尺子), 实测同一天报了🔴+🟡两条、级别还打架。
+  //   留租户那条(点名到号, 能直接去处理)。**严重度分级的保护没丢**, 搬到了 judgeTenant:
+  //   见 ops-daily-briefing.test.ts「有号今日 0 篇 → alert」。
+  it("8-02 分发缺口: 平台级不再重复渲染(租户级已报且点名到号)", () => {
+    const { items } = judgePlatform({
+      ...base,
+      incidents: [{ kind: "draft_shortfall", count: 1, lastMessage: "2/3 个公众号未达每日保底(2篇), 其中 1 个号今日 0 篇", lastAt: new Date() }],
+    });
+    expect(items.some((i) => i.text.includes("未达每日保底"))).toBe(false);
+  });
+
+  it("8-02 期刊池 forecast 同样不再重复渲染(池简报那条已覆盖且更可读)", () => {
+    const { items } = judgePlatform({
+      ...base,
+      incidents: [{ kind: "journal_pool_forecast", count: 1, lastMessage: "期刊池预判[国际刊·教育学]", lastAt: new Date() }],
+    });
+    expect(items).toHaveLength(0);
   });
 
   it("补救本身失败 = 红(这是我们自己的代码坏了, 不是没料)", () => {
