@@ -81,6 +81,16 @@ export function healthRank(h: AccountHealth): number {
 export const BJ_OFFSET_MS = 8 * 3600_000;
 
 /** 北京时间"今天 00:00"对应的 UTC 时刻 */
+/**
+ * 北京时间当日零点(返回对应的 UTC 瞬间)。
+ *
+ * ⚠️ **这是全系统唯一的北京日界口径** —— 别再用 `d.setHours(0,0,0,0)` 另造一个:
+ *   setHours 取的是 Node 进程本地时区, 而本项目 `process.env.TZ` 未设置, 靠服务器 OS
+ *   恰好是 CST 才等于北京零点。换 Docker 镜像 / 迁机器 / CI 里跑就会静默偏 8 小时,
+ *   而这个口径管着预算闸、日调用上限、探索额度这些**会改变行为**的判定。
+ *   (8-02 已把 billing/cost-ledger.ts 的 setHours 实现并到这里; 扫描守卫见
+ *    __tests__/time-semantics-guard.test.ts, 里面有三条写法的生产实测对照表。)
+ */
 export function startOfBjDay(now: Date = new Date()): Date {
   const bj = new Date(now.getTime() + BJ_OFFSET_MS);
   bj.setUTCHours(0, 0, 0, 0);

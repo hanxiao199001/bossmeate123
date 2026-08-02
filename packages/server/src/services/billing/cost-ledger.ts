@@ -10,6 +10,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { costLedger, tenants } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { startOfBjDay } from "../metrics/matrix-health.js";
 
 export const DVH_CENTS_PER_SECOND = 16.5;
 
@@ -53,17 +54,25 @@ export async function recordCost(input: RecordCostInput): Promise<void> {
   }
 }
 
+/**
+ * 8-02: 由 `setHours(0,0,0,0)` 改为 startOfBjDay()。
+ *
+ * 原实现取的是 **Node 进程本地时区**的零点。实测服务器 `process.env.TZ` **未设置**,
+ * 靠 OS 恰好是 CST 才等于北京零点 —— 换 Docker 基础镜像 / 迁机器 / CI 里跑 / 任何人设了
+ * TZ=UTC, "今日花费"与**预算闸**立刻偏 8 小时。而这条链路管的是钱。
+ * 同一个概念不该有两套实现: 全系统统一走 startOfBjDay()(见 metrics/matrix-health.ts)。
+ */
 function startOfToday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return startOfBjDay();
 }
 
+/** 北京时区的本月 1 号零点(同上: 不用 setHours, 不依赖进程 TZ) */
 function startOfMonth(): Date {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const BJ = 8 * 3600_000;
+  const bj = new Date(Date.now() + BJ);
+  bj.setUTCDate(1);
+  bj.setUTCHours(0, 0, 0, 0);
+  return new Date(bj.getTime() - BJ);
 }
 
 export interface SpendSummary {

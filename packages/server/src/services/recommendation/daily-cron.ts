@@ -15,10 +15,11 @@
  *
  * 调度: scheduler.ts 注册 cron '0 3 * * *' Asia/Shanghai (每日 03:00 BJ)。
  */
-import { desc, sql, inArray, eq, and } from "drizzle-orm";
+import { desc, sql, inArray, eq, and, gte } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { keywords as keywordsTable, contents, tenants, journals, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { startOfBjDay } from "../metrics/matrix-health.js";
 import { env } from "../../config/env.js";
 import { recommendJournals } from "./journal-recommender.js";
 import { createBatch } from "../batch/batch-service.js";
@@ -568,7 +569,14 @@ async function unverifiedUsedToday(tenantId: string): Promise<number> {
     .innerJoin(journals, eq(journalUsage.journalId, journals.id))
     .where(and(
       eq(journalUsage.tenantId, tenantId),
-      sql`${journalUsage.usedAt} >= date_trunc('day', now())`,
+      // 8-02 🔴 由 `date_trunc('day', now())` 改为 startOfBjDay()。
+      //   病症: DB session 时区是 UTC, `date_trunc('day', now())` 给的是 **UTC 零点 = BJ 08:00**,
+      //   于是"今日已用"的窗口变成 BJ 08:00 → 次日 08:00。而生成跑在 BJ 03:00, 正落在窗口尾部 ——
+      //   它把**昨天 08:00 之后**的用量算成今天, 探索额度提前用满, 可用的未核实刊被白白跳过。
+      //   实测(8-02 16:48): 这句算出"今日已用 = 0", 而真实 BJ 今日 = 30 —— 窗口整个错位。
+      //   改用 drizzle 类型化比较 + startOfBjDay(): 类型化比较对 NAIVE/TZ 两类列都正确
+      //   (journal_usage.used_at 是 TZ), 且不必在这里记住该表是哪一种。
+      gte(journalUsage.usedAt, startOfBjDay()),
       // 与 verification.ts 的 isUnverifiedJournal 同口径(7-28 起是**分体系**门槛:
       //   国内刊看目录成员资格, 国际刊看 conf>=70) —— 两边必须同源, 否则配额会把
       //   "已核实的国内刊"也算进探索额度, 白白吃掉每日 2 个名额。
@@ -940,24 +948,24 @@ export async function runDailyContentByType(
     //   这一段能直接回答"因为开工前该学科就只剩 0 本", 而不用再去反推。
     poolPreflight,
   };
+  // 8-02 🔴 这里**不再落 zero_output / low_output**。
+  //
+  // 原因: totalProduced = batchIds.length + roundupCount = **入队数**, 不是生成数
+  //   (createBatch 只是 db.insert, 真正的生成在下游 batch-worker 异步跑)。
+  //   本函数 03:00 跑完时一篇都还没生成 —— 在这里判"产出"必然判的是意图不是结果。
+  //   实测代价: 近 14 天 batch_rows 失败 416/成功 526, 而这两条 incident 一条都没落过。
+  //   欠费/AI 挂掉恰恰长这样: 入队照常成功, 下游全军覆没, 告警一片绿。
+  //
+  // 改到简报侧(09:30, 那时当天批次早跑完)按**实际生成的 contents 条数**判:
+  //   ops/generation-outcome.ts + daily-briefing.collectOutcomeItems。
+  //   那里还多一条 generation_pipeline_unhealthy(batch_rows 自比 failed/total > 20%),
+  //   正是本洞的直接守卫 —— 入队 617 行只出 219 篇, 以后会自己喊出来。
+  //
+  // 日志保留: 它是**入队环节**的即时信号(给技术看), 措辞改成如实说"入队"。
   if (totalProduced === 0) {
-    // 零产出告警: 别再静默停摆几天没人发现。失败明细一并打出, 便于定位(余额/冷却/候选枯竭)。
-    logger.error({ ...runFacts }, "⚠️ 每日生成零产出! 请检查 LLM 余额 / 期刊冷却 / 候选词。详见 failures");
-    // 7-25 运维告警: 光有日志没人看。落 ops_incidents → 次日 09:30 运营简报里红色置顶。
-    await reportCronIncident({
-      kind: "zero_output", severity: "error", tenantId: SYS,
-      message: `每日生成零产出(目标 ${targetTotal} 篇, 失败 ${failures.length} 项, 选不出题 ${skipped.noTopic} 次 / 选不出刊 ${skipped.noJournal} 次)`,
-      detail: runFacts,
-    });
+    logger.error({ ...runFacts }, "⚠️ 每日排产一行都没入队! 查期刊冷却/候选词/配额。真实产出由简报侧结果闭环判定");
   } else if (targetTotal > 0 && totalProduced < targetTotal * LOW_OUTPUT_RATIO) {
-    // 7-28 ①b: 零产出与"目标 20 出了 1 篇"是两种病, 后者原来完全静默。
-    //   刻意是黄色不是红色: 系统还活着、还在出货, 只是明显不够 —— 要人看一眼配额/期刊池, 不用半夜爬起来。
-    logger.warn({ ...runFacts }, `⚠️ 每日生成产出不足: ${totalProduced}/${targetTotal} 篇`);
-    await reportCronIncident({
-      kind: "low_output", severity: "warn", tenantId: SYS,
-      message: `每日生成只出 ${totalProduced}/${targetTotal} 篇(不足目标 ${Math.round(LOW_OUTPUT_RATIO * 100)}%): 选不出题 ${skipped.noTopic} 次 · 选不出刊 ${skipped.noJournal} 次 · 生成失败 ${failures.length} 次`,
-      detail: runFacts,
-    });
+    logger.warn({ ...runFacts }, `⚠️ 每日排产入队不足: ${totalProduced}/${targetTotal} 行(真实产出由简报侧结果闭环判定)`);
   }
   logger.info({ roundupCount, articles: batchIds.length, failures: failures.length, totalProduced, targetTotal }, "PR-O3 每日内容(按类型)生成完成");
   return {

@@ -54,7 +54,9 @@ export type IncidentKind =
   | "dvh_paid_task_orphaned"    // 已扣费但拿不到成片(submit 成功, query 失败/超时) —— 钱花了没货
   | "dvh_submit_failed"         // 提交阿里云就失败(未扣费), 落库的是占位样片非真渲染
   | "dvh_tts_failed"            // TTS 合成失败, 已**主动中止**提交(未扣费; 提交了必是哑巴视频)
-  | "dvh_mock_mode";            // DVH_REAL_MODE 未开: 本条是固定占位样片, 形象/背景/音色一律不生效
+  | "dvh_mock_mode"
+  // ---- 8-02 生成结果闭环: 入队了但没生出来 ----
+  | "generation_pipeline_unhealthy";            // DVH_REAL_MODE 未开: 本条是固定占位样片, 形象/背景/音色一律不生效
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -88,6 +90,7 @@ export const KIND_LABEL: Record<string, string> = {
   // 8-02 自检补: 这个 kind 由 model-router 的启动期自检落库(已出现 5 次), 但一直没有 label,
   //   简报里就直接把英文 kind 念出来, 运营看不懂。
   degenerate_fallback_route: "AI 兜底路由退化(主模型与备用模型是同一个, 主模型一挂即全线停)",
+  generation_pipeline_unhealthy: "生成链路异常(进了队列却大批生不出来)",
 };
 
 export interface RecordIncidentInput {

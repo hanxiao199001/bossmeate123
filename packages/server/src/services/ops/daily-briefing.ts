@@ -39,6 +39,8 @@ import { checkSupplierBalance, type SupplierBalanceResult } from "./supplier-bal
 import { getIncidentSummary, KIND_LABEL, recordIncident, type IncidentCount } from "./incidents.js";
 // 7-30 感知①: 期刊池余量(“哪个学科的刊快用完了”) —— 与选刊器同源, 见 journals/pool-inventory.ts
 import { collectPoolBriefing } from "../journals/pool-inventory.js";
+// 8-02 生成结果闭环: 零产出/产出不足改看**实际生成条数**而非入队数, 见该文件头
+import { collectGenerationOutcome, judgeGenerationOutcome } from "./generation-outcome.js";
 
 // ============ 数据结构 ============
 
@@ -786,6 +788,26 @@ export async function collectZeroStreakPlatform(now: Date = new Date()): Promise
   }
 }
 
+/**
+ * 8-02 生成结果闭环 → 简报条目。纯读, 不落库(理由见调用处注释)。
+ * 判定逻辑在 ops/generation-outcome.ts(纯函数, 单测锁行为)。
+ */
+export async function collectOutcomeItems(now: Date = new Date()): Promise<BriefItem[]> {
+  try {
+    const { getContentQuota } = await import("../recommendation/daily-cron.js");
+    const cq = await getContentQuota();
+    const target = cq ? Object.values(cq).reduce((n, v) => n + Number(v?.count ?? 0), 0) : 0;
+    const outcome = await collectGenerationOutcome(startOfBjDay(now), target);
+    return judgeGenerationOutcome(outcome).map((v) => ({
+      level: v.severity === "error" ? ("alert" as const) : ("warn" as const),
+      text: v.message,
+    }));
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "简报: 生成结果闭环采集失败, 本次不判定");
+    return [];
+  }
+}
+
 /** 平台级采集(跨租户: 系统健康 + 供应商余额 + 异常事件流水) */
 export async function collectPlatformBriefing(now: Date = new Date()): Promise<PlatformBriefing> {
   const since = startOfBjDay(now);
@@ -811,7 +833,10 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
   const { items, todos } = judgePlatform({ health, supplier, incidents });
   // 8-02: 连续异常升级由租户级搬到这里。🚨 是最响的一条, 排最前。
   const streakItems = await collectZeroStreakPlatform(now);
-  const allItems = [...streakItems, ...items, ...pool.items];
+  // 8-02 生成结果闭环。**直接产出条目, 不落库** —— collect* 全链路必须保持只读:
+  //   排查时会拿它跑 dry-run(不推企微不落库)看"今天简报会说什么", 一旦这里写库, dry-run 就有副作用了。
+  const outcomeItems = await collectOutcomeItems(now);
+  const allItems = [...streakItems, ...outcomeItems, ...items, ...pool.items];
   return {
     health, supplier, incidents,
     items: allItems, todos: [...todos, ...pool.todos],

@@ -36,11 +36,17 @@ export async function readBillingPlan(tenantId: string): Promise<BillingPlan> {
   }
 }
 
+/**
+ * 8-02: 由 setHours 改为显式北京时区计算(与 cost-ledger 同一处理)。
+ * setHours 取的是 Node 进程本地时区, 而 process.env.TZ 未设置 —— 靠服务器 OS 恰好是 CST。
+ * 这里管的是**套餐月配额闸**(超了直接拒绝生成), 偏 8 小时会让月初/月末各错一批。
+ */
 function startOfMonth(): Date {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const BJ = 8 * 3600_000;
+  const bj = new Date(Date.now() + BJ);
+  bj.setUTCDate(1);
+  bj.setUTCHours(0, 0, 0, 0);
+  return new Date(bj.getTime() - BJ);
 }
 
 async function monthlyCount(tenantId: string, type: "article" | "video"): Promise<number> {
