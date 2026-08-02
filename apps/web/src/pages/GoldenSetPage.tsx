@@ -130,6 +130,9 @@ export default function GoldenSetPage() {
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [picked, setPicked] = useState<string[]>([]); // 点选的原因标签
   const [fillInMode, setFillInMode] = useState(false); // 补理由模式（只看标过但没写原因的）
+  // 8-02: 保存是静默的（点一下就落库），但没有反馈时人会以为"没提交"——最后一篇尤其明显，
+  //       因为没有"下一篇"可点，看起来就像卡住了。savedAt 用来显示"已保存 ✓"。
+  const [savedAt, setSavedAt] = useState<number>(0);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
 
   const card = cards[idx];
@@ -221,6 +224,7 @@ export default function GoldenSetPage() {
         setCards((prev) =>
           prev.map((c) => (c.id === card.id ? { ...c, myLabel: label, myReason: finalReason || null } : c))
         );
+        setSavedAt(Date.now());
         void loadStats();
         void fetchScores(card.id); // 标完才允许看系统分
       } catch (e) {
@@ -433,7 +437,16 @@ export default function GoldenSetPage() {
                 </div>
               )}
 
-              <div className="mt-4 flex items-center gap-2">
+              {/* 保存状态：静默落库没有反馈时，人会以为"没提交"（最后一篇尤其明显） */}
+              <div className="mt-3 h-5 text-center text-xs">
+                {saving ? (
+                  <span className="text-gray-400">保存中…</span>
+                ) : savedAt && Date.now() - savedAt < 60000 ? (
+                  <span className="text-emerald-600">✓ 已保存（每次点选都会自动存，不用提交）</span>
+                ) : null}
+              </div>
+
+              <div className="mt-1 flex items-center gap-2">
                 <button
                   onClick={() => setIdx((i) => Math.max(i - 1, 0))}
                   disabled={idx === 0}
@@ -441,17 +454,30 @@ export default function GoldenSetPage() {
                 >
                   ←
                 </button>
-                <button
-                  onClick={goNext}
-                  disabled={idx >= cards.length - 1}
-                  className="flex-1 text-sm px-3 py-2 bg-gray-900 text-white rounded hover:bg-gray-800 disabled:opacity-40"
-                >
-                  下一篇 →
-                </button>
+                {idx >= cards.length - 1 ? (
+                  <div className="flex-1 text-sm px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-center">
+                    🎉 这批标完了（共 {cards.length} 篇）
+                  </div>
+                ) : (
+                  <button
+                    onClick={goNext}
+                    className="flex-1 text-sm px-3 py-2 bg-gray-900 text-white rounded hover:bg-gray-800"
+                  >
+                    下一篇 →
+                  </button>
+                )}
               </div>
               <div className="text-[11px] text-gray-400 mt-2 text-center">
-                1/2/3 打分（不跳页）· Enter 或 → 下一篇
+                1/2/3 打分（不跳页）· Enter 或 → 下一篇 · 全程自动保存
               </div>
+              {idx >= cards.length - 1 && (
+                <button
+                  onClick={() => void loadCards(fillInMode ? "fillIn" : "fresh")}
+                  className="mt-2 w-full text-xs px-3 py-2 border rounded hover:bg-gray-50"
+                >
+                  {fillInMode ? "看看还有没有漏的" : "再来一批"}
+                </button>
+              )}
             </div>
 
             {/* 系统分：标完才出现 */}
