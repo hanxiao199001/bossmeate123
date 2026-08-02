@@ -32,6 +32,7 @@ import {
   BATCH_WORKER_CONCURRENCY,
   BATCH_RETRY_DELAYS_MS,
   BATCH_MAX_AUTO_RETRY,
+  BATCH_MAX_DEFER_DAYS,
   batchQueue,
 } from "./queue.js";
 import { updateRowProgress } from "./batch-service.js";
@@ -43,6 +44,8 @@ interface BatchRowJob {
   userId: string;
   isRetry?: boolean;
   autoRetryCount?: number;
+  /** 8-02: 撞 LLM 日上限被顺延过几次(每次顺延一天, 上限 BATCH_MAX_DEFER_DAYS) */
+  deferCount?: number;
 }
 
 /**
@@ -93,15 +96,45 @@ export function startBatchWorker(): Worker<BatchRowJob> {
       // 1.5 —— 7-27 无人值守③: LLM 日花费/日调用硬上限(billing/llm-guard)。
       //   这里是**真正烧钱的地方**(每篇 6-10 次 LLM 调用), daily-cron 只在排产时查一次,
       //   队列里已排进来的行必须在开工前再拦一道, 否则熔断后已入队的几十行照烧不误。
-      //   触顶 → 行标 failed(带人话原因, 明天可到批次页 retry), 不 throw(避免 BullMQ 重试风暴)。
       //   AI 客服/对话链路不经过这里, 天然豁免。fail-open: 闸自身异常放行(见 llm-guard 文件头)。
+      //
+      // 8-02 改造: 触顶从「标 failed」改成「顺延到次日」。
+      //   病症(08-01 事故): 撞顶的 394 行被直接 updateRowProgress(rowId,"failed") **永久销毁**,
+      //   而当时日志写的是"明天零点自动解封, 可 retry" —— 这句承诺从来没有任何东西去兑现:
+      //   batch-worker 那 3 次自动重试都在 7.5 分钟内耗尽(那时上限还没解封), 之后无人问津。
+      //   等于一次撞顶就白白丢掉整批排产。现在改成重新入队 + delay 到次日 BJ 00:05,
+      //   行状态保持 pending(不是 failed), 日志也改成实话。
+      //   仍然不 throw: 避免 BullMQ 把它当失败重试, 顺延由我们自己控节奏。
       try {
         const { checkLlmDailyCap } = await import("../billing/llm-guard.js");
         const cap = await checkLlmDailyCap();
         if (!cap.allowed) {
-          logger.error({ rowId, usage: cap.usage }, "🛑 LLM 日上限熔断 — 本行不生成(明天零点自动解封, 可 retry)");
+          const deferCount = job.data.deferCount ?? 0;
+          if (deferCount < BATCH_MAX_DEFER_DAYS) {
+            const { delayToBjMidnight } = await import("./enqueue-planner.js");
+            const delay = delayToBjMidnight(1);
+            await batchQueue.add(
+              "batch-row",
+              { batchId, rowId, tenantId, userId, deferCount: deferCount + 1 },
+              { delay, jobId: `batch-${batchId}-${rowId}-defer-${deferCount + 1}` },
+            );
+            // 保持 pending —— 它没失败, 只是还没轮到它
+            await updateRowProgress(rowId, "pending", {
+              errorMessage: `今日 LLM 调用配额已用尽, 本行顺延到明天自动重跑(第 ${deferCount + 1} 次顺延)`,
+            });
+            logger.warn(
+              { rowId, usage: cap.usage, deferCount: deferCount + 1, delayMs: delay },
+              "🛑 LLM 日上限熔断 — 本行顺延到次日 00:05 自动重跑(未失败, 未丢弃)",
+            );
+            return;
+          }
+          // 顺延够多天仍排不上 = 配额长期不够, 这才是真失败, 得让人看见
+          logger.error(
+            { rowId, usage: cap.usage, deferCount },
+            `🛑 LLM 日上限熔断且已顺延 ${BATCH_MAX_DEFER_DAYS} 天仍排不上 — 判失败(配额长期不足, 需调 LLM_DAILY_CALL_CAP 或减少排产)`,
+          );
           await updateRowProgress(rowId, "failed", {
-            errorMessage: `LLM 日上限熔断, 今日停产保余额: ${(cap.reason ?? "").slice(0, 300)}`,
+            errorMessage: `连续 ${BATCH_MAX_DEFER_DAYS} 天 LLM 配额不足, 本行放弃: ${(cap.reason ?? "").slice(0, 200)}`,
           });
           return;
         }

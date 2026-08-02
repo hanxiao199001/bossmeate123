@@ -118,7 +118,13 @@ export class OpenAICompatibleProvider implements AIProvider {
         "API 错误"
       );
       this.reportQuotaIfNeeded(response.status, error);
-      throw new Error(`${this.name} API 错误: ${response.status} - ${error}`);
+      // 8-02: 状态码**挂成结构化字段**, 别让下游去解析这句中文文案。
+      //   原来 utils/retry.ts 的 defaultShouldRetry 正是靠正则抠这句里的数字, 而它写的是
+      //   /API (\d{3}):/(数字在冒号前), 与本行格式(数字在"错误:"后)永远匹配不上 →
+      //   429/5xx 一律不重试, withRetry 当了很久摆设。文案随时会改, 字段不会。
+      const err = new Error(`${this.name} API 错误: ${response.status} - ${error}`) as Error & { status?: number };
+      err.status = response.status;
+      throw err;
     }
 
     const data = (await response.json()) as {

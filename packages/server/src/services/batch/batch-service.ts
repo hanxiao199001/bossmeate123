@@ -14,6 +14,7 @@ import { batches, batchRows, contents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import type { CsvRow } from "./csv-parser.js";
 import { batchQueue } from "./queue.js";
+import { planEnqueue } from "./enqueue-planner.js";
 
 export interface CreateBatchInput {
   tenantId: string;
@@ -58,17 +59,35 @@ export async function createBatch(input: CreateBatchInput): Promise<{ batchId: s
   }));
   const insertedRows = await db.insert(batchRows).values(rowsToInsert).returning({ id: batchRows.id, priority: batchRows.priority });
 
+  // 8-02 日配额分片(见 enqueue-planner 文件头的 08-01 事故复盘):
+  //   超出今日剩余配额的行不再一次性怼进队列, 而是带 delay 顺延到后面几天。
+  //   小批次(日常 24 行)远低于容量 → delays 全 0, 行为与改造前完全一致。
+  //   分片器自身异常时退回"全部立即入队"(fallback), 绝不因为它挂了就不排产。
+  const plan = await planEnqueue(insertedRows.length);
+
   // 入队（priority 高的 BullMQ priority 数字小 = 高优先）
-  for (const row of insertedRows) {
+  for (let i = 0; i < insertedRows.length; i++) {
+    const row = insertedRows[i]!;
     const bullPriority = 6 - (row.priority ?? 3); // 1→5 / 5→1
+    const delay = plan.delays[i] ?? 0;
     await batchQueue.add(
       "batch-row",
       { batchId: batch.id, rowId: row.id, tenantId: input.tenantId, userId: input.userId },
-      { priority: bullPriority, jobId: `batch-${batch.id}-${row.id}` },
+      { priority: bullPriority, jobId: `batch-${batch.id}-${row.id}`, ...(delay > 0 ? { delay } : {}) },
     );
   }
 
-  logger.info({ batchId: batch.id, total: input.rows.length, tenantId: input.tenantId }, "P4 batch created + 入队");
+  if (plan.deferred > 0) {
+    logger.warn(
+      {
+        batchId: batch.id, total: insertedRows.length,
+        todayCapacity: plan.todayCapacity, deferred: plan.deferred, spanDays: plan.spanDays,
+        callsPerArticle: Number(plan.callsPerArticle.toFixed(1)),
+      },
+      "P4 batch 超出今日 LLM 配额容量 — 超出部分已顺延到后续天(不是丢弃)",
+    );
+  }
+  logger.info({ batchId: batch.id, total: input.rows.length, tenantId: input.tenantId, deferred: plan.deferred }, "P4 batch created + 入队");
   return { batchId: batch.id, rowCount: insertedRows.length };
 }
 
@@ -96,7 +115,9 @@ export async function getBatchStatus(batchId: string, tenantId: string): Promise
 /** Worker 回调：更新 row 状态 + 触发主表重算 */
 export async function updateRowProgress(
   rowId: string,
-  status: "generating" | "generated" | "failed",
+  // 8-02 加 "pending": 撞 LLM 日上限被顺延的行要退回待跑, 不能标 failed(见 batch-worker 顺延改造)。
+  //   pending 本就是 batch_rows.status 的合法值(schema.ts: pending|generating|generated|failed)。
+  status: "pending" | "generating" | "generated" | "failed",
   opts: { articleId?: string | null; errorMessage?: string | null } = {},
 ): Promise<void> {
   await db

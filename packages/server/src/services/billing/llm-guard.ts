@@ -94,8 +94,14 @@ export function judgeLlmCap(usage: LlmDailyUsage, cfg: LlmCapConfig): LlmCapVerd
       allowed: false,
       usedPct,
       reason:
+        // 8-02: 删掉原来那句归因猜测("次数暴涨而花费不高, 典型是失败重试打转")。
+        //   08-01 事故当天它就是错的 —— 真实根因是行业月度一次性入队 593 行(平时 24),
+        //   每篇本来就要 8~10 次调用, 属于正常消耗撞天花板, 与重试毫无关系。
+        //   而这句话很有说服力, 直接把排查带偏了半天。
+        //   现在只陈述事实 + 给**可验证的数据**(元/次), 归因留给排查的人。
         `今日 AI 调用已达 ${usage.calls} 次, 触达日调用硬上限 ${cfg.dailyCallCap} 次 —— 已停止内容生成` +
-        `(明天北京时间零点自动解封)。次数暴涨而花费不高, 典型是**失败重试打转**, 请查服务器日志里的超时/报错。`,
+        `(明天北京时间零点自动解封)。本日均价 ${(usage.costCents / 100 / Math.max(1, usage.calls)).toFixed(4)} 元/次` +
+        `(与近日均价对比: 明显偏低→多为失败重试; 持平→是排产量真的太大)。`,
     };
   }
   return { allowed: true, reason: null, usedPct };
