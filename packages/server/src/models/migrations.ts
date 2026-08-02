@@ -647,4 +647,36 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_journals_kind_pick ON journals (journal_kind, discipline_code, status);
     `,
   },
+  {
+    version: "031_golden_set_annotations",
+    description:
+      "8-02 Golden Set 标注基准表: 人对内容质量的判断(good/fair/poor + 一句话理由)独立落库。" +
+      "为什么不塞 contents.metadata —— ①一篇会被多人标(老板定标尺/运营续标), metadata 是单值坑; " +
+      "②标注要可改, 靠 UNIQUE(content_id, annotator_id) 保证同一人对同一篇只有一条(ON CONFLICT 更新); " +
+      "③这批数据的用途是**跟六维分算相关性**, 与被评估对象解耦才能日后换评分器重跑对照。" +
+      "reason 刻意留自由文本(不做下拉): 它是将来提炼「驳回原因分类词表」的原料, 提前枚举等于提前把答案写死。" +
+      "content_id / tenant_id / annotator_id 全 ON DELETE CASCADE(与 003 的强归属口径一致, 删内容不留孤儿)。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS golden_set_annotations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        content_id UUID NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        annotator_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        label VARCHAR(10) NOT NULL,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      -- 同一人对同一篇只有一条(可改不可重), 也是 upsert 的冲突目标
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_golden_content_annotator
+        ON golden_set_annotations (content_id, annotator_id);
+      -- "我标过的 / 还没标的" 热路径
+      CREATE INDEX IF NOT EXISTS idx_golden_tenant_annotator
+        ON golden_set_annotations (tenant_id, annotator_id);
+      -- 按内容反查(算相关性时 JOIN contents)
+      CREATE INDEX IF NOT EXISTS idx_golden_content
+        ON golden_set_annotations (content_id);
+    `,
+  },
 ];

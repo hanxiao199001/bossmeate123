@@ -214,6 +214,10 @@ async function bootstrap() {
     // Agent-1 (B轨): Agent 设备管理 + 派单（用户 JWT）
     await protectedApp.register(agentAdminRoutes, { prefix: env.API_PREFIX });
     await protectedApp.register(todayRoutes, { prefix: env.API_PREFIX }); // PR-W2 今日驾驶舱
+    // 8-02 Golden Set 标注工具: 老板的质量判断落库, 当评估体系基准线。
+    //   路由内**在服务端**剔掉六维分/AI审稿/质检状态(防锚定), 见 services/golden-set/anchor-guard.ts。
+    const { goldenSetRoutes } = await import("./routes/golden-set.js");
+    await protectedApp.register(goldenSetRoutes, { prefix: `${env.API_PREFIX}/golden-set` });
   });
 
   // 7-26 启动期自检: LLM baseURL 与 API Key 必须成对(DEEPSEEK_VIA 一个开关切两者)。
