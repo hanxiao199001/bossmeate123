@@ -37,6 +37,8 @@ const h = vi.hoisted(() => {
 vi.mock("../models/db.js", () => ({
   db: {
     select: () => h.chain(h.selectQueue.shift() ?? []),
+    // 8-02: collectZeroStreakPlatform 用 selectDistinct 查"有可分发账号的租户"
+    selectDistinct: () => h.chain(h.selectQueue.shift() ?? []),
     insert: () => h.chain([]),
   },
   testConnection: vi.fn(async () => true),
@@ -72,6 +74,7 @@ const {
   renderBriefingText,
   worstLevel,
   collectTenantBriefing,
+  collectZeroStreakPlatform,
 } = await import("../services/ops/daily-briefing.js");
 const { judgeSupplier } = await import("../services/ops/supplier-balance.js");
 const { isQuotaLikeError } = await import("../services/ops/incidents.js");
@@ -364,9 +367,49 @@ describe("judgeSupplier — 不依赖外部 API 的降级判定", () => {
     expect(r.reasons.some((x) => x.includes("疑似欠费"))).toBe(true);
   });
 
-  it("消耗大幅下滑但没到 0 → 黄", () => {
-    const r = judgeSupplier({ ...BASE, aliyunAvailableYuan: null, avg7dCents: 5000, todayCents: 500, llmQuotaErrors24h: 0 });
+  // ===== 8-02 判据由"总额比"改为"元/篇比"。下面三条用的是生产实测数字, 不是编的 =====
+
+  it("🔴 总额下滑但单位成本正常 → 不报(08-02 那条假黄的原型)", () => {
+    // 实测 08-02: 今日 4.38 元/28 篇, 近 7 日均 29.45 元/58.6 篇(前一天一次性跑了 219 篇把基准抬高)。
+    // 旧口径 4.38/29.45 = 15% → 报警; 新口径 0.156 vs 0.503 元/篇 = 31% → 不报。
+    const r = judgeSupplier({
+      ...BASE, aliyunAvailableYuan: null,
+      avg7dCents: 2945, todayCents: 438, avg7dContents: 58.6, todayContents: 28,
+      llmQuotaErrors24h: 0,
+    });
+    expect(r.level).toBe("ok");
+    expect(r.reasons).toHaveLength(0);
+  });
+
+  it("单位成本真骤降 → 黄(同样产量花得异常少 = AI 调用大量失败)", () => {
+    // 实测 07-25: 0.41 元出 27 篇 = 0.015 元/篇, 而近 7 日均 13.26 元/22 篇 = 0.60 元/篇 → 2.5%
+    const r = judgeSupplier({
+      ...BASE, aliyunAvailableYuan: null,
+      avg7dCents: 1326, todayCents: 41, avg7dContents: 22, todayContents: 27,
+      llmQuotaErrors24h: 0,
+    });
     expect(r.level).toBe("warn");
+    expect(r.reasons.some((x) => x.includes("单位成本"))).toBe(true);
+  });
+
+  it("产量太小不做单位成本判定(小分母噪音极大, 那种日子归 low_output 管)", () => {
+    const r = judgeSupplier({
+      ...BASE, aliyunAvailableYuan: null,
+      avg7dCents: 5000, todayCents: 10, avg7dContents: 30, todayContents: 2,   // 今日只出 2 篇 < 5
+      llmQuotaErrors24h: 0,
+    });
+    expect(r.level).toBe("ok");
+  });
+
+  it("🔴 断流(今日 0 元)仍然是红 —— 归一化绝不能把 0/0 判成正常", () => {
+    // 这是 BSS 权限没配通期间**唯一**的欠费探针, 与产量无关, 改动必须不碰它
+    const r = judgeSupplier({
+      ...BASE, aliyunAvailableYuan: null,
+      avg7dCents: 5000, todayCents: 0, avg7dContents: 30, todayContents: 0,
+      llmQuotaErrors24h: 0,
+    });
+    expect(r.level).toBe("alert");
+    expect(r.reasons.some((x) => x.includes("疑似欠费"))).toBe(true);
   });
 
   it("本来就不怎么花钱的租户不误报", () => {
@@ -543,15 +586,40 @@ describe("collectTenantBriefing — mock db 聚合口径", () => {
     expect(b.publishHealth.stuckPending).toBe(1); // 只有 auto 那条
   });
 
-  it("7-27 老租户连续 3 天全零 → 🚨 升级条目", async () => {
+  // 8-02: 连续异常升级已搬到平台级。这里只锁"租户级不再产出 🚨"(去重),
+  //   🚨 本身的保护搬到下面 collectZeroStreakPlatform 那个 describe, 没有裸删。
+  it("8-02 连续异常已搬平台级 → 租户级不再产出 🚨(四个租户刷四遍的病根)", async () => {
     const monthAgo = new Date(Date.now() - 30 * 86_400_000);
-    for (let i = 0; i < 5; i++) h.selectQueue.push([]);                    // ①-⑤ 全零
-    h.selectQueue.push([{ config: null, createdAt: monthAgo }]);           // ⑥ 老租户 → 跑连续异常统计
-    h.selectQueue.push([]);                                                // ⑦ 近 N 天逐日生成: 空 = 全零
-    h.selectQueue.push([]);                                                // ⑧ 近 N 天逐日分发: 空 = 全零
+    for (let i = 0; i < 5; i++) h.selectQueue.push([]);
+    h.selectQueue.push([{ config: null, createdAt: monthAgo }]);
     const b = await collectTenantBriefing("t1", "停摆租户");
-    const esc = b.items.find((i) => i.text.includes("🚨"));
-    expect(esc?.level).toBe("alert");
-    expect(esc?.text).toContain("零产出");
+    expect(b.items.some((i) => i.text.includes("🚨"))).toBe(false);
+  });
+});
+
+describe("8-02 collectZeroStreakPlatform — 连续异常升级(平台级)", () => {
+  beforeEach(() => { h.selectQueue.length = 0; });
+
+  it("有可分发租户 + 全平台连续全零 → 🚨 零产出(只出一条, 不再按租户刷屏)", async () => {
+    h.selectQueue.push([{ tenantId: "t-real" }]);   // ① 有 1 个租户有 active 微信号
+    h.selectQueue.push([]);                          // ② 逐日生成: 空 = 全零
+    h.selectQueue.push([]);                          // ③ 逐日分发: 空 = 全零
+    const items = await collectZeroStreakPlatform();
+    expect(items).toHaveLength(1);
+    expect(items[0]!.level).toBe("alert");
+    expect(items[0]!.text).toContain("零产出");
+  });
+
+  it("🔴 分母排除空壳租户: 全平台无可分发账号 → 一条都不报(否则平台级同样恒真)", async () => {
+    h.selectQueue.push([]);   // ① 没有任何租户有 active 微信号
+    const items = await collectZeroStreakPlatform();
+    expect(items).toEqual([]);
+    // 早退, 不该再去查生成/分发(队列没被消费)
+    expect(h.selectQueue.length).toBe(0);
+  });
+
+  it("统计失败只降级为不升级, 绝不把整份简报拖挂", async () => {
+    h.selectQueue.push(new Error("db down"));
+    await expect(collectZeroStreakPlatform()).resolves.toEqual([]);
   });
 });

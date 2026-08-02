@@ -430,6 +430,25 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         } catch {}
         await updateRowProgress(rowId, "failed", { articleId: content.id, errorMessage: msg });
 
+        // 8-02 🔴 真正的"生成失败"就是这里 —— 此前这条路径只有上面一行 logger.warn。
+        //
+        // 【自检实测】近 14 天 batch_rows 失败 416 行 / 成功 526 行(44% 失败率),
+        //   而 ops_incidents 里 generation_failed **一条都没有** —— 告警系统对此完全瞎。
+        // 【为什么会这样】daily-cron 里那个同名埋点守的是**入队**阶段(selectCandidates/createBatch 抛错),
+        //   而入队只是 db.insert, 几乎不失败; 真正的生成在本 worker 里异步跑, 失败只改状态。
+        //   于是 daily-cron 的 totalProduced(= 入队批次数) 永远漂亮, zero_output / low_output
+        //   跟着一起瞎 —— 三条告警名字叫"生成", 量的全是"入队"。
+        //   欠费/AI 挂掉恰恰是这种形态: 入队照常成功, 下游全军覆没, 简报一片绿。
+        // 节流: 一次故障会连撞几十行(同 daily-cron 的分法), 10 分钟一条, 被压次数带在 detail 里。
+        try {
+          const { recordIncidentThrottled } = await import("../ops/incidents.js");
+          await recordIncidentThrottled({
+            kind: "generation_failed", severity: "error", tenantId,
+            message: `文章生成最终失败(已自动重试 ${BATCH_MAX_AUTO_RETRY} 次): ${msg.slice(0, 200)}`,
+            detail: { batchId, rowId, contentId: content.id, autoRetryCount, error: msg.slice(0, 300) },
+          }, { key: `gen_failed_worker:${tenantId}` });
+        } catch { /* 告警旁路: 绝不能反过来把生成流程搞挂 */ }
+
         // 6-17 #1: 生成彻底失败 → 回滚 daily-cron 入队时写的"占位"冷却(provisional, contentId 为空),
         // 否则这本刊被白锁 JOURNAL_COOLDOWN_DAYS 天却零产出(memory「今日推荐没新内容」根因)。
         // 只删 contentId 为空的占位行; roundup/成功内容写的冷却(带 contentId)不动。
