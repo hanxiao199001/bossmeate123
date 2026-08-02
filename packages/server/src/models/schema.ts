@@ -1441,3 +1441,44 @@ export const opsBriefings = pgTable(
     index("idx_ops_briefings_tenant_date").on(table.tenantId, table.briefDate),
   ],
 );
+
+// ============ Golden Set 人工标注（评估体系基准）============
+/**
+ * 8-02 Golden Set: 老板/运营对内容质量的**人工判断**落库, 是整个评估体系的基准线。
+ *
+ * 为什么单独建表而不是塞 contents.metadata:
+ *   ① 一篇内容会被**多个人**标(老板定标尺 → 运营续标), metadata 是单值坑;
+ *   ② 标注要能改(同一人对同一篇只有一条, 靠 UNIQUE(content_id, annotator_id) 兜);
+ *   ③ 这批数据的用途是**跟六维分做相关性**, 混进 metadata 会跟被评估对象耦合,
+ *      日后想"重算相关性/换评分器再跑一遍"就没有干净的对照组了。
+ *
+ * ⚠️ 防锚定铁律: 标注**采集**过程绝不能让标注人看见系统分(见 services/golden-set/anchor-guard.ts)。
+ *   这张表只存人的判断; 系统分留在 contents.metadata, 分析时再 JOIN。
+ */
+export const goldenSetAnnotations = pgTable(
+  "golden_set_annotations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contentId: uuid("content_id")
+      .references(() => contents.id, { onDelete: "cascade" })
+      .notNull(),
+    tenantId: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    /** 谁标的 — 老板 vs 运营的尺子日后要能分开算(标注者间信度) */
+    annotatorId: uuid("annotator_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    /** good | fair | poor — 值域真相源见 services/golden-set/labels.ts GOLDEN_LABELS */
+    label: varchar("label", { length: 10 }).notNull(),
+    /** 一句话理由(自由文本, 不强制)。**将来用它提炼"驳回原因分类词表"**, 别做成下拉框。 */
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_golden_content_annotator").on(table.contentId, table.annotatorId),
+    index("idx_golden_tenant_annotator").on(table.tenantId, table.annotatorId),
+    index("idx_golden_content").on(table.contentId),
+  ],
+);

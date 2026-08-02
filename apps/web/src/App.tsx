@@ -21,6 +21,7 @@ import JournalDetailPage from "./pages/JournalDetailPage";
 import RecommendationFeedPage from "./pages/RecommendationFeedPage";
 import TryPage from "./pages/TryPage";
 import CostComparisonPage from "./pages/CostComparisonPage";
+import GoldenSetPage from "./pages/GoldenSetPage";
 import ContentWorkbenchPage from "./pages/ContentWorkbenchPage";
 import SalesRadarPage from "./pages/SalesRadarPage";
 import KfServicePage from "./pages/KfServicePage"; // 7-2 B-kf 企微微信客服管理页
@@ -246,6 +247,18 @@ export default function App() {
           <ProtectedRoute>
             <MainLayout>
               <CostComparisonPage />
+            </MainLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* 8-02: Golden Set 标注 — 评估体系地基。防锚定要求标注前不显示系统评分，见页面注释 */}
+      <Route
+        path="/golden-set"
+        element={
+          <ProtectedRoute>
+            <MainLayout>
+              <GoldenSetPage />
             </MainLayout>
           </ProtectedRoute>
         }
