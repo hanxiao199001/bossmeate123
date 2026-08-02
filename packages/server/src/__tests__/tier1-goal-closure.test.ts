@@ -146,33 +146,27 @@ describe("①a 排产跳过点落库(原来只有 logger 一行)", () => {
 });
 
 describe("①b 产出不足分级: 零 = 🔴, 不足 60% = 🟡", () => {
-  it("零产出 → zero_output(error), detail 带目标/实际/名额蒸发明细", async () => {
+  // ════ 8-02 断言翻转 ════
+  // 这两条原来断言 runDailyContentByType 会落 zero_output / low_output。**已搬到简报侧**:
+  //   它们此前建立在 totalProduced = batchIds.length = **入队数** 上(createBatch 只是 db.insert),
+  //   真正的生成在下游 batch-worker 异步跑 —— 入队成功就报绿, 哪怕一篇没生出来。
+  //   实测代价: 近 14 天 batch_rows 失败 416/成功 526, 而这两条 incident 一条都没落过。
+  //   而且本函数 03:00 跑完时一篇都还没生成, 在这里判"产出"必然判的是意图不是结果。
+  // 保护没丢, 搬到了 ops/generation-outcome.ts(按当天**实际生成的 contents 条数**判),
+  //   单测见 generation-outcome.test.ts。这里只锁"daily-cron 不再落这两条"。
+  it("8-02 已搬简报侧: daily-cron 零产出时**不再**落 zero_output(那是入队数不是产出数)", async () => {
     S.journalId = null;
     await runDailyContentByType({ domestic: { count: 4, disciplines: ["medicine"] } });
-
-    const zero = recordIncidentSpy.mock.calls.find((c) => (c[0] as { kind: string }).kind === "zero_output");
-    expect(zero).toBeTruthy();
-    const inc = zero![0] as { severity: string; message: string; detail: Record<string, unknown> };
-    expect(inc.severity).toBe("error");
-    expect(inc.detail.targetTotal).toBe(4);
-    expect(inc.detail.totalProduced).toBe(0);
-    expect((inc.detail.skipped as { noJournal: number }).noJournal).toBe(4);
+    expect(kindsOf(recordIncidentSpy)).not.toContain("zero_output");
   });
 
-  it("目标 5 实际 1(20%) → low_output(warn) —— 这一条以前完全静默", async () => {
+  it("8-02 已搬简报侧: 入队不足时**不再**落 low_output", async () => {
     createBatchMock
       .mockResolvedValueOnce({ batchId: "b1" })
       .mockRejectedValue(new Error("boom"));
     const r = await runDailyContentByType({ domestic: { count: 5, disciplines: ["medicine"] } });
-
-    expect(r.articlesEnqueued).toBe(1);
-    const low = recordIncidentSpy.mock.calls.find((c) => (c[0] as { kind: string }).kind === "low_output");
-    expect(low).toBeTruthy();
-    const inc = low![0] as { severity: string; message: string; detail: Record<string, unknown> };
-    expect(inc.severity).toBe("warn");   // 系统还活着, 只是不够 → 黄不是红
-    expect(inc.message).toContain("1/5");
-    expect(inc.detail.targetTotal).toBe(5);
-    // 零产出与产出不足互斥, 不重复打扰
+    expect(r.articlesEnqueued).toBe(1);   // 返回值语义没动(调用方不受影响)
+    expect(kindsOf(recordIncidentSpy)).not.toContain("low_output");
     expect(kindsOf(recordIncidentSpy)).not.toContain("zero_output");
   });
 
