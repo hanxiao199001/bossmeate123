@@ -129,6 +129,7 @@ export default function GoldenSetPage() {
   const [scoresLoading, setScoresLoading] = useState(false);
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [picked, setPicked] = useState<string[]>([]); // 点选的原因标签
+  const [fillInMode, setFillInMode] = useState(false); // 补理由模式（只看标过但没写原因的）
   const reasonRef = useRef<HTMLTextAreaElement>(null);
 
   const card = cards[idx];
@@ -142,15 +143,29 @@ export default function GoldenSetPage() {
     }
   }, []);
 
-  const loadCards = useCallback(async () => {
+  /**
+   * mode=fresh   拉没标过的（正常标注）
+   * mode=fillIn  拉"标过但没写原因"的 —— 8-02 的设计错误(选完自动跳页)让首批 50 篇
+   *              理由填写率 0%，label 有效但说不出差在哪一维。补理由比重标便宜得多，
+   *              而且不用重做判断（重做反而会引入"同一人隔天标不一致"的新噪音）。
+   */
+  const loadCards = useCallback(async (mode: "fresh" | "fillIn" = "fresh") => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await api.get<{ items: BlindCard[]; poolSize?: number }>(
-        "/golden-set/candidates?strategy=sampled&limit=50"
-      );
-      setCards(r.data?.items ?? []);
+      // 补理由必须走 strategy=mine: 它直接按 annotatorId 查标注表、**没有日期窗口**,
+      //   我标过的每一条都在里面。
+      //   ⚠️ 别改回 strategy=recent —— 那条路是"最近 N 条**内容**"(默认 180 天里取最近 limit 条),
+      //   而标注是分层采样打的、散布在更早的内容上。实测: 待补 50 条里 recent+limit=200
+      //   只捞得到 21 条, **静默漏掉 29 条**(被标内容最早到 6-13, 而最近 200 条只回溯到 7-24)。
+      //   漏了还看不出来 —— 人会补完 21 条以为收工, 实际 58% 仍是空理由。
+      const qs = mode === "fillIn" ? "strategy=mine&limit=200" : "strategy=sampled&limit=50";
+      const r = await api.get<{ items: BlindCard[]; poolSize?: number }>(`/golden-set/candidates?${qs}`);
+      let items = r.data?.items ?? [];
+      if (mode === "fillIn") items = items.filter((c) => c.myLabel && !c.myReason);
+      setCards(items);
       setIdx(0);
+      setFillInMode(mode === "fillIn");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "拉取待标内容失败");
     } finally {
@@ -292,7 +307,16 @@ export default function GoldenSetPage() {
               <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
             </div>
           </div>
-          <button onClick={() => void loadCards()} className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50">
+          <button
+            onClick={() => void loadCards("fillIn")}
+            className={`text-xs px-3 py-1.5 border rounded ${
+              fillInMode ? "bg-amber-500 text-white border-amber-500" : "hover:bg-gray-50"
+            }`}
+            title="只看已经打过分、但还没写原因的"
+          >
+            补理由
+          </button>
+          <button onClick={() => void loadCards("fresh")} className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50">
             换一批
           </button>
         </div>
@@ -308,7 +332,9 @@ export default function GoldenSetPage() {
         <div className="max-w-6xl mx-auto px-6 py-16 text-center text-gray-400">加载中…</div>
       ) : !card ? (
         <div className="max-w-6xl mx-auto px-6 py-16 text-center text-gray-400">
-          没有待标内容了。点「换一批」重新采样，或者去内容工坊看看有没有新内容。
+          {fillInMode
+            ? "🎉 都补完了。点「换一批」继续标新的。"
+            : "没有待标内容了。点「换一批」重新采样，或者去内容工坊看看有没有新内容。"}
         </div>
       ) : (
         <main className="max-w-6xl mx-auto px-6 py-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
