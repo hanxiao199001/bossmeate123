@@ -13,6 +13,26 @@ import { db } from "../../models/db.js";
 import { opsIncidents } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 
+/**
+ * 8-03: 三个纯判据(isQuotaLikeError / isTimeoutLikeError / classifyFailure)已搬到
+ * services/ops/failure-kind.ts —— 那里零依赖, 而本文件依赖 db。
+ *
+ * 【为什么要搬】新增的失败分类是**整套自动重跑的地基**, 会被 batch-worker / 质检 / DVH /
+ *   探测器四条链路引用; 若判据留在本文件, 这四处就都得连带把数据库拉进来(单测也要 mock db)。
+ * 【为什么在这里 re-export】原来的 `import { isQuotaLikeError } from "../ops/incidents.js"`
+ *   有 5 个调用点 + 2 个测试文件, 全部保持可用, 零改动面。新代码建议直接从 failure-kind.js 引。
+ */
+export {
+  isQuotaLikeError,
+  isTimeoutLikeError,
+  classifyFailure,
+  isRetriableFailure,
+  extractErrorFields,
+  parseProviderErrorBody,
+  FAILURE_KIND_LABEL,
+} from "./failure-kind.js";
+export type { FailureKind, ProviderErrorFields } from "./failure-kind.js";
+
 /** 事件类型 —— 新增类型时同步更新 KIND_LABEL, 否则简报里只显示原始 kind */
 export type IncidentKind =
   | "ledger_write_failed"   // cost_ledger 写入失败(钱花了没记上账)
@@ -56,7 +76,14 @@ export type IncidentKind =
   | "dvh_tts_failed"            // TTS 合成失败, 已**主动中止**提交(未扣费; 提交了必是哑巴视频)
   | "dvh_mock_mode"
   // ---- 8-02 生成结果闭环: 入队了但没生出来 ----
-  | "generation_pipeline_unhealthy";            // DVH_REAL_MODE 未开: 本条是固定占位样片, 形象/背景/音色一律不生效
+  | "generation_pipeline_unhealthy"            // DVH_REAL_MODE 未开: 本条是固定占位样片, 形象/背景/音色一律不生效
+  // ---- 8-03 失败分类 + 服务恢复自动重跑(见 failure-kind.ts / deferred.ts / service-health-probe.ts) ----
+  //   四个 kind 讲的是同一条内容的四个时点: 被暂停 → 服务回来了 → 重跑 → 跑不动了转人工。
+  //   刻意不合并: 简报要能分清"今天积压了多少"和"今天自动救回了多少", 合成一条就都看不见了。
+  | "content_deferred"           // 内容因外部服务不可用被暂停(原始输入已存, 恢复后自动重跑)
+  | "service_recovered"          // 探测到外部依赖恢复, 已把积压内容重新入队
+  | "deferred_retry_exhausted"   // 自动重跑次数用尽仍失败 → 转人工(别再每 30 分钟烧一次钱)
+  | "service_probe_failed";      // 恢复探测本身失败(= 依赖仍未恢复; 连续失败会拉长探测间隔)
 
 export const KIND_LABEL: Record<string, string> = {
   ledger_write_failed: "记账失败(钱花了没记上账)",
@@ -91,6 +118,10 @@ export const KIND_LABEL: Record<string, string> = {
   //   简报里就直接把英文 kind 念出来, 运营看不懂。
   degenerate_fallback_route: "AI 兜底路由退化(主模型与备用模型是同一个, 主模型一挂即全线停)",
   generation_pipeline_unhealthy: "生成链路异常(进了队列却大批生不出来)",
+  content_deferred: "内容已暂停待重跑(外部服务不可用, 原稿已保存, 服务恢复后自动重跑)",
+  service_recovered: "外部服务已恢复(积压内容已自动重新入队)",
+  deferred_retry_exhausted: "自动重跑次数用尽(已转人工, 不再自动重试)",
+  service_probe_failed: "外部服务仍未恢复(恢复探测失败)",
 };
 
 export interface RecordIncidentInput {
@@ -221,65 +252,8 @@ export async function countIncidents(kind: string, hours = 24): Promise<number> 
   }
 }
 
-// ============ LLM 额度不足信号 (纯函数, 无 IO — 直接单测) ============
-
-/**
- * 判定一次 LLM/云 API 失败是否属于"额度不足 / 欠费 / 未开通"类。
- * 这是"该充值了"的最直接信号 —— 比等消耗曲线掉到 0 早一步。
- *
- * 覆盖: OpenAI 兼容(DeepSeek/百炼 compatible-mode) + 阿里云百炼原生错误码 + HTTP 402。
- * 刻意不含 429 纯限流(Requests per minute 是流控不是欠费), 但含 DashScope 的
- * Throttling.AllocationQuota(免费额度用尽会走这个码)。
- */
-export function isQuotaLikeError(status: number, body: string | null | undefined): boolean {
-  if (status === 402) return true; // Payment Required
-  const t = (body ?? "").toLowerCase();
-  if (!t) return false;
-  const KEYWORDS = [
-    "insufficient_quota",
-    "insufficient balance",
-    "insufficientbalance",
-    "insufficient_user_quota",
-    "exceeded your current quota",
-    "allocated quota exceeded",
-    "allocationquota",
-    "quota exhausted",
-    "quota_exceeded",
-    "arrears",
-    "account is overdue",
-    "accessdenied.unpurchased",
-    "free allocated quota exceeded",
-    "余额不足",
-    "额度不足",
-    "欠费",
-    "已用完",
-    "未开通",
-  ];
-  return KEYWORDS.some((k) => t.includes(k));
-}
-
-/**
- * 7-27: 判定一次调用失败是否属于"超时/被中断"类。
- *
- * 由来: 7-27 线上 49 次 `This operation was aborted`(AbortController 到点掐断 fetch),
- *   一条 incident 都没有 —— 六维质检因此大面积拿不到分, 只能靠人肉翻日志才发现。
- *   AI 超时是**成本与产能**双杀的信号(钱花了、内容没出来), 必须能被简报报出来。
- *
- * 刻意**不含** 4xx/5xx 业务错误 —— 那些由 llm_quota / 调用方各自的日志覆盖, 混进来会稀释信号。
- */
-export function isTimeoutLikeError(err: unknown): boolean {
-  const msg = (err instanceof Error ? `${err.name} ${err.message}` : String(err ?? "")).toLowerCase();
-  if (!msg) return false;
-  const KEYWORDS = [
-    "aborted",          // undici: This operation was aborted
-    "abort",            // AbortError
-    "timeout",
-    "timed out",
-    "etimedout",
-    "esockettimedout",
-    "econnreset",
-    "socket hang up",
-    "超时",
-  ];
-  return KEYWORDS.some((k) => msg.includes(k));
-}
+// ============ LLM 额度不足 / 超时 / 失败分类 ============
+//
+// 8-03 起判据本体在 services/ops/failure-kind.ts(纯函数, 零依赖), 本文件顶部已 re-export。
+// 这里刻意不再放判据代码 —— 判据只能有一份, 两份就会像 7-25 的 "arrears" vs "Arrearage" 那样
+// 各自漂移, 最后谁也不知道线上真正生效的是哪一份。

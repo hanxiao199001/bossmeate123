@@ -60,16 +60,57 @@ export class OpenAICompatibleProvider implements AIProvider {
     })();
   }
 
+  /**
+   * 8-03: 把 API 错误响应体解析成**结构化字段**并挂到 Error 上。
+   *
+   * 【为什么必须是字段】8-03 百炼欠费真实报文:
+   *   HTTP 400 {"type":"Arrearage","message":"Access denied, please make sure your account
+   *             is in good standing before making a request."}
+   *   当时 isQuotaLikeError 的词表里写的是 "arrears"(7-25 拍脑袋写的), 与 "Arrearage" 差一个
+   *   词形 → 对着真实欠费返回 false → llm_quota 一条都没记 → 整条线停摆没人知道要去充值。
+   *   这和 utils/retry.ts 靠正则抠中文文案里的状态码是同一个病: **文案随时会变, 字段不会**。
+   *   现在 status / errorType / errorCode / responseBody 一律挂成字段, 下游(failure-kind 的
+   *   classifyFailure)优先读字段, 文本只做兜底。
+   */
+  private decorateApiError(err: Error, status: number, body: string): Error {
+    const e = err as Error & { status?: number; errorType?: string; errorCode?: string; responseBody?: string; provider?: string };
+    e.status = status;
+    e.provider = this.name;
+    e.responseBody = body.slice(0, 2000);
+    // parseProviderErrorBody 认两种形态: 百炼原生顶层 {"type":...} 与 OpenAI 兼容 {"error":{...}}
+    try {
+      // 同步 require 不可用(ESM), 但解析本身是纯函数且必须同步 —— 内联一次极简解析,
+      // 完整版(含 error 嵌套 / 各种大小写)在 failure-kind.parseProviderErrorBody, 两边口径一致。
+      const raw = body.trim();
+      if (raw.startsWith("{")) {
+        const json = JSON.parse(raw) as Record<string, unknown>;
+        const nested = (json.error && typeof json.error === "object" ? json.error : null) as Record<string, unknown> | null;
+        const type = nested?.type ?? json.type;
+        const code = nested?.code ?? json.code;
+        if (typeof type === "string" && type.trim()) e.errorType = type.trim();
+        if (typeof code === "string" && code.trim()) e.errorCode = code.trim();
+      }
+    } catch {
+      /* 响应体不是 JSON(网关 HTML 错误页等) → 只留 status + responseBody, 下游走文本兜底 */
+    }
+    return e;
+  }
+
   /** 额度不足/欠费类失败 → 落 ops_incidents(旁路, 绝不影响原有抛错行为) */
-  private reportQuotaIfNeeded(status: number, body: string): void {
+  private reportQuotaIfNeeded(status: number, body: string, fields?: { errorType?: string; errorCode?: string }): void {
     void (async () => {
       try {
         const { isQuotaLikeError, recordIncident } = await import("../../ops/incidents.js");
-        if (!isQuotaLikeError(status, body)) return;
+        // 8-03: 字段优先(百炼的 Arrearage 就靠这条被认出来), 文本只是兜底
+        if (!isQuotaLikeError(status, body, fields)) return;
         await recordIncident({
           kind: "llm_quota",
-          message: `${this.name} 返回额度不足/欠费 (HTTP ${status}): ${body.slice(0, 200)}`,
-          detail: { provider: this.name, status },
+          message: `${this.name} 返回额度不足/欠费 (HTTP ${status}${fields?.errorType ? `, type=${fields.errorType}` : ""}): ${body.slice(0, 200)}`,
+          detail: {
+            provider: this.name, status,
+            errorType: fields?.errorType ?? null,
+            errorCode: fields?.errorCode ?? null,
+          },
         });
       } catch {
         /* 告警旁路失败不影响主流程 */
@@ -117,13 +158,20 @@ export class OpenAICompatibleProvider implements AIProvider {
         { provider: this.name, status: response.status, error },
         "API 错误"
       );
-      this.reportQuotaIfNeeded(response.status, error);
       // 8-02: 状态码**挂成结构化字段**, 别让下游去解析这句中文文案。
       //   原来 utils/retry.ts 的 defaultShouldRetry 正是靠正则抠这句里的数字, 而它写的是
       //   /API (\d{3}):/(数字在冒号前), 与本行格式(数字在"错误:"后)永远匹配不上 →
       //   429/5xx 一律不重试, withRetry 当了很久摆设。文案随时会改, 字段不会。
-      const err = new Error(`${this.name} API 错误: ${response.status} - ${error}`) as Error & { status?: number };
-      err.status = response.status;
+      // 8-03: 同一原则再推一层 —— 连 error.type / error.code 也挂成字段(见 decorateApiError)。
+      const err = this.decorateApiError(
+        new Error(`${this.name} API 错误: ${response.status} - ${error}`),
+        response.status,
+        error,
+      ) as Error & { errorType?: string; errorCode?: string };
+      this.reportQuotaIfNeeded(response.status, error, {
+        ...(err.errorType ? { errorType: err.errorType } : {}),
+        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
+      });
       throw err;
     }
 
@@ -195,10 +243,18 @@ export class OpenAICompatibleProvider implements AIProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      this.reportQuotaIfNeeded(response.status, error);
-      throw new Error(
-        `${this.name} Stream 错误: ${response.status} - ${error}`
-      );
+      // 8-03: 流式这条路以前只抛裸 Error(连 status 都没挂) —— 下游一律判成 content_error,
+      //   欠费时这条链路上的内容会被判死。与非流式同口径处理。
+      const err = this.decorateApiError(
+        new Error(`${this.name} Stream 错误: ${response.status} - ${error}`),
+        response.status,
+        error,
+      ) as Error & { errorType?: string; errorCode?: string };
+      this.reportQuotaIfNeeded(response.status, error, {
+        ...(err.errorType ? { errorType: err.errorType } : {}),
+        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
+      });
+      throw err;
     }
 
     let fullContent = "";

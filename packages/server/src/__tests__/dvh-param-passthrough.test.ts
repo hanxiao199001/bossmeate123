@@ -88,7 +88,10 @@ vi.mock("../services/storage/index.js", () => ({
   },
 }));
 // fellSilent=false = 合成成功。要测"TTS 失败"就 mockResolvedValueOnce 一个 fellSilent:true
-const ttsSpy = vi.fn(async (_t: string, _x: string, _o: any) => ({ remotePath: "tts/a.wav", durationMs: 60000, fellSilent: false }));
+// 8-03: silentReason 是 TTSResult 新增字段(失败原因), 基准 mock 里声明出来, 用例才好覆盖它
+const ttsSpy = vi.fn(async (_t: string, _x: string, _o: any) => ({
+  remotePath: "tts/a.wav", durationMs: 60000, fellSilent: false, silentReason: undefined as string | undefined,
+}));
 vi.mock("../services/video/tts-service.js", () => ({ ttsService: { synthesize: ttsSpy } }));
 vi.mock("../services/task/queue.js", () => ({ videoQueue: { getJobs: async () => [], add: async () => ({ id: "j1" }) } }));
 vi.mock("../services/articles/state-machine.js", () => ({ initialStatusFields: () => ({ status: "draft" }) }));
@@ -344,23 +347,40 @@ async function waitFor(pred: () => boolean, ms = 3000) {
 }
 
 describe("TTS 失败 → 直接失败, 绝不带着静音去提交", () => {
-  it("音频驱动下 TTS 降级静音: 不提交阿里云(=不扣费)、不落库假视频、落 incident", async () => {
+  it("音频驱动下 TTS 降级静音: 不提交阿里云(=不扣费)、不落假视频、落 incident, 但**口播稿必须留下来**", async () => {
     process.env.DVH_AUDIO_DRIVEN = "1";
     // TTSService 四个 provider 分支合成失败都会顶一段 silentMp3 上来, fellSilent 是唯一的失败信号
-    ttsSpy.mockResolvedValueOnce({ remotePath: "tts/silent.wav", durationMs: 60000, fellSilent: true });
+    // 8-03: silentReason 是新增的"为什么失败" —— 这里放百炼欠费的真实报文, 看分类能不能判成 quota
+    ttsSpy.mockResolvedValueOnce({
+      remotePath: "tts/silent.wav", durationMs: 60000, fellSilent: true,
+      silentReason: 'Error: qwen-tts 400 {"type":"Arrearage","message":"Access denied, please make sure your account is in good standing before making a request."}',
+    });
     const app = await buildApp();
     const res = await app.inject({ method: "POST", url: "/dvh-from-text", payload: { text: CLEAN, templateId: MALE_KEY } });
     expect(res.statusCode).toBe(200); // fire-and-forget, 接口照旧 200
-    await waitFor(() => incidentSpy.mock.calls.length > 0);
+    await waitFor(() => inserted.length > 0);
 
     // ★ 核心: 一个字节都没发给阿里云 —— 静音音频驱动出来的必然是哑巴视频, 而阿里云照秒收钱
     expect(captured.length).toBe(0);
-    // ★ 也不落一条假视频进内容管理(与 submit_failed 的占位样片不同: 这条是主动中止, 不是兜底)
-    expect(inserted.length).toBe(0);
     expect(incidentSpy.mock.calls[0]?.[0]).toMatchObject({ kind: "dvh_tts_failed", severity: "error" });
     expect(logSpy.error.mock.calls.some((c) => String(c[1]).includes("dvh.tts.silent_abort"))).toBe(true);
     // 不许谎报成功
     expect(logSpy.info.mock.calls.some((c) => String(c[1]) === "dvh.text.success")).toBe(false);
+
+    // ★ 8-03 改口径: 以前这里断言 inserted.length === 0(什么都不落库)。
+    //   那正是老板那条 157 字口播稿蒸发的原因 —— 不落库 = 界面上什么都没有, 稿子只在他脑子里。
+    //   现在落的**不是假视频**(status=failed, 没有 videoUrl), 而是一条"这次失败了 + 原稿在这"的记录。
+    expect(inserted.length).toBe(1);
+    const rec = inserted[0];
+    expect(rec.status).toBe("failed");
+    expect(rec.body).toBe(CLEAN);                          // 🔴 口播稿原文, 运营点开就能拷走
+    expect(rec.metadata.narrationText).toBe(CLEAN);
+    expect(rec.metadata.videoUrl).toBeUndefined();          // 绝不是一条视频
+    // ★ 失败分类: TTS 的真因是百炼欠费 → quota_exceeded(充值后自动重跑), 且原始输入齐全
+    expect(rec.metadata.deferred.reason).toBe("quota_exceeded");
+    expect(rec.metadata.deferred.retryCount).toBe(0);
+    expect(rec.metadata.deferred.input).toMatchObject({ kind: "dvh_text", text: CLEAN, templateId: MALE_KEY });
+    expect(incidentSpy.mock.calls.some((c) => c[0]?.kind === "content_deferred")).toBe(true);
   });
 
   it("TTS 正常(fellSilent=false)时不受影响: 照常提交", async () => {

@@ -808,6 +808,30 @@ export async function collectOutcomeItems(now: Date = new Date()): Promise<Brief
   }
 }
 
+/**
+ * 8-03 积压待重跑: "N 条内容因外部服务不可用暂停, 服务恢复后会自动重跑"。
+ *
+ * 【为什么是 warn 不是 alert】这些内容**没丢**, 原稿都在, 服务回来了系统自己会跑 ——
+ *   要人动手的只有"去充值"这一件, 而那件由 llm_quota / 供应商余额那两条负责喊。
+ *   把它标成红色会让运营以为要手动重跑, 恰恰是这次要消灭的动作。
+ *   但停摆超过 6 小时就升级: 那说明"充值"这个动作没人做, 才是真要人。
+ */
+export async function collectDeferredItems(now: Date = new Date()): Promise<BriefItem[]> {
+  try {
+    const { collectDeferredSummary } = await import("./service-health-probe.js");
+    const s = await collectDeferredSummary(now);
+    if (!s.text) return [];
+    const escalate = (s.stalledHours ?? 0) >= 6;
+    return [{
+      level: escalate ? ("alert" as const) : ("warn" as const),
+      text: escalate ? `🔴 ${s.text} — 已停摆超 6 小时, 请确认 AI 服务账户是否欠费` : s.text,
+    }];
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "简报: 积压待重跑采集失败, 本次不判定");
+    return [];
+  }
+}
+
 /** 平台级采集(跨租户: 系统健康 + 供应商余额 + 异常事件流水) */
 export async function collectPlatformBriefing(now: Date = new Date()): Promise<PlatformBriefing> {
   const since = startOfBjDay(now);
@@ -836,7 +860,9 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
   // 8-02 生成结果闭环。**直接产出条目, 不落库** —— collect* 全链路必须保持只读:
   //   排查时会拿它跑 dry-run(不推企微不落库)看"今天简报会说什么", 一旦这里写库, dry-run 就有副作用了。
   const outcomeItems = await collectOutcomeItems(now);
-  const allItems = [...streakItems, ...outcomeItems, ...items, ...pool.items];
+  // 8-03 积压待重跑(自带 try/catch, 绝不抛错)
+  const deferredItems = await collectDeferredItems(now);
+  const allItems = [...streakItems, ...outcomeItems, ...deferredItems, ...items, ...pool.items];
   return {
     health, supplier, incidents,
     items: allItems, todos: [...todos, ...pool.todos],

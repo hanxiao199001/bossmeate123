@@ -679,4 +679,19 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON golden_set_annotations (content_id);
     `,
   },
+  {
+    version: "032_contents_deferred_index",
+    description:
+      "8-03 失败分类 + 服务恢复自动重跑: 探测器每 30 分钟要扫一遍\"哪些内容在等重跑\"" +
+      "(WHERE metadata->'deferred' IS NOT NULL)。contents 是全系统最大的表之一(60 天保留窗内数万行), " +
+      "不加索引就是每半小时一次全表扫。用**部分索引**而不是整列 GIN: 带 deferred 的行只占极小比例" +
+      "(正常日子是 0 行), 部分索引几乎不占空间、写入几乎零开销, 而 GIN 要为每一行的整个 metadata 建项。" +
+      "索引表达式取 reason 而不是整个 deferred 块 —— 查询就是按 reason 过滤(quota_exceeded / service_down)。" +
+      "⚠️ 纯性能索引, 不改任何语义: 不建也能跑, 只是慢。退回执行: DROP INDEX idx_contents_deferred。",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_contents_deferred
+        ON contents ((metadata -> 'deferred' ->> 'reason'))
+        WHERE metadata -> 'deferred' IS NOT NULL;
+    `,
+  },
 ];

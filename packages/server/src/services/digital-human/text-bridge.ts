@@ -44,6 +44,12 @@ export interface DvhTextBridgeOptions {
    * **同步知道**"这次是重复提交", 才能回 409 给运营看, 而不是回 200 却什么都没发生。
    */
   slotKeys?: string[];
+  /**
+   * 8-03: 这次是"服务恢复后的自动重跑"的第几次(由 service-health-probe 传入)。
+   * 不传 = 运营手动发起的首次生成。重跑再失败时要把计数带下去, 否则 retryCount 永远从 0 开始,
+   * DEFERRED_MAX_RETRY 上限形同虚设 —— 一条永远坏的稿子会每 30 分钟烧一次钱。
+   */
+  deferredRetryCount?: number;
 }
 
 // ============ 在途锁(防双击 = 防两份 15 元) ============
@@ -127,7 +133,7 @@ export function inFlightDvhTextCount(): number {
 export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<void> {
   const {
     db, tenantId, userId, text, templateId, voiceId, backgroundUrl,
-    conversationId, idempotencyKey, complianceSoftHits,
+    conversationId, idempotencyKey, complianceSoftHits, deferredRetryCount,
   } = opts;
 
   // 路由层没抢就自己抢(直接调本函数的脚本/测试路径), 抢不到直接走人 —— 绝不能重复扣费。
@@ -144,6 +150,18 @@ export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<vo
 
   // 标题: 没填就拿稿子开头顶上(DVH 那边还会再截到 60 字, 这里先给个人看得懂的)
   const title = (opts.title?.trim() || text.trim().slice(0, 24) || "口播稿视频").slice(0, 60);
+
+  /**
+   * 8-03 存档动作**放到锁外面做**(见 finally 之后那一段)。
+   *
+   * 在途锁的职责只有一个: 在"这条稿子正在花钱生产"期间挡住重复提交。
+   * 生产一旦结束(不管成没成), 锁就该还回去 —— 后面写失败记录/打 deferred 标记这些
+   * 纯存档动作再慢也不该占着它。占着的后果是: 运营眼看着失败了想立刻重来, 却收到 409
+   * "有同参数任务在途", 完全说不通。
+   */
+  let fatalErr: unknown = null;
+  let submitFailedContentId: string | null = null;
+  let submitFailedError = "";
 
   try {
     const mapping = (await resolveAvatarVoice(String(templateId)))
@@ -258,6 +276,14 @@ export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<vo
         { ...logCtx, orphanTaskUuid: produced.orphanTaskUuid, fallbackError: produced.fallbackError },
         "dvh.text.placeholder — 落库了, 但这条不是真渲染(见 fallbackReason), 别当成品用",
       );
+      // 8-03: submit 失败(未扣费)常常就是欠费的下游表现 —— 阿里云同一个账户,
+      //   百炼欠费时 DVH 提交也会被拒。给这条占位行打上 deferred, 服务恢复后自动重跑,
+      //   而不是留一条"看起来成功、其实是占位样片"的死片子等人去发现。
+      //   mock_mode 不打: 那是 DVH_REAL_MODE 没开(配置问题), 重跑一万次还是占位样片。
+      if (produced.fallbackReason === "submit_failed" && row?.id) {
+        submitFailedContentId = row.id;
+        submitFailedError = produced.fallbackError ?? "DVH 提交失败";
+      }
     } else {
       logger.info(logCtx, "dvh.text.success");
     }
@@ -266,7 +292,142 @@ export async function triggerDvhFromText(opts: DvhTextBridgeOptions): Promise<vo
       { err: err instanceof Error ? err.message : err, tenantId, templateId },
       "dvh.text.fatal",
     );
+    fatalErr = err;
   } finally {
     releaseDvhTextSlots(slotKeys);
+  }
+
+  // ---- 锁已归还, 下面是存档收尾(不涉及扣费, 慢一点没关系) ----
+
+  // 8-03 🔴 这里就是老板那条 157 字口播稿蒸发的地方。
+  //   原来 catch 只打一行 warn 就走人: 不落库、不产视频、界面上什么都没有,
+  //   运营既不知道失败了、也拿不回原稿(narrationText 只存在成功路径的 metadata 里)。
+  //   现在无论哪类失败都落一条 contents(status=failed, body=口播稿原文),
+  //   外部服务类失败再额外挂 metadata.deferred, 服务恢复后自动重跑。
+  if (fatalErr !== null) {
+    await recordDvhTextFailure(opts, fatalErr, title);
+    return;
+  }
+  // 8-03: submit 失败(未扣费)常常就是欠费的下游表现 —— 阿里云同一个账户,
+  //   百炼欠费时 DVH 提交也会被拒。给这条占位行打上 deferred, 服务恢复后自动重跑,
+  //   而不是留一条"看起来成功、其实是占位样片"的死片子等人去发现。
+  //   mock_mode 不打: 那是 DVH_REAL_MODE 没开(配置问题), 重跑一万次还是占位样片。
+  if (submitFailedContentId) {
+    await markDvhDeferred({
+      contentId: submitFailedContentId,
+      err: new Error(submitFailedError),
+      opts, retryCount: deferredRetryCount ?? 0,
+      detail: "数字人视频提交失败(未扣费)",
+    });
+  }
+}
+
+// ============ 8-03 失败也要留下痕迹(deferred) ============
+
+/** 从一次直生请求还原出"重跑需要的全部输入" —— 少一个字段这条就永远跑不回来了 */
+function buildDvhDeferredInput(opts: DvhTextBridgeOptions): import("../ops/deferred.js").DeferredInputDvhText {
+  return {
+    kind: "dvh_text",
+    tenantId: opts.tenantId,
+    userId: opts.userId,
+    text: opts.text,                       // 🔴 口播稿原文, 唯一副本
+    ...(opts.title ? { title: opts.title } : {}),
+    templateId: String(opts.templateId),
+    ...(opts.voiceId ? { voiceId: opts.voiceId } : {}),
+    ...(opts.backgroundUrl ? { backgroundUrl: opts.backgroundUrl } : {}),
+    ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
+  };
+}
+
+/** 给一条已落库的内容补 deferred 标记(submit 失败的占位行走这条) */
+async function markDvhDeferred(args: {
+  contentId: string;
+  err: unknown;
+  opts: DvhTextBridgeOptions;
+  retryCount: number;
+  detail: string;
+}): Promise<void> {
+  try {
+    const { buildDeferred, markContentDeferred } = await import("../ops/deferred.js");
+    const mark = buildDeferred({
+      err: args.err,
+      input: buildDvhDeferredInput(args.opts),
+      detail: args.detail,
+      retryCount: args.retryCount,
+    });
+    if (!mark) return; // content_error → 判死, 不假装能救回来
+    await markContentDeferred(args.contentId, mark);
+  } catch (e) {
+    logger.warn({ err: e instanceof Error ? e.message : e }, "dvh.text.mark_deferred_failed");
+  }
+}
+
+/**
+ * 直生彻底失败 → 落一条 status=failed 的 contents, 把口播稿原文放进 body。
+ *
+ * 【为什么 body 放原稿而不是留空】运营在内容列表点开就能看到自己写了什么、能复制走,
+ *   不必去翻服务器日志。这是"稿子还在"这句承诺的实体。
+ * 【为什么 content_error 也落库】失败必须可见。区别只在有没有 deferred 块:
+ *   有 = 列表显示"待重试"(会自动重跑); 没有 = 显示"失败"(要人处理)。
+ */
+async function recordDvhTextFailure(opts: DvhTextBridgeOptions, err: unknown, title: string): Promise<void> {
+  try {
+    const { buildDeferred, insertDeferredContent, describeFailureDetail } = await import("../ops/deferred.js");
+    const mark = buildDeferred({
+      err,
+      input: buildDvhDeferredInput(opts),
+      detail: describeFailureDetail(err),
+      retryCount: opts.deferredRetryCount ?? 0,
+    });
+    const contentId = await insertDeferredContent({
+      tenantId: opts.tenantId,
+      userId: opts.userId,
+      type: "video",
+      title,
+      body: opts.text,                       // 🔴 原稿存这里, 运营看得见、拷得走
+      conversationId: opts.conversationId ?? null,
+      mark,
+      err,
+      extraMetadata: {
+        source: "dvh",
+        sourceType: "custom_text",
+        narrationText: opts.text,
+        narrationHash: narrationFingerprint(opts.text),
+        narrationChars: opts.text.length,
+        templateId: String(opts.templateId),
+        ...(opts.voiceId ? { voiceOverride: opts.voiceId } : {}),
+        ...(opts.backgroundUrl ? { backgroundUrl: opts.backgroundUrl } : {}),
+        ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+        ...(opts.complianceSoftHits?.length ? { complianceSoftHits: opts.complianceSoftHits } : {}),
+        autoGenerated: false,
+        failedStage: "dvh_text_produce",
+      },
+    });
+    logger.error(
+      {
+        tenantId: opts.tenantId, templateId: opts.templateId, contentId,
+        deferredReason: mark?.reason ?? null,
+        chars: opts.text.length,
+        // 落库失败时(contentId=null)这行日志就是原稿的最后一份副本
+        narrationText: contentId ? undefined : opts.text,
+      },
+      mark
+        ? "dvh.text.deferred — 外部服务不可用, 已落库保存原稿, 服务恢复后自动重跑"
+        : "dvh.text.failed_recorded — 已落库(内容自身问题, 不自动重跑)",
+    );
+    if (mark) {
+      const { recordIncident } = await import("../ops/incidents.js");
+      void recordIncident({
+        kind: "content_deferred", severity: "warn", tenantId: opts.tenantId,
+        message: `文字稿直生失败已暂停待重跑: 《${title.slice(0, 30)}》 — ${mark.detail}`,
+        detail: { contentId, reason: mark.reason, inputKind: "dvh_text", chars: opts.text.length, retryCount: mark.retryCount },
+      });
+    }
+  } catch (e) {
+    // 兜底的兜底: 连失败记录都落不下 —— 原稿只剩这条日志
+    logger.error(
+      { err: e instanceof Error ? e.message : e, tenantId: opts.tenantId, narrationText: opts.text },
+      "dvh.text.failure_record_failed — 失败记录未能落库, 口播稿只剩本条日志",
+    );
   }
 }

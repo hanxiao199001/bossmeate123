@@ -3,6 +3,8 @@
  * 5-23 PR #161: 加 always-on checkbox (Gmail 风) + multiSelected ring 高亮.
  *   selected (单选高亮, 现有) 与 multiSelected (多选 checkbox 勾) 区分 — 命名不重叠.
  */
+import { readDeferred, deferredBadge } from "../../utils/deferred";
+
 export interface WorkbenchListItem {
   id: string;
   title: string | null;
@@ -51,6 +53,10 @@ export default function ContentListItem({
 }: ContentListItemProps) {
   const j = item.journal;
   const keyword = (item.metadata as { keyword?: string } | null | undefined)?.keyword;
+  // 8-03: "失败"里有一半其实是"待重试" —— 外部服务当时不可用, 原稿还在, 系统会自己重跑。
+  //   显示成失败会让运营白跑一趟(见 utils/deferred.ts 的文件头)。
+  const deferred = readDeferred(item.metadata);
+  const deferBadge = deferred ? deferredBadge(deferred) : null;
   const meta: string[] = [];
   if (j?.name) meta.push(j.name);
   if (j?.impactFactor != null) meta.push(`IF ${j.impactFactor}`);
@@ -88,6 +94,14 @@ export default function ContentListItem({
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-100 text-rose-700">🎬 视频</span>
           ) : (
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-100 text-sky-700">📄 图文</span>
+          )}
+          {deferBadge && (
+            <span
+              className={`inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${deferBadge.cls}`}
+              title={deferBadge.title}
+            >
+              ⏳ {deferBadge.label}
+            </span>
           )}
           {item.status === "needs_review" && (
             <span className="inline-block align-middle mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">待审</span>

@@ -51,7 +51,8 @@ export type SchedulerJobType =
   | "ai-review-scan"           // 7-05 ④: 每小时 AI 审稿员扫灰区待审(影子模式记建议/live 自动裁决)
   | "draft-distribute"         // 7-05 ⑤: 每日早晨公众号草稿箱分发(每号 top-N 候选)
   | "wechat-stats-collect"     // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
-  | "ops-daily-briefing";      // 7-25: 每日运营简报(异常汇总→企微推送, 推失败降级落库+今日驾驶舱)
+  | "ops-daily-briefing"       // 7-25: 每日运营简报(异常汇总→企微推送, 推失败降级落库+今日驾驶舱)
+  | "service-health-probe";    // 8-03: 每 30 分钟探外部依赖是否恢复 → 自动重跑积压内容(欠费/服务挂)
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -484,6 +485,19 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { date: r.date, level: r.level, pushed: r.pushed, tenantsProcessed: r.tenantsProcessed };
     }
 
+    case "service-health-probe": {
+      // 8-03: 外部依赖恢复探测 + 自动重跑。
+      //   探测本身要花真钱(必须是真实计费调用 —— 实测欠费时 /models 照返 200),
+      //   所以三道刹车都在 runServiceHealthProbe 里: 没积压不探 / 连续失败退避 / DVH 不探。
+      //   总开关 SERVICE_PROBE_ENABLED(默认开), 关掉时空转。
+      if (process.env.SERVICE_PROBE_ENABLED === "0" || process.env.SERVICE_PROBE_ENABLED === "false") {
+        return { skipped: true, reason: "SERVICE_PROBE_ENABLED=0" };
+      }
+      const { runServiceHealthProbe } = await import("./ops/service-health-probe.js");
+      const r = await runServiceHealthProbe();
+      return { skipped: r.skipped, reason: r.reason, backlog: r.backlog, retry: r.retry };
+    }
+
     case "login-keepalive": {
       // 串行慢巡检(账号间8-20s), 不要与推草稿/扫码并发跑浏览器 — keepalive 内部有 running 互斥
       const { runLoginKeepalive } = await import("./publisher/login-keepalive.js");
@@ -756,6 +770,16 @@ async function registerCronJobs() {
     "ops-daily-briefing-schedule",
     { pattern: `${env.OPS_BRIEFING_CRON_MINUTE} ${env.OPS_BRIEFING_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
     { name: "ops-daily-briefing", data: { type: "ops-daily-briefing" as SchedulerJobType } }
+  );
+
+  // 8-03: 每 30 分钟探一次"外部依赖回来没有" → 回来了就把积压内容自动重跑。
+  //   为什么是 30 分钟: 欠费/服务挂通常是分钟到小时级, 30 分钟既不会让恢复后干等太久,
+  //   又不会把探测成本做大(且没有积压时根本不发请求, 见 runServiceHealthProbe 的第一道刹车)。
+  //   错开整点(:07/:37): 别和 03:00 排产、07:00 分发、09:30 简报这些整点任务挤在一起。
+  await crawlerQueue.upsertJobScheduler(
+    "service-health-probe-schedule",
+    { pattern: "7,37 * * * *", tz: "Asia/Shanghai" },
+    { name: "service-health-probe", data: { type: "service-health-probe" as SchedulerJobType } }
   );
 
   // 每日 7:30 热度×期刊交叉匹配（在爬虫+关键词分析之后）

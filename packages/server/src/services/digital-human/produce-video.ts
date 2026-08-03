@@ -35,9 +35,21 @@ import { recordIncident, recordIncidentThrottled } from "../ops/incidents.js";
  * 与其花钱买一条注定要删的片子, 不如当场失败、让人看见。
  */
 export class DvhTtsFailedError extends Error {
-  constructor(message: string) {
+  /**
+   * 8-03: TTS 到底为什么失败(TTSResult.silentReason 原文)。
+   * 【为什么必须带】8-03 百炼欠费时 TTS 报的是 Arrearage, 但 TTSService 把异常 catch 成
+   *   fellSilent 布尔, 原因蒸发了。失败分类(failure-kind.classifyFailure)要靠它把这条
+   *   判成 quota_exceeded(充值后可自动重跑), 而不是笼统的 service_down。
+   */
+  readonly silentReason?: string;
+  constructor(message: string, silentReason?: string) {
     super(message);
     this.name = "DvhTtsFailedError";
+    if (silentReason) {
+      this.silentReason = silentReason;
+      // 挂到 cause 上, extractErrorFields 会顺着错误链一路读下去
+      (this as Error & { cause?: unknown }).cause = new Error(silentReason);
+    }
   }
 }
 
@@ -146,13 +158,21 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       //   以前 fellSilent 只进日志, 于是这条链路明知会废还照提交照扣费。现在当场中止。
       if (tts.fellSilent) {
         const reason = `TTS 合成失败降级为静音(provider=${process.env.TTS_PROVIDER ?? "未配置"}), 已中止提交 — 提交了必是哑巴视频且照样扣费`;
-        logger.error({ tenantId, templateId, clonedVoiceId, ttsProvider: process.env.TTS_PROVIDER ?? null }, `dvh.tts.silent_abort — ${reason}`);
+        // 8-03: 把 TTS 的**真实失败原因**一路带上(欠费 vs 网络挂 vs 凭证没配, 处置完全不同)
+        logger.error(
+          { tenantId, templateId, clonedVoiceId, ttsProvider: process.env.TTS_PROVIDER ?? null, silentReason: tts.silentReason ?? null },
+          `dvh.tts.silent_abort — ${reason}`,
+        );
         void recordIncident({
           kind: "dvh_tts_failed", severity: "error", tenantId,
-          message: reason,
-          detail: { templateId, clonedVoiceId: clonedVoiceId ?? null, ttsProvider: process.env.TTS_PROVIDER ?? null, chars: text.length },
+          message: `${reason}${tts.silentReason ? ` | 原因: ${tts.silentReason.slice(0, 160)}` : ""}`,
+          detail: {
+            templateId, clonedVoiceId: clonedVoiceId ?? null,
+            ttsProvider: process.env.TTS_PROVIDER ?? null, chars: text.length,
+            silentReason: tts.silentReason ?? null,
+          },
         });
-        throw new DvhTtsFailedError(`DVH_TTS_FAILED: ${reason}`);
+        throw new DvhTtsFailedError(`DVH_TTS_FAILED: ${reason}`, tts.silentReason);
       }
       // 7-31 存证: 音频驱动下音色**真生效**, 记下这条音频是用哪个 voice 合的
       // 阿里云需HTTPS拉音频。OSS私有桶→签名URL(限时有效、不公开); 本地→相对路径转公网base。submit前算好, 不可达直接抛(不白扣费)

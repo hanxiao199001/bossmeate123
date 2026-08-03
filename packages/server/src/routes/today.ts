@@ -128,6 +128,8 @@ export async function todayRoutes(app: FastifyInstance) {
             needsReviewReason?: string; sixDimTotal?: number; sixDimWeak?: Array<{ label: string; score: number; fixHint: string }>;
             titleIssue?: unknown; sixDimDegraded?: boolean;
             aiReview?: { verdict?: string; confidence?: number; reason?: string; mode?: string }; // 7-05 ④ AI 审稿建议
+            // 8-03: 外部服务不可用导致的暂停(原稿已存, 服务恢复后自动重跑) — 见 services/ops/deferred.ts
+            deferred?: { reason?: string; detail?: string; retryCount?: number; exhausted?: boolean };
           } | null;
           // 6-20/7-05 ①: 待审给出失败原因 + 六维失败维度 + fixHint, 让运营知道哪把尺挂的、怎么改。
           let reviewReason: string | null = null;
@@ -171,6 +173,15 @@ export async function todayRoutes(app: FastifyInstance) {
               confidence: Number(meta.aiReview.confidence ?? 0),
               reason: String(meta.aiReview.reason ?? "").slice(0, 120),
               mode: String(meta.aiReview.mode ?? ""),
+            } : null,
+            // 8-03: 列表要能一眼分出"失败了(要人处理)"和"待重试(系统会自己跑)"。
+            //   只透传显示需要的三个字段, **绝不把 deferred.input 发给前端** ——
+            //   那里面是口播稿原文/选题等原始输入, 属于服务端存档, 列表接口没必要带。
+            deferred: meta?.deferred?.reason ? {
+              reason: String(meta.deferred.reason),
+              detail: String(meta.deferred.detail ?? "").slice(0, 120),
+              retryCount: Number(meta.deferred.retryCount ?? 0),
+              exhausted: meta.deferred.exhausted === true,
             } : null,
           };
         }),
