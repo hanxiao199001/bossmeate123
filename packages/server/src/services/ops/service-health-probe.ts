@@ -385,13 +385,26 @@ async function rerunQualityCheck(row: DeferredRow): Promise<boolean> {
       })
       .where(eq(contents.id, row.id));
 
-    // 这次真评上分了 → 按分数走原有归宿。质检通过就放行进可发池, 不过就老老实实留在待审
-    //   (那是"内容分低", 与"评分器挂了"是两回事 —— 7-27 起这两件事就必须分开, 见 quality-check-v2)。
+    // 8-05 【影子模式】重评了, 但**不自动放行** —— 重评结果只写进 metadata, 状态保持 needs_review。
+    //
+    // 原设计是"质检通过就 transitionStatus(needs_review → generated)"自动进可发池。老板拍板改保守, 两条理由:
+    //   ① 这批内容恰恰是**故障期间生成**的 —— 生成时质检就是挂的, 内容本身从没被完整检查过;
+    //   ② 不符合渐进移交: 第一次上线就全自动, 而"探测→重跑→放行"整条链路**没有任何人工介入点**,
+    //      判断一旦有偏差, 错误会静默累积(而且累积的是"已发出去的内容", 不可逆)。
+    //
+    // 影子模式怎么退出: 积累一两周, 比对「系统重评通过」vs「运营确认放行」的一致率。
+    //   一致率高了再把下面这段放开, 那时候切才有依据 —— 现在切只是赌它对。
+    //   放开时就是恢复这三行:
+    //     const { transitionStatus } = await import("../articles/state-machine.js");
+    //     try { await transitionStatus(row.id, "needs_review", "generated"); } catch { /* 尊重人工结果 */ }
+    //   条件同原设计: qp.qualityLoop.passed && cur.status === "needs_review"。
+    //
+    // 注: 重评分数已在上面写进 metadata, 运营在待审列表里看得到分, 不是让人裸判。
     if (qp.qualityLoop.passed && cur.status === "needs_review") {
-      const { transitionStatus } = await import("../articles/state-machine.js");
-      try {
-        await transitionStatus(row.id, "needs_review", "generated");
-      } catch { /* 状态已被人工改过 → 尊重人工结果 */ }
+      logger.info(
+        { contentId: row.id, finalTotal: qp.qualityLoop.finalTotal ?? null },
+        "deferred.rerun_passed_but_held — 重评通过, 影子模式下仍留待审等人工确认(不自动放行)",
+      );
     }
     return true;
   } catch (err) {
