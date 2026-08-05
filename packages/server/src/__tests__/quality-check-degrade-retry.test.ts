@@ -64,6 +64,12 @@ async function flushIncidents(expectedCalls: number): Promise<void> {
 beforeEach(() => {
   chatMock.mockReset();
   recordIncidentSpy.mockReset();
+  // 8-05 显式钉住排版规则分开关。
+  //   本文件测的是「主模型超时 → 换快模型」, formatting 怎么算对它只是噪音;
+  //   但 sixDimQualityCheck 会读 process.env.FORMATTING_RULE_SCORE, 不钉死的话
+  //   测试结果就跟着**部署配置**变 —— 实测: 线上按拆开发把该开关设成 0 之后,
+  //   这条用例立刻红(期望 77 实得 80)。测试不该依赖环境变量的环境值。
+  delete process.env.FORMATTING_RULE_SCORE;   // = 规则分生效(默认行为)
 });
 
 describe("① 主模型超时 → 直接换快模型重评(不原地重打)", () => {
