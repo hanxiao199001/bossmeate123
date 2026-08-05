@@ -91,6 +91,16 @@ export interface TTSResult {
    *   **要不要为静音买单, 由调用方自己判** —— 这里只负责如实说。
    */
   fellSilent: boolean;
+  /**
+   * 8-03: fellSilent=true 时**为什么**失败(原始错误摘要)。
+   *
+   * 【为什么加】8-03 百炼欠费 → qwen-tts 报 Arrearage → 四个 provider 分支把异常
+   *   catch 掉降级静音, 错误就此蒸发, 调用方只看到一个布尔 true。
+   *   于是 DVH 那边只能说"TTS 失败了", 说不出"是欠费"—— 而这两者的处置完全不同:
+   *   欠费是充值后可原样重跑(quota_exceeded), 别的原因可能是内容问题。
+   *   失败分类(failure-kind.ts)判据要读它, 所以必须把原因一路带上来。
+   */
+  silentReason?: string;
 }
 
 export class TTSService {
@@ -114,6 +124,8 @@ export class TTSService {
 
     let audio: Buffer;
     let fellSilent = false;
+    // 8-03: 降级静音的**原因**要带出去 —— 见 TTSResult.silentReason 的注释
+    let silentReason: string | undefined;
     const hasAliyunCreds =
       ALIYUN_AK_ID && ALIYUN_AK_SECRET && env.ALIYUN_NLS_APPKEY;
     const hasStaticToken = env.TTS_API_KEY && env.ALIYUN_NLS_APPKEY;
@@ -124,6 +136,7 @@ export class TTSService {
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 TTS 合成失败，降级静音");
         audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
+        silentReason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       }
     } else if (this.provider === "siliconflow" && env.SILICONFLOW_API_KEY) {
       try {
@@ -131,6 +144,7 @@ export class TTSService {
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "SiliconFlow(CosyVoice2) TTS 合成失败，降级静音");
         audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
+        silentReason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       }
     } else if (this.provider === "dashscope" && env.QWEN_API_KEY) {
       try {
@@ -139,12 +153,16 @@ export class TTSService {
       } catch (err) {
         logger.error({ err: err instanceof Error ? err.message : err }, "阿里云 qwen-tts 合成失败，降级静音");
         audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
+        silentReason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       }
     } else if (this.provider === "azure" && env.TTS_API_KEY) {
       audio = await this.synthesizeAzure(text, voice, fmt);
     } else {
       logger.warn("TTS 凭证未配置，生成占位静音音频");
       audio = this.silentMp3(estimateDurationMs(text)); fellSilent = true;
+      // 凭证没配是**配置问题**, 不是"服务挂了" —— 措辞刻意不带 timeout/欠费类词,
+      //   免得被 classifyFailure 误判成可自动重跑(充值/等恢复都救不了它, 只有改配置能)。
+      silentReason = `TTS 凭证未配置(TTS_PROVIDER=${this.provider ?? "未设置"})`;
     }
 
     // 6-22 语速: 按剪辑风格(opts.speed)或全局 TTS_SPEED 用 ffmpeg atempo 提速(保音调)。失败则保留原音频。
@@ -173,6 +191,7 @@ export class TTSService {
       bytes: audio.length,
       format: fmt,
       fellSilent,
+      ...(silentReason ? { silentReason } : {}),
     };
   }
 

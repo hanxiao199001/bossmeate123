@@ -10,6 +10,7 @@ import Greeting from "../components/dashboard/Greeting";
 import OnboardingChecklist from "../components/OnboardingChecklist"; // 7-05 老板首登向导
 import { AGENT_PLATFORMS, VIDEO_PLATFORMS, platformShortLabel } from "../utils/platforms";
 import { statusLabel, statusColor } from "../components/StatusBadge";
+import { readDeferred, deferredBadge, type DeferredInfo } from "../utils/deferred";
 
 interface TodayContent {
   id: string;
@@ -21,6 +22,8 @@ interface TodayContent {
   reviewReason?: string | null;
   reviewWeak?: Array<{ label: string; score: number; fixHint: string }>; // 7-05 ① 失败维度+fixHint
   aiReview?: { verdict: string; confidence: number; reason: string; mode: string } | null; // 7-05 ④ AI 审稿建议
+  /** 8-03: 外部服务不可用导致的暂停 — 会自动重跑, 显示成"待重试"而不是"失败" */
+  deferred?: DeferredInfo | null;
   source: string | null;
 }
 
@@ -742,6 +745,9 @@ export default function TodayPage() {
               <div className="space-y-1">
                 {g.list.map((c) => {
                   const st = { label: statusLabel(c.status), cls: statusColor(c.status) };
+                  // 8-03: 有 deferred = 系统会自己重跑, 别让运营以为要动手(见 utils/deferred.ts)
+                  const dInfo = readDeferred(c.deferred);
+                  const dBadge = dInfo ? deferredBadge(dInfo) : null;
                   const isVideo = c.type === "video";
                   const eligible = data.accounts.filter((a) => (isVideo ? AGENT_PLATFORMS.has(a.platform) : !AGENT_PLATFORMS.has(a.platform)));
                   const isPicking = picking?.id === c.id;
@@ -749,6 +755,11 @@ export default function TodayPage() {
                     <div key={c.id}>
                       <div className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-lg hover:bg-gray-50 group">
                         <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${st.cls}`}>{st.label}</span>
+                        {dBadge && (
+                          <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${dBadge.cls}`} title={dBadge.title}>
+                            ⏳ {dBadge.label}
+                          </span>
+                        )}
                         <Link to={`/content/${c.id}`} className="text-sm text-gray-800 truncate flex-1 group-hover:text-indigo-600">{c.title ?? "(无标题)"}</Link>
                         {c.status === "needs_review" && c.reviewReason && (
                           <span className="shrink-0 max-w-[260px] truncate text-xs text-amber-600" title={c.reviewReason}>⚠ {c.reviewReason}</span>

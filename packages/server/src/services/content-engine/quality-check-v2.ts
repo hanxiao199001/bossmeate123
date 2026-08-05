@@ -22,6 +22,8 @@ import {
   SIX_DIM_EXCELLENT_SCORE,
   SIX_DIM_WEAK_DIM_HINT,
 } from "./quality-thresholds.js";
+// 8-02: 排版维改由代码算（Golden Set 实测 LLM 在这一维基本失明），见该文件头注释
+import { scoreFormatting } from "./formatting-metrics.js";
 import type { VectorCategory } from "../knowledge/vector-store.js";
 import { extractJsonObject } from "./llm-json.js";
 
@@ -105,6 +107,19 @@ export interface SixDimResult {
   scoredBy?: "primary" | "fallback";
   /** 实际出分的模型名(如 deepseek-v4-pro / qwen-plus), 与 scoredBy 一起落 metadata 备查 */
   scorerModel?: string;
+  /**
+   * 8-03: 没评上分时, **是哪一类失败**导致的(见 services/ops/failure-kind.ts)。
+   *
+   * 【为什么必须带出来】8-03 百炼欠费, 质检主备模型同时失败(它们共用一个阿里云账户 ——
+   *   7-27 切 DEEPSEEK_VIA=bailian 时无意造成的单点), 9 篇内容判 needs_review 卡住。
+   *   这 9 篇**内容一点问题没有**, 只是评分器当时不可用; 充值之后它们本该被自动重评,
+   *   但下游只看得到一个 degraded 布尔 —— 分不清"评分器挂了"和"内容评不出分",
+   *   于是只能一律转人工。带上分类, 上游(batch-worker)才能给它们打 deferred 标记。
+   * degraded=false 时为 undefined。
+   */
+  degradedKind?: import("../ops/failure-kind.js").FailureKind;
+  /** 8-03: 原始错误摘要(排障 + 供 classifyFailure 二次判定, 不给运营看) */
+  degradedError?: string;
 }
 
 export interface QualityCheckV2Result {
@@ -692,6 +707,36 @@ ${scorerView}
       logger.warn({ tenantId, title: title.slice(0, 40), fabHits, llmScore }, "六维: 正文编造指标, dataAccuracy 压至红线分");
     }
 
+    // 8-02 排版改由代码算，覆盖 LLM 给的分 —— 同 dataAccuracy 那处"代码罚"的道理。
+    //
+    //   Golden Set 归因实测(老板标 50 篇): 「排版乱/排版没法看」被抱怨 27 次,
+    //   而 LLM 的 formatting 维平均给 7.0~7.4 —— 人一眼看出没法看, 它觉得挺好。
+    //   病根不是判据没写对(prompt 里"单段>200字""连续4段无图"已经很精确), 是:
+    //     ① LLM 不数数, 精确判据它只能"感觉一下"
+    //     ② 它只看 body.slice(0,1500), 而排版是越到后面越松
+    //   规则版判据照抄 prompt 那条, 只是改由代码精确执行 + 看全文, 见 formatting-metrics.ts。
+    //
+    //   与 dataAccuracy 的"只降不升"不同, 这里是**完全替换**: 那一维 LLM 只是偶尔漏判,
+    //   这一维实测基本失效, 保留它的分只会引入噪音。LLM 原分记进 justification 供事后对比。
+    //   逃生开关 FORMATTING_RULE_SCORE=0 可切回 LLM 评分。
+    if (process.env.FORMATTING_RULE_SCORE !== "0") {
+      const fmt = scoreFormatting(body);
+      const llmScore = dims.formatting.score;
+      const detail = fmt.deductions.filter((d) => d.points > 0).map((d) => d.reason).join("；") || "无明显问题";
+      dims.formatting = {
+        score: fmt.score,
+        weakestSection: dims.formatting.weakestSection,
+        fixHint: fmt.fixHint,
+        justification: `【规则评分】${detail}。(LLM 原评 ${llmScore} 分，仅记录不采用)`,
+      };
+      if (Math.abs(fmt.score - llmScore) >= 3) {
+        logger.info(
+          { tenantId, title: title.slice(0, 40), ruleScore: fmt.score, llmScore, metrics: fmt.metrics },
+          "六维: 排版规则分与 LLM 分差距 ≥3, 供校准阈值用"
+        );
+      }
+    }
+
     // 加权总分：每维 score(0-10) × 权重(%)，除以 10 → 0-100
     // 例：全维 8 分 → 8×100/10 = 80 分（正好压在发布线上）
     const total = Math.round(
@@ -753,10 +798,15 @@ ${scorerView}
 
   // 主模型 + 降级模型都没救回来 → 这篇**没评上分**(≠ 评了 0 分), 见 degradedSixDim 的注释
   const reason = classifyQualityFailure(lastErr) === "timeout" ? "AI 超时/无响应" : "评分输出解析失败";
+  // 8-03: 主备全挂时**是什么原因**要一路带给上游 —— 欠费(quota_exceeded)和服务抖动
+  //   (service_down)都是"内容没问题, 外部服务当时不可用", 充值/恢复后应该自动重评;
+  //   只有 content_error(比如正文本身让模型解析不出 JSON)才是真该转人工的那一类。
+  const { classifyFailure } = await import("../ops/failure-kind.js");
+  const degradedKind = classifyFailure(lastErr);
   reportQualityIncident("quality_check_unavailable", "error",
     `六维质检未评上分(${reason}, 主+降级模型均失败): 《${title.slice(0, 40)}》 — ${errText(lastErr).slice(0, 120)}`,
-    { tenantId, title, contentId, extra: { reason, error: errText(lastErr).slice(0, 200) } });
-  return degradedSixDim(reason);
+    { tenantId, title, contentId, extra: { reason, failureKind: degradedKind, error: errText(lastErr).slice(0, 200) } });
+  return { ...degradedSixDim(reason), degradedKind, degradedError: errText(lastErr).slice(0, 300) };
 }
 
 function errText(err: unknown): string {

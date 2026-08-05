@@ -46,6 +46,15 @@ interface BatchRowJob {
   autoRetryCount?: number;
   /** 8-02: 撞 LLM 日上限被顺延过几次(每次顺延一天, 上限 BATCH_MAX_DEFER_DAYS) */
   deferCount?: number;
+  /**
+   * 8-03: 这次是"外部服务恢复后的自动重跑"的第几次(由 service-health-probe 入队时带上)。
+   * 与 deferCount / autoRetryCount 是**三件不同的事**, 刻意不合并:
+   *   autoRetryCount     = 进程内 30s/2min/5min 的即时重试(治瞬时抖动)
+   *   deferCount         = 撞 LLM 日上限顺延到次日(治当天配额用完)
+   *   deferredRetryCount = 欠费/服务挂了, 探测到恢复后才重跑(治账户级/服务级停摆)
+   * 混成一个计数, 三种故障就会互相吃掉对方的重试次数。
+   */
+  deferredRetryCount?: number;
 }
 
 /**
@@ -293,6 +302,8 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         // 铁律: 流水线任何失败只 warn, 文章按现状继续走, 绝不让提质把生产打挂。
         let sixDimPassedGate: boolean | null = null;
         let sixDimDegraded = false; // 7-03: 评分器两次均降级 → needs_review 标 degraded(区别于"质量不过"), 首过率统计排除
+        // 8-03: 没评上分**是哪一类失败**(欠费/服务挂/内容问题) —— 决定这篇能不能自动重评
+        let sixDimDegradedErr: { kind?: string; error?: string } | null = null;
         // 7-28 ②d: 质检流水线**整条抛异常**时, 原来 sixDimPassedGate 保持 null, 而下面的判据是
         //   `sixDimPassedGate === false` 才转待审 —— null 等于通过, 于是"质检根本没跑"的文章
         //   直接 status=generated 进可发池。异常 ≠ 通过。现在标 gateUnavailable, 转 needs_review,
@@ -325,6 +336,12 @@ export function startBatchWorker(): Worker<BatchRowJob> {
               .where(eq(contents.id, content.id));
             sixDimPassedGate = qp.qualityLoop.passed;
             sixDimDegraded = qp.sixDim?.degraded ?? false;
+            if (sixDimDegraded) {
+              sixDimDegradedErr = {
+                ...(qp.sixDim?.degradedKind ? { kind: qp.sixDim.degradedKind } : {}),
+                ...(qp.sixDim?.degradedError ? { error: qp.sixDim.degradedError } : {}),
+              };
+            }
             logger.info(
               { contentId: content.id, sixDimTotal: qp.qualityLoop.finalTotal, rounds: qp.qualityLoop.rounds, passed: qp.qualityLoop.passed, llmCalls: qp.llmCalls },
               "P0四件套: batch 路径提质完成"
@@ -408,6 +425,39 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           await db.update(contents)
             .set({ metadata: sql`COALESCE(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify(reviewMeta)}::jsonb` })
             .where(eq(contents.id, content.id));
+          // 8-03 🔴 "没评上分"里, 内容其实没毛病的那一半要能自动重评。
+          //   8-03 事故: 百炼欠费 → 质检主备模型同时失败(共用一个阿里云账户) → 9 篇卡在
+          //   needs_review, 充完值后没有任何东西会去把它们重评一遍, 全靠人去发现。
+          //   现在给这几篇打 deferred(input 只需要 contentId —— 正文已经落库了),
+          //   探测到 AI 恢复就原地重评: 评上分且过闸 → 自动放行进可发池; 分低 → 老老实实留待审。
+          //   content_error(正文本身让模型解析不出 JSON)→ buildDeferred 返回 null, 照旧转人工。
+          if (sixDimDegraded && sixDimDegradedErr) {
+            try {
+              const { buildDeferred, markContentDeferred, describeFailureDetail } = await import("../ops/deferred.js");
+              const qErr = new Error(sixDimDegradedErr.error ?? "质检主备模型均失败");
+              const mark = buildDeferred({
+                err: qErr,
+                detail: describeFailureDetail(qErr),
+                input: {
+                  kind: "quality_check",
+                  tenantId,
+                  contentId: content.id,
+                  journalId: row.journalId ?? null,
+                },
+              });
+              if (mark) {
+                await markContentDeferred(content.id, mark);
+                const { recordIncidentThrottled } = await import("../ops/incidents.js");
+                await recordIncidentThrottled({
+                  kind: "content_deferred", severity: "warn", tenantId,
+                  message: `质检不可用已暂停待重评(${mark.detail}): 《${String(row.topic).slice(0, 30)}》`,
+                  detail: { contentId: content.id, reason: mark.reason, inputKind: "quality_check" },
+                }, { key: `content_deferred:quality:${tenantId}` });
+              }
+            } catch (e) {
+              logger.warn({ contentId: content.id, err: e instanceof Error ? e.message : e }, "8-03 质检 deferred 标记失败");
+            }
+          }
           await updateRowProgress(rowId, "generated", { articleId: content.id, errorMessage: null });
           logger.info({ rowId, contentId: content.id, qScore, degraded: sixDimDegraded, gateUnavailable },
             sixDimDegraded ? "质检不可用(主+降级模型均失败, 未评上分), 转 needs_review 待重评"
@@ -438,10 +488,19 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ rowId, err: msg, autoRetryCount }, "P4 batch row 生成失败");
+        // 8-03 失败分类: content_error(内容自己的问题) / service_down(服务当时挂了) / quota_exceeded(欠费)
+        const { classifyFailure } = await import("../ops/failure-kind.js");
+        const failureKind = classifyFailure(err);
+        logger.warn({ rowId, err: msg, autoRetryCount, failureKind }, "P4 batch row 生成失败");
+
+        // 8-03 账户级故障**不走进程内即时重试**: 30s/2min/5min 三次重试对"账户欠费"是纯粹的
+        //   白烧 —— 欠费不会在 7 分钟内自己好, 每次重试还要再撞一遍 LLM(有的模型失败也计费)。
+        //   直接落 deferred, 交给探测器等充值后再跑。service_down 反过来照旧走三次重试:
+        //   网络抖动/单次超时确实常常 30 秒后就好了, 那种情况立刻重试比等 30 分钟划算得多。
+        const skipInProcessRetry = failureKind === "quota_exceeded";
 
         // 自动 retry 指数退避
-        if (autoRetryCount < BATCH_MAX_AUTO_RETRY) {
+        if (!skipInProcessRetry && autoRetryCount < BATCH_MAX_AUTO_RETRY) {
           const delay = BATCH_RETRY_DELAYS_MS[autoRetryCount] ?? BATCH_RETRY_DELAYS_MS[BATCH_RETRY_DELAYS_MS.length - 1];
           // 状态机：generating → failed → generating（满足 spec 转移规则）
           try {
@@ -462,6 +521,39 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           await transitionStatus(content.id, "generating", "failed", { errorMessage: msg });
         } catch {}
         await updateRowProgress(rowId, "failed", { articleId: content.id, errorMessage: msg });
+
+        // 8-03 🔴 失败分类 + 保留原始输入 —— 这条内容将来能不能被自动救回来, 全看这一段。
+        //   contents 行已经在(上面 failed 了), 所以这里只补 metadata.deferred, 不新建行。
+        //   input 存 batchId/batchRowId(重新入队就靠它俩) + topic/template/journalId 快照
+        //   (batch_rows 被清理后仍还原得出这一篇)。
+        //   content_error → buildDeferred 返回 null, 不标记 = 判死转人工, 与改造前行为一致。
+        try {
+          const { buildDeferred, markContentDeferred, describeFailureDetail } = await import("../ops/deferred.js");
+          const mark = buildDeferred({
+            err,
+            detail: describeFailureDetail(err),
+            retryCount: job.data.deferredRetryCount ?? 0,
+            input: {
+              kind: "article_generation",
+              batchId, batchRowId: rowId, tenantId, userId,
+              topic: row.topic,
+              template: row.template ?? null,
+              journalId: row.journalId ?? null,
+              accountId: (row as { accountId?: string | null }).accountId ?? null,
+            },
+          });
+          if (mark) {
+            await markContentDeferred(content.id, mark);
+            const { recordIncidentThrottled } = await import("../ops/incidents.js");
+            await recordIncidentThrottled({
+              kind: "content_deferred", severity: "warn", tenantId,
+              message: `文章生成失败已暂停待重跑(${mark.detail}): 《${String(row.topic).slice(0, 30)}》`,
+              detail: { batchId, rowId, contentId: content.id, reason: mark.reason, retryCount: mark.retryCount },
+            }, { key: `content_deferred:article:${tenantId}` });
+          }
+        } catch (e) {
+          logger.warn({ rowId, err: e instanceof Error ? e.message : e }, "8-03 deferred 标记失败(该行将无法自动重跑)");
+        }
 
         // 8-02 🔴 真正的"生成失败"就是这里 —— 此前这条路径只有上面一行 logger.warn。
         //
