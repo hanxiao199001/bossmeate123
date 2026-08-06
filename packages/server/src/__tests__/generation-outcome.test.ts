@@ -17,7 +17,7 @@ const {
   judgeGenerationOutcome, OUTCOME_LOW_RATIO, PIPELINE_FAIL_RATIO, PIPELINE_MIN_ROWS,
 } = await import("../services/ops/generation-outcome.js");
 
-const base = { generated: 30, target: 30, batchTotal: 30, batchFailed: 0 };
+const base = { generated: 30, titleFallback: 0, target: 30, batchTotal: 30, batchFailed: 0 };
 const kinds = (o: Parameters<typeof judgeGenerationOutcome>[0]) =>
   judgeGenerationOutcome(o).map((v) => v.kind);
 
@@ -29,13 +29,13 @@ describe("zero_output —— 看实际生成条数, 不看入队数", () => {
   });
 
   it("🔴 关键区分: 入队了却一篇没生出来 → 措辞指向**生成环节**(而不是排产)", () => {
-    const v = judgeGenerationOutcome({ generated: 0, target: 30, batchTotal: 617, batchFailed: 416 });
+    const v = judgeGenerationOutcome({ generated: 0, titleFallback: 0, target: 30, batchTotal: 617, batchFailed: 416 });
     expect(v[0]!.message).toContain("卡在生成环节");
     expect(v[0]!.message).toContain("617");
   });
 
   it("连队列都没进过行 → 措辞指向**排产环节**(两种病, 排查方向完全不同)", () => {
-    const v = judgeGenerationOutcome({ generated: 0, target: 30, batchTotal: 0, batchFailed: 0 });
+    const v = judgeGenerationOutcome({ generated: 0, titleFallback: 0, target: 30, batchTotal: 0, batchFailed: 0 });
     expect(v[0]!.message).toContain("卡在排产环节");
   });
 });
@@ -65,7 +65,7 @@ describe("low_output —— 实际生成 < 目标 60%", () => {
 
 describe("generation_pipeline_unhealthy —— batch_rows 自比(08-01 那个洞的直接守卫)", () => {
   it("🔴 用事故真实数字: 入队 617 失败 416(67%) → 报警", () => {
-    const v = judgeGenerationOutcome({ generated: 219, target: 30, batchTotal: 617, batchFailed: 416 });
+    const v = judgeGenerationOutcome({ generated: 219, titleFallback: 0, target: 30, batchTotal: 617, batchFailed: 416 });
     const p = v.find((x) => x.kind === "generation_pipeline_unhealthy");
     expect(p).toBeTruthy();
     expect(p!.severity).toBe("error");
@@ -88,13 +88,42 @@ describe("generation_pipeline_unhealthy —— batch_rows 自比(08-01 那个洞
   });
 
   it("产出正常但链路失败率高 → 只报链路异常, 不误报产出不足", () => {
-    const k = kinds({ generated: 30, target: 30, batchTotal: 100, batchFailed: 50 });
+    const k = kinds({ generated: 30, titleFallback: 0, target: 30, batchTotal: 100, batchFailed: 50 });
     expect(k).toEqual(["generation_pipeline_unhealthy"]);
   });
 });
 
 describe("采集失败时的行为", () => {
   it("generated < 0(采集失败标记) → 一条都不判(宁可不报, 不可乱报)", () => {
-    expect(judgeGenerationOutcome({ generated: -1, target: 30, batchTotal: 617, batchFailed: 416 })).toEqual([]);
+    expect(judgeGenerationOutcome({ generated: -1, titleFallback: 0, target: 30, batchTotal: 617, batchFailed: 416 })).toEqual([]);
+  });
+});
+
+describe("🔴 降级标题兜底计数(8-07): 让它不可能悄悄发生", () => {
+  it("用实况数字: 24/26 篇兜底 → error 级", () => {
+    const v = judgeGenerationOutcome({ ...base, generated: 26, titleFallback: 24 });
+    const t = v.find((x) => x.kind === "title_fallback");
+    expect(t).toBeTruthy();
+    expect(t!.severity).toBe("error");
+    expect(t!.message).toContain("24/26");
+  });
+
+  it("少量兜底 → warn(不是每次都要喊到最响)", () => {
+    const v = judgeGenerationOutcome({ ...base, generated: 30, titleFallback: 2 });
+    expect(v.find((x) => x.kind === "title_fallback")!.severity).toBe("warn");
+  });
+
+  it("零兜底 → 不报", () => {
+    expect(kinds({ ...base, titleFallback: 0 })).not.toContain("title_fallback");
+  });
+
+  it("🔴 与既有指标正交 —— 产量正常、链路正常, 只有兜底高时仍然报得出来", () => {
+    // 这正是本案的形态: generated 照常 26 篇、batch_rows 零失败, 哪个既有指标都照不到它
+    const k = kinds({ generated: 26, titleFallback: 24, target: 26, batchTotal: 26, batchFailed: 0 });
+    expect(k).toEqual(["title_fallback"]);
+  });
+
+  it("采集失败(generated<0)时不判", () => {
+    expect(kinds({ generated: -1, titleFallback: 5, target: 30, batchTotal: 0, batchFailed: 0 })).toEqual([]);
   });
 });
