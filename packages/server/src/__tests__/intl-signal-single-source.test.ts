@@ -43,6 +43,12 @@ const ALLOWED = new Map<string, string>([
     "hasWosData 是刻意的窄子集: 回答'够不够渲染 WoS 版块'而非'是不是国际刊'(见该函数注释)",
   ],
   ["services/crawler/trusted-facts-validator.ts", "写入侧校验值本身合不合理, 不判有无"],
+  [
+    "services/journals/journal-data-supply.ts",
+    "刻意的窄子集: 回答'这本刊的数据够写什么体裁'(rich/medium/sparse), 不是'是不是国际刊'。" +
+      "取 partition ∪ casPartitionNew, **刻意少取 casPartition** —— 该列整列为空(0 行), " +
+      "算进来等于凭空多一个永远不成立的信号(正是本文件头记的那个坑)。少取理由与判据依据写在该文件头。",
+  ],
   ["models/migrations.ts", "生成列 DDL 是 buildIntlSignalSql() 的输出快照, 不是另一套判据"],
   [
     "routes/workflow.ts",
