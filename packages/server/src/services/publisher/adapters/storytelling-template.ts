@@ -20,6 +20,9 @@
  * 与 'data-card' 互换性：签名完全一致，registry 可无缝替换。
  */
 
+import {
+  SLOT_EMPTY, checkAcceptanceRateSlot, checkImpactFactorSlot, checkPartitionSlot, shouldHideCard,
+} from "./field-slot-guard.js";
 import type { JournalInfo, CollectionResult } from "../../data-collection/journal-content-collector.js";
 import type { AIGeneratedContent } from "../../skills/journal-template.js";
 import { esc } from "../../skills/journal-template.js";
@@ -90,9 +93,23 @@ function renderPainPointHook(journal: JournalInfo, aiContent: AIGeneratedContent
 
 function renderStoryIntro(journal: JournalInfo, aiContent: AIGeneratedContent): string {
   const journalName = esc(journal.nameEn || journal.name);
-  const ifText = journal.impactFactor ? `IF ${journal.impactFactor}` : "高影响力";
+  // 8-06 🔴 删兜底文案。原来是:
+  //     const ifText = journal.impactFactor ? `IF ${x}` : "高影响力";
+  //     const partitionText = partition ? `${x}期刊` : "权威期刊";
+  //   于是没数据的刊在正文里被写成「一本叫 X 的**权威期刊**（**高影响力**）」——
+  //   措辞自信、读者完全看不出这是兜底。这是第五次「降级产物与真产物同形态」
+  //   (0分/静音/占位片/空数组/本条, 见 CLAUDE.md 红线 #14)。
+  //   而且它与 journal-data-supply 的 prompt 禁令直接打架: 那边刚禁了 LLM 用
+  //   「影响因子较高」这类形容替代, 模板自己却在干同一件事。
+  //   修法**不是换个词**, 是让这半句整个不出现(见下方 qualifier)。
+  const ifText = journal.impactFactor ? `IF ${journal.impactFactor}` : null;
   const partition = journal.casPartition || journal.partition;
-  const partitionText = partition ? `${esc(partition)}${/区/.test(partition) || /^Q[1-4]/i.test(partition) ? "" : " 区"}期刊` : "权威期刊";
+  const partitionText = partition
+    ? `${esc(partition)}${/区/.test(partition) || /^Q[1-4]/i.test(partition) ? "" : " 区"}期刊`
+    : null;
+  // 有几件说几件: 两个都有 → 「的 Q1 期刊（IF 3.2）」; 只有分区 → 「的 Q1 期刊」;
+  //   只有 IF → 「的期刊（IF 3.2）」; 都没有 → 「的期刊」(不加任何修饰, 也不留空括号)
+  const qualifier = `${partitionText ?? "期刊"}${ifText ? `（${ifText}）` : ""}`;
 
   // 用 scopeDescription 作为故事背景（如有），fallback 为合成开场
   // 先 plain() 剥掉 AI 夹带的 HTML, 再 esc, 避免裸标签
@@ -102,7 +119,7 @@ function renderStoryIntro(journal: JournalInfo, aiContent: AIGeneratedContent): 
     : `专注于${esc(journal.discipline || "本领域")}前沿研究`;
 
   return `<section style="margin:0 0 20px 0;font-size:15px;line-height:1.8;color:#333;">` +
-    `<p style="margin:0 0 10px 0;">某博士在选刊上犹豫半年，最终把目光锁定在一本叫 <strong style="color:#FF9800;">${journalName}</strong> 的${partitionText}（${ifText}）。</p>` +
+    `<p style="margin:0 0 10px 0;">某博士在选刊上犹豫半年，最终把目光锁定在一本叫 <strong style="color:#FF9800;">${journalName}</strong> 的${qualifier}。</p>` +
     `<p style="margin:0;">这本期刊${scope}。今天我们就来看看，它凭什么值得投。</p>` +
     `</section>`;
 }
@@ -110,27 +127,25 @@ function renderStoryIntro(journal: JournalInfo, aiContent: AIGeneratedContent): 
 // ============ 区块 3: 4 格小数据卡 ============
 
 function renderCompactDataCard(journal: JournalInfo): string {
+  // 8-06 接确定性校验(field-slot-guard, 四模板唯一归宿)。两件事:
+  //   ① LLM 会把非数字塞进 IF 槽 —— 实测近 30 天 8 篇(6.9%), 形态如
+  //      「CSSCI来源期刊」「2023年复合IF约1.2」「同类1区约5-6」。渲染器原本写的是
+  //      `x ? x.toString() : "—"`, 判据是"真值"而不是"合法", 所以字符串照样渲染进去。
+  //   ② 满卡「—」= 空洞 → 超过半数格子无数据整张卡不出现。
+  const checks = {
+    impactFactor: checkImpactFactorSlot(journal.impactFactor),
+    partition: checkPartitionSlot(journal.casPartition || journal.partition),
+    acceptanceRate: checkAcceptanceRateSlot(journal.acceptanceRate),
+    reviewCycle: journal.reviewCycle && String(journal.reviewCycle).trim()
+      ? { ok: true, value: String(journal.reviewCycle) }
+      : { ok: false, value: SLOT_EMPTY },
+  };
+  if (shouldHideCard(Object.values(checks))) return "";
   const cells: Array<{ label: string; value: string; color: string }> = [
-    {
-      label: "IF",
-      value: journal.impactFactor ? journal.impactFactor.toString() : "—",
-      color: "#FF9800",
-    },
-    {
-      label: "分区",
-      value: journal.casPartition || journal.partition || "—",
-      color: "#4CAF50",
-    },
-    {
-      label: "录用率",
-      value: journal.acceptanceRate ? `${(journal.acceptanceRate * 100).toFixed(0)}%` : "—",
-      color: "#2196F3",
-    },
-    {
-      label: "审稿周期",
-      value: journal.reviewCycle || "—",
-      color: "#9C27B0",
-    },
+    { label: "IF", value: checks.impactFactor.value, color: "#FF9800" },
+    { label: "分区", value: checks.partition.value, color: "#4CAF50" },
+    { label: "录用率", value: checks.acceptanceRate.value, color: "#2196F3" },
+    { label: "审稿周期", value: checks.reviewCycle.value, color: "#9C27B0" },
   ];
 
   // 4 列 table，每格 25% 宽

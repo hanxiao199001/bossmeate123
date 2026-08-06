@@ -1074,7 +1074,10 @@ function renderTimelineBlock(journal: JournalInfo): string {
     { label: "投稿", sub: "提交系统" },
     { label: "初审 / 外审", sub: rcSub },
     { label: "录用", sub: "完成修回后" },
-    { label: "见刊", sub: freq ? `刊期 ${esc(freq)}` : "排版上线" },
+    // 8-06: 原兜底是「排版上线」—— 看着像真实见刊信息, 实为无数据。数据卡的格子不能空,
+    //   所以按 CLAUDE.md 红线 #14 的第二种正确形态**明确标注无数据**(范例见本文件
+    //   415「未分区」/417「JCR 分区数据未公布」/517「近年 CAR 指数暂未公布」)。
+    { label: "见刊", sub: freq ? `刊期 ${esc(freq)}` : "刊期暂无数据" },
   ];
   const cells = steps.map((st, i) =>
     `<td style="text-align:center;vertical-align:top;padding:0 4px;">` +
