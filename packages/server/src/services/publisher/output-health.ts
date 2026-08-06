@@ -30,7 +30,8 @@ export type OutputHealthCode =
   | "body_too_short"     // 正文过短(生成半途失败的典型形态)
   | "body_truncated"     // 正文明显截断(半句结束 / markdown 语法残留)
   | "body_repetition"    // 同一段落大量重复(LLM 退化)
-  | "template_residue";  // 模板/变量残留([object Object] / undefined / {{IMG:...}})
+  | "template_residue"   // 模板/变量残留([object Object] / undefined / {{IMG:...}})
+  | "fallback_phrase";   // 8-06: 与真数据同形态的兜底文案(「高影响力」「权威期刊」这类)
 
 export interface OutputHealthIssue {
   code: OutputHealthCode;
@@ -95,6 +96,25 @@ const DANGLING_WORD_RE = /(?:的|和|与|而|但|以及|因为|所以|如果|虽
 export const TITLE_PLACEHOLDER_RE =
   /(?:IF|影响因子)\s*[:：]?\s*[XxNn](?:\.[XxNn])?|[XxNn]\s*(?:天|个月|月|%|区)|\$\s*[XxNn]|<[^>]{0,8}(?:分区|真实|数值)[^>]{0,8}>/;
 
+/**
+ * 8-06 **兜底文案词表** —— 与真数据同形态的模糊断言。
+ *
+ * 由来: 扫四个内容模板发现 `journal.impactFactor ? \`IF ${x}\` : "高影响力"` 这类写法 ——
+ *   没数据时正文写成「一本叫 X 的**权威期刊**（**高影响力**）」, 措辞自信、看不出是兜底。
+ *   模板侧已改成「整句不出现」或「明确标注无数据」(见 field-slot-guard.ts 文件头),
+ *   **但 LLM 自己也会写出同样的话** —— 模板修完只解决一半, 所以这里再拦一道。
+ *
+ * ⚠️ 只在**该刊确实没有对应数据**时才算违规 —— 有 IF 的刊说「高影响力」是正常行文。
+ *   所以判定需要 journalFacts, 见 checkOutputHealth 的 opts.noMetricFacts。
+ *   (拿不到 facts 时**不判**, 宁可漏报也不误杀 —— 这条不是安全闸, 是质量闸。)
+ */
+const FALLBACK_PHRASE_PATTERNS: Array<[RegExp, string]> = [
+  [/高影响力/, "「高影响力」—— 无 IF 数据时的兜底形容"],
+  [/权威期刊|知名期刊|顶级期刊|优质期刊/, "「权威/知名/顶级/优质期刊」—— 无分区数据时的兜底形容"],
+  [/影响因子(?:较|颇|很)?高|IF\s*(?:较|颇|很)?高/, "「影响因子较高」—— 用形容替代数值"],
+  [/排版上线/, "「排版上线」—— 无刊期数据时的兜底"],
+];
+
 /** 模板/变量残留: 这些字符串出现在成稿里一定是 bug, 不是内容 */
 const TEMPLATE_RESIDUE_PATTERNS: Array<[RegExp, string]> = [
   [/\{\{[^}]{0,40}\}\}/, "未替换的模板变量 {{...}}"],
@@ -142,6 +162,12 @@ export function checkOutputHealth(input: {
   title?: string | null;
   body?: string | null;
   type?: string | null;
+  /**
+   * 8-06: 该刊**确实没有** IF/分区数据(由 journal-data-supply 的 has 派生)。
+   * 只有为 true 时才查兜底文案 —— 有 IF 的刊说「高影响力」是正常行文, 不是编造。
+   * 不传 = 不判(拿不到期刊事实时宁可漏报, 这条是质量闸不是安全闸)。
+   */
+  noMetricFacts?: boolean;
 }): OutputHealthResult {
   const issues: OutputHealthIssue[] = [];
   const title = (input.title ?? "").trim();
@@ -173,6 +199,18 @@ export function checkOutputHealth(input: {
 
   // ④ 模板/变量残留(标题 + 正文)
   const residueTarget = `${title}\n${plain}`;
+  // 8-06 兜底文案(仅当该刊确实无指标数据时才判, 见 noMetricFacts 注释)
+  if (input.noMetricFacts) {
+    for (const [re, label] of FALLBACK_PHRASE_PATTERNS) {
+      const hay = `${input.title ?? ""}\n${plain}`;
+      const m = hay.match(re);
+      if (m) {
+        issues.push({ code: "fallback_phrase", detail: `${label}: 「${snippet(m[0], 30)}」` });
+        break;
+      }
+    }
+  }
+
   for (const [re, label] of TEMPLATE_RESIDUE_PATTERNS) {
     const m = residueTarget.match(re);
     if (m) {
