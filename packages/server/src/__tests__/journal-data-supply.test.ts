@@ -128,13 +128,19 @@ function collect(dir: string, out: string[] = []): string[] {
 const ALLOW: Record<string, string> = {
   "services/journals/journal-data-supply.ts": "判据本身就定义在这里",
   "services/compliance/fabrication-criteria.ts": "hasDbFact 的定义处, 是本判据的底层依赖",
+  "services/skills/journal-prompt-fields.ts":
+    "字段名枚举 + 中文标签映射表, 是**渲染层**的字段清单, 不做任何'够不够'的判断",
+  "services/review/ai-reviewer.ts":
+    "SELECT 投影 —— 取这些列喂给 checkTitleDataConsistency 做编造校验, 是另一个问题(标题数字有没有据), 不是数据供给分级",
 };
 
 describe("扫描守卫: 数据供给判据不许分叉", () => {
   it("🔴 别处不得手写「有没有 IF/分区」的组合判据 —— 一律走 classifyDataSupply", () => {
-    // 只抓「同时判 IF 和分区」的组合形态(单独读某个字段渲染是正常的, 不拦)
+    // 只抓「同时判 IF 和分区、且带真值/空值判断」的组合形态。
+    //   刻意不抓纯字段引用 —— SELECT 投影、字段名枚举、标签映射表都会同时出现这些名字,
+    //   那是渲染/取数, 不是判据。首版正则没加这个限定, 扫出 2 个误报(已进白名单)。
     const pattern =
-      /(impactFactor|impact_factor)[\s\S]{0,80}(compositeImpactFactor|composite_impact_factor)[\s\S]{0,120}(partition|casPartitionNew)/;
+      /(impactFactor|impact_factor)[\s\S]{0,80}(compositeImpactFactor|composite_impact_factor)[\s\S]{0,120}(partition|casPartitionNew)[\s\S]{0,80}(!==\s*null|!=\s*null|===\s*null|\?\?|&&|\|\||!!)/;
     const hits: string[] = [];
     for (const f of collect(SRC)) {
       const rel = relative(SRC, f);
