@@ -124,6 +124,9 @@ function collect(dir: string, out: string[] = []): string[] {
 /**
  * 白名单 —— 加进来必须写明为什么这里手写是对的。
  * 判据的唯一归宿是 journal-data-supply.ts; 其余地方要问「这本刊数据够不够」一律 import。
+ *
+ * ⚠️ **白名单是存量基线, 不是豁免**。每修掉一处就从这里删一条, 目标清零。
+ *   条目只增不减 = 守卫在给技术债背书, 那还不如没有。
  */
 const ALLOW: Record<string, string> = {
   "services/journals/journal-data-supply.ts": "判据本身就定义在这里",
@@ -132,6 +135,14 @@ const ALLOW: Record<string, string> = {
     "字段名枚举 + 中文标签映射表, 是**渲染层**的字段清单, 不做任何'够不够'的判断",
   "services/review/ai-reviewer.ts":
     "SELECT 投影 —— 取这些列喂给 checkTitleDataConsistency 做编造校验, 是另一个问题(标题数字有没有据), 不是数据供给分级",
+  // ↓ 这条是**待修的技术债**, 不是"这里写得对"
+  "services/skills/journal-template.ts":
+    "🔴 待修: 第 1194 行 `const inScope = !!(j.impactFactor || j.partition || j.jcrFull)` —— " +
+    "问的是**国际身份**(这本刊在不在中科院国际预警名单适用范围)而非数据供给, 所以本守卫拦它属误伤; " +
+    "但它本身是**国际身份判据的第三处分叉**(7-20 content-check.ts 一次、7-28 journal-kind.ts 一次, " +
+    "见 intl-signal.ts 文件头), 少取 casPartitionNew(线上 2203 行有数据)、jcrFull 只判非空而非 " +
+    "jcrFullHasWosEvidence。**已单独立项**: 修法唯一 —— 换成 intl-signal.ts 的 hasIntlSignal(), " +
+    "不许出现第三种写法。修完从本白名单删除。",
 };
 
 describe("扫描守卫: 数据供给判据不许分叉", () => {
