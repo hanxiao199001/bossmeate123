@@ -151,6 +151,26 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         logger.warn({ err: err instanceof Error ? err.message : err }, "LLM 日上限检查异常, 放行(fail-open)");
       }
 
+      // 8-06 A1 【影子打标】数据供给分级 —— 只写 metadata, **不改任何行为**。
+      //   目的: 先让"这本刊的数据够写什么体裁"这件事在存量数据上可见可查, 跑两天看分布稳不稳,
+      //   再决定要不要按它切体裁路由(A3)。实测近 14 天 sparse 占 57.6%, 那 58% 现在写的
+      //   就是取样 5/5 全中的叙述型编造 —— 但换体裁是产品决策, 要拿实物给老板拍板, 不能靠比例。
+      //   判据唯一归宿在 journals/journal-data-supply.ts, 这里只调用不重算。
+      //   旁路失败绝不影响生成(打标是观测, 不是生产链路的一环)。
+      let supplyMeta: Record<string, unknown> = {};
+      if (row.journalId) {
+        try {
+          const [{ classifyDataSupply, supplyMetadata }, { journals }] = await Promise.all([
+            import("../journals/journal-data-supply.js"),
+            import("../../models/schema.js"),
+          ]);
+          const [j] = await db.select().from(journals).where(eq(journals.id, row.journalId)).limit(1);
+          if (j) supplyMeta = supplyMetadata(classifyDataSupply(j));
+        } catch (err) {
+          logger.warn({ err: err instanceof Error ? err.message : err, rowId }, "数据供给打标失败(不影响生成)");
+        }
+      }
+
       // 2. INSERT contents (status='draft') — initialStatusFields 走状态机初始化
       const [content] = await db
         .insert(contents)
@@ -165,6 +185,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
             batchRowId: rowId,
             template: row.template,
             ...(row.journalId ? { journalId: row.journalId } : {}),
+            ...supplyMeta,
           },
         })
         .returning({ id: contents.id });
