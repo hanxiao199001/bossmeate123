@@ -136,11 +136,23 @@ const ALLOW: Record<string, string> = {
 
 describe("扫描守卫: 数据供给判据不许分叉", () => {
   it("🔴 别处不得手写「有没有 IF/分区」的组合判据 —— 一律走 classifyDataSupply", () => {
-    // 只抓「同时判 IF 和分区、且带真值/空值判断」的组合形态。
-    //   刻意不抓纯字段引用 —— SELECT 投影、字段名枚举、标签映射表都会同时出现这些名字,
-    //   那是渲染/取数, 不是判据。首版正则没加这个限定, 扫出 2 个误报(已进白名单)。
-    const pattern =
-      /(impactFactor|impact_factor)[\s\S]{0,80}(compositeImpactFactor|composite_impact_factor)[\s\S]{0,120}(partition|casPartitionNew)[\s\S]{0,80}(!==\s*null|!=\s*null|===\s*null|\?\?|&&|\|\||!!)/;
+    // 真正要抓的是「把 IF/分区揉成一个 boolean 结论」的形态, 例如
+    //   const hasMetric = j.impactFactor != null || j.partition != null
+    //   if (j.impactFactor || j.casPartitionNew) { ... }
+    // 刻意**不抓**投影与渲染 —— 它们也会同时出现这些字段名:
+    //   · SELECT 投影 / 事实抽取(`impactFactor: jf.impactFactor ?? null`)
+    //   · 字段名枚举、中文标签映射表
+    //   · 逐字段渲染(`if (j.impactFactor != null) L.push(...)`) —— 单字段判断是渲染, 不是分级
+    // 判据: 同一个**赋值或 if 条件**里同时出现 IF 类与分区类字段, 且以布尔运算连接。
+    const pattern = new RegExp(
+      String.raw`(const|let|if\s*\()[^;
+]{0,120}` +
+      String.raw`(impactFactor|compositeImpactFactor)[^;
+]{0,60}` +
+      String.raw`(\|\||&&)[^;
+]{0,60}` +
+      String.raw`(partition|casPartitionNew)`,
+    );
     const hits: string[] = [];
     for (const f of collect(SRC)) {
       const rel = relative(SRC, f);
