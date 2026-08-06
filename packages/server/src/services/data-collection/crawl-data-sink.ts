@@ -63,6 +63,8 @@ interface TopicRecommendation {
 }
 
 interface GeneratedArticle {
+  /** 8-07: AI 返回抽不出 JSON 的降级产物(标题是拼的, 无深度章节/videoScript)。红线 #14 */
+  titleFallback?: boolean;
   contentId: string;
   title: string;
   body: string;

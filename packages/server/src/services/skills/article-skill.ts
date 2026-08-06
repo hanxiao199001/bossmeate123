@@ -11,6 +11,7 @@
  */
 
 import { logger } from "../../config/logger.js";
+import { extractJsonObject } from "../content-engine/llm-json.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { retrieveForArticle } from "../knowledge/rag-retriever.js";
@@ -104,6 +105,8 @@ interface OutlineSection {
 }
 
 interface GeneratedArticle {
+  /** 8-07: AI 返回抽不出 JSON 的降级产物(标题是拼的, 无深度章节/videoScript)。红线 #14 */
+  titleFallback?: boolean;
   title: string;
   body: string;
   summary: string;
@@ -449,6 +452,7 @@ export class ArticleSkill implements ISkill {
           qualityPassed: quality.passed,
           aiScore: quality.aiScore,
           hardMetrics: quality.hardMetrics,
+          ...(article.titleFallback ? { titleFallback: true } : {}),   // 8-07 见红线 #14
           variationRecipe: article.variationRecipe, // PR-FW 飞轮归因
           issues: quality.issues,
           suggestions: quality.suggestions,
@@ -1156,6 +1160,10 @@ export class ArticleSkill implements ISkill {
       wordCount: ArticleSkill.stripHtmlAndCount(wrappedBody),
       videoScript: aiContent.videoScript,
       variationRecipe: variation.recipe, // PR-FW
+      // 8-07: 降级标记一路透传到 metadata。链路上有**两处**会把它丢掉
+      //   (这里的 article 对象 + batch-worker 的 cherry-pick 白名单), 少补一处标记就落不了库,
+      //   观测等于白做。红线 #14 的"可区分"要求, 前提是标记真的到得了 DB。
+      ...(aiContent.titleFallback ? { titleFallback: true } : {}),
     };
 
     // 5-23 PR #162 Phase 4-lite: body-level fact check (兜底 prompt 硬约束未拦的 AI 幻觉)
@@ -1544,9 +1552,15 @@ ${angleHint}`,
         });
       }
 
-      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
+      // 8-07 ② 换成共享 JSON 修复器(唯一归宿, services/content-engine/llm-json.ts)。
+      //   原来这里是自己手写的 `content.match(/\{[\s\S]*\}/)` —— 而 llm-json.ts 的文件头
+      //   记着这一行对推理型模型不够(思维链/```围栏/中途插解释都会混进来), 六维评分
+      //   曾因同一个坑单日 28 次不可解析、历史累计 192 次。修复器修过的坑, 这里原样又踩了一遍。
+      //   ⚠️ 但它救不了**截断** —— 没有闭合的 `}` 就没有完整对象可取, 那种情况必须在
+      //     客户端层按 finishReason 拦(见下方观测)。
+      const extracted = extractJsonObject(result.content);
+      if (extracted.value) {
+        const parsed = extracted.value as Record<string, any>;
         return {
           title: parsed.title || `期刊推荐：${journalName}`,
           openingHook: typeof parsed.openingHook === "string" && parsed.openingHook.trim().length > 0 ? parsed.openingHook.trim() : undefined, // 7-03 A 区块0
@@ -1567,16 +1581,38 @@ ${angleHint}`,
             : undefined,
         };
       }
+      // 8-07 ① 【观测】走到这里 = 拿到了返回但抽不出 JSON。
+      //   原来这条路径**完全静默**: try 块正常走完、不抛异常、不进 catch、不打任何日志,
+      //   直接掉到下面的兜底 return。实测代价: 08-04 起连续三天, 走本函数的内容
+      //   **100% 兜底**(80 篇, videoScript 命中 0/80、深度章节 0/80), 而日志只有 7 条
+      //   —— 那 7 条是 JSON.parse 抛错的, 其余全部无声无息。
+      //   这是第六次「降级产物与真产物不可区分」(见 CLAUDE.md 红线 #14), 而且是最隐蔽的一次:
+      //   连"故障发生过"这件事都没留下痕迹, 8-05 刚建的失败分类/自动重跑根本收不到它。
+      logger.error({
+        journal: journal.name,
+        // 修法完全取决于失败形态, 所以原始返回要留证:
+        //   markdown 围栏包着 JSON → 提取器问题; 文本正确但无 JSON → prompt 约束失效;
+        //   截断 → maxTokens; 拒答/空返回/限流错误文本 → 模型或额度问题
+        rawHead: String(result?.content ?? "").slice(0, 500),
+        rawLength: String(result?.content ?? "").length,
+        finishReason: result?.finishReason ?? null,   // "max_tokens" = 截断, 一眼定性
+        outputTokens: result?.outputTokens ?? null,
+        model: `${result?.model ?? "?"}`,             // 进程内实际用的模型, 不是 .env 文件
+        repairsTried: extracted?.repairs ?? [],
+      }, "🔴 期刊推荐 JSON 抽取失败 — 本篇走兜底标题(内容缺深度章节与视频脚本)");
     } catch (err) {
       logger.warn({ err, journal: journal.name }, "AI 生成期刊推荐内容失败");
     }
 
     // 降级：使用基本信息
+    // 8-07 ③ 删掉原来的 `rating: 4` —— 失败路径不该产出一个像模像样的评分。
+    //   硬编码 4 星是"兜底越完整越危险"的典型: 它让下游完全看不出这篇是降级产物。
+    //   titleFallback 标记落 metadata, 从此兜底率一条查询就能查, 不用再靠句式指纹考古。
     return {
       title: `期刊推荐：${journalName}，影响因子 ${ifText}`,
       scopeDescription: journal.scopeDescription || "",
       recommendation: "",
-      rating: 4,
+      titleFallback: true,
     };
   }
 }

@@ -133,6 +133,12 @@ export function resolveTheme(discipline: string | null | undefined): ThemeColors
 // ============ AI 生成内容接口 ============
 
 export interface AIGeneratedContent {
+  /**
+   * 8-07: 这篇是**降级产物** —— AI 返回抽不出 JSON, 标题是代码拼的、深度章节与
+   * videoScript 全部缺失。红线 #14: 降级产物必须在数据上可区分于真产物。
+   * 落进 content.metadata 后, 兜底率一条查询即可统计(此前只能靠标题句式指纹考古)。
+   */
+  titleFallback?: boolean;
   title: string;           // 吸引眼球的文章标题
   // 7-03 A: 开头钩子导语（评分器和读者读的"开头"就是它）。2-3 句痛点场景切入, 小编口吻,
   // 走 8 钩子库选型(article-skill p0Suffix 注入)。空则区块0降级不渲染(老文章兼容)。
