@@ -261,7 +261,10 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           const metaMerge: Record<string, unknown> = {};
           // 7-28 阶段1-C: promptVersion 必须在白名单里, 否则 ArticleSkill 写的版本号会被这层过滤掉,
           //   落库的内容又变成"不知道是哪版 prompt 写的"(见 prompt-version.ts)。
-          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion"]) {
+          // 8-07: titleFallback 必须在白名单里 —— 这层是 cherry-pick, 不在名单的字段会被
+          //   静默过滤掉。红线 #14 要求降级产物可区分, 而"可区分"的前提是标记真的落了库;
+          //   标记被过滤 = 观测等于白做(promptVersion 上一轮就踩过同一个坑, 见上方注释)。
+          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion", "titleFallback"]) {
             if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
           }
           await db
