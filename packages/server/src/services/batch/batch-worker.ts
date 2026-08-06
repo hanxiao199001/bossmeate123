@@ -267,6 +267,26 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion", "titleFallback"]) {
             if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
           }
+          // 8-07 P1-A 【影子】事实密度 —— 只统计、只落 metadata, **不参与任何判定**。
+          //   用途是分离「无米之炊」与「有米不做」, 以及给 A2(sparse 体裁)做 before/after 验收。
+          //   基线必须在改动之前采集, 所以先接上线 —— 等 A2 上线再接就没有干净的 before 了
+          //   (排版规则分就吃过这个亏, 只能事后补量)。
+          //   匹配器自本次起冻结, 理由见 fact-density.ts 文件头。旁路失败不影响生成。
+          try {
+            const [{ computeFactDensity, factDensityMetadata }, { journals }] = await Promise.all([
+              import("../content-engine/fact-density.js"),
+              import("../../models/schema.js"),
+            ]);
+            if (row.journalId) {
+              const [j] = await db.select().from(journals).where(eq(journals.id, row.journalId)).limit(1);
+              // 直接写 metaMerge(在上面 cherry-pick 循环之后), 所以**不需要**进白名单 ——
+              //   白名单过滤的是 artifact 带来的字段, 这几个是本地算的。
+              if (j) Object.assign(metaMerge, factDensityMetadata(computeFactDensity(result.artifact.body, j)));
+            }
+          } catch (err) {
+            logger.warn({ err: err instanceof Error ? err.message : err, rowId }, "事实密度统计失败(不影响生成)");
+          }
+
           await db
             .update(contents)
             .set({
