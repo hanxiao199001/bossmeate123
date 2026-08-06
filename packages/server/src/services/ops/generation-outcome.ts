@@ -34,6 +34,13 @@ export const PIPELINE_MIN_ROWS = 10;
 export interface GenerationOutcome {
   /** 当天**实际生成**的 contents 条数(结果, 不是入队意图) */
   generated: number;
+  /**
+   * 8-07 当天走了**降级标题兜底**的条数(metadata.titleFallback)。
+   * 由来: article-skill 的 JSON 抽取失败兜底连续三天 100% 命中(80 篇), 而它零日志、
+   *   零 incident、零标记 —— 8-05 建的失败分类体系对它完全失明(见 CLAUDE.md 红线 #14 第六条)。
+   *   这个案子的核心教训就是"它悄悄发生了三天没人知道", 所以计数进简报, 让它从此不可能悄悄发生。
+   */
+  titleFallback: number;
   /** 当天排产目标 */
   target: number;
   /** 当天 batch_rows: 总数 / 失败数 */
@@ -54,7 +61,10 @@ export async function collectGenerationOutcome(
   const endOfToday = new Date(startOfTodayUtc.getTime() + 86_400_000);
   try {
     const [genRow] = await db
-      .select({ n: sql<string>`COUNT(*)` })
+      .select({
+        n: sql<string>`COUNT(*)`,
+        fb: sql<string>`COUNT(*) FILTER (WHERE ${contents.metadata} ? 'titleFallback')`,
+      })
       .from(contents)
       .where(and(gte(contents.createdAt, startOfTodayUtc), lt(contents.createdAt, endOfToday)));
     const [brRow] = await db
@@ -66,18 +76,19 @@ export async function collectGenerationOutcome(
       .where(and(gte(batchRows.createdAt, startOfTodayUtc), lt(batchRows.createdAt, endOfToday)));
     return {
       generated: Number(genRow?.n ?? 0),
+      titleFallback: Number((genRow as { fb?: string } | undefined)?.fb ?? 0),
       target,
       batchTotal: Number(brRow?.total ?? 0),
       batchFailed: Number(brRow?.failed ?? 0),
     };
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, "生成结果采集失败, 本次不判定");
-    return { generated: -1, target, batchTotal: 0, batchFailed: 0 };
+    return { generated: -1, titleFallback: 0, target, batchTotal: 0, batchFailed: 0 };
   }
 }
 
 export interface OutcomeVerdict {
-  kind: "zero_output" | "low_output" | "generation_pipeline_unhealthy";
+  kind: "zero_output" | "low_output" | "generation_pipeline_unhealthy" | "title_fallback";
   severity: "error" | "warn";
   message: string;
   detail: Record<string, unknown>;
@@ -112,6 +123,22 @@ export function judgeGenerationOutcome(o: GenerationOutcome): OutcomeVerdict[] {
         `今天实际只生成 ${o.generated} 篇, 目标 ${o.target} 篇(不足 ${Math.round(OUTCOME_LOW_RATIO * 100)}%)。` +
         (o.batchTotal > 0 ? `生成队列 ${o.batchTotal} 行中失败 ${o.batchFailed} 行。` : ""),
       detail: { ...o, failRatio },
+    });
+  }
+
+  // ③b 8-07 降级标题兜底 —— 内容"生成成功"了, 但标题是代码拼的、深度章节与视频脚本全缺。
+  //   它不是链路故障(batch_rows 看不出), 也不是产量问题(generated 照常计数) ——
+  //   正因为哪个既有指标都照不到它, 才需要单独一条。实测曾连续三天 100% 无人知晓。
+  if (o.generated > 0 && o.titleFallback > 0) {
+    const ratio = o.titleFallback / o.generated;
+    out.push({
+      kind: "title_fallback",
+      severity: ratio >= 0.3 ? "error" : "warn",
+      message:
+        `今天 ${o.titleFallback}/${o.generated} 篇(${Math.round(ratio * 100)}%)用了降级标题 —— ` +
+        `这些内容的标题是代码拼的, 深度章节与视频脚本缺失。` +
+        `根因看服务器日志「期刊推荐 JSON 抽取失败」那条(带原始返回/finishReason/模型名)。`,
+      detail: { ...o, ratio },
     });
   }
 
