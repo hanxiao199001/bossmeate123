@@ -95,6 +95,35 @@ describe("① 分类只认目录自带的", () => {
     expect(byCat).toEqual({ cssci: "体育学", "pku-core": "体育" });
   });
 
+  /**
+   * 8-10 实测撞到：同分类的刊若都取头 8 本，两篇文章的同类刊清单会逐字相同。
+   * 改为按刊名做确定性偏移取环形窗口 —— 列的每一本仍真属于该分类，只是换一段窗口。
+   */
+  it("同分类的两本刊给出不同的 siblings 窗口（但各自可重复）", () => {
+    const a = buildCohortFromRow(row("中国教育学刊")).slices[0].siblings;
+    const b = buildCohortFromRow(row("教育研究")).slices[0].siblings;
+    expect(a).not.toEqual(b);
+    // 各自稳定
+    expect(buildCohortFromRow(row("中国教育学刊")).slices[0].siblings).toEqual(a);
+    // 两边列出来的都真属于教育学
+    for (const n of [...a, ...b]) {
+      expect(buildCohortFromRow(row(n)).slices.find((x) => x.catalog === "cssci")?.disciplineOfThisJournal).toBe(
+        "教育学",
+      );
+    }
+  });
+
+  /**
+   * 「还有另外 N 本」是本体裁最自然的句式。不给这个数，模型会自己做减法 ——
+   * 8-10 实测《陕西师范大学学报》那篇写出「另外 121 本」「另外 73 本」(122-1 / 74-1)，
+   * 两处都被数字闸拦下。它一旦算过一次，下次就会"算"一个没依据的数。
+   */
+  it("othersInDiscipline 由代码给出，且进事实清单", () => {
+    const c = buildCohortFromRow(row("中国教育学刊"));
+    expect(c.slices[0].othersInDiscipline).toBe(42);
+    expect(cohortPromptFacts(c).join("\n")).toContain("除本刊外还有 42 本");
+  });
+
   it("siblings 全部同目录同分类，且不含自己", () => {
     const c = buildCohortFromRow(row("中国教育学刊"));
     const s = c.slices[0];
@@ -185,6 +214,7 @@ describe("④ 事实清单是数字的唯一出口", () => {
     const allowed = new Set<string>();
     for (const s of usableSlices(c)) {
       allowed.add(String(s.countInDiscipline));
+      allowed.add(String(s.othersInDiscipline));
       allowed.add(String(s.countInCatalogTotal));
       allowed.add(String(s.shareOfCatalogPct));
       for (const d of s.crossDiscipline) allowed.add(String(d.count));

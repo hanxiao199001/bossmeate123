@@ -44,8 +44,20 @@ import {
 } from "./discipline-position-prompt.js";
 
 const LLM_TIMEOUT_MS = 120_000;
+/**
+ * 8-10 实测：deepseek-v4-pro 是**推理模型**，会先烧一大段思考再吐内容。
+ * maxTokens=3000 时两篇跑到 outputTokens=3001（撞顶），真正吐出的正文只有 206 / 342 字符 ——
+ * 而模板把数字都填上了，成品看起来仍是一篇完整文章。截断产物与好产物无法区分，红线 #14。
+ * 抬到 8000 给推理留出余量，同时下面对 finishReason==="max_tokens" 直接拒收。
+ */
+const MAX_TOKENS = 8000;
 
-export type GenerateSkipReason = CohortSkipReason | "llm_error" | "llm_json_failed" | "llm_empty_fields";
+export type GenerateSkipReason =
+  | CohortSkipReason
+  | "llm_error"
+  | "llm_json_failed"
+  | "llm_truncated"
+  | "llm_empty_fields";
 
 export interface DisciplinePositionResult {
   ok: true;
@@ -139,7 +151,7 @@ export async function generateDisciplinePosition(
           { role: "user", content: prompt.user },
         ],
         temperature: opts.temperature ?? 0.7,
-        maxTokens: 3000,
+        maxTokens: MAX_TOKENS,
       }),
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error("DISCIPLINE_POSITION_LLM_TIMEOUT")), LLM_TIMEOUT_MS)),
     ]);
@@ -147,6 +159,16 @@ export async function generateDisciplinePosition(
     const detail = err instanceof Error ? err.message : String(err);
     logger.error({ journal: cohort.name, detail }, "discipline_position.llm_error");
     return { ok: false, reason: "llm_error", detail };
+  }
+
+  // 🔴 截断即拒收。extractJsonObject 会把被截断的 JSON "修好"，于是短了一半的正文
+  //   照样渲染成一篇完整文章 —— 这正是红线 #14 那类无法区分的降级产物。
+  if (resp.finishReason === "max_tokens") {
+    logger.error(
+      { journal: cohort.name, model: resp.model, outputTokens: resp.outputTokens, rawLength: resp.content?.length ?? 0 },
+      "discipline_position.truncated",
+    );
+    return { ok: false, reason: "llm_truncated", detail: `outputTokens=${resp.outputTokens} 撞上限` };
   }
 
   const extracted = extractJsonObject(resp.content);

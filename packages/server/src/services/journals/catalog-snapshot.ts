@@ -242,21 +242,31 @@ export function countInCatalog(c: CatalogTag): number {
 
 /**
  * 同目录同分类的其他刊名（不含自己）。
- * 稳定排序（按归一名），不随机 —— 同一本刊两次生成给出同样的清单，便于复核。
+ *
+ * 稳定排序（按归一名）+ **环形窗口偏移**：不传 offset 就是头 N 本；传了就从该位置起取 N 本。
+ * 偏移的用处是让同分类的不同刊给出不同的清单（8-10 实测：都取头 8 本会让两篇文章逐字雷同），
+ * 而列出来的每一本仍然真属于该分类 —— 换窗口不换真伪。
+ * 不随机：同一本刊两次生成给出同样的清单，便于复核。
  */
 export function siblingsInDiscipline(
   c: CatalogTag,
   discipline: string | null,
   selfNormName: string,
   limit = 8,
+  offset = 0,
 ): string[] {
   if (c === "cscd" || !discipline) return [];
   const list = getCatalogSnapshot().byCatalog.get(c) ?? [];
-  return list
+  const all = list
     .filter((e) => e.discipline === discipline && e.normName !== selfNormName)
     .sort((a, b) => a.normName.localeCompare(b.normName))
-    .slice(0, limit)
     .map((e) => e.name);
+  if (all.length === 0) return [];
+  // 环形取窗口：同分类的不同刊给出不同的窗口，但每本刊自己的窗口是固定的
+  const start = ((offset % all.length) + all.length) % all.length;
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(limit, all.length); i++) out.push(all[(start + i) % all.length]!);
+  return out;
 }
 
 /**

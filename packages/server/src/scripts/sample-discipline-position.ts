@@ -133,7 +133,7 @@ async function latestExistingContent(journalId: string): Promise<{ title: string
 }
 
 interface Sample {
-  group: "A" | "B";
+  group: "A" | "A'" | "B";
   journalId: string;
   journalName: string;
   supply: string;
@@ -168,15 +168,23 @@ async function main() {
   }
 
   // ── 选刊
+  //   A 组按纯 TOP5 取（结论本身就是拍板材料：8-10 实测 5/5 全部 no_catalog_in_db,
+  //   即本体裁**覆盖不到当前的回头刊**——它们多是国际刊）。
+  //   A′ 组补位：回头刊里真能过准入的，用来出「同一本刊，两种写法」的左右对比。
   const groupA = await pickGroupA(A_GROUP_SIZE);
   const groupB = pickGroupB(pool, B_GROUP_SIZE);
   console.log(`\n选刊 A 组（回头刊 TOP${A_GROUP_SIZE}）：${groupA.map((r) => r.name).join("、")}`);
+  const groupAPrime = (await pickGroupA(40))
+    .filter((r) => !groupA.some((g) => g.id === r.id) && cohortEligible(buildCohortFromRow(r)).ok)
+    .slice(0, A_GROUP_SIZE);
+  console.log(`选刊 A′ 组（回头刊里能过准入的）：${groupAPrime.map((r) => r.name).join("、") || "（一本都没有）"}`);
   console.log(`选刊 B 组（真 sparse 国内刊）：${groupB.map((r) => r.name).join("、")}`);
 
   const samples: Sample[] = [];
   let seed = 0;
   for (const [group, rows] of [
     ["A", groupA],
+    ["A'", groupAPrime],
     ["B", groupB],
   ] as const) {
     for (const row of rows) {
@@ -234,30 +242,40 @@ async function main() {
   const bEdu = done.filter(
     (s) => s.group === "B" && usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal.includes("教育"),
   );
+  /**
+   * 🔴 分开量两件事。第一版只量了整页 HTML，得出「56% 雷同」——
+   * 但逐条看下去，9 条共同"句子"全是模板标签（「CSSCI（2023-2024 版目录）」
+   * 「数据来源：…」「（以上是整个目录的分类分布…）」）。
+   * 模板骨架相同是**设计使然**，把它算进雷同度只会得出一个吓人但没意义的数。
+   * 老板真正要看的是：**模型写的正文**有多像，以及**同类刊清单**是不是同一份。
+   */
   let dupNote = "B 组不足 2 篇同学科，无法评估";
   if (bEdu.length >= 2) {
-    const sentSets = bEdu.map(
-      (s) =>
-        new Set(
-          s
-            .result!.html.replace(/<[^>]+>/g, "\n")
-            .split(/[\n。]/)
-            .map((x) => x.trim())
-            .filter((x) => x.length > 12),
-        ),
-    );
-    let shared = 0;
-    let total = 0;
-    for (let i = 0; i < sentSets.length; i++) {
-      for (let j = i + 1; j < sentSets.length; j++) {
-        const inter = [...sentSets[i]!].filter((x) => sentSets[j]!.has(x)).length;
-        shared += inter;
-        total += Math.min(sentSets[i]!.size, sentSets[j]!.size);
+    const narrativeOf = (s: Sample) =>
+      new Set(
+        Object.values(s.result!.narrative)
+          .join("\n")
+          .split(/[\n。！？]/)
+          .map((x) => x.trim())
+          .filter((x) => x.length > 12),
+      );
+    const siblingsOf = (s: Sample) => new Set(usableSlices(s.result!.cohort).flatMap((x) => x.siblings));
+    const jac = (sets: Array<Set<string>>) => {
+      let shared = 0;
+      let base = 0;
+      for (let i = 0; i < sets.length; i++) {
+        for (let j = i + 1; j < sets.length; j++) {
+          shared += [...sets[i]!].filter((x) => sets[j]!.has(x)).length;
+          base += Math.min(sets[i]!.size, sets[j]!.size);
+        }
       }
-    }
-    dupNote = `同为教育口的 ${bEdu.length} 篇，两两之间完全相同的句子占比 ${
-      total > 0 ? ((shared / total) * 100).toFixed(1) : "0"
-    }%（共 ${shared} 句）`;
+      return base > 0 ? (shared / base) * 100 : 0;
+    };
+    const nPct = jac(bEdu.map(narrativeOf));
+    const sPct = jac(bEdu.map(siblingsOf));
+    dupNote =
+      `同为教育口的 ${bEdu.length} 篇：模型正文重合 ${nPct.toFixed(1)}%，` +
+      `同类刊清单重合 ${sPct.toFixed(1)}%（模板骨架必然相同，不计入）`;
   }
   console.log(`【拍板数字③】${dupNote}`);
 

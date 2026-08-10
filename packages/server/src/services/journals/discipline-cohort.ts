@@ -78,6 +78,14 @@ export interface CohortCatalogSlice {
   disciplineOfThisJournal: string;
   /** 主叙事用这个：该目录该分类下共几本 */
   countInDiscipline: number;
+  /**
+   * 除本刊外还有几本 = countInDiscipline - 1。
+   * 🔴 必须由代码给。8-10 实测：不给这个数，模型会自己算 —— 《陕西师范大学学报》那篇
+   * 写出「同属…的还有另外 121 本」和「另外 73 本」（122-1 与 74-1），两处都被数字闸拦下。
+   * 「还有另外 N 本」是这个体裁最自然的句式，逼模型做减法等于逼它算数，
+   * 而它一旦算过一次，下次就会"算"一个没有依据的数。
+   */
+  othersInDiscipline: number;
   countInCatalogTotal: number;
   /** 代码预算好的派生量，LLM 不许自己算 */
   shareOfCatalogPct: number;
@@ -140,6 +148,13 @@ export function usableSlices(c: DisciplineCohort): CohortCatalogSlice[] {
   return c.slices.filter((s) => s.countInDiscipline >= MIN_DISCIPLINE_COUNT);
 }
 
+/** 刊名 → 稳定的小整数。同一本刊永远得到同一个偏移，便于复核 */
+function hashOffset(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h;
+}
+
 function buildSlice(e: CatalogEntry, selfNorm: string): CohortCatalogSlice | null {
   if (e.catalog === "cscd" || !e.discipline) return null;
   const catalog = e.catalog as DisciplinedCatalog;
@@ -151,10 +166,13 @@ function buildSlice(e: CatalogEntry, selfNorm: string): CohortCatalogSlice | nul
     catalogYear: e.catalogYear,
     disciplineOfThisJournal: e.discipline,
     countInDiscipline: inDiscipline,
+    othersInDiscipline: Math.max(0, inDiscipline - 1),
     countInCatalogTotal: total,
     // 一位小数。代码算，LLM 不算
     shareOfCatalogPct: total > 0 ? Number(((inDiscipline / total) * 100).toFixed(1)) : 0,
-    siblings: siblingsInDiscipline(catalog, e.discipline, selfNorm, MAX_SIBLINGS),
+    // 同学科的刊若都取头 8 本，两篇文章的清单会逐字相同(8-10 实测撞到)。
+    // 按本刊名做确定性偏移取窗口 —— 列出来的每一本仍然真属于该分类，只是换一段窗口。
+    siblings: siblingsInDiscipline(catalog, e.discipline, selfNorm, MAX_SIBLINGS, hashOffset(selfNorm)),
     crossDiscipline: catalogDisciplineCounts(catalog).slice(0, MAX_CROSS_DISCIPLINE),
   };
 }
@@ -241,7 +259,8 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
       `本刊被 ${s.label}（${s.catalogYear} 版目录）收录，在该目录中的分类是「${s.disciplineOfThisJournal}」。`,
     );
     out.push(
-      `${s.label}（${s.catalogYear} 版）「${s.disciplineOfThisJournal}」分类下共收录 ${s.countInDiscipline} 本期刊；` +
+      `${s.label}（${s.catalogYear} 版）「${s.disciplineOfThisJournal}」分类下共收录 ${s.countInDiscipline} 本期刊` +
+        `（含本刊；除本刊外还有 ${s.othersInDiscipline} 本）；` +
         `该版目录全部共 ${s.countInCatalogTotal} 本，该分类占 ${s.shareOfCatalogPct}%。`,
     );
     if (s.siblings.length >= 3) {
@@ -286,6 +305,7 @@ export function cohortMetadata(c: DisciplineCohort): Record<string, unknown> {
       countInDiscipline: s.countInDiscipline,
       countInCatalogTotal: s.countInCatalogTotal,
       shareOfCatalogPct: s.shareOfCatalogPct,
+      othersInDiscipline: s.othersInDiscipline,
       siblingCount: s.siblings.length,
     })),
     cohortCscdBadge: c.cscdBadge,
