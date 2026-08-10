@@ -124,6 +124,23 @@ describe("① 分类只认目录自带的", () => {
     expect(cohortPromptFacts(c).join("\n")).toContain("除本刊外还有 42 本");
   });
 
+  /**
+   * 事实清单里**已经有**「该分类占 0.4%」，模型仍自己算了倒数（1987÷8≈250，被闸拦下）。
+   * 给了占比不等于堵住算术冲动 —— 它会换一种形态再算。所以最常见的倒数形态也由代码给。
+   */
+  it("oneInEvery 由代码算出并进事实清单", () => {
+    const c = buildCohortFromRow(row("中国教育学刊"));
+    expect(c.slices[0].oneInEvery).toBe(15); // 660 / 43
+    expect(cohortPromptFacts(c).join("\n")).toContain("平均每 15 本中有 1 本");
+    expect(cohortPromptFacts(c).join("\n")).toContain("不要自行换算");
+  });
+
+  it("分类占比过大时 oneInEvery 为 null（「每 1 本有 1 本」是废话）", () => {
+    const c = buildCohortFromRow(row("中国教育学刊"));
+    c.slices[0].oneInEvery = null;
+    expect(cohortPromptFacts(c).join("\n")).not.toContain("平均每");
+  });
+
   it("siblings 全部同目录同分类，且不含自己", () => {
     const c = buildCohortFromRow(row("中国教育学刊"));
     const s = c.slices[0];
@@ -229,6 +246,7 @@ describe("④ 事实清单是数字的唯一出口", () => {
     for (const s of usableSlices(c)) {
       allowed.add(String(s.countInDiscipline));
       allowed.add(String(s.othersInDiscipline));
+      if (s.oneInEvery !== null) allowed.add(String(s.oneInEvery));
       allowed.add(String(s.countInCatalogTotal));
       allowed.add(String(s.shareOfCatalogPct));
       for (const d of s.crossDiscipline) allowed.add(String(d.count));

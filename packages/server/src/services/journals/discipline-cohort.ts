@@ -88,6 +88,18 @@ export interface CohortCatalogSlice {
    * 而它一旦算过一次，下次就会"算"一个没有依据的数。
    */
   othersInDiscipline: number;
+  /**
+   * 密度的倒数形态：该版目录平均每 N 本里有 1 本属于该分类。
+   *
+   * 🔴 为什么占比之外还要给这个：8-10 实测，事实清单里**已经写着「该分类占 0.4%」**，
+   * 模型仍然自己算了倒数 —— 《电影评介》那篇写出「每 250 本北大核心期刊中才有一本」
+   * （1987÷8，被数字闸拦下）。给了占比不等于堵住了算术冲动，它会换一种形态再算一次。
+   * 所以把这个最常见的形态也由代码算好。**比率之外的算术形态继续靠闸兜**，
+   * 不为每种可能的换算都开一个字段。
+   *
+   * 分类本数为 0 或算出来 <2 时为 null（「每 1 本里有 1 本」是废话）。
+   */
+  oneInEvery: number | null;
   countInCatalogTotal: number;
   /** 代码预算好的派生量，LLM 不许自己算 */
   shareOfCatalogPct: number;
@@ -174,6 +186,7 @@ function buildSlice(e: CatalogEntry, selfNorm: string): CohortCatalogSlice | nul
     disciplineOfThisJournal: e.discipline,
     countInDiscipline: inDiscipline,
     othersInDiscipline: Math.max(0, inDiscipline - 1),
+    oneInEvery: inDiscipline > 0 && total / inDiscipline >= 2 ? Math.round(total / inDiscipline) : null,
     countInCatalogTotal: total,
     // 一位小数。代码算，LLM 不算
     shareOfCatalogPct: total > 0 ? Number(((inDiscipline / total) * 100).toFixed(1)) : 0,
@@ -278,6 +291,12 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
         `（含本刊；除本刊外还有 ${s.othersInDiscipline} 本）；` +
         `该版目录全部共 ${s.countInCatalogTotal} 本，该分类占 ${s.shareOfCatalogPct}%。`,
     );
+    if (s.oneInEvery !== null) {
+      out.push(
+        `换算成密度：${s.label} ${s.catalogYear} 版目录平均每 ${s.oneInEvery} 本中有 1 本属于` +
+          `「${s.disciplineOfThisJournal}」分类。（此数已由系统算出，需要时直接引用，不要自行换算）`,
+      );
+    }
     if (s.siblings.length >= 3) {
       out.push(
         `同属 ${s.label}「${s.disciplineOfThisJournal}」分类的其他期刊（部分）：` +
@@ -321,6 +340,7 @@ export function cohortMetadata(c: DisciplineCohort): Record<string, unknown> {
       countInCatalogTotal: s.countInCatalogTotal,
       shareOfCatalogPct: s.shareOfCatalogPct,
       othersInDiscipline: s.othersInDiscipline,
+      oneInEvery: s.oneInEvery,
       siblingCount: s.siblings.length,
     })),
     cohortBadges: c.badges,
