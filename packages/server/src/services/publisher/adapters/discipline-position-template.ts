@@ -153,7 +153,7 @@ export function generateDisciplinePositionHtml(cohort: DisciplineCohort, n: Disc
     for (const s of withSiblings) {
       out.push(
         `<p style="margin:12px 0 6px;font-size:14px;color:${C.sub};">` +
-          `${esc(s.label)}「${esc(s.disciplineOfThisJournal)}」分类（部分）</p>`,
+          `${esc(s.label)}（${esc(s.catalogYear)} 版）「${esc(s.disciplineOfThisJournal)}」分类（部分）</p>`,
       );
       out.push(
         s.siblings

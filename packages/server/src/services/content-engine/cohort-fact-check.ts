@@ -40,7 +40,8 @@ export interface CohortNumberViolation {
     | "number_not_in_facts"
     | "approximation_not_allowed"
     | "url_not_allowed"
-    | "membership_not_time_anchored";
+    | "membership_not_time_anchored"
+    | "ranking_not_allowed";
   /** 命中的原文片段 */
   matched: string;
   /** 整句原文，便于人工复核 */
@@ -68,12 +69,35 @@ const PATTERNS: RegExp[] = [
 ];
 
 /**
- * 目录名。用于「成员资格断言必须锚定版本年」那条检查。
- * 含常见别称（中文核心 = 北大核心的俗称）。
+ * 版本年锚点。⚠️ 必须认「2023年版」——8-10 实测模型爱写
+ * 「《中文核心期刊要目总览》（2023年版）」，第一版正则只认「2023 版」把它误判成违规。
  */
-const CATALOG_MENTION = /CSSCI\s*扩展版?|CSSCI|北大核心|中文核心|中文社会科学引文索引|CSCD|SCI\s*核心/g;
-/** 版本年锚点：「2023 版」「2023-2024 版」「该版」「版本年」 */
-const VERSION_YEAR = /\d{4}(?:\s*-\s*\d{4})?\s*版|版本年|该版/;
+const VERSION_YEAR = /\d{4}(?:\s*[-—]\s*\d{4})?\s*年?\s*版|版本年|该版|本版/;
+
+/**
+ * 成员资格**断言**。刻意不是"提到目录名"——
+ * 8-10 实测：按"提到目录名就要求同句带版本年"去查，10 篇报出 35 条，
+ * 逐条看下去**没有一条**是要防的那个失败模式，全是
+ * 「北大核心目录只给出成员资格，不提供排序」这类讲目录本身的句子。
+ * 每篇 3.5 条误报，等于把这道闸变成噪声（8-08 扫描守卫收窄三次的同一个教训）。
+ *
+ * 收窄到真正会随目录更新变假的句式：**判断动词 + 目录名**。
+ *   命中：是/为/属于/跻身/作为 + 北大核心[期刊]
+ *   放行：「在 CSSCI 中，民族学分类…」「北大核心目录只给出成员资格」
+ */
+const MEMBERSHIP_CLAIM = new RegExp(
+  `(?:是|为|属于|跻身|入列|作为)\\s*(?:一本\\s*)?(?:${
+    "CSSCI\\s*扩展版?|CSSCI|北大核心|中文核心|中文社会科学引文索引|CSCD|SCI\\s*核心"
+  })`,
+  "g",
+);
+
+/**
+ * 排名断言。本体裁**禁一切排名**——目录只给出成员资格，不给出排序。
+ * 8-10 实测漏网：「收录本数位列第三」用的是中文数字，而数字闸只认阿拉伯数字。
+ * 要求后面跟数词，所以「位列其中」这类不误报。
+ */
+const RANKING_CLAIM = /(?:排名|位列|名列|居|排在)\s*第?\s*(?:\d+|[一二三四五六七八九十]+)\s*(?:位|名|)/g;
 
 /**
  * 「是北大核心期刊」vs「入选 2023 版北大核心」。
@@ -88,10 +112,15 @@ export function findMembershipClaimViolations(text: string | null | undefined): 
   if (!text) return [];
   const out: CohortNumberViolation[] = [];
   for (const sentence of sentencesOf(toPlain(text))) {
-    const m = sentence.match(new RegExp(CATALOG_MENTION.source, "g"));
-    if (!m) continue;
-    if (VERSION_YEAR.test(sentence)) continue;
-    out.push({ kind: "membership_not_time_anchored", matched: m[0], sentence });
+    // ① 成员资格断言未锚定版本年 —— 目录一更新就变假话
+    if (!VERSION_YEAR.test(sentence)) {
+      const m = sentence.match(new RegExp(MEMBERSHIP_CLAIM.source, "g"));
+      if (m) out.push({ kind: "membership_not_time_anchored", matched: m[0], sentence });
+    }
+    // ② 排名断言 —— 无论有没有版本年，本体裁一律不许
+    for (const r of sentence.matchAll(new RegExp(RANKING_CLAIM.source, RANKING_CLAIM.flags))) {
+      out.push({ kind: "ranking_not_allowed", matched: r[0], sentence });
+    }
   }
   return out;
 }

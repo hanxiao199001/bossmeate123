@@ -139,9 +139,52 @@ describe("成员资格断言必须锚定版本年", () => {
     expect(kinds(t)[0]).toContain("是北大核心期刊");
   });
 
+  /**
+   * 🔴 判据收窄的回归锁。8-10 首版按"提到目录名就要求同句带版本年"去查，
+   * 10 篇报出 35 条，逐条看下去**没有一条**是要防的失败模式 —— 全是讲目录本身的句子。
+   * 每篇 3.5 条误报会把这道闸变成噪声。下面这些真实句子必须放行。
+   */
+  it.each([
+    "需要说明的是，北大核心目录只给出成员资格，不提供排序。",
+    "若要自行核实，可以查阅《中文核心期刊要目总览》（2023年版），逐本核对。",
+    "在CSSCI中，民族学与文化学的分类重点在于民族文化和教育研究。",
+    "同一本期刊在CSSCI和北大核心中分属不同学科分类，在目录实践中并不少见。",
+  ])("真实句「%s」不误报", (t) => {
+    expect(findMembershipClaimViolations(t)).toEqual([]);
+  });
+
+  it("「2023年版」也算锚定（首版正则只认「2023 版」，把它误判成违规）", () => {
+    expect(findMembershipClaimViolations("本刊是北大核心期刊（2023年版）。")).toEqual([]);
+  });
+
   it("不提目录名的句子不受影响", () => {
     expect(kinds("本刊聚焦教育研究，读者以一线教师为主。")).toEqual([]);
     expect(findMembershipClaimViolations(null)).toEqual([]);
+  });
+});
+
+/**
+ * 本体裁禁一切排名 —— 目录只给成员资格，不给排序。
+ * 8-10 实测漏网：「收录本数位列第三」用中文数字，数字闸只认阿拉伯数字。
+ */
+describe("排名断言一律不许", () => {
+  it.each(["该分类收录本数位列第三。", "本刊排名第 5。", "在同类中名列第二位。", "居第一位。"])(
+    "「%s」命中",
+    (t) => {
+      expect(findMembershipClaimViolations(t).some((v) => v.kind === "ranking_not_allowed")).toBe(true);
+    },
+  );
+
+  it("「位列其中」不是排名，不误报", () => {
+    expect(findMembershipClaimViolations("核实《教育学术月刊》位列其中。")).toEqual([]);
+  });
+
+  it("带了版本年也照样拦（排名不是时态问题）", () => {
+    expect(
+      findMembershipClaimViolations("在 2023 版目录里，该分类位列第三。").some(
+        (v) => v.kind === "ranking_not_allowed",
+      ),
+    ).toBe(true);
   });
 });
 
