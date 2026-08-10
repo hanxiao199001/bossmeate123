@@ -253,6 +253,9 @@ describe("④ 事实清单是数字的唯一出口", () => {
       // 版本年（2023-2024 会被拆成 2023 与 2024）与清单条数
       for (const p of s.catalogYear.split("-")) allowed.add(p);
       allowed.add(String(s.crossDiscipline.length));
+      // 「平均每 N 本中有 1 本」里的字面量 1 —— 句式常量，不是数据。
+      //   这条测试抓到过它（加 oneInEvery 那次），说明它确实在守"清单里的数字都有出处"。
+      if (s.oneInEvery !== null) allowed.add("1");
     }
     expect([...nums].filter((n) => !allowed.has(n))).toEqual([]);
   });
