@@ -60,7 +60,7 @@ describe("① 分类只认目录自带的", () => {
     expect(c.slices.every((s) => s.disciplineOfThisJournal !== "教育学")).toBe(true);
     const facts = cohortPromptFacts(c).join("\n");
     expect(facts).not.toMatch(/本刊[^\n]*「教育学」/);
-    expect(facts).toContain("在该目录中的分类是「体育学」");
+    expect(facts).toContain("在该版目录中的分类是「体育学」");
   });
 
   /**

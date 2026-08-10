@@ -233,7 +233,11 @@ async function main() {
 
   // ── 拍板数字 ②：编造命中数
   const totalViolations = done.reduce(
-    (a, s) => a + s.result!.checks.numberViolations.length + s.result!.checks.fabrication.length,
+    (a, s) =>
+      a +
+      s.result!.checks.numberViolations.length +
+      s.result!.checks.fabrication.length +
+      s.result!.checks.membershipViolations.length,
     0,
   );
   console.log(`\n【拍板数字②】${done.length} 篇合计 编造/数字违规命中：${totalViolations} 处（目标 0）`);
@@ -338,6 +342,9 @@ function buildComparePage(
       <td class="${r.checks.numberViolations.length + r.checks.fabrication.length > 0 ? "bad" : "good"}">${
         r.checks.numberViolations.length + r.checks.fabrication.length
       }</td>
+      <td class="${r.checks.membershipViolations.length > 0 ? "bad" : "good"}">${
+        r.checks.membershipViolations.length
+      }</td>
       <td class="${r.checks.health.issues.length > 0 ? "bad" : "good"}">${r.checks.health.issues.length}</td>
     </tr>`;
     })
@@ -345,14 +352,16 @@ function buildComparePage(
 
   const skipRows = samples
     .filter((s) => !s.result)
-    .map((s) => `<tr><td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td colspan="8">跳过：${esc(s.skipReason)}</td></tr>`)
+    .map((s) => `<tr><td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td colspan="9">跳过：${esc(s.skipReason)}</td></tr>`)
     .join("");
 
   const blocks = done
     .map((s) => {
       const r = s.result!;
       const evid = [
-        ...r.checks.numberViolations.map((v) => `【${v.kind}】命中「${v.matched}」 ← ${v.sentence}`),
+        ...[...r.checks.numberViolations, ...r.checks.membershipViolations].map(
+          (v) => `【${v.kind}】命中「${v.matched}」 ← ${v.sentence}`,
+        ),
         ...r.checks.fabrication.map((f) => `【编造】${typeof f === "string" ? f : JSON.stringify(f)}`),
         ...r.checks.health.issues.map((i) => `【health/${i.code}】${i.detail}`),
       ];
@@ -405,6 +414,13 @@ pre{white-space:pre-wrap;font-size:13px;background:#fafafa;padding:10px;border-r
 h2{font-size:17px;margin:0 0 12px}h3{font-size:14px;color:#666;margin:0 0 8px}
 small{font-weight:400;color:#888;font-size:13px}
 .stat{background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:14px 16px;margin-bottom:20px;font-size:15px}
+.problems{background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:16px;margin-bottom:20px}
+.pcard{border-left:4px solid #ccc;padding:10px 14px;margin:12px 0;background:#fbfbfb;font-size:14px}
+.pcard p{margin:8px 0}
+.pcard.ok{border-left-color:#2e7d32}.pcard.no{border-left-color:#c62828}
+.tag{font-size:12px;padding:2px 8px;border-radius:10px;color:#fff}
+.tag-ok{background:#2e7d32}.tag-no{background:#c62828}
+code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px}
 </style></head><body>
 <div class="banner">
   <b>未写库 · 未注册模板 · 未进任何轮换 · 拍板前零上线</b><br>
@@ -414,6 +430,28 @@ small{font-weight:400;color:#888;font-size:13px}
   尚未人工审校（<code>catalog-facts.ts</code> 全部 <code>reviewed:false</code>），
   不确认就不写，绝不由模型猜一个机构名或网址。
 </div>
+<section class="problems">
+  <h2 style="margin:0 0 12px;font-size:16px;">这页解决什么、不解决什么</h2>
+  <div class="pcard ok">
+    <b>问题 A：国内 sparse 刊被迫编造</b>　<span class="tag tag-ok">A2 解决</span>
+    <p>587 篇实测 sparse 占 57.6%；取样 5 篇 <b>5/5 出现叙述型编造</b>
+    （「审稿流程严谨」「实证研究稿件更受青睐」，DB 里一个字都没有）。
+    病根是模板固定要写投稿指南，而这些刊没有 IF / 分区 / 审稿周期 —— <b>任务本身无解</b>，
+    加闸只能让它闭嘴，不能让它有话说。</p>
+    <p><b>本体裁的做法</b>：不问「这本刊怎么样」，问「它在目录里处在什么位置」。
+    素材来自<b>刊库集合数据</b>而非单刊，所以刊越薄越管用。下方 A′ 组是同一本刊的左右对比。</p>
+  </div>
+  <div class="pcard no">
+    <b>问题 B：国际 education 刊池只有 6 本，30 天被用了 30 次</b>　
+    <span class="tag tag-no">A2 覆盖不到</span>
+    <p><b>这个体裁解决不了 B。</b>它的主料是国内目录的学科分类，
+    而跑量最大的那批回头刊（System / TESOL Quarterly / Modern Language Journal…）是国际刊，
+    在 DB 里没有国内目录归属 —— 下表 A 组 <b>5/5 全部因 <code>no_catalog_in_db</code> 跳过</b>，
+    就是这个事实的直接证据。</p>
+    <p><b>B 需要另外的动作</b>：扩心理学账号（255 本 rich 刊现成可用），
+    或调整账号配额把 education 的排产压下来。<b>拍板通过 A2 ≠ B 被解决了。</b></p>
+  </div>
+</section>
 <div class="stat">
   <b>拍板数字①</b> sparse 国内刊准入率：${stat.pass}/${stat.sparseTotal} = <b>${stat.admitRate}%</b>
   ${[...stat.skipCounts].map(([k, v]) => `<br>　　不通过 ${esc(k)}：${v} 本`).join("")}<br><br>
@@ -424,7 +462,7 @@ small{font-weight:400;color:#888;font-size:13px}
 </div>
 <table><thead><tr>
 <th>组</th><th>期刊</th><th>供给</th><th>字数</th><th>factsAvailable</th><th>factsCited</th>
-<th>目录切片</th><th>违规/百字</th><th>编造命中</th><th>health</th>
+<th>目录切片</th><th>违规/百字</th><th>编造命中</th><th>措辞未锚版本年</th><th>health</th>
 </tr></thead><tbody>${rows}${skipRows}</tbody></table>
 ${blocks}
 </body></html>`;

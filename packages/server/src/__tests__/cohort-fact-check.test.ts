@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-const { findCohortNumberViolations, cohortNumberWhitelist } = await import(
+const { findCohortNumberViolations, cohortNumberWhitelist, findMembershipClaimViolations } = await import(
   "../services/content-engine/cohort-fact-check.js"
 );
 const { buildCohortFromRow, cohortPromptFacts } = await import("../services/journals/discipline-cohort.js");
@@ -104,6 +104,44 @@ describe("真数与行文数字不许误报", () => {
   it("空正文不抛错", () => {
     expect(findCohortNumberViolations(null, COHORT)).toEqual([]);
     expect(findCohortNumberViolations("", COHORT)).toEqual([]);
+  });
+});
+
+/**
+ * 快照必然会旧 —— 句式要选那种**旧了也不会变成错话**的。
+ *   「是北大核心期刊」        现在时断言，下一版目录调整后变假话
+ *   「入选 2023 版北大核心」  历史事实，永真
+ * 这不是文风偏好，是正确性，所以有判据、有测试。
+ */
+describe("成员资格断言必须锚定版本年", () => {
+  const kinds = (t: string) => findMembershipClaimViolations(t).map((v) => v.sentence);
+
+  it.each([
+    "本刊是北大核心期刊。",
+    "《教育学报》属于 CSSCI 来源期刊。",
+    "作为一本 CSCD 收录期刊，它长期稳定。",
+    "本刊为中文核心。",
+  ])("现在时断言「%s」命中", (t) => {
+    expect(kinds(t).length).toBe(1);
+  });
+
+  it.each([
+    "本刊入选 2023 版北大核心目录。",
+    "在 CSSCI 2023-2024 版目录中，本刊被划入教育学分类。",
+    "该版 CSSCI 收录 660 本。",
+  ])("锚定了版本年的「%s」放行", (t) => {
+    expect(kinds(t)).toEqual([]);
+  });
+
+  it("同一段里只在开头交代一次版本年不算数（逐句判）", () => {
+    const t = "以下数据出自 2023 版目录。本刊是北大核心期刊。";
+    expect(kinds(t).length).toBe(1);
+    expect(kinds(t)[0]).toContain("是北大核心期刊");
+  });
+
+  it("不提目录名的句子不受影响", () => {
+    expect(kinds("本刊聚焦教育研究，读者以一线教师为主。")).toEqual([]);
+    expect(findMembershipClaimViolations(null)).toEqual([]);
   });
 });
 

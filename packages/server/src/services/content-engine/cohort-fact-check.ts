@@ -36,7 +36,11 @@ import { cohortPromptFacts } from "../../services/journals/discipline-cohort.js"
 import { allowedUrls } from "../../services/journals/catalog-facts.js";
 
 export interface CohortNumberViolation {
-  kind: "number_not_in_facts" | "approximation_not_allowed" | "url_not_allowed";
+  kind:
+    | "number_not_in_facts"
+    | "approximation_not_allowed"
+    | "url_not_allowed"
+    | "membership_not_time_anchored";
   /** 命中的原文片段 */
   matched: string;
   /** 整句原文，便于人工复核 */
@@ -62,6 +66,35 @@ const PATTERNS: RegExp[] = [
   /(?:共|收录|合计|总计)\s*\d+(?:\.\d+)?/g,
   /(?:排名|位列|名列)\s*第?\s*\d+/g,
 ];
+
+/**
+ * 目录名。用于「成员资格断言必须锚定版本年」那条检查。
+ * 含常见别称（中文核心 = 北大核心的俗称）。
+ */
+const CATALOG_MENTION = /CSSCI\s*扩展版?|CSSCI|北大核心|中文核心|中文社会科学引文索引|CSCD|SCI\s*核心/g;
+/** 版本年锚点：「2023 版」「2023-2024 版」「该版」「版本年」 */
+const VERSION_YEAR = /\d{4}(?:\s*-\s*\d{4})?\s*版|版本年|该版/;
+
+/**
+ * 「是北大核心期刊」vs「入选 2023 版北大核心」。
+ *
+ * 前者是**现在时断言**，目录一更新就变成假话；后者陈述历史事实，永真。
+ * 快照必然会旧 —— 所以句式要选那种旧了也不会变成错话的。这不是文风偏好，是正确性。
+ *
+ * 判据落在可检验处：**任何提到目录名的句子，必须在同一句里锚定版本年**。
+ * 模板渲染的部分每处都带版本年，风险全在模型写的叙述里 —— 所以这条跑在叙述文本上。
+ */
+export function findMembershipClaimViolations(text: string | null | undefined): CohortNumberViolation[] {
+  if (!text) return [];
+  const out: CohortNumberViolation[] = [];
+  for (const sentence of sentencesOf(toPlain(text))) {
+    const m = sentence.match(new RegExp(CATALOG_MENTION.source, "g"));
+    if (!m) continue;
+    if (VERSION_YEAR.test(sentence)) continue;
+    out.push({ kind: "membership_not_time_anchored", matched: m[0], sentence });
+  }
+  return out;
+}
 
 /** 剥标签取纯文本。与 findBodyFabrication 同款（先剥 SVG，图表里的数字不算行文） */
 function toPlain(body: string): string {

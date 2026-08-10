@@ -107,7 +107,23 @@ describe("③ 数字逐字来自 cohort", () => {
 
   it("落款恒定标注数据来源与版本年", () => {
     expect(html()).toContain("数据来源：CSSCI 2023-2024 版目录");
-    expect(html()).toContain("目录更新后本数会变化");
+    expect(html()).toContain("后续版本调整不改变本文所述事实");
+  });
+
+  /**
+   * 快照必然会旧 —— 徽章句式要选旧了也不变成错话的那种。
+   * 「入选 2023-2024 版 CSSCI」是历史事实永真；「CSSCI 期刊」是现在时断言。
+   */
+  it("徽章写「入选 X 版 Y」，不写「Y 期刊」", () => {
+    const h = html();
+    expect(h).toContain("入选 2023-2024 版 CSSCI");
+    expect(h).not.toMatch(/CSSCI\s*期刊/);
+  });
+
+  it("模板渲染出的每一处目录名都锚定了版本年", async () => {
+    const { findMembershipClaimViolations } = await import("../services/content-engine/cohort-fact-check.js");
+    expect(findMembershipClaimViolations(html())).toEqual([]);
+    expect(findMembershipClaimViolations(html("武汉体育学院学报", { catalogs: ["cssci", "pku-core"] }))).toEqual([]);
   });
 
   it("横向盘子自带归属限定语（防读者/模型串位）", () => {

@@ -152,6 +152,17 @@ describe("⑤ 输出契约与变体", () => {
     expect(p.sections["写作要求"]).toContain("标题**不得**只写刊名");
   });
 
+  it("措辞纪律块明令「入选 X 版」而非「是 X 期刊」", () => {
+    const { p } = build();
+    expect(p.sections["措辞纪律"]).toContain("入选 <版本年> 版 <目录名>");
+    expect(p.sections["措辞纪律"]).toContain("目录会更新");
+  });
+
+  it("事实清单本身示范正确句式（模型会照着写）", () => {
+    const { p } = build();
+    expect(p.sections["本篇唯一可用事实"]).toContain("本刊入选 CSSCI 2023-2024 版目录");
+  });
+
   it("system 明说「清单之外的期刊属性视为不存在」", () => {
     const { p } = build();
     expect(p.system).toContain("视为不存在");

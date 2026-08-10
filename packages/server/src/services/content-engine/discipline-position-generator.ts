@@ -24,7 +24,11 @@ import { logger } from "../../config/logger.js";
 import { getProviders } from "../ai/provider-factory.js";
 import { extractJsonObject } from "./llm-json.js";
 import { generateDisciplinePositionHtml } from "../publisher/adapters/discipline-position-template.js";
-import { findCohortNumberViolations, type CohortNumberViolation } from "./cohort-fact-check.js";
+import {
+  findCohortNumberViolations,
+  findMembershipClaimViolations,
+  type CohortNumberViolation,
+} from "./cohort-fact-check.js";
 import { computeFactDensity, type FactDensity } from "./fact-density.js";
 import { checkOutputHealth, type OutputHealthResult } from "../publisher/output-health.js";
 import { findBodyFabrication } from "../compliance/content-check.js";
@@ -75,6 +79,8 @@ export interface DisciplinePositionResult {
   metadata: Record<string, unknown>;
   checks: {
     numberViolations: CohortNumberViolation[];
+    /** 成员资格断言没锚定版本年（「是北大核心期刊」这类会随目录更新变假的话） */
+    membershipViolations: CohortNumberViolation[];
     /** findBodyFabrication 的返回（字段级编造） */
     fabrication: ReturnType<typeof findBodyFabrication>;
     health: OutputHealthResult;
@@ -226,6 +232,8 @@ export async function generateDisciplinePosition(
     },
     checks: {
       numberViolations: findCohortNumberViolations(html, cohort),
+      // 只查模型写的叙述 —— 模板渲染的每处都带版本年，不必重复检
+      membershipViolations: findMembershipClaimViolations(Object.values(narrative).join("\n")),
       fabrication: findBodyFabrication(html, toFabricationFields(opts.row)),
       // noMetricFacts 走单一判据出口，别在这里重写布尔组合（会踩扫描守卫）
       health: checkOutputHealth({

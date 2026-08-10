@@ -29,7 +29,7 @@
  * DB 行写 `catalogs: ["cssci"]`，快照里这本刊同时在北大核心 —— 输出会有两个切片。
  *
  * 这样做是对的：快照**就是官方目录本身**，而 `journals.catalogs` 是抓取产物，实测偏缺。
- * 文中那句「本刊被北大核心（2023 版目录）收录」读者拿官方目录一查即得，DB 缺不缺不影响其为真。
+ * 文中那句「本刊入选北大核心 2023 版目录」读者拿官方目录一查即得，DB 缺不缺不影响其为真。
  *
  * 但 DB 侧的目录成员资格仍然是准入条件之一（`no_catalog_in_db`）——它是一个**独立佐证**：
  * 万一 normName 撞名（不同刊共用旧名），DB 没有任何目录标记能把整篇假文章挡在门外。
@@ -271,7 +271,7 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
 
   for (const s of usableSlices(c)) {
     out.push(
-      `本刊被 ${s.label}（${s.catalogYear} 版目录）收录，在该目录中的分类是「${s.disciplineOfThisJournal}」。`,
+      `本刊入选 ${s.label} ${s.catalogYear} 版目录，在该版目录中的分类是「${s.disciplineOfThisJournal}」。`,
     );
     out.push(
       `${s.label}（${s.catalogYear} 版）「${s.disciplineOfThisJournal}」分类下共收录 ${s.countInDiscipline} 本期刊` +
@@ -299,7 +299,7 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
 
   for (const b of c.badges) {
     out.push(
-      `本刊同时被 ${b.label}（${b.catalogYear} 版）收录` +
+      `本刊同时入选 ${b.label} ${b.catalogYear} 版目录` +
         (b.level ? `，层级为${b.level}` : "") +
         `。（${b.label} 目录不划分学科分类，不得就此推断任何学科排名或学科本数）`,
     );

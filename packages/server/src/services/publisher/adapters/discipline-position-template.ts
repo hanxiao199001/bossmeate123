@@ -103,9 +103,10 @@ export function generateDisciplinePositionHtml(cohort: DisciplineCohort, n: Disc
   if (cohort.nameEn) {
     out.push(`<p style="margin:0 0 10px;font-size:13px;color:${C.sub};">${esc(cohort.nameEn)}</p>`);
   }
+  // 「入选 X 版 Y」而非「Y 期刊」—— 目录会更新，前者是历史事实永真，后者会变成假话
   const badges = [
-    ...slices.map((s) => `${s.label}（${s.catalogYear} 版）`),
-    ...cohort.badges.map((b) => `${b.label}（${b.catalogYear} 版）${b.level ?? ""}`.trim()),
+    ...slices.map((s) => `入选 ${s.catalogYear} 版 ${s.label}`),
+    ...cohort.badges.map((b) => `入选 ${b.catalogYear} 版 ${b.label}${b.level ? "·" + b.level : ""}`),
   ];
   if (badges.length > 0) {
     out.push(
@@ -136,7 +137,7 @@ export function generateDisciplinePositionHtml(cohort: DisciplineCohort, n: Disc
         `<p style="margin:0 0 8px;font-size:15px;font-weight:600;color:${C.heading};">` +
           `${esc(s.label)}（${esc(s.catalogYear)} 版目录）</p>`,
       );
-      out.push(factRow("所属分类", s.disciplineOfThisJournal));
+      out.push(factRow("该版目录中的分类", s.disciplineOfThisJournal));
       out.push(factRow("该分类收录", `${s.countInDiscipline} 本`));
       out.push(factRow("该版目录合计", `${s.countInCatalogTotal} 本`));
       out.push(factRow("该分类占比", `${s.shareOfCatalogPct}%`));
@@ -205,7 +206,8 @@ export function generateDisciplinePositionHtml(cohort: DisciplineCohort, n: Disc
   if (years.length > 0) {
     out.push(
       `<p style="margin:22px 0 6px;padding-top:12px;border-top:1px solid ${C.line};` +
-        `font-size:13px;color:${C.sub};">数据来源：${esc(years.join("、"))}目录。目录更新后本数会变化。</p>`,
+        `font-size:13px;color:${C.sub};">数据来源：${esc(years.join("、"))}目录。` +
+        `以上均为该版目录的收录情况，后续版本调整不改变本文所述事实。</p>`,
     );
   }
 

@@ -88,6 +88,22 @@ const GENRE_BANS = [
   "**不得**声称本刊在某分类中的排名、位次或地位高低 —— 目录只给出成员资格，不给出排序。",
 ];
 
+/**
+ * 🔴 时态纪律。快照必然会旧 —— 句式要选那种**旧了也不会变成错话**的。
+ *
+ *   「本刊是北大核心期刊」        现在时断言，目录一更新就变成假话
+ *   「本刊入选 2023 版北大核心」  陈述历史事实，永真
+ *
+ * 不是文风偏好，是正确性：`findMembershipClaimViolations` 按同一条判据检查产物。
+ */
+const WORDING_DISCIPLINE = [
+  "凡提到目录成员资格，一律写成「入选 <版本年> 版 <目录名>」，**禁止**写成「是/属于 <目录名> 期刊」。",
+  "理由：目录会更新。「入选 2023 版北大核心」是历史事实，永远为真；" +
+    "「是北大核心期刊」是现在时断言，下一版目录调整后就变成假话。",
+  "**每一个**提到目录名的句子，都必须在同一句里带上该目录的版本年 —— 不许只在开头交代一次。",
+  "同理，分类归属写「在该版目录中被划入某分类」，不写「本刊属于某学科」。",
+];
+
 const NUMBER_DISCIPLINE = [
   "文中出现的每一个数字，必须**逐字**取自上面的事实清单。",
   "**禁止**任何加减、换算、取整、估算、约数（如「N 余本」「近 N 种」「超过 N 本」）。",
@@ -209,6 +225,7 @@ export function buildDisciplinePositionPrompt(input: DisciplinePositionPromptInp
   sections["严禁书写"] = [...supplyPromptConstraints(supply), ...GENRE_BANS].map((l) => `· ${l}`).join("\n");
 
   sections["数字纪律"] = NUMBER_DISCIPLINE.map((l) => `· ${l}`).join("\n");
+  sections["措辞纪律"] = WORDING_DISCIPLINE.map((l) => `· ${l}`).join("\n");
 
   sections["写作要求"] = [
     "全文 800-1200 字。素材本就不多，**宁可短，不许灌水** —— 不许用形容词、感叹和排比撑长度。",
