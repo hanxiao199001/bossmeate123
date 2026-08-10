@@ -9,6 +9,8 @@
  */
 
 import type { JournalInfo, CollectionResult } from "../data-collection/journal-content-collector.js";
+// 8-10: 数据卡改内联 SVG(原 dataCardUri 因 data URI 被微信拒收而丢弃), 见 buildCoverHero
+import { generateJournalDataCard } from "../crawler/journal-image-crawler.js";
 import {
   generateIFTrendChart,
   generatePubVolumeChart,
@@ -587,14 +589,50 @@ export function generateJournalSectionHtml(
  */
 /**
  * 封面大图 Hero — 全幅展示官方期刊封面，增强权威感
- * 如果有 coverUrl → 渲染全宽封面 + 期刊名叠加
- * 如果有 dataCardUri → 渲染数据信息卡片
- * 都没有 → 返回空（不渲染）
+ *
+ * 优先级: 真实 coverUrl(HTTP 图) → 内联数据卡 SVG → 都没有则不渲染。
+ *
+ * ## 8-10: 数据卡从"生成后丢弃"改为**内联 SVG**
+ *
+ * 原来这里是 `if (!j.coverUrl || j.coverUrl.startsWith("data:")) return ""` ——
+ * 微信公众号正文确实**不支持 data URI**(只认 HTTP/HTTPS 图片地址), 判断本身没错;
+ * 但 `dataCardUri` 恰恰是 `svgToDataUri()` 的产物, 于是**每一张数据卡都被生成后丢弃**,
+ * 卡片引擎白跑。实测近 30 天 817 篇里内联 svg 只有 197 篇(24%)。
+ *
+ * 修法不是"想办法把 data URI 塞进去", 而是**内联 `<svg>`** —— 图表(IF 趋势/发文量)
+ * 一直走的就是内联 SVG 且微信正常渲染, 这条路已被 197 篇实证。
+ * 体积上内联还**更小**: dataURI 要 base64(膨胀 4/3), 实测 2.4KB SVG → 3.3KB dataURI。
  */
+/**
+ * 内联数据卡。**体积保护**: body 已经很长时不再追加 ——
+ *   实测近 60 天成功推送微信的最大正文是 31,473 字节(236 篇), 那是**已验证安全线**而非上限。
+ *   28KB 阈值留了余量; 且这种篇幅本来就不缺内容, 少一张卡没有损失。
+ */
+function renderInlineDataCard(j: JournalInfo, currentLength = 0): string {
+  if (currentLength > INLINE_CARD_MAX_BODY_BYTES) return "";
+  const svg = generateJournalDataCard({
+    name: j.name, nameEn: j.nameEn, impactFactor: j.impactFactor,
+    partition: j.partition, casPartition: (j as { casPartition?: string | null }).casPartition,
+    acceptanceRate: j.acceptanceRate, reviewCycle: j.reviewCycle,
+    isWarningList: j.isWarningList,
+    catalogs: (j as { catalogs?: unknown }).catalogs,
+    cscdLevel: (j as { cscdLevel?: string | null }).cscdLevel,
+    pkuCoreLevel: (j as { pkuCoreLevel?: string | null }).pkuCoreLevel,
+    discipline: j.discipline, publisher: j.publisher,
+  });
+  if (!svg) return "";   // 不足 2 格 → 整卡不出现
+  return `<div style="margin-bottom:20px;">${svg}</div>`;
+}
+
+/** 见 renderInlineDataCard 注释: 31,473 字节是实测已成功推送的最大正文, 这里留余量 */
+export const INLINE_CARD_MAX_BODY_BYTES = 28000;
+
 function buildCoverHero(j: JournalInfo, theme: ThemeColors): string {
-  // 微信公众号不支持 data URI (base64)，只支持 HTTP/HTTPS 图片 URL
-  // 因此只在有真实 coverUrl 时才渲染 Hero 封面区
-  if (!j.coverUrl || j.coverUrl.startsWith("data:")) return "";
+  // 有真封面图(HTTP) → 优先用它
+  if (!j.coverUrl || j.coverUrl.startsWith("data:")) {
+    // 没有真封面 → 退回内联数据卡。卡片自适应格数, 不足 2 格返回空串(见 generateJournalDataCard)
+    return renderInlineDataCard(j);
+  }
 
   const displayName = j.nameEn || j.name;
 

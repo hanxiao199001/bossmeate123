@@ -172,65 +172,120 @@ export async function fetchJournalCoverMultiSource(
  * 生成期刊数据信息卡片 SVG
  * 包含：期刊名、IF、分区、录用率、审稿周期
  */
+/**
+ * 期刊数据卡 —— **自适应格子**（8-10 改造）。
+ *
+ * ## 改造前的问题
+ *
+ * 原实现是**固定四格** IF / 分区 / 录用率 / 审稿周期, 每格无数据时填 `"N/A"`。
+ * 对 sparse 刊(实测占内容的 57.6%, 且国内刊池 rich 恒为 0)画出来就是**满卡 N/A** ——
+ * 正是红线 #14 补充上限禁止的形态: 「一格暂无是诚实, 满卡暂无是空洞」。
+ *
+ * ## 现在的规则
+ *
+ *   ① **有什么画什么**: 逐格判定, 无数据的格子**整格不出现**(不是填 N/A)
+ *   ② sparse 刊用目录/学科/主办方补位 —— 这三类**零编造风险**且它一定有
+ *   ③ **不足 2 格就整张卡不画**(返回空串) —— 与 adapters/field-slot-guard.ts 的
+ *      `shouldHideCard` 同一条逻辑: 撑不起一张卡的信息量, 画出来就是空洞
+ *   ④ 宽度按实际格数自适应, 不留空位
+ *
+ * ⚠️ **渲染层的反编造纪律与正文一致**(红线 #14 管渲染侧的那半):
+ *   绝不为了凑格子引入任何本刊没有的指标 —— 目录/学科/主办方是**它真有的属性**,
+ *   不是指标的替代品。这里不做任何"无 IF 就写高影响力"式的降级。
+ */
 export function generateJournalDataCard(journal: {
   name: string;
   nameEn?: string | null;
   impactFactor?: number | null;
   partition?: string | null;
+  casPartition?: string | null;
   acceptanceRate?: number | null;
   reviewCycle?: string | null;
   isWarningList?: boolean | null;
+  catalogs?: unknown;
+  cscdLevel?: string | null;
+  pkuCoreLevel?: string | null;
+  discipline?: string | null;
+  publisher?: string | null;
 }): string {
-  const ifText = journal.impactFactor ? journal.impactFactor.toFixed(1) : "N/A";
-  const partition = journal.partition || "N/A";
-  const acceptRate = journal.acceptanceRate
-    ? `${(journal.acceptanceRate * 100).toFixed(0)}%`
-    : "N/A";
-  const cycle = journal.reviewCycle || "N/A";
+  interface Cell { value: string; label: string; color: string; size: number }
+  const cells: Cell[] = [];
+
+  // ---- 指标格(有才画, 绝不填 N/A) ----
+  if (journal.impactFactor != null && journal.impactFactor > 0) {
+    cells.push({ value: journal.impactFactor.toFixed(1), label: "影响因子 IF", color: "#059669", size: 28 });
+  }
+  const partition = journal.partition || journal.casPartition;
+  if (partition) {
+    const pc: Record<string, string> = { Q1: "#dc2626", Q2: "#ea580c", Q3: "#ca8a04", Q4: "#6b7280" };
+    cells.push({ value: partition, label: "分区", color: pc[partition] || "#6b7280", size: partition.length > 4 ? 18 : 30 });
+  }
+  if (journal.acceptanceRate != null && journal.acceptanceRate > 0) {
+    const pct = journal.acceptanceRate <= 1 ? journal.acceptanceRate * 100 : journal.acceptanceRate;
+    cells.push({ value: `${pct.toFixed(0)}%`, label: "录用率", color: "#2563eb", size: 26 });
+  }
+  if (journal.reviewCycle) {
+    cells.push({ value: String(journal.reviewCycle), label: "审稿周期", color: "#7c3aed", size: 16 });
+  }
+
+  // ---- sparse 补位格: 目录/学科/主办方(零编造风险, 且它一定有) ----
+  if (cells.length < 4) {
+    const cats: string[] = [];
+    if (Array.isArray(journal.catalogs)) {
+      const m: Record<string, string> = {
+        "pku-core": "北大核心", cssci: "CSSCI", "cssci-ext": "CSSCI扩展", cscd: "CSCD", sci: "SCI", ssci: "SSCI",
+      };
+      for (const c of journal.catalogs) { const t = m[String(c)]; if (t) cats.push(t); }
+    }
+    if (cats.length === 0 && journal.pkuCoreLevel) cats.push(String(journal.pkuCoreLevel));
+    if (cats.length === 0 && journal.cscdLevel) cats.push(`CSCD${journal.cscdLevel}`);
+    if (cats.length > 0) {
+      cells.push({ value: cats.slice(0, 2).join(" · "), label: "收录", color: "#0891b2", size: cats.join("").length > 6 ? 14 : 18 });
+    }
+    if (cells.length < 4 && journal.discipline) {
+      const d = String(journal.discipline);
+      cells.push({ value: d.length > 8 ? `${d.slice(0, 7)}…` : d, label: "学科", color: "#4f46e5", size: d.length > 5 ? 15 : 20 });
+    }
+    if (cells.length < 4 && journal.publisher) {
+      const pb = String(journal.publisher);
+      cells.push({ value: pb.length > 9 ? `${pb.slice(0, 8)}…` : pb, label: "主办", color: "#64748b", size: pb.length > 6 ? 13 : 17 });
+    }
+  }
+
+  // ③ 撑不起一张卡就别画 —— 同 field-slot-guard.shouldHideCard 的逻辑
+  if (cells.length < 2) return "";
+
+  const shown = cells.slice(0, 4);
+  const n = shown.length;
+  const GAP = 20;
+  const PAD = 30;
+  const W = 600;
+  const cw = Math.floor((W - PAD * 2 - GAP * (n - 1)) / n);
   const warning = journal.isWarningList ? "⚠️ 预警期刊" : "";
 
-  // 分区颜色
-  const partitionColor: Record<string, string> = {
-    Q1: "#dc2626",
-    Q2: "#ea580c",
-    Q3: "#ca8a04",
-    Q4: "#6b7280",
-  };
-  const pColor = partitionColor[partition] || "#6b7280";
+  const boxes = shown
+    .map((c, i) => {
+      const x = PAD + i * (cw + GAP);
+      const cx = x + cw / 2;
+      return `<rect x="${x}" y="90" width="${cw}" height="80" rx="10" fill="white" stroke="#e5e7eb"/>` +
+        `<text x="${cx}" y="${c.size >= 24 ? 122 : 126}" font-family="system-ui,sans-serif" font-size="${c.size}" font-weight="bold" fill="${c.color}" text-anchor="middle">${escapeXml(c.value)}</text>` +
+        `<text x="${cx}" y="148" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280" text-anchor="middle">${escapeXml(c.label)}</text>`;
+    })
+    .join("\n  ");
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" viewBox="0 0 600 200">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="200" viewBox="0 0 ${W} 200" style="max-width:100%;display:block;margin:0 auto;">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#f0fdf4;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#ecfeff;stop-opacity:1" />
     </linearGradient>
-    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
-      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#00000015"/>
-    </filter>
   </defs>
-  <rect width="600" height="200" rx="16" fill="url(#bg)" stroke="#d1d5db" stroke-width="1" filter="url(#shadow)"/>
-  <!-- 标题 -->
+  <rect width="${W}" height="200" rx="16" fill="url(#bg)" stroke="#d1d5db" stroke-width="1"/>
   <text x="30" y="40" font-family="system-ui,sans-serif" font-size="18" font-weight="bold" fill="#111827">${escapeXml(journal.name)}</text>
   ${journal.nameEn ? `<text x="30" y="62" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280">${escapeXml(journal.nameEn)}</text>` : ""}
-  ${warning ? `<text x="540" y="40" font-family="system-ui,sans-serif" font-size="13" fill="#dc2626" text-anchor="end">${warning}</text>` : ""}
-  <!-- 数据行 -->
+  ${warning ? `<text x="570" y="40" font-family="system-ui,sans-serif" font-size="13" fill="#dc2626" text-anchor="end">${warning}</text>` : ""}
   <line x1="30" y1="75" x2="570" y2="75" stroke="#e5e7eb" stroke-width="1"/>
-  <!-- IF -->
-  <rect x="30" y="90" width="120" height="80" rx="10" fill="white" stroke="#e5e7eb"/>
-  <text x="90" y="120" font-family="system-ui,sans-serif" font-size="28" font-weight="bold" fill="#059669" text-anchor="middle">${ifText}</text>
-  <text x="90" y="145" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280" text-anchor="middle">影响因子 IF</text>
-  <!-- 分区 -->
-  <rect x="170" y="90" width="120" height="80" rx="10" fill="white" stroke="#e5e7eb"/>
-  <text x="230" y="125" font-family="system-ui,sans-serif" font-size="32" font-weight="bold" fill="${pColor}" text-anchor="middle">${partition}</text>
-  <text x="230" y="145" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280" text-anchor="middle">JCR分区</text>
-  <!-- 录用率 -->
-  <rect x="310" y="90" width="120" height="80" rx="10" fill="white" stroke="#e5e7eb"/>
-  <text x="370" y="120" font-family="system-ui,sans-serif" font-size="26" font-weight="bold" fill="#2563eb" text-anchor="middle">${acceptRate}</text>
-  <text x="370" y="145" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280" text-anchor="middle">录用率</text>
-  <!-- 审稿周期 -->
-  <rect x="450" y="90" width="120" height="80" rx="10" fill="white" stroke="#e5e7eb"/>
-  <text x="510" y="120" font-family="system-ui,sans-serif" font-size="18" font-weight="bold" fill="#7c3aed" text-anchor="middle">${escapeXml(cycle)}</text>
-  <text x="510" y="145" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280" text-anchor="middle">审稿周期</text>
+  ${boxes}
 </svg>`;
 }
 
