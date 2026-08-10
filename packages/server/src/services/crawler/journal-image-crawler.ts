@@ -228,8 +228,12 @@ export function generateJournalDataCard(journal: {
     cells.push({ value: String(journal.reviewCycle), label: "审稿周期", color: "#7c3aed", size: 16 });
   }
 
-  // ---- sparse 补位格: 目录/学科/主办方(零编造风险, 且它一定有) ----
-  if (cells.length < 4) {
+  // ---- 补位格: 目录/学科/主办方(零编造风险, 且它一定有) ----
+  // ⚠️ 只在**指标格明显不足**时补 —— 实测第一版写成 `cells.length < 4`, 结果 rich 刊
+  //   (3 个指标格)也被补了一格"学科", 挤掉了本该留白的位置。
+  //   指标齐全的刊不需要补位: 它的卡片本来就有信息量, 硬塞学科/主办方是凑格子。
+  const metricCells = cells.length;
+  if (metricCells < 2) {
     const cats: string[] = [];
     if (Array.isArray(journal.catalogs)) {
       const m: Record<string, string> = {
@@ -242,11 +246,11 @@ export function generateJournalDataCard(journal: {
     if (cats.length > 0) {
       cells.push({ value: cats.slice(0, 2).join(" · "), label: "收录", color: "#0891b2", size: cats.join("").length > 6 ? 14 : 18 });
     }
-    if (cells.length < 4 && journal.discipline) {
+    if (cells.length < 3 && journal.discipline) {
       const d = String(journal.discipline);
       cells.push({ value: d.length > 8 ? `${d.slice(0, 7)}…` : d, label: "学科", color: "#4f46e5", size: d.length > 5 ? 15 : 20 });
     }
-    if (cells.length < 4 && journal.publisher) {
+    if (cells.length < 3 && journal.publisher) {
       const pb = String(journal.publisher);
       cells.push({ value: pb.length > 9 ? `${pb.slice(0, 8)}…` : pb, label: "主办", color: "#64748b", size: pb.length > 6 ? 13 : 17 });
     }
