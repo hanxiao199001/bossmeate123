@@ -136,6 +136,12 @@ describe("⑤ 输出契约与变体", () => {
     expect(a.structure).not.toBe(b.structure);
   });
 
+  /** 首轮实测 10 篇里 2 篇把刊名原样当标题返回（4 字），被出稿健康闸判 title_too_short */
+  it("明令标题不得只写刊名", () => {
+    const { p } = build();
+    expect(p.sections["写作要求"]).toContain("标题**不得**只写刊名");
+  });
+
   it("system 明说「清单之外的期刊属性视为不存在」", () => {
     const { p } = build();
     expect(p.system).toContain("视为不存在");
