@@ -185,7 +185,10 @@ node_modules 用**绝对路径 symlink 指向主仓**：目录内部的相对 sy
 | `citing_journals_top10` | `{ topJournals: [{name, percent, count}], totalCitations, lastUpdatedAt }` | 同上 |
 | `jcr_full` | `{ wosLevel, jifSubjects, jciSubjects, isTopJournal, lastUpdatedAt }` | 同上 |
 
-**SVG 生成**: `packages/server/src/services/crawler/journal-chart-generator.ts` 含 5 个 generator（generateBarChart / generateIFTrendChart / generatePubVolumeChart / generateCASPartitionTable / generateJCRPartitionTable），实时读 jsonb → SVG → `<img src="data:image/svg+xml;...">` 嵌模板。
+**SVG 生成**: `packages/server/src/services/crawler/journal-chart-generator.ts` 含 5 个 generator（generateBarChart / generateIFTrendChart / generatePubVolumeChart / generateCASPartitionTable / generateJCRPartitionTable），实时读 jsonb → SVG → **内联 `<svg>`** 嵌模板。
+
+> ⚠️ **8-10 更正**：原记「`<img src="data:image/svg+xml;...">`」**已过时**。实测 883 篇正文里内联 `<svg>` 197 篇、`src="data:` 112 篇 —— 图表走的是内联 SVG。
+> 这条区别很要紧：**微信公众号正文不支持 data URI**（只认 HTTP/HTTPS 图片地址），所以走 data URI 的图在微信侧根本渲染不出来。`journal-template.buildCoverHero` 曾因此把每一张数据卡生成后丢弃（8-10 已改为内联 SVG，见 P1-C）。
 
 **前端 React 渲染**: 截至 PR #125，`JournalDetailPage` 用数据表格（无 SVG）显示这 4 个 jsonb 字段；shunshi-style template 后端预渲染 SVG。
 
