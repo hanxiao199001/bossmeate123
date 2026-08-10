@@ -179,12 +179,26 @@ describe("③ 准入四条：无米不做饭", () => {
     expect(cohortEligible(c).reason).toBe("snapshot_mismatch");
   });
 
-  it("只命中 CSCD → cscd_only（它没有学科分类，撑不起坐标）", () => {
+  /**
+   * 与 snapshot_mismatch 是**两种不同的诊断**：这里是"匹配上了，但那个目录没有学科维度"。
+   * 8-10 实测：不加载 sci-core 时，700 本 SCI 核心刊被误报成 snapshot_mismatch，
+   * 让准入率这个拍板数字失真 —— 诊断错了，拍板依据就错了。
+   */
+  it("只命中徽章目录 → no_disciplined_catalog（CSCD / SCI 核心都算）", () => {
     const c = buildCohortFromRow(row("aBIOTECH", { catalogs: ["cscd"], cscdLevel: "核心库" }));
     expect(c.matchedBy).toBe("name");
     expect(c.slices).toEqual([]);
-    expect(c.cscdBadge).toEqual({ level: "核心库", catalogYear: "2023-2024" });
-    expect(cohortEligible(c).reason).toBe("cscd_only");
+    expect(c.badges).toEqual([
+      expect.objectContaining({ catalog: "cscd", label: "CSCD", level: "核心库", catalogYear: "2023-2024" }),
+    ]);
+    expect(cohortEligible(c).reason).toBe("no_disciplined_catalog");
+  });
+
+  it("SCI 核心刊不再被误报成「匹配不上」", () => {
+    const c = buildCohortFromRow(row("NEURAL REGENERATION RESEARCH", { catalogs: ["sci-core"] }));
+    expect(c.matchedBy).toBe("name");
+    expect(c.badges.some((b) => b.catalog === "sci-core")).toBe(true);
+    expect(cohortEligible(c).reason).toBe("no_disciplined_catalog");
   });
 
   it("分类只有 1 本 → discipline_too_small（写「共 1 本」没有信息量）", () => {
@@ -198,12 +212,12 @@ describe("③ 准入四条：无米不做饭", () => {
     expect(cohortPromptFacts(c).join("\n")).not.toContain("博物馆事业");
   });
 
-  it("ISSN 兜底：CSCD 那批无刊名记录仍能匹配上（但仍是 cscd_only）", () => {
+  it("ISSN 兜底：CSCD 那批无刊名记录仍能匹配上（但仍是 no_disciplined_catalog）", () => {
     const c = buildCohortFromRow(
       row("本库自己的刊名与CSCD对不上", { catalogs: ["cscd"], cscdLevel: "核心库", issn: "1005-1031" }),
     );
     expect(c.matchedBy).toBe("issn");
-    expect(cohortEligible(c).reason).toBe("cscd_only");
+    expect(cohortEligible(c).reason).toBe("no_disciplined_catalog");
   });
 });
 

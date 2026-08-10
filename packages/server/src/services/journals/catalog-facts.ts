@@ -14,7 +14,8 @@
  *
  * ## 待老韩确认（确认完把 reviewed 改 true 并填字段）
  *
- *   四个目录各自的：① 编制机构全称 ② 官方查证入口 URL
+ *   五个目录各自的：① 编制机构全称 ② 官方查证入口 URL
+ *   （CSSCI / CSSCI 扩展版 / 北大核心 / CSCD / SCI 核心）
  *
  * 确认前 10 篇样例里第 6 章不会出现 —— 这是**刻意的**，对比页会标注。
  *
@@ -59,6 +60,7 @@ export const CATALOG_FACTS: Record<CatalogTag, CatalogFact> = {
   "cssci-ext": { ...EMPTY, reviewed: false, reviewedBy: "" },
   "pku-core": { ...EMPTY, reviewed: false, reviewedBy: "" },
   cscd: { ...EMPTY, reviewed: false, reviewedBy: "" },
+  "sci-core": { ...EMPTY, reviewed: false, reviewedBy: "" },
 };
 
 /** 还没审校的目录。样例脚本与对比页据此标注「第 6 章缺席是预期的」 */

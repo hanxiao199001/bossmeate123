@@ -43,7 +43,7 @@ describe("① 快照必须真的加载到（打包回归守卫）", () => {
   });
 
   it("四个目录都非空", () => {
-    for (const c of ["cssci", "cssci-ext", "pku-core", "cscd"] as const) {
+    for (const c of ["cssci", "cssci-ext", "pku-core", "cscd", "sci-core"] as const) {
       expect(countInCatalog(c)).toBeGreaterThan(0);
     }
   });
@@ -55,6 +55,7 @@ describe("② 条数与版本年写死（8-10 实测）", () => {
     ["cssci-ext", 249],
     ["pku-core", 1987],
     ["cscd", 1339],
+    ["sci-core", 2161],
   ] as const)("%s = %i 条", (c, n) => {
     expect(countInCatalog(c)).toBe(n);
   });
@@ -99,6 +100,7 @@ describe("② 条数与版本年写死（8-10 实测）", () => {
     expect(yearOf("cssci")).toEqual(new Set(["2023-2024"]));
     expect(yearOf("cssci-ext")).toEqual(new Set(["2023-2024"]));
     expect(yearOf("cscd")).toEqual(new Set(["2023-2024"]));
+    expect(yearOf("sci-core")).toEqual(new Set(["2023"]));
     expect(yearOf("pku-core")).toEqual(new Set(["2023"])); // ← 刻意不同
   });
 
@@ -109,7 +111,17 @@ describe("② 条数与版本年写死（8-10 实测）", () => {
   });
 });
 
-describe("③ CSCD 绝不进学科统计（它没有 discipline 字段）", () => {
+describe("③ 徽章目录绝不进学科统计（CSCD / SCI 核心都没有 discipline）", () => {
+  it("sci-core 也是徽章目录：2161 条 discipline 全空，零学科键", () => {
+    const list = getCatalogSnapshot().byCatalog.get("sci-core") ?? [];
+    expect(list.length).toBe(2161);
+    expect(list.every((e) => e.discipline === null)).toBe(true);
+    expect([...getCatalogSnapshot().countsByCatalogDiscipline.keys()].filter((k) => k.startsWith("sci-core|"))).toEqual(
+      [],
+    );
+    expect(catalogDisciplineCounts("sci-core")).toEqual([]);
+  });
+
   it("CSCD 每条的 discipline 恒为 null", () => {
     const list = getCatalogSnapshot().byCatalog.get("cscd") ?? [];
     expect(list.every((e) => e.discipline === null)).toBe(true);

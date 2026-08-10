@@ -120,7 +120,7 @@ describe("③ 数字逐字来自 cohort", () => {
     expect(h).toContain("CSSCI（2023-2024 版目录）");
   });
 
-  it("CSCD 只当徽章，不参与任何计数展示", () => {
+  it("徽章目录只当徽章，不参与任何计数展示", () => {
     const h = html("aBIOTECH", { catalogs: ["cscd"], cscdLevel: "核心库" });
     expect(h).toContain("CSCD（2023-2024 版）核心库");
     expect(h).not.toContain("它在目录里的位置"); // 无学科切片 → 主料章不出现

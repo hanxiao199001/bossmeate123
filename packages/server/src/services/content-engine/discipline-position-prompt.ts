@@ -190,8 +190,7 @@ export function buildDisciplinePositionPrompt(input: DisciplinePositionPromptInp
   const closing = GENRE_CLOSINGS[seed % GENRE_CLOSINGS.length]!;
 
   const facts = cohortPromptFacts(cohort);
-  const catalogTags = usableSlices(cohort).map((s) => s.catalog);
-  if (cohort.cscdBadge) catalogTags.push("cscd" as never);
+  const catalogTags = [...usableSlices(cohort).map((s) => s.catalog), ...cohort.badges.map((b) => b.catalog)];
   const catalogBlock = catalogFactBlock(catalogTags);
 
   const sections: Record<string, string> = {};

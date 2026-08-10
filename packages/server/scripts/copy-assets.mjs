@@ -50,6 +50,7 @@ const REQUIRED_ASSETS = [
   "data/cssci-ext-2023.json",
   "data/pku-core-2023.json",
   "data/cscd-2023.json",
+  "data/sci-core-2023.json",
 ];
 
 function walk(dir, out = []) {

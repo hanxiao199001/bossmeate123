@@ -51,8 +51,10 @@ import {
   countInDiscipline,
   lookupByIssn,
   lookupByName,
+  isBadgeOnly,
   siblingsInDiscipline,
   snapshotHealthy,
+  type BadgeOnlyCatalog,
   type CatalogEntry,
   type CatalogTag,
   type DisciplinedCatalog,
@@ -106,8 +108,12 @@ export interface DisciplineCohort {
   matchedBy: "name" | "issn" | null;
   /** 带学科分类的目录切片，按分类本数降序 */
   slices: CohortCatalogSlice[];
-  /** CSCD 只能当徽章（它没有学科分类），单独放，不参与任何统计 */
-  cscdBadge: { level: string | null; catalogYear: string } | null;
+  /**
+   * 徽章目录命中（CSCD / SCI 核心）。它们没有学科分类，只能陈述"被收录"，
+   * 不参与任何统计。**刻意用一个数组而不是每个目录一个字段** ——
+   * 两个字段说同一件事，早晚会漂移成两套判断。
+   */
+  badges: Array<{ catalog: BadgeOnlyCatalog; label: string; catalogYear: string; level: string | null }>;
   /** 快照版本年集合，落 metadata 用 */
   snapshotYears: string[];
   computedAt: string;
@@ -118,7 +124,7 @@ export type CohortSkipReason =
   | "snapshot_unhealthy"
   | "no_catalog_in_db"
   | "snapshot_mismatch"
-  | "cscd_only"
+  | "no_disciplined_catalog"
   | "discipline_too_small";
 
 /**
@@ -134,8 +140,9 @@ export function cohortEligible(c: DisciplineCohort): { ok: boolean; reason?: Coh
   if (!c.hasCatalogInDb) return { ok: false, reason: "no_catalog_in_db" };
   // 2. 刊名/ISSN 都没匹配上快照 —— 数字无从谈起
   if (!c.matchedBy) return { ok: false, reason: "snapshot_mismatch" };
-  // 3. 只命中 CSCD：它没有学科分类，撑不起「坐标」这个主叙事
-  if (c.slices.length === 0) return { ok: false, reason: "cscd_only" };
+  // 3. 只命中徽章目录（CSCD / SCI 核心）：它们没有学科分类，撑不起「坐标」这个主叙事。
+  //    注意这与 snapshot_mismatch 是**两种不同的诊断** —— 这里是"匹配上了但那个目录没有学科维度"。
+  if (c.slices.length === 0) return { ok: false, reason: "no_disciplined_catalog" };
   // 4. 所有分类都太小，凑不出格局
   if (!c.slices.some((s) => s.countInDiscipline >= MIN_DISCIPLINE_COUNT)) {
     return { ok: false, reason: "discipline_too_small" };
@@ -156,7 +163,7 @@ function hashOffset(name: string): number {
 }
 
 function buildSlice(e: CatalogEntry, selfNorm: string): CohortCatalogSlice | null {
-  if (e.catalog === "cscd" || !e.discipline) return null;
+  if (isBadgeOnly(e.catalog) || !e.discipline) return null;
   const catalog = e.catalog as DisciplinedCatalog;
   const inDiscipline = countInDiscipline(catalog, e.discipline);
   const total = countInCatalog(catalog);
@@ -227,7 +234,15 @@ export function buildCohortFromRow(row: CohortJournalRow): DisciplineCohort {
   // 分类越大的目录越适合当主叙事，排前面
   slices.sort((a, b) => b.countInDiscipline - a.countInDiscipline || a.catalog.localeCompare(b.catalog));
 
-  const cscd = hits.find((h) => h.catalog === "cscd");
+  const badges = hits
+    .filter((h) => isBadgeOnly(h.catalog))
+    .map((h) => ({
+      catalog: h.catalog as BadgeOnlyCatalog,
+      label: CATALOG_LABEL[h.catalog],
+      catalogYear: h.catalogYear,
+      level: h.cscdLevel ?? null,
+    }))
+    .sort((a, b) => a.catalog.localeCompare(b.catalog));
 
   return {
     journalId: row.id,
@@ -237,7 +252,7 @@ export function buildCohortFromRow(row: CohortJournalRow): DisciplineCohort {
     hasCatalogInDb: supply.has.catalog,
     matchedBy,
     slices,
-    cscdBadge: cscd ? { level: cscd.cscdLevel ?? null, catalogYear: cscd.catalogYear } : null,
+    badges,
     snapshotYears: [...new Set(hits.map((h) => h.catalogYear))].sort(),
     computedAt: new Date().toISOString(),
   };
@@ -282,11 +297,11 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
     }
   }
 
-  if (c.cscdBadge) {
+  for (const b of c.badges) {
     out.push(
-      `本刊同时被 CSCD（${c.cscdBadge.catalogYear} 版）收录` +
-        (c.cscdBadge.level ? `，层级为${c.cscdBadge.level}` : "") +
-        "。（CSCD 目录不划分学科分类，不得就此推断任何学科排名）",
+      `本刊同时被 ${b.label}（${b.catalogYear} 版）收录` +
+        (b.level ? `，层级为${b.level}` : "") +
+        `。（${b.label} 目录不划分学科分类，不得就此推断任何学科排名或学科本数）`,
     );
   }
   return out;
@@ -308,6 +323,6 @@ export function cohortMetadata(c: DisciplineCohort): Record<string, unknown> {
       othersInDiscipline: s.othersInDiscipline,
       siblingCount: s.siblings.length,
     })),
-    cohortCscdBadge: c.cscdBadge,
+    cohortBadges: c.badges,
   };
 }

@@ -105,7 +105,7 @@ describe("③ 事实清单是数字的唯一出口", () => {
 
 describe("④ 目录说明未审校时整块不出现（不许猜机构名/URL）", () => {
   it("四个目录当前都未审校", () => {
-    expect(pendingCatalogFacts().sort()).toEqual(["cscd", "cssci", "cssci-ext", "pku-core"]);
+    expect(pendingCatalogFacts().sort()).toEqual(["cscd", "cssci", "cssci-ext", "pku-core", "sci-core"]);
   });
 
   it("未审校 → 没有「目录说明」块，且全文不出现任何网址", () => {

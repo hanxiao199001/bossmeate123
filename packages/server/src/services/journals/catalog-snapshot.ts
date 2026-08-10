@@ -32,9 +32,14 @@
  * ## 数据边界（8-10 实测，写死在测试里）
  *
  *   cssci 660 / cssci-ext 249 / pku-core 1987 —— 均带 discipline，零重名、零空分类
- *   cscd 1339 —— **没有 discipline 字段**（只有 issn + cscdLevel 核心库/扩展库）
+ *   cscd     1339 —— **没有 discipline 字段**（只有 issn + cscdLevel 核心库/扩展库）
+ *   sci-core 2161 —— discipline **整列为空**
  *
- * → CSCD **绝不能进任何学科统计**，只能当徽章。混进去会算出「分类=undefined 共 N 本」。
+ * → 这两个**绝不能进任何学科统计**，只能当徽章（`BADGE_ONLY_CATALOGS`）。
+ *   混进去会算出「分类=undefined 共 N 本」。
+ *   8-10 实测：不加载 sci-core 的后果不是"少一个徽章"，而是 700 本 SCI 核心刊被报成
+ *   `snapshot_mismatch`（"匹配不上"），让准入率这个拍板数字失真 —— 它们其实匹配得上，
+ *   只是所在目录没有学科维度。诊断错了，拍板依据就错了。
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -48,7 +53,18 @@ const DATA_DIR = resolve(__dirname, "../../data");
 /** 带学科分类的三个目录 —— CSCD 不在内，见文件头 */
 export const DISCIPLINED_CATALOGS = ["cssci", "cssci-ext", "pku-core"] as const;
 export type DisciplinedCatalog = (typeof DISCIPLINED_CATALOGS)[number];
-export type CatalogTag = DisciplinedCatalog | "cscd";
+/**
+ * 无学科分类的目录 —— 只能当徽章，绝不进任何学科统计。
+ * CSCD 与 SCI 核心都是这一类（8-10 实测：cscd 1339 条、sci-core 2161 条，
+ * discipline 字段**全为空**）。
+ */
+export const BADGE_ONLY_CATALOGS = ["cscd", "sci-core"] as const;
+export type BadgeOnlyCatalog = (typeof BADGE_ONLY_CATALOGS)[number];
+export type CatalogTag = DisciplinedCatalog | BadgeOnlyCatalog;
+
+export function isBadgeOnly(c: CatalogTag): c is BadgeOnlyCatalog {
+  return (BADGE_ONLY_CATALOGS as readonly string[]).includes(c);
+}
 
 export interface CatalogEntry {
   /** 目录里的原始刊名 */
@@ -101,6 +117,7 @@ const FILES: Record<CatalogTag, string> = {
   "cssci-ext": "cssci-ext-2023.json",
   "pku-core": "pku-core-2023.json",
   cscd: "cscd-2023.json",
+  "sci-core": "sci-core-2023.json",
 };
 
 /**
@@ -160,8 +177,9 @@ export function getCatalogSnapshot(): CatalogSnapshot {
         //   缺字段 → 记进 loadErrors 让 snapshotHealthy 拦住整篇生成。
         catalogYear: typeof r.catalogYear === "string" && r.catalogYear ? r.catalogYear : "",
         // CSCD 无 discipline 字段 → 恒 null, 由下面的统计判断跳过
-        discipline: tag === "cscd" ? null : (typeof r.discipline === "string" && r.discipline ? r.discipline : null),
-        ...(tag === "cscd" ? { cscdLevel: r.cscdLevel ?? null, issn } : {}),
+        // 徽章目录恒 null —— 不依赖"数据恰好是空的"，而是显式排除
+        discipline: isBadgeOnly(tag) ? null : (typeof r.discipline === "string" && r.discipline ? r.discipline : null),
+        ...(isBadgeOnly(tag) ? { cscdLevel: r.cscdLevel ?? null, issn } : {}),
       };
       if (!e.catalogYear) missingYear.add(tag);
       list.push(e);
@@ -218,7 +236,7 @@ export function lookupByName(name: string): CatalogEntry[] {
 
 /** 某目录下每个学科分类各几本，按本数降序。CSCD 返回空数组（它没有分类） */
 export function catalogDisciplineCounts(c: CatalogTag): Array<{ discipline: string; count: number }> {
-  if (c === "cscd") return [];
+  if (isBadgeOnly(c)) return [];
   const out: Array<{ discipline: string; count: number }> = [];
   for (const [k, count] of getCatalogSnapshot().countsByCatalogDiscipline) {
     const [cat, discipline] = k.split("|");
@@ -231,7 +249,7 @@ export function catalogDisciplineCounts(c: CatalogTag): Array<{ discipline: stri
 
 /** 某目录某分类下共几本。CSCD 或分类不存在 → 0 */
 export function countInDiscipline(c: CatalogTag, discipline: string | null): number {
-  if (c === "cscd" || !discipline) return 0;
+  if (isBadgeOnly(c) || !discipline) return 0;
   return getCatalogSnapshot().countsByCatalogDiscipline.get(`${c}|${discipline}`) ?? 0;
 }
 
@@ -255,7 +273,7 @@ export function siblingsInDiscipline(
   limit = 8,
   offset = 0,
 ): string[] {
-  if (c === "cscd" || !discipline) return [];
+  if (isBadgeOnly(c) || !discipline) return [];
   const list = getCatalogSnapshot().byCatalog.get(c) ?? [];
   const all = list
     .filter((e) => e.discipline === discipline && e.normName !== selfNormName)
@@ -284,4 +302,5 @@ export const CATALOG_LABEL: Record<CatalogTag, string> = {
   "cssci-ext": "CSSCI 扩展版",
   "pku-core": "北大核心",
   cscd: "CSCD",
+  "sci-core": "SCI 核心",
 };

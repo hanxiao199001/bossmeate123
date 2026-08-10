@@ -105,7 +105,7 @@ export function generateDisciplinePositionHtml(cohort: DisciplineCohort, n: Disc
   }
   const badges = [
     ...slices.map((s) => `${s.label}（${s.catalogYear} 版）`),
-    ...(cohort.cscdBadge ? [`CSCD（${cohort.cscdBadge.catalogYear} 版）${cohort.cscdBadge.level ?? ""}`.trim()] : []),
+    ...cohort.badges.map((b) => `${b.label}（${b.catalogYear} 版）${b.level ?? ""}`.trim()),
   ];
   if (badges.length > 0) {
     out.push(

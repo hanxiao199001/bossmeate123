@@ -408,8 +408,9 @@ small{font-weight:400;color:#888;font-size:13px}
 </style></head><body>
 <div class="banner">
   <b>未写库 · 未注册模板 · 未进任何轮换 · 拍板前零上线</b><br>
-  目录快照：CSSCI/CSSCI扩展/CSCD 2023-2024 版，北大核心 2023 版。<br>
-  ⚠️ 「目录是什么/怎么查证」这一章<b>刻意缺席</b> —— 四个目录的编制机构与官方查证入口
+  目录快照：CSSCI / CSSCI 扩展版 / CSCD 2023-2024 版，北大核心 / SCI 核心 2023 版。<br>
+  CSCD 与 SCI 核心<b>没有学科分类</b>，只能当徽章，不参与任何本数统计。<br>
+  ⚠️ 「目录是什么/怎么查证」这一章<b>刻意缺席</b> —— 五个目录的编制机构与官方查证入口
   尚未人工审校（<code>catalog-facts.ts</code> 全部 <code>reviewed:false</code>），
   不确认就不写，绝不由模型猜一个机构名或网址。
 </div>
