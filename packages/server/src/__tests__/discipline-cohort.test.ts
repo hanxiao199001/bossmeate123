@@ -56,12 +56,41 @@ describe("① 分类只认目录自带的", () => {
     const cssci = c.slices.find((s) => s.catalog === "cssci");
     expect(cssci?.disciplineOfThisJournal).toBe("体育学");
     expect(cssci?.countInDiscipline).toBe(12);
-    // 事实清单里一次「教育学」都不该出现
-    expect(cohortPromptFacts(c).join("\n")).not.toContain("教育学");
+    // 本刊的分类断言里绝不能出现教育学
+    expect(c.slices.every((s) => s.disciplineOfThisJournal !== "教育学")).toBe(true);
+    const facts = cohortPromptFacts(c).join("\n");
+    expect(facts).not.toMatch(/本刊[^\n]*「教育学」/);
+    expect(facts).toContain("在该目录中的分类是「体育学」");
+  });
+
+  /**
+   * 横向盘子列的是**整个目录的分类全景**，写一本体育刊时里面也会出现「教育学 43 本」。
+   * 这是本体裁最容易被 LLM 串位的一处：一旦写成「本刊所在的教育学分类有 43 本」就是假话。
+   * 所以归属限定语必须**在事实清单里就钉死**，不能指望 prompt 别处的泛泛禁令。
+   */
+  it("横向盘子必须自带归属限定语（防 LLM 把别的分类安到本刊头上）", () => {
+    const facts = cohortPromptFacts(buildCohortFromRow(row("武汉体育学院学报"))).filter((f) =>
+      f.includes("分类全景"),
+    );
+    expect(facts.length).toBeGreaterThan(0);
+    for (const f of facts) {
+      expect(f).toContain("与本刊所属分类无关");
+      expect(f).toMatch(/本刊所属分类是「.+」，不是上列任何一个/);
+    }
+  });
+
+  /**
+   * 隐含设计决定，锁住免得后人当 bug 改掉：**快照说了算，不是 journals.catalogs 说了算**。
+   * 快照就是官方目录本身；catalogs 列是抓取产物，实测偏缺。
+   * DB 的目录成员资格只当准入的独立佐证（防撞名），不裁剪输出。
+   */
+  it("DB catalogs 缺北大核心，快照有 → 照样出北大核心切片", () => {
+    const c = buildCohortFromRow(row("武汉体育学院学报", { catalogs: ["cssci"] }));
+    expect(c.slices.map((s) => s.catalog).sort()).toEqual(["cssci", "pku-core"]);
   });
 
   it("同一本刊在两个目录里的分类名不同，各记各的（不合并）", () => {
-    const c = buildCohortFromRow(row("武汉体育学院学报", { catalogs: ["cssci", "pku-core"] }));
+    const c = buildCohortFromRow(row("武汉体育学院学报"));
     const byCat = Object.fromEntries(c.slices.map((s) => [s.catalog, s.disciplineOfThisJournal]));
     expect(byCat).toEqual({ cssci: "体育学", "pku-core": "体育" });
   });

@@ -23,6 +23,18 @@
  * 3. **无米不做饭**（红线 #14 的正解）。四种情形一律不产稿、记原因，
  *    而不是降级产一篇看起来正常的稿子 —— 见 `cohortEligible`。
  *
+ * ## 「本刊被哪些目录收录」以快照为准，不以 `journals.catalogs` 为准
+ *
+ * 8-10 单测撞出来的一个隐含决定，写在这里免得后人当 bug 改掉：
+ * DB 行写 `catalogs: ["cssci"]`，快照里这本刊同时在北大核心 —— 输出会有两个切片。
+ *
+ * 这样做是对的：快照**就是官方目录本身**，而 `journals.catalogs` 是抓取产物，实测偏缺。
+ * 文中那句「本刊被北大核心（2023 版目录）收录」读者拿官方目录一查即得，DB 缺不缺不影响其为真。
+ *
+ * 但 DB 侧的目录成员资格仍然是准入条件之一（`no_catalog_in_db`）——它是一个**独立佐证**：
+ * 万一 normName 撞名（不同刊共用旧名），DB 没有任何目录标记能把整篇假文章挡在门外。
+ * 一个信号定真伪太脆，两个独立信号同时成立才动笔。
+ *
  * ## 为什么准入判据是纯函数、而取数是异步
  *
  * `getDisciplineCohort` 只做"取行 + 拼集合"，null 仅代表**期刊行不存在**。
@@ -239,9 +251,14 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
       );
     }
     if (s.crossDiscipline.length >= 3) {
+      // ⚠️ 措辞把归属钉死。这一行列的是**整个目录的分类全景**，里面必然出现与本刊无关的
+      //   分类（写一本体育刊时，「教育学 43 本」也会在列）。不写清楚，LLM 极易串位
+      //   写成「本刊所在的教育学分类有 43 本」——一句彻底的假话。
       out.push(
-        `${s.label}（${s.catalogYear} 版）各分类收录本数（前 ${s.crossDiscipline.length}）：` +
-          s.crossDiscipline.map((d) => `${d.discipline} ${d.count} 本`).join("、"),
+        `【以下是 ${s.label} 整个目录的分类全景，与本刊所属分类无关，仅供说明目录规模】` +
+          `${s.label}（${s.catalogYear} 版）收录本数最多的 ${s.crossDiscipline.length} 个分类依次为：` +
+          s.crossDiscipline.map((d) => `${d.discipline} ${d.count} 本`).join("、") +
+          `。本刊所属分类是「${s.disciplineOfThisJournal}」，不是上列任何一个（除非同名）。`,
       );
     }
   }
