@@ -17,6 +17,7 @@ const {
   getCatalogSnapshot,
   snapshotHealthy,
   lookupByName,
+  lookupByIssn,
   catalogDisciplineCounts,
   countInDiscipline,
   countInCatalog,
@@ -56,6 +57,30 @@ describe("② 条数与版本年写死（8-10 实测）", () => {
     ["cscd", 1339],
   ] as const)("%s = %i 条", (c, n) => {
     expect(countInCatalog(c)).toBe(n);
+  });
+
+  /**
+   * 🔴 CSCD 有 **14 条刊名为空但 ISSN 有效**的记录（另外三个目录零空名）。
+   * 一开始按「无刊名就跳过」处理，结果 countInCatalog("cscd") = 1325 ——
+   * 等于对这 14 本刊断言「未被 CSCD 收录」。现在按 ISSN 留下来，可查不可漏。
+   * 这两条断言分别锁「一条不丢」和「空名不进刊名索引」。
+   */
+  it("CSCD 那 14 条无刊名记录按 ISSN 保留，一条不丢", () => {
+    const list = getCatalogSnapshot().byCatalog.get("cscd") ?? [];
+    const nameless = list.filter((e) => !e.name);
+    expect(nameless).toHaveLength(14);
+    expect(nameless.every((e) => !!e.issn)).toBe(true);
+    expect(lookupByIssn("1005-1031").some((e) => e.catalog === "cscd")).toBe(true);
+    expect(lookupByIssn("10051031")).toEqual(lookupByIssn("1005-1031")); // 连字符无关
+    expect(lookupByIssn(null)).toEqual([]);
+  });
+
+  it("刊名与 ISSN 双空的行为 0（真丢了才计 droppedRows）", () => {
+    expect(getCatalogSnapshot().droppedRows).toBe(0);
+  });
+
+  it("空刊名不进刊名索引（否则 lookupByName 会命中一堆无关条目）", () => {
+    expect(getCatalogSnapshot().entriesByNorm.has("")).toBe(false);
   });
 
   it("CSSCI 教育学 = 43 本 —— 文案主叙事直接引用这个数", () => {

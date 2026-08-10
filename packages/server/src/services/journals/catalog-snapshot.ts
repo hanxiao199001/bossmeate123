@@ -62,11 +62,15 @@ export interface CatalogEntry {
   discipline: string | null;
   /** 仅 CSCD 有：核心库 / 扩展库 */
   cscdLevel?: string | null;
+  /** 仅 CSCD 有。归一为大写去连字符，见 normIssn */
+  issn?: string | null;
 }
 
 export interface CatalogSnapshot {
-  /** 归一刊名 → 它命中的全部目录条目 */
+  /** 归一刊名 → 它命中的全部目录条目。刊名为空的条目**不进**此表 */
   entriesByNorm: Map<string, CatalogEntry[]>;
+  /** 归一 ISSN → 条目（目前只有 CSCD 带 issn） */
+  entriesByIssn: Map<string, CatalogEntry[]>;
   byCatalog: Map<CatalogTag, CatalogEntry[]>;
   /** `${catalog}|${discipline}` → 本数。CSCD 不参与 */
   countsByCatalogDiscipline: Map<string, number>;
@@ -75,6 +79,11 @@ export interface CatalogSnapshot {
    * 不许拿残缺的数字写文章(见 snapshotHealthy)。
    */
   loadErrors: string[];
+  /**
+   * 刊名与 ISSN **都**为空、无法被任何方式查到的行数。
+   * 与 loadErrors 分开：这是数据瑕疵，不该拦住整篇生成（8-10 实测为 0）。
+   */
+  droppedRows: number;
   loadedAt: string;
 }
 
@@ -112,7 +121,9 @@ export function getCatalogSnapshot(): CatalogSnapshot {
   const entriesByNorm = new Map<string, CatalogEntry[]>();
   const byCatalog = new Map<CatalogTag, CatalogEntry[]>();
   const countsByCatalogDiscipline = new Map<string, number>();
+  const entriesByIssn = new Map<string, CatalogEntry[]>();
   const loadErrors: string[] = [];
+  let droppedRows = 0;
   const missingYear = new Set<CatalogTag>();
 
   for (const [tag, file] of Object.entries(FILES) as Array<[CatalogTag, string]>) {
@@ -131,7 +142,14 @@ export function getCatalogSnapshot(): CatalogSnapshot {
     const list: CatalogEntry[] = [];
     for (const r of rows) {
       const name = typeof r.name === "string" ? r.name.trim() : "";
-      if (!name) continue;
+      const issn = normIssn(r.issn);
+      // 🔴 刊名空但有 ISSN 的行**必须留下**。8-10 实测 CSCD 有 14 条这样的记录
+      //   (另外三个目录零空名)。丢掉它们 = 对这 14 本刊断言「未被 CSCD 收录」——
+      //   又一个与真结论无法区分的假结论。留下来按 ISSN 可查, 只是进不了刊名索引。
+      if (!name && !issn) {
+        droppedRows++;
+        continue;
+      }
       const e: CatalogEntry = {
         name,
         normName: normName(name),
@@ -143,13 +161,21 @@ export function getCatalogSnapshot(): CatalogSnapshot {
         catalogYear: typeof r.catalogYear === "string" && r.catalogYear ? r.catalogYear : "",
         // CSCD 无 discipline 字段 → 恒 null, 由下面的统计判断跳过
         discipline: tag === "cscd" ? null : (typeof r.discipline === "string" && r.discipline ? r.discipline : null),
-        ...(tag === "cscd" ? { cscdLevel: r.cscdLevel ?? null } : {}),
+        ...(tag === "cscd" ? { cscdLevel: r.cscdLevel ?? null, issn } : {}),
       };
       if (!e.catalogYear) missingYear.add(tag);
       list.push(e);
-      const arr = entriesByNorm.get(e.normName);
-      if (arr) arr.push(e);
-      else entriesByNorm.set(e.normName, [e]);
+      // 空刊名绝不进刊名索引 —— 否则 lookupByName("") 会命中一堆无关条目
+      if (e.normName) {
+        const arr = entriesByNorm.get(e.normName);
+        if (arr) arr.push(e);
+        else entriesByNorm.set(e.normName, [e]);
+      }
+      if (issn) {
+        const arr = entriesByIssn.get(issn);
+        if (arr) arr.push(e);
+        else entriesByIssn.set(issn, [e]);
+      }
       // 只有带分类的目录才进学科统计
       if (e.discipline) {
         const k = `${tag}|${e.discipline}`;
@@ -163,10 +189,25 @@ export function getCatalogSnapshot(): CatalogSnapshot {
   for (const tag of missingYear) loadErrors.push(`${FILES[tag]}: 存在缺 catalogYear 的记录`);
 
   cache = {
-    entriesByNorm, byCatalog, countsByCatalogDiscipline,
-    loadErrors, loadedAt: new Date().toISOString(),
+    entriesByNorm, entriesByIssn, byCatalog, countsByCatalogDiscipline,
+    loadErrors, droppedRows, loadedAt: new Date().toISOString(),
   };
   return cache;
+}
+
+/** ISSN 归一：去连字符/空格 + 大写（末位可能是 X） */
+function normIssn(v: unknown): string {
+  return typeof v === "string" ? v.replace(/[-\s]/g, "").toUpperCase() : "";
+}
+
+/**
+ * 按 ISSN 查目录条目。目前只有 CSCD 带 ISSN ——
+ * 存在的意义就是兜住那 14 条无刊名记录，别把「查不到」讲成「没收录」。
+ */
+export function lookupByIssn(issn: string | null | undefined): CatalogEntry[] {
+  const k = normIssn(issn);
+  if (!k) return [];
+  return getCatalogSnapshot().entriesByIssn.get(k) ?? [];
 }
 
 /** 按刊名查它命中了哪些目录（走 normName，与入库同口径） */
