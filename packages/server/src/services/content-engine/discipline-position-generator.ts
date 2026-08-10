@@ -43,7 +43,12 @@ import {
   type DisciplinePositionContent,
 } from "./discipline-position-prompt.js";
 
-const LLM_TIMEOUT_MS = 120_000;
+/**
+ * ⚠️ 必须与 MAX_TOKENS 同步。8-10 踩过一次：为修截断把 MAX_TOKENS 3000→8000，
+ * 却没动这里的 120s —— 结果 10 篇里 3 篇撞超时（修好了一个失败模式，换来另一个）。
+ * 推理模型吐 8000 token 的实测耗时在 100~200s，留一倍余量。
+ */
+const LLM_TIMEOUT_MS = 300_000;
 /**
  * 8-10 实测：deepseek-v4-pro 是**推理模型**，会先烧一大段思考再吐内容。
  * maxTokens=3000 时两篇跑到 outputTokens=3001（撞顶），真正吐出的正文只有 206 / 342 字符 ——
