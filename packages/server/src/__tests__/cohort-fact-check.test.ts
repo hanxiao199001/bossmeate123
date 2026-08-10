@@ -41,8 +41,24 @@ describe("假数必须命中", () => {
     expect(kinds("该分类下共 430 本期刊。")).toContain("430 本");
   });
 
-  it("约数/估算（清单里没有「40」这个数）", () => {
+  it("约数/估算（「余」夹在数字与量词之间，曾从缝里漏过去）", () => {
     expect(kinds("教育学核心期刊有 40 余本。")).toContain("40 余本");
+    expect(kinds("该目录收录 700 多种。")).toContain("700 多种");
+  });
+
+  /**
+   * 43 在白名单里，但目录给的是**精确值** —— 加个「近」就把可查证的数变成不可查证的估计。
+   * 所以约数判据刻意不看白名单。
+   */
+  it("白名单里的真数，被约数措辞包住也算违规", () => {
+    const v = findCohortNumberViolations("该分类下有近 43 本期刊。", COHORT);
+    expect(v.map((x) => x.kind)).toContain("approximation_not_allowed");
+    expect(v.map((x) => x.matched)).toContain("近 43");
+  });
+
+  it.each(["超过 660 本", "至少 43 本", "多达 660 本", "不足 43 本"])("约数措辞「%s」命中", (phrase) => {
+    const v = findCohortNumberViolations(`该目录${phrase}。`, COHORT);
+    expect(v.some((x) => x.kind === "approximation_not_allowed")).toBe(true);
   });
 
   it("自行算出的百分比", () => {

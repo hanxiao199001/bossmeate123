@@ -36,7 +36,7 @@ import { cohortPromptFacts } from "../../services/journals/discipline-cohort.js"
 import { allowedUrls } from "../../services/journals/catalog-facts.js";
 
 export interface CohortNumberViolation {
-  kind: "number_not_in_facts" | "url_not_allowed";
+  kind: "number_not_in_facts" | "approximation_not_allowed" | "url_not_allowed";
   /** 命中的原文片段 */
   matched: string;
   /** 整句原文，便于人工复核 */
@@ -46,8 +46,17 @@ export interface CohortNumberViolation {
 /** 期刊计数的量词。刻意**不含「个」** —— 「3 个步骤」是行文，不是数量断言 */
 const COUNT_UNITS = "本|种|份|篇|家";
 
+/**
+ * 约数措辞。**与白名单无关，出现即违规** ——
+ * 「近 43 本」里的 43 虽在白名单里，但目录给的是精确值，加个「近」就把可查证的数
+ * 变成了不可查证的估计。8-10 单测撞出来的：原先只按数字查，「40 余本」因为
+ * 「余」夹在数字与量词之间，两条正则都不命中，直接漏网。
+ */
+const APPROX_RE = /(?:近|约|大约|将近|超过|逾|不足|至少|多达)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:余|多|来)\s*(?:本|种|份|篇|家)/g;
+
 const PATTERNS: RegExp[] = [
-  new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:${COUNT_UNITS})`, "g"),
+  // 量词前允许夹约数字（40 余本 / 700 多种）—— 否则整类估算表述从缝里漏过去
+  new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:余|多|几|来)?\\s*(?:${COUNT_UNITS})`, "g"),
   /\d+(?:\.\d+)?\s*[%％]/g,
   /\d{4}\s*年/g,
   /(?:共|收录|合计|总计)\s*\d+(?:\.\d+)?/g,
@@ -98,6 +107,13 @@ export function findCohortNumberViolations(
   const seen = new Set<string>();
 
   for (const sentence of sentencesOf(plain)) {
+    // 约数：先判，且不看白名单
+    for (const m of sentence.matchAll(new RegExp(APPROX_RE.source, APPROX_RE.flags))) {
+      const key = `approx@@${m[0]}@@${sentence}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ kind: "approximation_not_allowed", matched: m[0], sentence });
+    }
     for (const re of PATTERNS) {
       for (const m of sentence.matchAll(new RegExp(re.source, re.flags))) {
         const matched = m[0];
