@@ -31,9 +31,14 @@
  * 这样做是对的：快照**就是官方目录本身**，而 `journals.catalogs` 是抓取产物，实测偏缺。
  * 文中那句「本刊入选北大核心 2023 版目录」读者拿官方目录一查即得，DB 缺不缺不影响其为真。
  *
- * 但 DB 侧的目录成员资格仍然是准入条件之一（`no_catalog_in_db`）——它是一个**独立佐证**：
- * 万一 normName 撞名（不同刊共用旧名），DB 没有任何目录标记能把整篇假文章挡在门外。
- * 一个信号定真伪太脆，两个独立信号同时成立才动笔。
+ * DB 侧的目录成员资格仍是准入条件之一（`no_catalog_in_db`），但 ——
+ *
+ * 🔴 **它不是独立佐证**（8-11 更正，此前这里写反了）。
+ * `journals.catalogs` 正是 `scripts/ingest-domestic-core.ts` 从**这批同一份 JSON**、
+ * 用**同一个 `normName`** 写进去的。同一份证据读了两遍，对同名碰撞**零防御力**：
+ * 快照把台刊《X》匹配到大陆刊《X》，ingest 也会把 catalogs 写进那一行，两边一起错。
+ * 它能挡住的只是"DB 里根本没有目录信息"这一种情况。
+ * 真正的同名防线是下面的 `AMBIGUOUS_NAMES`。
  *
  * ## 为什么准入判据是纯函数、而取数是异步
  *
@@ -59,6 +64,27 @@ import {
   type CatalogTag,
   type DisciplinedCatalog,
 } from "./catalog-snapshot.js";
+
+/**
+ * 🔴 已知同名歧义刊名 —— 命中即拒绝生成，不做任何目录成员资格断言。
+ *
+ * CSSCI 2023-2024 把港澳台期刊收进目录本体后，出现了"同名但不同刊"的情形。
+ * 官方表**只对两本都入选的**加地区括注（全表仅 4 条：地理学报、管理学报的 北京/湖北/台湾 版本）。
+ * 麻烦的是官方**没加**括注、而现实中确实同名的那些 —— 目录里只有一条，
+ * 我们无从判断它指的是哪一本。此时 `lookupByName` 会把 DB 里的另一本匹配上去，
+ * 产出「本刊入选 CSSCI」这个**成员资格层面的假阳性 —— 性质等同编造**。
+ *
+ * 判断不了就不判断：命中此表一律 `ambiguous_name`，不出稿。
+ * 少写一篇没有代价；对一本没入选的刊宣称入选，是这个体裁最致命的一种错。
+ *
+ * ⚠️ 此表是**权宜**。根治要官方港澳台名单当地区词表，给快照条目打地区标记，
+ *   再按"地区不合即不匹配"来判。见 `src/data/CATALOG-PROVENANCE.md`「待解」一节。
+ *   在那之前，发现一个记一个 —— 加进来的成本是少一篇稿，不加的成本是一句假话。
+ */
+export const AMBIGUOUS_NAMES: ReadonlySet<string> = new Set([
+  // 台刊（台湾教育实践研究学会）与河北《教育实践与研究》同名；官方表仅一条且无括注
+  "教育实践与研究",
+]);
 
 /**
  * 一个分类要撑起「格局」叙事的最低本数。
@@ -118,6 +144,8 @@ export interface DisciplineCohort {
   hasCatalogInDb: boolean;
   /** 命中快照的方式。null = 没匹配上，准入判据 2 据此拦截 */
   matchedBy: "name" | "issn" | null;
+  /** 刊名在 `AMBIGUOUS_NAMES` 里 —— 匹配到的可能不是同一本刊，一律不出稿 */
+  ambiguousName: boolean;
   /** 带学科分类的目录切片，按分类本数降序 */
   slices: CohortCatalogSlice[];
   /**
@@ -136,6 +164,7 @@ export type CohortSkipReason =
   | "snapshot_unhealthy"
   | "no_catalog_in_db"
   | "snapshot_mismatch"
+  | "ambiguous_name"
   | "no_disciplined_catalog"
   | "discipline_too_small";
 
@@ -152,6 +181,8 @@ export function cohortEligible(c: DisciplineCohort): { ok: boolean; reason?: Coh
   if (!c.hasCatalogInDb) return { ok: false, reason: "no_catalog_in_db" };
   // 2. 刊名/ISSN 都没匹配上快照 —— 数字无从谈起
   if (!c.matchedBy) return { ok: false, reason: "snapshot_mismatch" };
+  // 2.5 已知同名歧义：匹配上了，但不确定匹配到的是不是同一本刊 → 不做任何成员资格断言
+  if (c.ambiguousName) return { ok: false, reason: "ambiguous_name" };
   // 3. 只命中徽章目录（CSCD / SCI 核心）：它们没有学科分类，撑不起「坐标」这个主叙事。
   //    注意这与 snapshot_mismatch 是**两种不同的诊断** —— 这里是"匹配上了但那个目录没有学科维度"。
   if (c.slices.length === 0) return { ok: false, reason: "no_disciplined_catalog" };
@@ -260,6 +291,7 @@ export function buildCohortFromRow(row: CohortJournalRow): DisciplineCohort {
   return {
     journalId: row.id,
     name: row.name,
+    ambiguousName: AMBIGUOUS_NAMES.has(selfNorm),
     nameEn: row.nameEn ?? null,
     supplyLevel: supply.level,
     hasCatalogInDb: supply.has.catalog,

@@ -141,6 +141,34 @@ describe("① 分类只认目录自带的", () => {
     expect(cohortPromptFacts(c).join("\n")).not.toContain("平均每");
   });
 
+  /**
+   * CSSCI 官方表用「课程·教材·教法」，而入库侧存的是「课程.教材.教法」。
+   * 不统一这本刊永远匹配不上官方目录 → 下游对一本实际入选的刊断言"未收录"。
+   */
+  it("汉字间的点号与间隔号归一到同一形态", () => {
+    const a = buildCohortFromRow(row("课程.教材.教法"));
+    const b = buildCohortFromRow(row("课程·教材·教法"));
+    expect(a.matchedBy).toBe("name");
+    expect(b.matchedBy).toBe("name");
+    expect(a.slices[0].disciplineOfThisJournal).toBe(b.slices[0].disciplineOfThisJournal);
+  });
+
+  /**
+   * 🔴 同名碰撞是**成员资格层面的假阳性，性质等同编造**。
+   * 台刊《教育实践与研究》与河北同名刊，官方表只有一条且无地区括注 ——
+   * 匹配上了也不知道匹配到的是哪一本，所以一律不出稿。
+   */
+  it("已知同名歧义刊名 → ambiguous_name，绝不做成员资格断言", () => {
+    const c = buildCohortFromRow(row("教育实践与研究"));
+    expect(c.matchedBy).toBe("name"); // 确实匹配上了
+    expect(c.ambiguousName).toBe(true);
+    expect(cohortEligible(c).reason).toBe("ambiguous_name");
+  });
+
+  it("普通刊名不受歧义表影响", () => {
+    expect(buildCohortFromRow(row("中国教育学刊")).ambiguousName).toBe(false);
+  });
+
   it("siblings 全部同目录同分类，且不含自己", () => {
     const c = buildCohortFromRow(row("中国教育学刊"));
     const s = c.slices[0];

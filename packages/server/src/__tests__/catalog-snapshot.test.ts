@@ -84,8 +84,37 @@ describe("② 条数与版本年写死（8-10 实测）", () => {
     expect(getCatalogSnapshot().entriesByNorm.has("")).toBe(false);
   });
 
-  it("CSSCI 教育学 = 43 本 —— 文案主叙事直接引用这个数", () => {
+  /**
+   * 🔴 43 这个数在官方校准**前后都是 43**，但名单不同 —— 校准前混进了
+   * 《妇女研究论丛》《甘肃行政学院学报》，同时漏掉官方归在教育学的
+   * 《复旦教育论坛》《高校教育管理》，一进一出正好抵平。
+   * **只核总数永远发现不了**，所以这里连同名单一起锁。
+   */
+  it("CSSCI 教育学 = 43 本，且名单与官方一致（只核总数会漏掉错配）", () => {
     expect(countInDiscipline("cssci", "教育学")).toBe(43);
+    const edu = (getCatalogSnapshot().byCatalog.get("cssci") ?? []).filter((e) => e.discipline === "教育学");
+    const names = new Set(edu.map((e) => e.name));
+    // 官方归在教育学、校准前被放错地方的两本
+    expect(names.has("复旦教育论坛")).toBe(true);
+    expect(names.has("高校教育管理")).toBe(true);
+    // 官方不在教育学、校准前混进来的两本
+    expect(names.has("妇女研究论丛")).toBe(false);
+    expect(names.has("甘肃行政学院学报")).toBe(false);
+  });
+
+  it("官方校准过的若干条分类（每条都在 diff 里逐条核过）", () => {
+    const of = (n: string) => lookupByName(n).find((e) => e.catalog === "cssci")?.discipline;
+    expect(of("甘肃行政学院学报")).toBe("政治学");
+    expect(of("妇女研究论丛")).toBe("社会学");
+    expect(of("改革")).toBe("经济学");
+    expect(of("干旱区资源与环境")).toBe("自然资源与环境科学");
+    expect(of("复旦学报(社会科学版)")).toBe("高校学报");
+    expect(of("特殊教育研究学刊")).toBe("教育学"); // 台刊, 但官方确实归在教育学
+  });
+
+  it("「综合性高校学报」这个分类官方不存在，已并回「高校学报」", () => {
+    expect(countInDiscipline("cssci", "综合性高校学报")).toBe(0);
+    expect(countInDiscipline("cssci", "高校学报")).toBe(77);
   });
 
   /**
@@ -191,10 +220,10 @@ describe("④ 只用目录自带分类，不碰 discipline_code", () => {
 
   it("catalogDisciplineCounts 按本数降序且总数守恒", () => {
     const rows = catalogDisciplineCounts("cssci");
-    expect(rows.length).toBe(27);
+    expect(rows.length).toBe(26); // 官方 26 个分类（校准前 27，多出一个不存在的「综合性高校学报」）
     for (let i = 1; i < rows.length; i++) expect(rows[i - 1].count).toBeGreaterThanOrEqual(rows[i].count);
     expect(rows.reduce((a, r) => a + r.count, 0)).toBe(660); // 零条漏统计
-    expect(rows[0]).toEqual({ discipline: "经济学", count: 76 });
+    expect(rows[0]).toEqual({ discipline: "高校学报", count: 77 });
   });
 
   /**
@@ -203,7 +232,7 @@ describe("④ 只用目录自带分类，不碰 discipline_code", () => {
    */
   it("北大核心分类粒度显著细于 CSSCI（同质化缓解依赖这一点）", () => {
     expect(catalogDisciplineCounts("pku-core").length).toBe(148);
-    expect(catalogDisciplineCounts("cssci-ext").length).toBe(27);
+    expect(catalogDisciplineCounts("cssci-ext").length).toBe(27); // ⚠️ 该表未经官方校准，见 CATALOG-PROVENANCE.md
   });
 
   it("输出稳定：重建快照后两次结果逐字相同（同一本刊两次生成给同样的数）", () => {
