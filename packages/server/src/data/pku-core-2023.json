@@ -5845,7 +5845,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "福建师范大学学报.自热科学版",
+  "name": "福建师范大学学报.自然科学版",
   "discipline": "综合性理工农医",
   "disciplineCode": "N/X",
   "catalog": "pku-core",
@@ -5873,7 +5873,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "内蒙古大学学报.自然科学版",
+  "name": "内蒙古农业大学学报.自然科学版",
   "discipline": "综合性理工农医",
   "disciplineCode": "N/X",
   "catalog": "pku-core",
@@ -7749,7 +7749,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "中国医学前言杂志（电子版）",
+  "name": "中国医学前沿杂志（电子版）",
   "discipline": "综合性医药卫生（除一般理论，教育与普及）",
   "disciplineCode": "R（除R-0，R-4）",
   "catalog": "pku-core",
@@ -8232,7 +8232,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "神经解刨学杂志",
+  "name": "神经解剖学杂志",
   "discipline": "基础医学",
   "disciplineCode": "R3",
   "catalog": "pku-core",
@@ -9198,7 +9198,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "中国临床医学影响杂志",
+  "name": "中国临床医学影像杂志",
   "discipline": "特种医学",
   "disciplineCode": "R8",
   "catalog": "pku-core",
@@ -10003,7 +10003,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "西南林业大学学报.自然学",
+  "name": "西南林业大学学报.自然科学",
   "discipline": "林业",
   "disciplineCode": "S7",
   "catalog": "pku-core",
@@ -11046,7 +11046,7 @@
   "catalogYear": "2023"
  },
  {
-  "name": "精密成型工程",
+  "name": "精密成形工程",
   "discipline": "金属学与热处理/焊接、金属切割及金属粘接",
   "disciplineCode": "TG1/TG4",
   "catalog": "pku-core",
