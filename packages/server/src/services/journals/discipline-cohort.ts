@@ -343,7 +343,11 @@ export function cohortPromptFacts(c: DisciplineCohort): string[] {
         `【以下是 ${s.label} 整个目录的分类全景，与本刊所属分类无关，仅供说明目录规模】` +
           `${s.label}（${s.catalogYear} 版）收录本数最多的 ${s.crossDiscipline.length} 个分类依次为：` +
           s.crossDiscipline.map((d) => `${d.discipline} ${d.count} 本`).join("、") +
-          `。本刊所属分类是「${s.disciplineOfThisJournal}」，不是上列任何一个（除非同名）。`,
+          `。本刊所属分类是「${s.disciplineOfThisJournal}」，不是上列任何一个（除非同名）。` +
+          // 8-11：这份清单是降序的，模型看见就会自发去数名次（《高等教育研究》那篇写出
+          //   「教育学以 43 本位列第四」）。和"给了占比就算倒数"同一个病 ——
+          //   数据的呈现形态本身在诱导加工，所以在数据块里就把话堵死，不指望别处的泛泛禁令。
+          `【以上仅为规模清单，严禁写出任何名次：第X、位列X、排名X、居第X 一律不许】`,
       );
     }
   }

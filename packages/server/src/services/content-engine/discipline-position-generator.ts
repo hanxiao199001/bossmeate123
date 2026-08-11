@@ -79,8 +79,11 @@ export interface DisciplinePositionResult {
   metadata: Record<string, unknown>;
   checks: {
     numberViolations: CohortNumberViolation[];
-    /** 成员资格断言没锚定版本年（「是北大核心期刊」这类会随目录更新变假的话） */
-    membershipViolations: CohortNumberViolation[];
+    /**
+     * 🔻 **影子检查，不计入违规数**（8-11 降级；台账 37 报 0 中，见 cohort-fact-check 文件头）。
+     * 只落 metadata 供事后翻查；升级回闸的条件是连续真阳性 ≥ 2 例。
+     */
+    membershipShadow: CohortNumberViolation[];
     /** findBodyFabrication 的返回（字段级编造） */
     fabrication: ReturnType<typeof findBodyFabrication>;
     health: OutputHealthResult;
@@ -226,6 +229,8 @@ export async function generateDisciplinePosition(
     recipe: prompt.recipe,
     metadata: {
       genre: "discipline-position",
+      // 影子检查结果落 metadata（不参与任何判定，供事后翻台账）
+      membershipShadowCount: findMembershipClaimViolations(Object.values(narrative).join("\n")).length,
       ...cohortMetadata(cohort),
       dataSupply: supply.level,
       variant: prompt.recipe,
@@ -233,7 +238,7 @@ export async function generateDisciplinePosition(
     checks: {
       numberViolations: findCohortNumberViolations(html, cohort),
       // 只查模型写的叙述 —— 模板渲染的每处都带版本年，不必重复检
-      membershipViolations: findMembershipClaimViolations(Object.values(narrative).join("\n")),
+      membershipShadow: findMembershipClaimViolations(Object.values(narrative).join("\n")),
       fabrication: findBodyFabrication(html, toFabricationFields(opts.row)),
       // noMetricFacts 走单一判据出口，别在这里重写布尔组合（会踩扫描守卫）
       health: checkOutputHealth({

@@ -32,7 +32,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { contents, journalUsage, journals } from "../models/schema.js";
 import { classifyDataSupply } from "../services/journals/journal-data-supply.js";
@@ -46,6 +46,14 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(__dirname, "../../data/discipline-position-samples");
+
+/**
+ * 🔴 终稿三篇（老板 8-11 定）。**钉死，不靠排名撞上** ——
+ * A′ 组按近 30 天 journal_usage 取 TOP5，排名随时间漂：8-11 两轮之间
+ * 《民族教育研究》就掉出了 TOP5，导致终稿选定的刊不在产物里。
+ * 定稿用的样例必须可复现，所以这三本每轮强制生成并排在最前。
+ */
+const FINAL_PICKS = ["民族教育研究", "教育学报", "电影评介"];
 
 const A_GROUP_SIZE = 5;
 const B_GROUP_SIZE = 5;
@@ -125,7 +133,9 @@ function pickGroupB(pool: Row[], n: number): Row[] {
   // 教育口凑不够 3 本就退而取最大的同分类桶 —— 重复度那个数必须有同学科样本才有意义
   const cohortBucket = eduBucket ?? bySize[0];
   const same = (cohortBucket?.[1] ?? []).slice(0, 3);
-  const rest = eligible.filter((r) => !same.includes(r)).slice(0, n - same.length);
+  // 多要几本备用：跨组去重会吃掉名额（8-11《教育学报》被 A′ 先占，B 组同学科从 3 篇掉到 2 篇，
+  //   重复度那个数的样本量当场减半）。多带的在主循环里被去重跳过即可。
+  const rest = eligible.filter((r) => !same.includes(r)).slice(0, n + 3 - same.length);
   if (cohortBucket) {
     console.log(`  B 组同分类样本取自「${cohortBucket[0]}」（该桶 ${cohortBucket[1].length} 本可用）`);
   }
@@ -146,7 +156,7 @@ async function latestExistingContent(journalId: string): Promise<{ title: string
 }
 
 interface Sample {
-  group: "A" | "A'" | "B";
+  group: "终稿" | "A" | "A'" | "B";
   journalId: string;
   journalName: string;
   supply: string;
@@ -184,6 +194,12 @@ async function main() {
   //   A 组按纯 TOP5 取（结论本身就是拍板材料：8-10 实测 5/5 全部 no_catalog_in_db,
   //   即本体裁**覆盖不到当前的回头刊**——它们多是国际刊）。
   //   A′ 组补位：回头刊里真能过准入的，用来出「同一本刊，两种写法」的左右对比。
+  // 终稿三篇：按名字直接取行，与排名无关
+  const picked = await db.select().from(journals).where(inArray(journals.name, FINAL_PICKS));
+  const finals = FINAL_PICKS.map((n) => picked.find((r) => r.name === n)).filter((r): r is Row => !!r);
+  if (finals.length !== FINAL_PICKS.length) {
+    console.log(`  ⚠️ 终稿三篇里有 ${FINAL_PICKS.length - finals.length} 本在 journals 表找不到`);
+  }
   const groupA = await pickGroupA(A_GROUP_SIZE);
   const groupB = pickGroupB(pool, B_GROUP_SIZE);
   console.log(`\n选刊 A 组（回头刊 TOP${A_GROUP_SIZE}）：${groupA.map((r) => r.name).join("、")}`);
@@ -197,6 +213,7 @@ async function main() {
   const emitted = new Set<string>(); // 同一本刊在 A′ 与 B 都被选中过（8-11），出两遍白费一个名额
   let seed = 0;
   for (const [group, rows] of [
+    ["终稿", finals],
     ["A", groupA],
     ["A'", groupAPrime],
     ["B", groupB],
@@ -251,12 +268,9 @@ async function main() {
   const done = samples.filter((s) => s.result);
 
   // ── 拍板数字 ②：编造命中数
+  // 🔻 措辞检查已降级为影子，**不计入**这个数（台账 37 报 0 中）
   const totalViolations = done.reduce(
-    (a, s) =>
-      a +
-      s.result!.checks.numberViolations.length +
-      s.result!.checks.fabrication.length +
-      s.result!.checks.membershipViolations.length,
+    (a, s) => a + s.result!.checks.numberViolations.length + s.result!.checks.fabrication.length,
     0,
   );
   console.log(`\n【拍板数字②】${done.length} 篇合计 编造/数字违规命中：${totalViolations} 处（目标 0）`);
@@ -306,7 +320,8 @@ async function main() {
     const sPct = jac(bEdu.map(siblingsOf));
     dupNote =
       `B 组同属「${topDisc}」的 ${bEdu.length} 篇：模型正文重合 ${nPct.toFixed(1)}%，` +
-      `同类刊清单重合 ${sPct.toFixed(1)}%（模板骨架必然相同，不计入）`;
+      `同类刊清单重合 ${sPct.toFixed(1)}%（模板骨架必然相同，不计入）` +
+      `　⚠️ 样本量 ${bEdu.length} 篇 —— 篇数越少这个百分比越不稳，跨轮比较要先看样本量`;
   }
   console.log(`【拍板数字③】${dupNote}`);
 
@@ -369,9 +384,6 @@ function buildComparePage(
       <td class="${r.checks.numberViolations.length + r.checks.fabrication.length > 0 ? "bad" : "good"}">${
         r.checks.numberViolations.length + r.checks.fabrication.length
       }</td>
-      <td class="${r.checks.membershipViolations.length > 0 ? "bad" : "good"}">${
-        r.checks.membershipViolations.length
-      }</td>
       <td class="${r.checks.health.issues.length > 0 ? "bad" : "good"}">${r.checks.health.issues.length}</td>
     </tr>`;
     })
@@ -379,16 +391,14 @@ function buildComparePage(
 
   const skipRows = samples
     .filter((s) => !s.result)
-    .map((s) => `<tr><td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td colspan="9">跳过：${esc(s.skipReason)}</td></tr>`)
+    .map((s) => `<tr><td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td colspan="8">跳过：${esc(s.skipReason)}</td></tr>`)
     .join("");
 
-  const blocks = done
-    .map((s) => {
+  const isFinal = (s: Sample) => s.group === "终稿";
+  const render = (s: Sample) => {
       const r = s.result!;
       const evid = [
-        ...[...r.checks.numberViolations, ...r.checks.membershipViolations].map(
-          (v) => `【${v.kind}】命中「${v.matched}」 ← ${v.sentence}`,
-        ),
+        ...r.checks.numberViolations.map((v) => `【${v.kind}】命中「${v.matched}」 ← ${v.sentence}`),
         ...r.checks.fabrication.map((f) => `【编造】${typeof f === "string" ? f : JSON.stringify(f)}`),
         ...r.checks.health.issues.map((i) => `【health/${i.code}】${i.detail}`),
       ];
@@ -418,8 +428,9 @@ function buildComparePage(
       <details><summary>证据区（命中 ${evid.length} 条 ｜ 本篇数字白名单：${esc(white.join("、"))}）</summary>
         <pre>${esc(evid.join("\n") || "（零命中）")}</pre></details>
     </section>`;
-    })
-    .join("");
+  };
+  const finalBlocks = done.filter(isFinal).map(render).join("");
+  const restBlocks = done.filter((s) => !isFinal(s)).map(render).join("");
 
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -489,9 +500,14 @@ code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px}
 </div>
 <table><thead><tr>
 <th>组</th><th>期刊</th><th>供给</th><th>字数</th><th>factsAvailable</th><th>factsCited</th>
-<th>目录切片</th><th>违规/百字</th><th>编造命中</th><th>措辞未锚版本年</th><th>health</th>
+<th>目录切片</th><th>违规/百字</th><th>编造命中</th><th>health</th>
 </tr></thead><tbody>${rows}${skipRows}</tbody></table>
-${blocks}
+<h2 style="margin:24px 0 12px;font-size:18px;">终稿三篇</h2>
+${finalBlocks || '<p class="none">终稿三篇未生成</p>'}
+<details style="margin-top:28px;"><summary style="cursor:pointer;font-size:16px;font-weight:600;padding:10px 0;">
+  其余 ${done.filter((s) => !isFinal(s)).length} 篇（附录，展开查看）</summary>
+${restBlocks}
+</details>
 </body></html>`;
 }
 
