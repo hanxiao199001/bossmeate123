@@ -113,10 +113,23 @@ function pickGroupB(pool: Row[], n: number): Row[] {
     const k = s.disciplineOfThisJournal;
     byDiscipline.set(k, [...(byDiscipline.get(k) ?? []), r]);
   }
-  const eduKey = [...byDiscipline.keys()].find((k) => k.includes("教育"));
-  const edu = (eduKey ? byDiscipline.get(eduKey)! : []).slice(0, 3);
-  const rest = eligible.filter((r) => !edu.includes(r)).slice(0, n - edu.length);
-  return [...edu, ...rest];
+  /**
+   * 取**最大**的教育口分类桶，不是第一个。
+   * 8-11 踩过：原先写 `.find(k => k.includes("教育"))`，取的是 Map 插入序里第一个 ——
+   * 快照对官方校准后遍历顺序一变，它撞上一个只有 1 本的小桶，
+   * B 组当场变成清一色医学刊，「3 篇同教育口暴露雷同风险」这个设计目的直接落空。
+   * 选样脚本的选样逻辑本身不稳，量出来的数就不可比。
+   */
+  const bySize = [...byDiscipline.entries()].sort((a, b) => b[1].length - a[1].length);
+  const eduBucket = bySize.find(([k, v]) => k.includes("教育") && v.length >= 3);
+  // 教育口凑不够 3 本就退而取最大的同分类桶 —— 重复度那个数必须有同学科样本才有意义
+  const cohortBucket = eduBucket ?? bySize[0];
+  const same = (cohortBucket?.[1] ?? []).slice(0, 3);
+  const rest = eligible.filter((r) => !same.includes(r)).slice(0, n - same.length);
+  if (cohortBucket) {
+    console.log(`  B 组同分类样本取自「${cohortBucket[0]}」（该桶 ${cohortBucket[1].length} 本可用）`);
+  }
+  return [...same, ...rest];
 }
 
 /** 该刊最近一篇存量文章 —— 左栏的「现状文」。没有就留空，不伪造 */
@@ -243,8 +256,16 @@ async function main() {
   console.log(`\n【拍板数字②】${done.length} 篇合计 编造/数字违规命中：${totalViolations} 处（目标 0）`);
 
   // ── 拍板数字 ③：B 组同学科重复度
+  // 按"B 组里出现最多的那个分类"取同学科样本 —— 不写死教育口(桶会随快照校准变)
+  const bCounts = new Map<string, number>();
+  for (const s of done) {
+    if (s.group !== "B") continue;
+    const d = usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal;
+    if (d) bCounts.set(d, (bCounts.get(d) ?? 0) + 1);
+  }
+  const topDisc = [...bCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const bEdu = done.filter(
-    (s) => s.group === "B" && usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal.includes("教育"),
+    (s) => s.group === "B" && usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal === topDisc,
   );
   /**
    * 🔴 分开量两件事。第一版只量了整页 HTML，得出「56% 雷同」——
@@ -278,7 +299,7 @@ async function main() {
     const nPct = jac(bEdu.map(narrativeOf));
     const sPct = jac(bEdu.map(siblingsOf));
     dupNote =
-      `同为教育口的 ${bEdu.length} 篇：模型正文重合 ${nPct.toFixed(1)}%，` +
+      `B 组同属「${topDisc}」的 ${bEdu.length} 篇：模型正文重合 ${nPct.toFixed(1)}%，` +
       `同类刊清单重合 ${sPct.toFixed(1)}%（模板骨架必然相同，不计入）`;
   }
   console.log(`【拍板数字③】${dupNote}`);
