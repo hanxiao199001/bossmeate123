@@ -75,20 +75,31 @@ const PATTERNS: RegExp[] = [
 const VERSION_YEAR = /\d{4}(?:\s*[-—]\s*\d{4})?\s*年?\s*版|版本年|该版|本版/;
 
 /**
- * 成员资格**断言**。刻意不是"提到目录名"——
- * 8-10 实测：按"提到目录名就要求同句带版本年"去查，10 篇报出 35 条，
- * 逐条看下去**没有一条**是要防的那个失败模式，全是
- * 「北大核心目录只给出成员资格，不提供排序」这类讲目录本身的句子。
- * 每篇 3.5 条误报，等于把这道闸变成噪声（8-08 扫描守卫收窄三次的同一个教训）。
+ * 成员资格**断言**。三次收窄的结果，每一次都是被实测的假阳性逼出来的：
  *
- * 收窄到真正会随目录更新变假的句式：**判断动词 + 目录名**。
- *   命中：是/为/属于/跻身/作为 + 北大核心[期刊]
- *   放行：「在 CSSCI 中，民族学分类…」「北大核心目录只给出成员资格」
+ *   v1「句子里提到目录名就要求带版本年」→ 10 篇报 35 条，**零真阳性**，
+ *      全是「北大核心目录只给出成员资格，不提供排序」这类讲目录本身的句子。
+ *   v2「判断动词 + 目录名」→ 又报 2 条假阳性：
+ *        「无论从 CSSCI 还**是**北大核心的学科标签来看」——「还是」的是是连词
+ *        「『高校学报』则**是** CSSCI 目录中特有的分类」——主语是分类不是本刊
+ *   v3（当前）要求命题真的在说**本刊的成员资格**，二选一即可：
+ *        ① 有指向本刊的主语（本刊/该刊/它/《刊名》）+ 判断动词 + 目录名
+ *        ② 目录名后面紧跟「期刊/来源期刊/收录期刊」这个名词
+ *
+ * 📌 截至 8-11，这道闸在约 30 篇实测产物上累计报出 37 条，**真阳性 0 条**。
+ *   prompt 侧的措辞纪律一直有效（模型稳定写「入选 X 版目录」）。
+ *   保留它是为了防回归，不是因为它在抓活的问题 —— 若再出现假阳性，
+ *   应当考虑降级为「只记录不计入违规数」，而不是继续加特例。
  */
-const MEMBERSHIP_CLAIM = new RegExp(
-  `(?:是|为|属于|跻身|入列|作为)\\s*(?:一本\\s*)?(?:${
-    "CSSCI\\s*扩展版?|CSSCI|北大核心|中文核心|中文社会科学引文索引|CSCD|SCI\\s*核心"
-  })`,
+const CATALOGS = "CSSCI\\s*扩展版?|CSSCI|北大核心|中文核心|中文社会科学引文索引|CSCD|SCI\\s*核心";
+/** ① 主语指向本刊 */
+const MEMBERSHIP_SUBJ = new RegExp(
+  `(?:本刊|该刊|它|《[^》]{1,40}》)[^。！？；]{0,15}(?:是|为|属于|跻身|入列)[^。！？；]{0,10}(?:${CATALOGS})`,
+  "g",
+);
+/** ② 目录名 + 「期刊」这个名词 —— 「是 CSSCI 来源期刊」这种即使省略主语也是成员资格断言 */
+const MEMBERSHIP_NOUN = new RegExp(
+  `(?:是|为|属于|跻身|入列|作为)\\s*(?:一本\\s*)?(?:${CATALOGS})[^。！？；]{0,4}(?:来源期刊|收录期刊|期刊)`,
   "g",
 );
 
@@ -114,7 +125,9 @@ export function findMembershipClaimViolations(text: string | null | undefined): 
   for (const sentence of sentencesOf(toPlain(text))) {
     // ① 成员资格断言未锚定版本年 —— 目录一更新就变假话
     if (!VERSION_YEAR.test(sentence)) {
-      const m = sentence.match(new RegExp(MEMBERSHIP_CLAIM.source, "g"));
+      const m =
+        sentence.match(new RegExp(MEMBERSHIP_SUBJ.source, "g")) ??
+        sentence.match(new RegExp(MEMBERSHIP_NOUN.source, "g"));
       if (m) out.push({ kind: "membership_not_time_anchored", matched: m[0], sentence });
     }
     // ② 排名断言 —— 无论有没有版本年，本体裁一律不许

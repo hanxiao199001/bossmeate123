@@ -194,6 +194,7 @@ async function main() {
   console.log(`选刊 B 组（真 sparse 国内刊）：${groupB.map((r) => r.name).join("、")}`);
 
   const samples: Sample[] = [];
+  const emitted = new Set<string>(); // 同一本刊在 A′ 与 B 都被选中过（8-11），出两遍白费一个名额
   let seed = 0;
   for (const [group, rows] of [
     ["A", groupA],
@@ -201,6 +202,11 @@ async function main() {
     ["B", groupB],
   ] as const) {
     for (const row of rows) {
+      if (emitted.has(row.id)) {
+        console.log(`  ⏭  ${row.name} 已在前一组出现，跳过（避免同刊出两遍占名额）`);
+        continue;
+      }
+      emitted.add(row.id);
       const supply = classifyDataSupply(row).level;
       const gate = cohortEligible(buildCohortFromRow(row));
       if (!gate.ok) {

@@ -153,6 +153,14 @@ describe("成员资格断言必须锚定版本年", () => {
     expect(findMembershipClaimViolations(t)).toEqual([]);
   });
 
+  /** v2 收窄后仍误报的两条真实产出句 —— v3 的回归锁 */
+  it.each([
+    "这意味着，无论从CSSCI还是北大核心的学科标签来看，都能定位到这本期刊。",
+    "“高校学报”则是CSSCI目录中特有的分类，专指由高校主办的综合性人文社科版学报。",
+  ])("真实产出句「%s」不误报（v2 曾误判）", (t) => {
+    expect(findMembershipClaimViolations(t)).toEqual([]);
+  });
+
   it("「2023年版」也算锚定（首版正则只认「2023 版」，把它误判成违规）", () => {
     expect(findMembershipClaimViolations("本刊是北大核心期刊（2023年版）。")).toEqual([]);
   });
