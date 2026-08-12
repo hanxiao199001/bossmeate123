@@ -13,6 +13,7 @@
  *   两者毫无关系, 别在同一个文件里同时 import。
  */
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 import { isRealMode } from "./client.js";
 import { submitDvhTask, submitDvhAudioTask } from "./submit-task.js";
 import { buildSrtFromText } from "./subtitle-from-text.js";
@@ -96,6 +97,41 @@ export interface ProducedVideo {
 }
 
 /**
+ * 8-12 提交成功(=已扣费)但取不回成片。
+ *
+ * 🔴 **绝不能盲目自动重跑** —— submit 已经按 0.165 元/秒扣过一次，重提交是再付一次钱。
+ * 正确动作是凭 `taskUuid` 去阿里云把那条已付费的成片捞回来。
+ * 所以这个错误必须把 taskUuid 带出去，deferred 记录里也要留着。
+ */
+export class DvhOrphanTaskError extends Error {
+  readonly taskUuid: string;
+  constructor(taskUuid: string, cause: string) {
+    super(`DVH_ORPHAN_TASK: 已提交并扣费但取不回成片(task ${taskUuid}) — ${cause}`);
+    this.name = "DvhOrphanTaskError";
+    this.taskUuid = taskUuid;
+  }
+}
+
+/** 8-12 提交就没成功(未扣费)。服务恢复后原样重跑即可。 */
+export class DvhSubmitFailedError extends Error {
+  constructor(cause: string) {
+    super(`DVH_SUBMIT_FAILED: ${cause}`);
+    this.name = "DvhSubmitFailedError";
+  }
+}
+
+/** 8-12 DVH_REAL_MODE 没开且没显式配置演示素材 —— 配置问题，重跑一万次也一样。 */
+export class DvhNotRealModeError extends Error {
+  constructor() {
+    super(
+      "DVH_NOT_REAL_MODE: DVH_REAL_MODE 不是 'true'，且未显式配置 DVH_MOCK_FIXTURE_BASE。" +
+        "生产环境必须开 DVH_REAL_MODE；开发/演示环境请显式设置 DVH_MOCK_FIXTURE_BASE 才会返回占位样片。",
+    );
+    this.name = "DvhNotRealModeError";
+  }
+}
+
+/**
  * 7-29: 原来是 5 个位置参数 (text, title, templateId, tenantId, clonedVoiceId), 再加背景图就彻底读不懂了
  *   —— 改成 options 对象。
  */
@@ -130,6 +166,10 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       },
       { key: "dvh_mock_mode" },
     );
+    // 🔴 8-12: 生产链路不再返回占位样片。只有**显式**配置了 DVH_MOCK_FIXTURE_BASE
+    //   (= 开发/演示环境的主动选择) 才给占位; 否则当场失败。
+    //   老规矩: 一个看起来成功、其实是固定样片的产物, 比一个明确的失败坏得多。
+    if (!env.DVH_MOCK_FIXTURE_BASE) throw new DvhNotRealModeError();
     return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "mock_mode" };
   }
   // PR #261 (5-29): 防烧钱 — submit 即扣费 (0.165 元/秒). 一旦 query 拿到付费 videoUrl,
@@ -263,12 +303,10 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         amountCents: estimateDvhCents(text),
         note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
       });
-      const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-      return {
-        ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false,
-        fallbackReason: "query_failed_orphan", fallbackError: msg,
-        ...(effective ? { effective } : {}),   // 已经提交过 = 参数确实发出去了, 留着对账
-      };
+      // 🔴 8-12: 不再退占位样片。8-12 实测线上因此躺着 4 条"状态 draft、看不出异常"的假成品
+      //   (标题是真实期刊内容, 片子是固定占位样片, 还带着与该刊无关的 IF/分区大字卡)。
+      //   改为抛错 → 调用方落 status=failed + metadata.deferred, 服务恢复后由重跑接管。
+      throw new DvhOrphanTaskError(taskUuid, msg);
     }
     // submit 都没成功 — 未扣费, 正常 fallback mock.
     // 7-31 由 warn 升到 error: 真实模式下走到这里, 运营界面上仍然是"生成成功"、内容管理里也真有一条视频,
@@ -289,7 +327,7 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         err: msg.slice(0, 300),
       },
     });
-    const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "submit_failed", fallbackError: msg };
+    // 🔴 8-12: 同上, 不再退占位样片。未扣费, 服务恢复后原样重跑即可。
+    throw new DvhSubmitFailedError(msg);
   }
 }

@@ -347,6 +347,15 @@ export function classifyFailure(err: unknown): FailureKind {
   //   两者都是"外部服务当时给不出东西", 内容本身没问题。
   if (f.name === "AiUnavailableError" || lower.includes("ai 不可用")) return "service_down";
   if (f.name === "DvhTtsFailedError" || lower.includes("dvh_tts_failed")) return "service_down";
+  // 8-12 DVH 提交失败(未扣费) —— 服务恢复后原样重跑
+  if (f.name === "DvhSubmitFailedError" || lower.includes("dvh_submit_failed")) return "service_down";
+  /**
+   * 8-12 DVH 孤儿任务：提交成功(**已扣费**)但取不回成片。
+   * 归 service_down 是为了让它进 deferred 队列不被判死，但 ⚠️ 重跑语义与别处不同：
+   * **应当凭 taskUuid 去捞回那条已付费的成片，而不是重新提交**（重提交 = 再付一次钱）。
+   * taskUuid 已由 DvhOrphanTaskError 带出并落进 deferred detail。
+   */
+  if (f.name === "DvhOrphanTaskError" || lower.includes("dvh_orphan_task")) return "service_down";
 
   // ---- ③ 兜底: 内容自己的问题, 重跑没用 ----
   return "content_error";
