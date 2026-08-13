@@ -32,6 +32,7 @@ import { nanoid } from "nanoid";
 import { logger } from "../config/logger.js";
 import { initialStatusFields } from "../services/articles/state-machine.js";
 import { generateRoundupArticle } from "../services/content-engine/roundup-generator.js";
+import { pickRotatingTemplateId } from "../services/skills/template-registry.js";
 
 // PR #173: "一键 N 篇" 模式 — count 替代 topic+journalId
 const generateArticleSchema = z.object({
@@ -50,7 +51,11 @@ const generateAndPublishSchema = z.object({
   journalIds: z.array(z.string().uuid()).default([]),
   // 通用
   template: z.enum(["A", "B", "C", "E"]).default("A"),
-  // PR-Q2: 排版模板 (顺仕美途/数据卡片/故事/清单), 缺省=不指定走默认; "rotate"=随机轮换
+  /**
+   * PR-Q2: 排版模板。缺省=不指定走默认；`"rotate"`=按轮换名单随机。
+   * ⚠️ 8-13：`listicle` **保留在枚举里**（显式指定向后兼容、存量重渲染要用），
+   *   但它已退出轮换（`rotationEnabled:false`），所以 `"rotate"` 不会再挑中它。
+   */
   layoutTemplateId: z.enum(["shunshi-style", "data-card", "storytelling", "listicle", "rotate"]).optional(),
   accountIds: z.array(z.string().uuid()).default([]),
   // PR-W5: exclusive=每账号按自己领域生成专属内容(count=每账号篇数, 互不重复); broadcast=老行为
@@ -94,10 +99,20 @@ const bulkDistributeSchema = z.object({
 
 const MAX_CARTESIAN = 200; // 笛卡尔积 safety cap
 
-// PR-Q2: 排版模板解析 — 指定id直接用; "rotate"或缺省→随机轮换4个真排版模板; 让用户能手动选排版
-const LAYOUT_POOL = ["shunshi-style", "data-card", "storytelling", "listicle"];
+/**
+ * PR-Q2: 排版模板解析 —— 指定 id 直接用；`"rotate"` 或缺省 → 走轮换。
+ *
+ * 🔴 8-13 收口：原来这里有第三份写死名单
+ * （`["shunshi-style","data-card","storytelling","listicle"]`，listicle 在内）。
+ * 加上 `article-skill` 与 `daily-cron`，同一件事全仓有**三处各判各的** ——
+ * 收口时我只找到前两处就宣布完成，是扫描守卫把这处抓出来的。
+ *
+ * 现在统一问 `pickRotatingTemplateId()`（唯一归宿：`TemplateDefinition.rotationEnabled`）。
+ * **显式指定不受影响**：用户点名 listicle 仍然给他 listicle（向后兼容，存量重渲染要用），
+ * 只有"让系统随便挑"这件事受轮换名单约束。
+ */
 function resolveLayout(v?: string): string | undefined {
-  if (!v || v === "rotate") return LAYOUT_POOL[Math.floor(Math.random() * LAYOUT_POOL.length)];
+  if (!v || v === "rotate") return pickRotatingTemplateId();
   return v;
 }
 
