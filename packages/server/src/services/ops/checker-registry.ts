@@ -154,7 +154,9 @@ registerChecker({
 });
 
 registerChecker({
-  id: "placeholder_asset_in_body",
+  // ⚠️ 必须带 output_health. 前缀 —— 它是出稿健康闸的一个 code, 接线按前缀过滤。
+  //   8-14 首版写成裸名, 接线时 codes 只有 9 个(闸实际有 10 个 code), 它永远不会记账。
+  id: "output_health.placeholder_asset_in_body",
   guards: "内容指向占位/测试素材（dvh-fixtures 等）—— 这不是真产物",
   since: "2026-08-13",
   mode: "active",

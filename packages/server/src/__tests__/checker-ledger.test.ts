@@ -125,3 +125,25 @@ describe("⑥ 注册处：回溯案例与上线后统计分开", () => {
     for (const c of R.listCheckers()) expect(c.since, `${c.id} 缺 since`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+describe("⑦ 接线完整性：闸的每个 code 都要有对应的注册项", () => {
+  /**
+   * 🔴 8-14 首版栽在这里：`placeholder_asset_in_body` 注册成了裸名，
+   * 而接线按 `output_health.` 前缀过滤 —— 于是它**永远不会记账**，
+   * 而日志里的 `wired codes:9` 看起来完全正常（闸实际有 10 个 code）。
+   * 少记一个 checker 不会报错，只会让台账悄悄缺一块 —— 正是这套系统要消灭的形态。
+   */
+  it("output-health 的每个 code 都能在注册处找到（前缀齐全）", async () => {
+    const oh = await import("../services/publisher/output-health.js");
+    // 用一组必然全命中的输入把所有 code 逼出来太脆；直接取类型联合的实际取值：
+    const codes = [
+      "ai_fallback_text", "title_empty", "title_too_short", "title_placeholder",
+      "body_too_short", "body_truncated", "body_repetition", "template_residue",
+      "fallback_phrase", "placeholder_asset_in_body",
+    ];
+    const registered = new Set(R.listCheckers().map((c) => c.id));
+    const missing = codes.filter((c) => !registered.has(`output_health.${c}`));
+    expect(missing, `这些 code 没注册(或缺前缀)，将永远不记账：${missing.join(", ")}`).toEqual([]);
+    expect(typeof oh.checkOutputHealth).toBe("function");
+  });
+});
