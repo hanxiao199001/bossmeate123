@@ -52,6 +52,7 @@ export type SchedulerJobType =
   | "draft-distribute"         // 7-05 ⑤: 每日早晨公众号草稿箱分发(每号 top-N 候选)
   | "wechat-stats-collect"     // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
   | "ops-daily-briefing"       // 7-25: 每日运营简报(异常汇总→企微推送, 推失败降级落库+今日驾驶舱)
+  | "ops-weekly-judgment"      // 8-14 Phase 2: 判断层周报(检查器台账 + 去留建议 → 企微推运营)
   | "service-health-probe";    // 8-03: 每 30 分钟探外部依赖是否恢复 → 自动重跑积压内容(欠费/服务挂)
 
 export interface SchedulerJobData {
@@ -485,6 +486,18 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       return { date: r.date, level: r.level, pushed: r.pushed, tenantsProcessed: r.tenantsProcessed };
     }
 
+    case "ops-weekly-judgment": {
+      // 8-14 Phase 2: 判断层周报。与日简报共用总开关 —— 运营关掉简报就是不想被打扰,
+      //   周报没道理绕过这个意图。
+      if (!env.OPS_BRIEFING_ENABLED) {
+        logger.info("ops-weekly-judgment skipped (OPS_BRIEFING_ENABLED=false)");
+        return { skipped: true, reason: "OPS_BRIEFING_ENABLED=false" };
+      }
+      const { runWeeklyJudgmentReport } = await import("./ops/weekly-judgment-report.js");
+      const r = await runWeeklyJudgmentReport();
+      return { weekOf: r.weekOf, todos: r.todos, pushed: r.pushed };
+    }
+
     case "service-health-probe": {
       // 8-03: 外部依赖恢复探测 + 自动重跑。
       //   探测本身要花真钱(必须是真实计费调用 —— 实测欠费时 /models 照返 200),
@@ -770,6 +783,16 @@ async function registerCronJobs() {
     "ops-daily-briefing-schedule",
     { pattern: `${env.OPS_BRIEFING_CRON_MINUTE} ${env.OPS_BRIEFING_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
     { name: "ops-daily-briefing", data: { type: "ops-daily-briefing" as SchedulerJobType } }
+  );
+
+  // 8-14 Phase 2: 每周一 10:00 BJ 判断层周报。
+  //   排在日简报(09:30)之后半小时 —— 周报要读的台账/内容数据与日简报同源,
+  //   让日简报先跑完, 避免两个任务同时扫 contents。
+  //   周一发: 上周数据齐全, 且运营周一有时间处理"这周要你做的事"。
+  await crawlerQueue.upsertJobScheduler(
+    "ops-weekly-judgment-schedule",
+    { pattern: "0 10 * * 1", tz: "Asia/Shanghai" },
+    { name: "ops-weekly-judgment", data: { type: "ops-weekly-judgment" as SchedulerJobType } }
   );
 
   // 8-03: 每 30 分钟探一次"外部依赖回来没有" → 回来了就把积压内容自动重跑。
