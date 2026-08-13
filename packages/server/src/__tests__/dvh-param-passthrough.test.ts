@@ -308,17 +308,23 @@ describe("存证: 选了什么 vs 实际用了什么", () => {
     expect(p.driveMode).toBe("text");
   });
 
-  it("submit 失败 → 落库的是占位样片: effective 缺失 + placeholder + fallbackReason, 且 error 级日志", async () => {
+  /**
+   * 8-12 行为变更：submit 失败不再退占位样片。
+   * 落的是 status=failed + metadata.deferred 的失败记录（body=口播稿原文，供重跑），
+   * 而不是一条「看起来像成品」的视频。7-31 那次只做到「不报 success」，仍然落了假成品；
+   * 实测线上因此躺着 4 条 status=draft、看不出异常的片子。
+   */
+  it("submit 失败 → 不产占位样片, 落 deferred 失败记录(原稿留着)", async () => {
     process.env.__FAKE_SUBMIT_FAIL = "1";
     const app = await buildApp();
     const res = await app.inject({ method: "POST", url: "/dvh-from-text", payload: { text: CLEAN, templateId: MALE_KEY, backgroundUrl: BG_LIB } });
     expect(res.statusCode).toBe(200); // fire-and-forget, 接口仍是 200 —— 所以更要靠存证认出来
     const meta = await waitInsert();
-    expect(meta.effective).toBeUndefined();          // 没提交成功 = 没有"实际用了什么"
-    expect(meta.placeholder).toBe(true);
-    expect(meta.fallbackReason).toBe("submit_failed");
-    expect(meta.realMode).toBe(false);
-    expect(meta.requested.templateId).toBe(MALE_KEY); // 用户选了什么仍然记得清清楚楚
+    expect(meta.placeholder).toBeUndefined();        // 不再有"占位样片"这种东西
+    expect(meta.fallbackReason).toBeUndefined();
+    expect(meta.failedStage).toBe("dvh_text_produce");
+    expect(meta.narrationText).toBe(CLEAN);          // 🔴 原稿必须留着, 否则重跑无米(8-03 教训)
+    expect(meta.deferred?.input?.kind).toBe("dvh_text");
     expect(logSpy.error.mock.calls.some((c) => String(c[1]).includes("real_failed_fallback_mock"))).toBe(true);
   });
 
@@ -394,32 +400,34 @@ describe("TTS 失败 → 直接失败, 绝不带着静音去提交", () => {
 });
 
 describe("success 只在真拿到成片时报 + 失败落 incident", () => {
-  it("已扣费却取不回成片(孤儿任务): 报 placeholder 不报 success, 且 incident 带 taskUuid 供捞回", async () => {
+  /**
+   * 孤儿任务 = 已提交(**已扣费**)但取不回成片 —— 四种失败里最贵的一种。
+   * 8-12 起同样不退占位样片；但 incident 与 taskUuid 这两条不变量必须保住：
+   * 那条已付费的成片还能凭 taskUuid 去阿里云捞回，丢了 taskUuid 就等于把钱扔了。
+   */
+  it("已扣费却取不回成片(孤儿任务): 不产占位样片, 但 incident 必须带 taskUuid 供捞回", async () => {
     queryMock.mockRejectedValue(new Error("query timeout"));
     const app = await buildApp();
     await app.inject({ method: "POST", url: "/dvh-from-text", payload: { text: CLEAN, templateId: MALE_KEY } });
     const meta = await waitInsert();
 
-    expect(meta.fallbackReason).toBe("query_failed_orphan");
-    expect(meta.orphanTaskUuid).toBe("t-1");
-    // 提交过 = 参数确实发出去了, effective 要留着对账(与 submit_failed 那条相反)
-    expect(meta.effective.avatarCode).toBe("CH_2d_MALE001");
-    // ★ 钱花了没拿到货 —— 四种兜底里最贵的一种, 必须上简报, 且带上 taskUuid(还能去阿里云捞回成片)
+    expect(meta.placeholder).toBeUndefined();
+    expect(meta.fallbackReason).toBeUndefined();
+    expect(meta.narrationText).toBe(CLEAN);
+    // ★ 钱花了没拿到货 —— 必须上简报, 且带上 taskUuid(还能去阿里云捞回成片)
     const inc = incidentSpy.mock.calls.map((c) => c[0] as any).find((a) => a.kind === "dvh_paid_task_orphaned");
     expect(inc).toBeTruthy();
     expect(inc.detail.taskUuid).toBe("t-1");
     // ★ 不许叫 success
     expect(logSpy.info.mock.calls.some((c) => String(c[1]) === "dvh.text.success")).toBe(false);
-    expect(logSpy.error.mock.calls.some((c) => String(c[1]).includes("dvh.text.placeholder"))).toBe(true);
   });
 
-  it("submit 失败: 同样不许叫 success, 且落 dvh_submit_failed incident", async () => {
+  it("submit 失败: 不许叫 success, 且落 dvh_submit_failed incident", async () => {
     process.env.__FAKE_SUBMIT_FAIL = "1";
     const app = await buildApp();
     await app.inject({ method: "POST", url: "/dvh-from-text", payload: { text: CLEAN, templateId: MALE_KEY } });
     await waitInsert();
     expect(logSpy.info.mock.calls.some((c) => String(c[1]) === "dvh.text.success")).toBe(false);
-    expect(logSpy.error.mock.calls.some((c) => String(c[1]).includes("dvh.text.placeholder"))).toBe(true);
     expect(incidentSpy.mock.calls.map((c) => (c[0] as any).kind)).toContain("dvh_submit_failed");
   });
 

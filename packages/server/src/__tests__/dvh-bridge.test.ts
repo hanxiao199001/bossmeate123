@@ -78,7 +78,14 @@ beforeEach(() => {
 });
 
 describe("triggerDvhFromArticle", () => {
-  it("mock 模式: 照样落库, 但**不许报 success** — 报 placeholder(error 级)", async () => {
+  /**
+   * 8-12 行为变更（第三次翻转，把前两次没做完的做完）：
+   *   7-31 让占位片不再报 success（但**照样落库**）
+   *   8-12 连落库也取消 —— 实测线上因此躺着 4 条「status=draft、看不出异常」的假成品。
+   * 现在 REAL_MODE 未开且未显式配 DVH_MOCK_FIXTURE_BASE → 当场失败，
+   * 落一条 status=failed 的记录（body=口播稿原文，供重跑），而不是一条像成品的视频。
+   */
+  it("mock 模式且未显式配演示素材: 不产视频, 落 failed 记录", async () => {
     isRealModeMock.mockReturnValue(false);
     const fakeDb = makeFakeDb({
       articleRow: { id: "art-1", title: "测试期刊", body: "<p>Lorem ipsum dolor sit amet</p>" },
@@ -86,11 +93,10 @@ describe("triggerDvhFromArticle", () => {
     await triggerDvhFromArticle({ ...baseOpts, db: fakeDb });
     expect(submitDvhTaskMock).not.toHaveBeenCalled();
     expect(queryDvhTaskMock).not.toHaveBeenCalled();
+    // 仍然落库一行 —— 但那是失败记录, 不是"看起来像成品的视频"(见 recordDvhArticleFailure)
     expect(fakeDb.insert).toHaveBeenCalledTimes(1);
-    // 7-31 断言翻转: 以前这里断言的是 dvh.bridge.success —— 而这条根本不是真渲染, 是固定占位样片。
-    //   "占位片也报 success" 正是要消灭的东西(日志满屏成功, 真假只差一个没人看的 realMode 字段)。
     expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(false);
-    expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.placeholder/.test(JSON.stringify(c)))).toBe(true);
+    expect(warnSpy.mock.calls.some((c) => /dvh\.bridge\.fatal/.test(JSON.stringify(c)))).toBe(true);
   });
 
   it("dedup: 已有 sourceArticleId+source=dvh 命中 → 跳过 + 不 fetch article 不 insert", async () => {
@@ -101,7 +107,7 @@ describe("triggerDvhFromArticle", () => {
     expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.dedup/.test(JSON.stringify(c)))).toBe(true);
   });
 
-  it("body.success=false fallback: real mode submit 抛 10010003 → fallback mock + insert realMode=false", async () => {
+  it("real mode submit 抛 10010003 → 不退占位样片, 落 failed 记录", async () => {
     isRealModeMock.mockReturnValue(true);
     const err = new Error("DVH submit failed: 10010003 无访问权限") as Error & { code?: string };
     err.code = "10010003";
@@ -112,12 +118,11 @@ describe("triggerDvhFromArticle", () => {
     await triggerDvhFromArticle({ ...baseOpts, db: fakeDb });
     expect(submitDvhTaskMock).toHaveBeenCalledTimes(1);
     expect(queryDvhTaskMock).not.toHaveBeenCalled();
+    // 8-12: 落的这一行是 status=failed 的失败记录(body=口播稿原文, 供 deferred 重跑),
+    //   不再是一条"占位样片冒充的视频"。
     expect(fakeDb.insert).toHaveBeenCalledTimes(1);
-    // 7-31 由 warn 升到 error: 真实模式下没提交成功却照样落库一条"视频"(占位样片),
-    //   运营界面上看不出区别 —— 这是老板 7-31 实测"形象/背景/音色全不生效"的最可能形态, 必须是 error 级。
     expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.real_failed_fallback_mock/.test(JSON.stringify(c)))).toBe(true);
-    // 7-31 同上翻转: 提交都没成功, 这条不配叫 success。落库照旧(占位样片有据可查), 但日志必须说实话。
     expect(infoSpy.mock.calls.some((c) => /dvh\.bridge\.success/.test(JSON.stringify(c)))).toBe(false);
-    expect(errorSpy.mock.calls.some((c) => /dvh\.bridge\.placeholder/.test(JSON.stringify(c)))).toBe(true);
+    expect(warnSpy.mock.calls.some((c) => /dvh\.bridge\.fatal/.test(JSON.stringify(c)))).toBe(true);
   });
 });

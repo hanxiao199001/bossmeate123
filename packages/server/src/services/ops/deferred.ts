@@ -96,6 +96,14 @@ export interface DeferredMark {
    */
   requeuedAt?: string;
   /** 重跑次数用尽 → 转人工, 探测器从此跳过它 */
+  /**
+   * true = 不再自动重跑，转人工。两种来源：
+   *   ① 自动重试到上限（原设计）
+   *   ② 🔴 **重跑本身有副作用、不能盲跑**（8-12 新增场景）——
+   *      DVH 孤儿任务已按 0.165 元/秒扣过费，重提交是**再付一次钱**；
+   *      正确动作是凭 taskUuid 去阿里云捞回那条已付费的成片。
+   *      在「重跑优先 re-query」做出来之前，这类一律出生即 exhausted。
+   */
   exhausted?: boolean;
 }
 
@@ -112,6 +120,15 @@ const REASON_DETAIL: Record<DeferredReason, string> = {
  * @returns null = 这次失败是 content_error(内容自己的问题), **不该** defer。
  *   调用方拿到 null 就走原来的失败路径 —— 判死比假装能救回来诚实。
  */
+/**
+ * 出生即 exhausted 的判据：重跑有副作用、不能盲跑。
+ * 现在只有 DVH 孤儿任务一种（已扣费）。加第二种之前先想清楚"重跑一次的代价是什么"。
+ */
+function bornExhausted(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === "DvhOrphanTaskError" || String((err as Error)?.message ?? "").includes("DVH_ORPHAN_TASK");
+}
+
 export function buildDeferred(opts: {
   err: unknown;
   input: DeferredInput;
@@ -133,6 +150,8 @@ export function buildDeferred(opts: {
   };
   const errText = f.text.trim();
   if (errText) mark.lastError = errText.slice(0, 500);
+  // 🔴 重跑有副作用的一类，出生即转人工 —— 见 bornExhausted 与 DeferredMark.exhausted 注释
+  if (bornExhausted(opts.err)) mark.exhausted = true;
   return mark;
 }
 

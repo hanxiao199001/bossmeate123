@@ -34,13 +34,28 @@ const SRC = join(here, "..", "src");
 const DIST = join(here, "..", "dist");
 
 /** 需要随 build 进 dist 的资产扩展名。新增类型在这里加。 */
-const ASSET_EXTS = new Set([".txt"]);
+// 8-10 加 .json: 国内核心目录快照(src/data/*-2023.json)是「学科定位」体裁的集合数据源头,
+//   运行时从 dist 读。不拷进去的话 catalog-snapshot 读到空目录 —— 而"空目录"与
+//   "这本刊不在目录里"在下游是同一个表现, 会静默产出"该刊无任何核心收录"的错误结论。
+const ASSET_EXTS = new Set([".txt", ".json"]);
+
+/** 跳过的目录(相对 src)。测试 fixture 不需要进生产产物 */
+const SKIP_DIRS = new Set(["__tests__"]);
 
 /** 必须存在的关键资产(相对 src 的路径)。缺了直接让 build 失败, 不允许静默。 */
-const REQUIRED_ASSETS = ["services/work-wechat/sensitive-lexicon.txt"];
+const REQUIRED_ASSETS = [
+  "services/work-wechat/sensitive-lexicon.txt",
+  // 8-10: 目录快照 —— 见 services/journals/catalog-snapshot.ts。缺了会让集合数据静默归零
+  "data/cssci-2023.json",
+  "data/cssci-ext-2023.json",
+  "data/pku-core-2023.json",
+  "data/cscd-2023.json",
+  "data/sci-core-2023.json",
+];
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
+    if (SKIP_DIRS.has(name)) continue;
     const full = join(dir, name);
     if (statSync(full).isDirectory()) walk(full, out);
     else if (ASSET_EXTS.has(extname(name))) out.push(full);

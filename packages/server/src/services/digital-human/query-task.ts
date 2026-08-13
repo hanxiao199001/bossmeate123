@@ -17,6 +17,53 @@ const POLL_INTERVAL_MS = 5000;
 // PR #238 (5-23): timeout 从 5min 延到 10min — 阿里云 2D 数字人长文本(>500字)渲染常超 5min.
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
+/**
+ * 8-13 任务被阿里云**明确判失败**（不是"查不到"）。
+ *
+ * 🔴 与 `DvhOrphanTaskError` 是两回事，别再合并：
+ *   · 本错误 = 接口好好回了话，告诉我们 status=4 + failCode + failReason。**没有成片，捞无可捞。**
+ *   · 孤儿   = 查询本身挂了/超时，任务可能还在跑，taskUuid 有捞回价值。
+ * 8-13 之前两者都被 `if (taskUuid)` 归成孤儿，于是 5 条 10010002 全带着
+ * 「可凭 taskUuid 去阿里云捞回」这条**错误指引**躺在 incident 里。
+ * **API 给的原因永远优先于我们的猜测** —— failCode/failReason 一路带到 errorMessage。
+ */
+export class DvhTaskFailedError extends Error {
+  readonly taskUuid: string;
+  readonly failCode: string;
+  readonly failReason: string;
+  readonly rawStatus: string;
+  constructor(args: { taskUuid: string; failCode: string; failReason: string; rawStatus: string }) {
+    super(`DVH_TASK_FAILED: status=${args.rawStatus} ${args.failCode} ${args.failReason}`.trim());
+    this.name = "DvhTaskFailedError";
+    this.taskUuid = args.taskUuid;
+    this.failCode = args.failCode;
+    this.failReason = args.failReason;
+    this.rawStatus = args.rawStatus;
+  }
+}
+
+/**
+ * 状态归一 —— **一处定义，两种形态通吃**。
+ *
+ * 阿里云这个字段有前科：PR #239 按 `typeof === "number"` 判，实测回的是字符串 "3" 而漏过；
+ * PR #240 才改成 `Number()`。为免第三次踩，判定收口到这一个函数并加测试。
+ */
+export function normalizeDvhStatus(raw: unknown): { text: string; num: number } {
+  const text = String(raw ?? "").trim().toUpperCase();
+  const n = Number(raw);
+  return { text, num: Number.isFinite(n) ? n : Number.NaN };
+}
+
+export function isDvhSuccessStatus(raw: unknown): boolean {
+  const { text, num } = normalizeDvhStatus(raw);
+  return text === "SUCCESS" || text === "SUCCEEDED" || num === 3;
+}
+
+export function isDvhFailStatus(raw: unknown): boolean {
+  const { text, num } = normalizeDvhStatus(raw);
+  return text === "FAIL" || text === "FAILED" || text === "FAILURE" || (Number.isFinite(num) && num >= 4);
+}
+
 export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryResult> {
   const dvhTenantId = process.env.DVH_TENANT_ID;
   const appId = process.env.DVH_APP_ID;
@@ -54,7 +101,7 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
       lastStatus = statusStr;
     }
     // 成功: 字符串 SUCCESS/SUCCEEDED  或  数字 3
-    if (statusStr === "SUCCESS" || statusStr === "SUCCEEDED" || statusNum === 3) {
+    if (isDvhSuccessStatus(rawStatus)) {
       const r = resp.body?.data?.taskResult;
       if (!r?.videoUrl) throw new Error(`DVH succeeded but no videoUrl: ${JSON.stringify(resp.body)}`);
       const totalMs = Date.now() - startedAt;
@@ -69,10 +116,17 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
       };
     }
     // 失败: 字符串 FAIL/FAILED/FAILURE  或  数字 ≥4 (阿里云用数字 4+ 表失败, 待真实样本确认)
-    if (statusStr === "FAIL" || statusStr === "FAILED" || statusStr === "FAILURE" || (Number.isFinite(statusNum) && statusNum >= 4)) {
+    if (isDvhFailStatus(rawStatus)) {
       const r = resp.body?.data?.taskResult;
       logger.warn({ taskUuid, status: rawStatus, failCode: r?.failCode, failReason: r?.failReason, pollCount }, "dvh.query.task_failed");
-      throw new Error(`DVH task failed: status=${rawStatus} ${r?.failCode ?? ""} ${r?.failReason ?? ""}`);
+      // 8-13: 改抛类型化错误 —— 原来抛裸 Error, 上层 `if (taskUuid)` 一律当孤儿,
+      //   API 明明白白给的 failCode/failReason 就此蒸发(5 条 10010002 全被归成"取不回")。
+      throw new DvhTaskFailedError({
+        taskUuid,
+        failCode: String(r?.failCode ?? ""),
+        failReason: String(r?.failReason ?? ""),
+        rawStatus: String(rawStatus ?? ""),
+      });
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }

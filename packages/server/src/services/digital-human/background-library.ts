@@ -52,6 +52,23 @@ export const DVH_BG_RATIO_TOLERANCE = 0.05;
 const PORTRAIT_RATIO = 9 / 16;   // 0.5625
 const LANDSCAPE_RATIO = 16 / 9;  // 1.7778
 
+/**
+ * 🔴 DVH 输出分辨率 —— **背景图必须与它逐像素相等**，不是"比例接近就行"。
+ *
+ * 8-13 探针实测（凭 taskUuid 直查阿里云）：近 14 天带背景图的 DVH 任务
+ * **5 条全部失败，0 条成功**，failCode 一律 `10010002 图片分辨率必须与输出的视频分辨率一致`；
+ * 而不带背景图的 15 条全部成功。肇事图是 1600×2848（比例 0.5618，在 ±5% 容差内 → 过了闸）。
+ *
+ * ⚠️ 本文件原先的注释写着「比例不对阿里云会拉伸/裁切甚至直接忽略」——
+ * **那是一个关于外部系统行为的未经查证的假设**，闸的 ±5% 容差就是按它设计的。
+ * 实测阿里云既不拉伸也不裁切：分辨率不精确相等就直接判任务失败，**而钱照扣**。
+ * 所以比例校验保留（它决定裁掉多少画面），但最终必须归一到下面这个精确尺寸。
+ */
+export const DVH_OUTPUT_SIZE: Record<BgOrientation, { width: number; height: number }> = {
+  portrait: { width: 1080, height: 1920 },
+  landscape: { width: 1920, height: 1080 },
+};
+
 /** 短边下限 — 低于这个值背景会被 DVH 上采样成糊图(1080P 视频用 480P 底图肉眼可见)。 */
 export const DVH_BG_MIN_SHORT_SIDE = 720;
 
@@ -237,10 +254,34 @@ export async function processBackgroundUpload(args: {
   const geo = validateBackgroundGeometry(meta.width, meta.height, expect);
   if (!geo.ok) throw new BackgroundUploadError(geo.code, geo.message);
 
+  /**
+   * b. 🔴 归一到 DVH 的精确输出分辨率（8-13 新增）。
+   *
+   * 比例已在上一步校验过（±5%），所以这里 cover 裁掉的画面 ≤5% ——
+   * 与本文件开头「5% 的画面代价肉眼几乎无感」是同一个取舍。
+   * 不归一的后果不是"画面差一点"，是**任务必失败且照扣费**（见 DVH_OUTPUT_SIZE 注释）。
+   */
+  const want = DVH_OUTPUT_SIZE[geo.orientation];
+  let normalized = buffer;
+  if (meta.width !== want.width || meta.height !== want.height) {
+    try {
+      normalized = await sharp(buffer)
+        .resize(want.width, want.height, { fit: "cover", position: "centre" })
+        .toBuffer();
+      logger.info(
+        { tenantId, from: `${meta.width}×${meta.height}`, to: `${want.width}×${want.height}` },
+        "dvh.bg.normalized — 已归一到 DVH 输出分辨率(不归一必然 10010002 失败且扣费)",
+      );
+    } catch (err) {
+      logger.error({ err, tenantId }, "dvh.bg.normalize_failed");
+      throw new BackgroundUploadError("NORMALIZE_FAILED", "背景图尺寸归一化失败，请换一张图再试");
+    }
+  }
+
   const ext = mimetype === "image/png" ? "png" : mimetype === "image/webp" ? "webp" : "jpg";
   const owner = scope === "system" ? SYSTEM_RECOMMENDATION_TENANT_ID : tenantId;
   const remotePath = `${owner}/dvh-backgrounds/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const url = await storage.upload(buffer, remotePath, mimetype);
+  const url = await storage.upload(normalized, remotePath, mimetype);
 
   // c. 图片内容审核 — 背景图会进公开视频, 违规内容不能过。范式同 routes/video.ts /compose。
   const { moderateImages, IMAGE_MODERATION_ENABLED } = await import("../compliance/image-moderation.js");
@@ -271,8 +312,9 @@ export async function processBackgroundUpload(args: {
 
   logger.info({ tenantId, scope, remotePath, ...geo }, "dvh.bg.uploaded");
   return {
-    url, remotePath, width: geo.width, height: geo.height, orientation: geo.orientation,
-    sizeBytes: buffer.length, sha256: hashBackgroundBuffer(buffer),
+    // 归一后的真实尺寸 —— 存 geo.width/height(原图尺寸)会让存证与实际存的图对不上
+    url, remotePath, width: want.width, height: want.height, orientation: geo.orientation,
+    sizeBytes: normalized.length, sha256: hashBackgroundBuffer(normalized),
   };
 }
 
@@ -486,4 +528,35 @@ export async function addBackgroundToLibrary(args: {
 
   logger.info({ id: entry.id, uploadedBy, source, total: backgrounds.length }, "dvh.bg.library.added");
   return { status: "added", entry, backgrounds, message: "已存入背景图库, 下次可直接选" };
+}
+
+/**
+ * 🔴 提交前的分辨率闸（8-13）—— 跑在**扣费之前**。
+ *
+ * 上传归一只管新图；OSS 里已经躺着的旧背景图（如肇事的 1600×2848）照样会被选中提交，
+ * 然后 100% 触发 `10010002` 并**照扣 0.165 元/秒**。所以提交路径上必须再验一次。
+ *
+ * 这是「自校验型」判据：输出分辨率是我们自己定的，图片尺寸能当场量出来，
+ * 不需要等阿里云告诉我们、更不需要先付钱才知道。
+ *
+ * 返回 null = 放行；返回字符串 = 拒绝理由（调用方据此中止，不提交、不扣费）。
+ * 探测失败（网络/格式）**放行** —— 这道闸是省钱的，不该因为量不出尺寸就阻断出片。
+ */
+export async function checkBackgroundResolution(url: string): Promise<string | null> {
+  if (!url || url === DVH_BG_NONE) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return null; // 拉不到就别拦, 交给阿里云
+    const buf = Buffer.from(await res.arrayBuffer());
+    const meta = await sharp(buf).metadata();
+    if (!meta.width || !meta.height) return null;
+    const hit = Object.values(DVH_OUTPUT_SIZE).some((d) => d.width === meta.width && d.height === meta.height);
+    if (hit) return null;
+    return (
+      `背景图分辨率 ${meta.width}×${meta.height} 与 DVH 输出不一致（需恰为 1080×1920 或 1920×1080）。` +
+      `阿里云对此一律判任务失败（10010002）且照常扣费，故本次不提交。请重新上传该背景图（新上传会自动归一）。`
+    );
+  } catch {
+    return null; // 量不出来就放行 —— 这道闸是省钱的, 不是安全闸
+  }
 }

@@ -119,6 +119,22 @@ export function classifyDataSupply(j: JournalSupplyInput | null | undefined): Da
 }
 
 /**
+ * 「这本刊一条指标事实都没有」—— 即 sparse 那条线的判据本身。
+ *
+ * 存在的理由只有一个：**判据不许在调用方重写**。
+ * `checkOutputHealth({ noMetricFacts })`、A2 体裁的准入、模板的槽位裁剪都要问这句话，
+ * 各自写 `!s.has.impactFactor && !s.has.partition` 就是三份会各自漂移的判据 ——
+ * 而且会当场踩中扫描守卫（`journal-data-supply.test.ts` 那条禁布尔组合的规则）。
+ *
+ * 注意它**不等价于** `level === "sparse"` 的字面判断，尽管当前二者同值：
+ * 语义上这里问的是"有没有指标"，而 level 还承载着流程数据那一维。
+ * 将来若加入第四档，这个函数仍然只答指标那一问。
+ */
+export function hasNoMetricFacts(s: DataSupply): boolean {
+  return !s.has.impactFactor && !s.has.partition;
+}
+
+/**
  * 按供给等级产出 **prompt 禁令**（治叙述型编造）。
  *
  * 为什么禁令要在这里而不是各 prompt 里手写: 8-05 排查发现同一件事在

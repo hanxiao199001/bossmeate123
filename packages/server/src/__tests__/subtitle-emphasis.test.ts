@@ -14,7 +14,9 @@ const STYLE: Required<SubtitleAssStyle> = {
   outline: 2,
   shadow: 0,
   alignment: 2,
-  marginV: 84, // 7-02 重校准默认(距底29%)
+  // 7-02 重校准默认(距底29%)。⚠️ 8-12 起这个值只是**输入** ——
+  //   版面层会把它改成 43(底边锚字幕带下沿 85%), 因为 84 会让文字向上长进人物区。
+  marginV: 84,
   bold: 1,
 };
 
@@ -117,7 +119,9 @@ describe("srtToAssWithEmphasis 完整 ASS 输出", () => {
     expect(ass).toContain("PlayResY: 288"); // 锚定 ffmpeg subrip 默认坐标系, 字号/边距与老路径视觉一致
     expect(ass).toContain("[V4+ Styles]");
     // Style 行: 字体/字号/颜色(尾 & 已规整)/描边/位置/边距/粗体(-1)
-    expect(ass).toContain("Style: Default,Noto Sans CJK SC,15,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,8,8,84,1");
+    // 8-12 行为变更：字号与 MarginV 取**版面解算后**的值，不再直接用 env。
+    //   MarginV 84→43（84 会把文字块顶进人物区，实测重叠 95%，见 vertical-layout.test.ts）
+    expect(ass).toContain("Style: Default,Noto Sans CJK SC,15,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,8,8,43,1");
     expect(ass).toContain("[Events]");
   });
 
@@ -131,8 +135,10 @@ describe("srtToAssWithEmphasis 完整 ASS 输出", () => {
   it("命中行带强调标签, 无命中部分保持原文", () => {
     const ass = srtToAssWithEmphasis(SRT, STYLE, 1080, 1920);
     // 13字超 maxChars(10) → 强制换行(空格断点)后再强调, 标签跨 \N 合法
-    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs20}影响因子 3.5{\\r}\\N稳步上升");
-    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs20}审稿周期{\\r}约{\\1c&H00FFFF&\\b1\\fs20}2{\\r}个月");
+    // 8-12 行为变更：强调字号 = 15×1.2 = 18（原 15×1.35≈20）。
+    //   1.35 在字号 15 / 2 行时数学上放不进 15% 的字幕带，由版面层压到 1.2。
+    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs18}影响因子 3.5{\\r}\\N稳步上升");
+    expect(ass).toContain("{\\1c&H00FFFF&\\b1\\fs18}审稿周期{\\r}约{\\1c&H00FFFF&\\b1\\fs18}2{\\r}个月");
   });
 });
 

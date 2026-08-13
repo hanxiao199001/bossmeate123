@@ -347,6 +347,28 @@ export function classifyFailure(err: unknown): FailureKind {
   //   两者都是"外部服务当时给不出东西", 内容本身没问题。
   if (f.name === "AiUnavailableError" || lower.includes("ai 不可用")) return "service_down";
   if (f.name === "DvhTtsFailedError" || lower.includes("dvh_tts_failed")) return "service_down";
+  // 8-12 DVH 提交失败(未扣费) —— 服务恢复后原样重跑
+  if (f.name === "DvhSubmitFailedError" || lower.includes("dvh_submit_failed")) return "service_down";
+  /**
+   * 8-12 DVH 孤儿任务：提交成功(**已扣费**)但取不回成片。
+   * 归 service_down 是为了让它进 deferred 队列不被判死，但 ⚠️ 重跑语义与别处不同：
+   * **应当凭 taskUuid 去捞回那条已付费的成片，而不是重新提交**（重提交 = 再付一次钱）。
+   * taskUuid 已由 DvhOrphanTaskError 带出并落进 deferred detail。
+   */
+  if (f.name === "DvhOrphanTaskError" || lower.includes("dvh_orphan_task")) return "service_down";
+  /**
+   * 8-13 背景图分辨率不合规 —— 换张图才行，重跑同一张必然同样失败。
+   */
+  if (f.name === "DvhBackgroundInvalidError" || lower.includes("dvh_bg_invalid")) return "content_error";
+
+  /**
+   * 8-13 阿里云明确判任务失败(带 failCode)。归 content_error = **不自动重跑**。
+   *
+   * 保守选择, 理由是钱: 每次重跑都先扣费再失败。failCode 的瞬时/确定性分类我们**还不掌握**
+   * (目前只见过 10010002 背景图分辨率, 那是确定性的)。先一律转人工, 等 incident 里
+   * 攒出 failCode 分布再决定哪些值得自动重跑 —— 而不是先假设它们可重跑然后烧钱验证。
+   */
+  if (f.name === "DvhTaskFailedError" || lower.includes("dvh_task_failed")) return "content_error";
 
   // ---- ③ 兜底: 内容自己的问题, 重跑没用 ----
   return "content_error";

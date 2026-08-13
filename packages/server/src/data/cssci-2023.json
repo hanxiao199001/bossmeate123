@@ -497,14 +497,14 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "地理学报(北京)",
+  "name": "地理学报（北京）",
   "discipline": "人文经济地理",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
-  "name": "地理学报(台湾)",
+  "name": "地理学报（台湾）",
   "discipline": "人文经济地理",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -624,7 +624,7 @@
  },
  {
   "name": "敦煌研究",
-  "discipline": "法学",
+  "discipline": "中华传统文化",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -687,77 +687,77 @@
  },
  {
   "name": "法制与社会发展",
-  "discipline": "语言学",
+  "discipline": "法学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "方言",
-  "discipline": "综合性社会科学",
+  "discipline": "语言学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "福建论坛(人文社会科学版)",
-  "discipline": "高校学报",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "福建师范大学学报(哲学社会科学版)",
-  "discipline": "社会学",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "妇女研究论丛",
-  "discipline": "教育学",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "复旦教育论坛",
-  "discipline": "高校学报",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "复旦学报(社会科学版)",
-  "discipline": "经济学",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "改革",
-  "discipline": "自然资源与环境科学",
-  "disciplineCode": null,
-  "catalog": "cssci",
-  "catalogYear": "2023-2024"
- },
- {
-  "name": "干旱区资源与环境",
   "discipline": "综合性社会科学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
+  "name": "福建师范大学学报(哲学社会科学版)",
+  "discipline": "高校学报",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
+  "name": "妇女研究论丛",
+  "discipline": "社会学",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
+  "name": "复旦教育论坛",
+  "discipline": "教育学",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
+  "name": "复旦学报(社会科学版)",
+  "discipline": "高校学报",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
+  "name": "改革",
+  "discipline": "经济学",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
+  "name": "干旱区资源与环境",
+  "discipline": "自然资源与环境科学",
+  "disciplineCode": null,
+  "catalog": "cssci",
+  "catalogYear": "2023-2024"
+ },
+ {
   "name": "甘肃社会科学",
-  "discipline": "政治学",
+  "discipline": "综合性社会科学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "甘肃行政学院学报",
-  "discipline": "教育学",
+  "discipline": "政治学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -778,7 +778,7 @@
  },
  {
   "name": "高校教育管理",
-  "discipline": "管理学",
+  "discipline": "教育学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -806,7 +806,7 @@
  },
  {
   "name": "公共管理与政策评论",
-  "discipline": "政治学",
+  "discipline": "管理学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -820,28 +820,28 @@
  },
  {
   "name": "公共行政学报",
-  "discipline": "历史学",
+  "discipline": "政治学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "古代文明",
-  "discipline": "语言学",
+  "discipline": "历史学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "古汉语研究",
-  "discipline": "考古学",
+  "discipline": "语言学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
   "name": "故宫博物院院刊",
-  "discipline": "管理学",
+  "discipline": "考古学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -882,14 +882,14 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "管理学报(湖北)",
+  "name": "管理学报（湖北）",
   "discipline": "管理学",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
  },
  {
-  "name": "管理学报(台湾)",
+  "name": "管理学报（台湾）",
   "discipline": "管理学",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -1408,7 +1408,7 @@
  },
  {
   "name": "江西师范大学学报(哲学社会科学版)",
-  "discipline": "综合性高校学报",
+  "discipline": "高校学报",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -1785,7 +1785,7 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "课程.教材.教法",
+  "name": "课程·教材·教法",
   "discipline": "教育学",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -2093,7 +2093,7 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "南京大学学报(哲学·人文科学·社会科学)",
+  "name": "南京大学学报(哲学.人文科学.社会科学)",
   "discipline": "高校学报",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -2626,7 +2626,7 @@
  },
  {
   "name": "深圳大学学报(人文社会科学版)",
-  "discipline": "综合性高校学报",
+  "discipline": "高校学报",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -3122,7 +3122,7 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "外交评论(外交学院学报)",
+  "name": "外交评论",
   "discipline": "政治学",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -3333,7 +3333,7 @@
  },
  {
   "name": "西南大学学报(社会科学版)",
-  "discipline": "综合性高校学报",
+  "discipline": "高校学报",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -3354,7 +3354,7 @@
  },
  {
   "name": "西域研究",
-  "discipline": "历史学",
+  "discipline": "中华传统文化",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"
@@ -3367,7 +3367,7 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "戏剧艺术",
+  "name": "戏剧艺术(上海戏剧学院学报)",
   "discipline": "艺术学",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -4018,7 +4018,7 @@
   "catalogYear": "2023-2024"
  },
  {
-  "name": "中共中央党校学报",
+  "name": "中共中央党校(国家行政学院)学报",
   "discipline": "政治学",
   "disciplineCode": null,
   "catalog": "cssci",
@@ -4558,7 +4558,7 @@
  },
  {
   "name": "周易研究",
-  "discipline": "哲学",
+  "discipline": "中华传统文化",
   "disciplineCode": null,
   "catalog": "cssci",
   "catalogYear": "2023-2024"

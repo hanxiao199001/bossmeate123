@@ -13,12 +13,13 @@
  *   两者毫无关系, 别在同一个文件里同时 import。
  */
 import { logger } from "../../config/logger.js";
+import { env } from "../../config/env.js";
 import { isRealMode } from "./client.js";
 import { submitDvhTask, submitDvhAudioTask } from "./submit-task.js";
 import { buildSrtFromText } from "./subtitle-from-text.js";
 import { ttsService } from "../video/tts-service.js";
 import { storage } from "../storage/index.js";
-import { queryDvhTaskUntilDone } from "./query-task.js";
+import { queryDvhTaskUntilDone, type DvhTaskFailedError } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import type { TemplateId } from "./template-mapping.js";
@@ -96,6 +97,52 @@ export interface ProducedVideo {
 }
 
 /**
+ * 8-12 提交成功(=已扣费)但取不回成片。
+ *
+ * 🔴 **绝不能盲目自动重跑** —— submit 已经按 0.165 元/秒扣过一次，重提交是再付一次钱。
+ * 正确动作是凭 `taskUuid` 去阿里云把那条已付费的成片捞回来。
+ * 所以这个错误必须把 taskUuid 带出去，deferred 记录里也要留着。
+ */
+export class DvhOrphanTaskError extends Error {
+  readonly taskUuid: string;
+  constructor(taskUuid: string, cause: string) {
+    super(`DVH_ORPHAN_TASK: 已提交并扣费但取不回成片(task ${taskUuid}) — ${cause}`);
+    this.name = "DvhOrphanTaskError";
+    this.taskUuid = taskUuid;
+  }
+}
+
+/** 8-12 提交就没成功(未扣费)。服务恢复后原样重跑即可。 */
+export class DvhSubmitFailedError extends Error {
+  constructor(cause: string) {
+    super(`DVH_SUBMIT_FAILED: ${cause}`);
+    this.name = "DvhSubmitFailedError";
+  }
+}
+
+/**
+ * 8-13 背景图分辨率不合规。**内容自身问题**（换张图才行），重跑同一张图必然同样失败 ——
+ * 所以刻意不归 service_down，让 deferred 判它 content_error、不进自动重跑。
+ */
+export class DvhBackgroundInvalidError extends Error {
+  constructor(reason: string) {
+    super(`DVH_BG_INVALID: ${reason}`);
+    this.name = "DvhBackgroundInvalidError";
+  }
+}
+
+/** 8-12 DVH_REAL_MODE 没开且没显式配置演示素材 —— 配置问题，重跑一万次也一样。 */
+export class DvhNotRealModeError extends Error {
+  constructor() {
+    super(
+      "DVH_NOT_REAL_MODE: DVH_REAL_MODE 不是 'true'，且未显式配置 DVH_MOCK_FIXTURE_BASE。" +
+        "生产环境必须开 DVH_REAL_MODE；开发/演示环境请显式设置 DVH_MOCK_FIXTURE_BASE 才会返回占位样片。",
+    );
+    this.name = "DvhNotRealModeError";
+  }
+}
+
+/**
  * 7-29: 原来是 5 个位置参数 (text, title, templateId, tenantId, clonedVoiceId), 再加背景图就彻底读不懂了
  *   —— 改成 options 对象。
  */
@@ -130,6 +177,10 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       },
       { key: "dvh_mock_mode" },
     );
+    // 🔴 8-12: 生产链路不再返回占位样片。只有**显式**配置了 DVH_MOCK_FIXTURE_BASE
+    //   (= 开发/演示环境的主动选择) 才给占位; 否则当场失败。
+    //   老规矩: 一个看起来成功、其实是固定样片的产物, 比一个明确的失败坏得多。
+    if (!env.DVH_MOCK_FIXTURE_BASE) throw new DvhNotRealModeError();
     return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "mock_mode" };
   }
   // PR #261 (5-29): 防烧钱 — submit 即扣费 (0.165 元/秒). 一旦 query 拿到付费 videoUrl,
@@ -139,6 +190,27 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
   let durationMs = 0;
   // 7-31 真正发给阿里云的那份参数 — submit 成功才有值, 一路带回给调用方落 metadata
   let effective: DvhEffectiveParams | undefined;
+  /**
+   * 🔴 8-13 背景图分辨率闸 —— 必须在 submit(=扣费点) 之前。
+   *
+   * 探针实测: 近 14 天**带背景图的 DVH 任务 5 条全失败、0 条成功**,
+   * failCode 一律 10010002「图片分辨率必须与输出的视频分辨率一致」;
+   * 不带背景图的 15 条全成功。也就是说这条路径当时的成功率是 **0%**,
+   * 而每一条都先扣了钱。上传侧已加归一, 这里兜住 OSS 里已存在的旧图。
+   */
+  if (backgroundUrl && backgroundUrl !== "none") {
+    const { checkBackgroundResolution } = await import("./background-library.js");
+    const bad = await checkBackgroundResolution(backgroundUrl);
+    if (bad) {
+      void recordIncident({
+        kind: "dvh_bg_resolution_rejected", severity: "warn", tenantId,
+        message: `背景图分辨率不合规, 已在扣费前中止: ${bad.slice(0, 160)}`,
+        detail: { backgroundUrl, templateId, title: title.slice(0, 80) },
+      });
+      throw new DvhBackgroundInvalidError(bad);
+    }
+  }
+
   // PR-W1 预算闸: submit 即扣费, 所以闸必须在 submit 之前。超限直接抛 — 不退 mock, 让调用方看到原因。
   const gate = await checkBudget(tenantId, estimateDvhCents(text));
   if (!gate.allowed) {
@@ -247,7 +319,42 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         ...(effective ? { effective } : {}),
       };
     }
-    // ★ submit 成功 (已扣费) 但 query 失败/超时: 阿里云任务可能仍在跑/已完成. 记 orphanTaskUuid 供后续 recover, 不静默吞.
+    /**
+     * 🔴 8-13 先分辨"任务被判失败"与"查不到"—— 这两件事此前被一律当成孤儿。
+     *
+     * 阿里云明确回了 status=4 + failCode + failReason 时：**没有成片，捞无可捞**。
+     * 把它继续叫"孤儿 + 可凭 taskUuid 捞回"，就是给下一个人一条错误指引
+     * （8-13 之前正是如此，5 条 10010002 全带着这句话）。
+     */
+    /**
+     * ⚠️ 按 `name` 判而不是 `instanceof` —— 与 `failure-kind.ts` 同一写法。
+     * `instanceof` 依赖"两边拿到同一个类对象"：跨模块实例（vitest 的 vi.mock 只导出部分成员、
+     * 打包出现重复副本）时右操作数会是 undefined，`instanceof` 当场抛 TypeError，
+     * **catch 块自己炸掉**，于是连兜底分支都进不去。8-13 实测: pr261 那条测试就是这么红的。
+     */
+    const failed = (err as { name?: string } | null)?.name === "DvhTaskFailedError" ? (err as DvhTaskFailedError) : null;
+    if (failed) {
+      logger.error(
+        { taskUuid: failed.taskUuid, failCode: failed.failCode, failReason: failed.failReason, status: failed.rawStatus, tenantId },
+        "dvh.task.failed_by_provider — 阿里云判任务失败, 无成片产出",
+      );
+      void recordCost({
+        tenantId, kind: "dvh",
+        amountCents: estimateDvhCents(text),
+        note: `DVH失败任务(预估, 已扣费无产出) ${title.slice(0, 40)} (task ${failed.taskUuid} ${failed.failCode})`,
+      });
+      void recordIncident({
+        kind: "dvh_task_failed", severity: "error", tenantId,
+        message: `数字人任务被阿里云判失败(已扣费, 无成片): ${failed.failCode} ${failed.failReason}`.slice(0, 300),
+        detail: {
+          taskUuid: failed.taskUuid, failCode: failed.failCode, failReason: failed.failReason,
+          templateId, title: title.slice(0, 80), backgroundUrl: backgroundUrl ?? null,
+          estimatedCents: estimateDvhCents(text),
+        },
+      });
+      throw err;
+    }
+    // ★ submit 成功 (已扣费) 但 query **取不回**(网络/超时): 任务可能仍在跑, taskUuid 有捞回价值.
     if (taskUuid) {
       logger.error({ err: msg, taskUuid }, "dvh.bridge.paid_task_orphaned_query_failed");
       // 7-31 上简报: 这是**钱花了没拿到货**, 四种兜底里最贵的一种, 且 orphanTaskUuid 拿在手上
@@ -263,12 +370,10 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         amountCents: estimateDvhCents(text),
         note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
       });
-      const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-      return {
-        ...m, rawVideoUrl: undefined, orphanTaskUuid: taskUuid, postprocessed: false, realMode: false,
-        fallbackReason: "query_failed_orphan", fallbackError: msg,
-        ...(effective ? { effective } : {}),   // 已经提交过 = 参数确实发出去了, 留着对账
-      };
+      // 🔴 8-12: 不再退占位样片。8-12 实测线上因此躺着 4 条"状态 draft、看不出异常"的假成品
+      //   (标题是真实期刊内容, 片子是固定占位样片, 还带着与该刊无关的 IF/分区大字卡)。
+      //   改为抛错 → 调用方落 status=failed + metadata.deferred, 服务恢复后由重跑接管。
+      throw new DvhOrphanTaskError(taskUuid, msg);
     }
     // submit 都没成功 — 未扣费, 正常 fallback mock.
     // 7-31 由 warn 升到 error: 真实模式下走到这里, 运营界面上仍然是"生成成功"、内容管理里也真有一条视频,
@@ -289,7 +394,7 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         err: msg.slice(0, 300),
       },
     });
-    const m = getMockDvhFixture((templateId in { A_academic: 1, B_marketing: 1, C_popular: 1, E_industry: 1 } ? templateId : "A_academic") as TemplateId);
-    return { ...m, rawVideoUrl: undefined, postprocessed: false, realMode: false, fallbackReason: "submit_failed", fallbackError: msg };
+    // 🔴 8-12: 同上, 不再退占位样片。未扣费, 服务恢复后原样重跑即可。
+    throw new DvhSubmitFailedError(msg);
   }
 }

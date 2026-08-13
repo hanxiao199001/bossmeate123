@@ -20,18 +20,12 @@ import { logger } from "../config/logger.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "../data");
 
-export function normName(name: string): string {
-  if (!name) return "";
-  let s = name;
-  s = s.replace(/[（(]\s*改名为[：:][^)）]*[)）]/g, "");
-  s = s.replace(/\[\s*改名为[^\]]*\]/g, "");
-  s = s.replace(/（/g, "(").replace(/）/g, ")").replace(/，/g, ",").replace(/•/g, "·");
-  s = s.replace(/\s+/g, "");
-  s = s.replace(/^[《\s]+|[》\s]+$/g, "");
-  // PR-C3: 统一 ".XX版" → "(XX版)" — 北大核心用括号、CSSCI 用点号, 防同刊重复入库
-  s = s.replace(/\.([一-龥A-Za-z0-9]+版)\)?$/, "($1)");
-  return s;
-}
+// 8-10: normName 已搬到 services/journals/journal-name-normalize.ts（单一真相源）。
+//   搬迁理由见该文件头：别处 import 本脚本会连带触发模块级 `import { db }`(急切实例化),
+//   且入库与查询的归一口径必须是同一份 —— 漂移会让下游写出「本刊在 CSSCI 教育学」的假断言。
+//   这里 re-export 保持既有调用方不变。
+import { normName } from "../services/journals/journal-name-normalize.js";
+export { normName };
 
 interface CatRow { name: string; issn?: string | null; cscdLevel?: string | null; discipline?: string | null; }
 interface Unified {

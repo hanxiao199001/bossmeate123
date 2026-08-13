@@ -12,6 +12,7 @@
  * 纯函数、无 IO、无副作用 — 方便单测; 解析不出任何 cue 时返回 "", 由调用方降级老路径。
  */
 import type { SubtitleAssStyle } from "./video-postprocess.js";
+import { solveSubtitleLayout, checkOcclusion, type SubtitleLayout } from "./vertical-layout.js";
 
 /**
  * 关键词命中规则(顺序即优先级, 正则交替从左到右尝试):
@@ -94,7 +95,7 @@ function spanWeight(s: string): number {
  * 相邻命中(间隔为空或纯空白)合并成一个标签区间, 避免 "IF 3.5" 变成两段标签碎片。
  * @param maxEmphasis 每条字幕最多强调几处(按信息量权重挑, 位置早者优先); 0 = 不限
  */
-export function emphasizeLine(text: string, baseFontSize: number, maxEmphasis = 0): string {
+export function emphasizeLine(text: string, baseFontSize: number, maxEmphasis = 0, emphasisScale = 1.35): string {
   const escaped = escAssText(text); // 逐字符等长替换, 不影响 match index
   EMPHASIS_RE.lastIndex = 0;
   let spans: Array<{ start: number; end: number; lastType: string }> = [];
@@ -128,7 +129,9 @@ export function emphasizeLine(text: string, baseFontSize: number, maxEmphasis = 
       .sort((a, b) => a.start - b.start);
   }
   // 黄色(&HBBGGRR&: 00FFFF=黄) + 加粗 + 放大 1.35 倍; {\r} 重置回 Default 样式
-  const emFs = Math.round(baseFontSize * 1.35);
+  // 8-12: 放大倍数不再写死 —— 由版面反推(vertical-layout.emphasisScaleCap)。
+  //   写死 1.35 时, 字号 15 的 2 行强调块 = 48.6 单位 > 字幕带 43.2 单位, 必然顶进人物区。
+  const emFs = Math.round(baseFontSize * emphasisScale);
   const openTag = `{\\1c&H00FFFF&\\b1\\fs${emFs}}`;
   let out = "";
   let cursor = 0;
@@ -177,7 +180,7 @@ export function srtToAssWithEmphasis(
   style: Required<SubtitleAssStyle>,
   videoW: number,
   videoH: number,
-  opts?: { maxEmphasis?: number; maxCharsPerLine?: number },
+  opts?: { maxEmphasis?: number; maxCharsPerLine?: number; onLayout?: (l: SubtitleLayout & { maxLinesSeen: number }) => void },
 ): string {
   const cues = parseSrt(srt);
   if (cues.length === 0) return "";
@@ -189,6 +192,26 @@ export function srtToAssWithEmphasis(
   const maxChars = opts?.maxCharsPerLine
     ?? Math.max(6, Math.floor(((playResX - marginLR * 2) * 1.1) / Math.max(1, style.fontSize)));
   const maxEmphasis = opts?.maxEmphasis ?? 0;
+
+  /**
+   * 🔴 8-12 版面解算 —— 字号/MarginV/强调倍数一律由 `vertical-layout` 反推, env 只当输入。
+   *
+   * 先按 env 字号把所有 cue 折行, 取**实际最大行数**再解算：某条 cue 折成 3 行时,
+   * 整轨字号一起降一档, 而不是让那一条溢出人物区。
+   * 这样做的代价是字略小, 换来的是**全轨确定性不挡脸** —— 后者不能靠运气。
+   */
+  const linesPerCue = cues.map(
+    (c) => c.text.split("\n").flatMap((l: string) => wrapCjkLine(l, maxChars)).length,
+  );
+  const maxLinesSeen = Math.max(1, ...linesPerCue);
+  const layout = solveSubtitleLayout({
+    fontSize: style.fontSize,
+    marginV: style.marginV,
+    playResY,
+    linesNeeded: maxLinesSeen,
+  });
+  opts?.onLayout?.({ ...layout, maxLinesSeen });
+
   const primary = normColour(style.primaryColour, "&H00FFFFFF");
   const outline = normColour(style.outlineColour, "&H00000000");
   // ASS Styles 的 Bold 用 -1 表示 true(不是 1)
@@ -205,7 +228,8 @@ export function srtToAssWithEmphasis(
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,${style.fontName},${style.fontSize},${primary},&H000000FF,${outline},&H00000000,${bold},0,0,0,100,100,0,0,1,${style.outline},${style.shadow},${style.alignment},${marginLR},${marginLR},${style.marginV},1`,
+    // 字号与 MarginV 用**解算后**的值, 不是 env 原值 —— 见上方 layout 注释
+    `Style: Default,${style.fontName},${layout.fontSize},${primary},&H000000FF,${outline},&H00000000,${bold},0,0,0,100,100,0,0,1,${style.outline},${style.shadow},${style.alignment},${marginLR},${marginLR},${layout.marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -215,7 +239,7 @@ export function srtToAssWithEmphasis(
     .map((c) => {
       // 先强制换行(每个已有行独立判断), 再做强调 — 换行插的是真实\n, emphasizeLine 输出时统一转 \N
       const wrapped = c.text.split("\n").flatMap((l) => wrapCjkLine(l, maxChars)).join("\n");
-      return `Dialogue: 0,${fmtAssTs(c.startMs)},${fmtAssTs(c.endMs)},Default,,0,0,0,,${emphasizeLine(wrapped, style.fontSize, maxEmphasis)}`;
+      return `Dialogue: 0,${fmtAssTs(c.startMs)},${fmtAssTs(c.endMs)},Default,,0,0,0,,${emphasizeLine(wrapped, layout.fontSize, maxEmphasis, layout.emphasisScale)}`;
     })
     .join("\n");
 

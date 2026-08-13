@@ -23,6 +23,7 @@ import { logger } from "../../config/logger.js";
 import { storage } from "../storage/index.js";
 import { env } from "../../config/env.js";
 import { srtToAssWithEmphasis } from "./subtitle-emphasis.js";
+import { solveSubtitleLayout } from "./vertical-layout.js";
 import { probeVideo } from "./video-remix.js";
 
 export interface PostprocessOptions {
@@ -68,8 +69,26 @@ const DEFAULT_STYLE: Required<SubtitleAssStyle> = {
   bold: (env.DVH_SUBTITLE_BOLD ? 1 : 0) as 0 | 1,
 };
 
+/**
+ * 🔴 降级路径也必须走版面解算。
+ *
+ * 8-12：只修 ASS 路径会留个后门 —— 强调开关关掉、或 ASS 烧录失败时，
+ * 这条 `subtitles=SRT+force_style` 路径照读 env 原值，字幕照样糊在脸上。
+ * 一个失效模式修一半，等于没修：出问题时恰恰是走降级的那些片。
+ *
+ * 这里按 2 行上限解算（SRT 路径不知道实际折几行，取上限是保守方向）。
+ */
 function buildForceStyle(style: SubtitleAssStyle): string {
   const merged = { ...DEFAULT_STYLE, ...style };
+  const layout = solveSubtitleLayout({ fontSize: merged.fontSize, marginV: merged.marginV, playResY: 288 });
+  if (layout.corrected) {
+    logger.warn(
+      { checkerId: "subtitle_occlusion", path: "srt_force_style", notes: layout.notes },
+      "dvh.subtitle.layout_corrected",
+    );
+  }
+  merged.fontSize = layout.fontSize;
+  merged.marginV = layout.marginV;
   return [
     `FontName=${merged.fontName}`,
     `FontSize=${merged.fontSize}`,
@@ -171,7 +190,30 @@ export async function postprocessVideoWithSubtitle(opts: PostprocessOptions): Pr
         const { w, h } = await probeVideo(inputMp4);
         const srtText = await readFile(srtPath, "utf-8");
         const mergedStyle: Required<SubtitleAssStyle> = { ...DEFAULT_STYLE, ...(subtitleStyle ?? {}) };
-        const ass = srtToAssWithEmphasis(srtText, mergedStyle, w, h, { maxEmphasis: env.DVH_SUBTITLE_EMPHASIS_MAX });
+        const ass = srtToAssWithEmphasis(srtText, mergedStyle, w, h, {
+          maxEmphasis: env.DVH_SUBTITLE_EMPHASIS_MAX,
+          // checkerId=subtitle_occlusion：解算结果一律记日志, 不静默修正 ——
+          //   静默改了 env 会让人以为 env 生效了, 下次又白调一遍
+          onLayout: (l) => {
+            const lvl = l.occlusion.ok ? "info" : "error";
+            logger[lvl](
+              {
+                checkerId: "subtitle_occlusion",
+                taskUuid,
+                path: "ass",
+                maxLinesSeen: l.maxLinesSeen,
+                fontSize: l.fontSize,
+                marginV: l.marginV,
+                emphasisScale: l.emphasisScale,
+                textBox: `${(l.textBox.from * 100).toFixed(1)}%~${(l.textBox.to * 100).toFixed(1)}%`,
+                overlapRatio: l.occlusion.overlapRatio,
+                corrected: l.corrected,
+                notes: l.notes,
+              },
+              l.occlusion.ok ? "dvh.subtitle.layout_ok" : "dvh.subtitle.layout_still_occluding",
+            );
+          },
+        });
         if (ass) {
           assPath = join(workDir, "input.ass");
           await writeFile(assPath, ass, "utf-8");

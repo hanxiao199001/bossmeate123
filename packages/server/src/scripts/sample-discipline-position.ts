@@ -1,0 +1,517 @@
+/**
+ * 「学科定位」体裁样例脚本（A2 第 8 步，8-10）—— 出 10 篇 + 对比页给老板拍板。
+ *
+ * ## 🔴 三条硬纪律（写在最前面，因为违反任何一条都会污染生产）
+ *
+ * 1. **绝不 insert `journal_usage`**。roundup 那条分支是会写的；写了就消耗生产的
+ *    15 天冷却，等于用样例把真实排产挤掉。
+ * 2. **绝不 insert `contents`**。样例不进发布池。
+ * 3. 输出写到 `packages/server/data/`（已在 .gitignore）。测试产物被 git 跟踪
+ *    卡住 `deploy:smart` 这个项目出过两次事故。
+ *
+ * 本脚本**只读库 + 调 LLM + 写本地文件**，没有任何写库路径。
+ *
+ * ## 用法
+ *
+ *   在服务器 packages/server 下：npx tsx src/scripts/sample-discipline-position.ts
+ *   取结果：ssh bossmate-boss cat <path> > local.html   （绝不往服务器 scp）
+ *
+ * ## 选刊两组，各服务一个目的
+ *
+ *   A 组 = 近 30 天用得最多的 5 本回头刊。它们多为 medium/rich，有现成的存量文章
+ *          可做左右对比 —— 老板看的是**同一本刊，两种写法**。
+ *   B 组 = 真 sparse 国内刊，其中至少 3 本同为教育口。刻意安排，用来在拍板前
+ *          暴露「同学科多篇数字段雷同」这个最大落地风险。
+ *
+ * ## 三个拍板数字（脚本必须打印）
+ *
+ *   ① sparse 刊里本体裁的准入率（有多少本真能用）—— 全量扫，不调 LLM
+ *   ② 10 篇的编造检测命中数（目标 0）
+ *   ③ B 组同学科几篇的重复度
+ */
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { db } from "../models/db.js";
+import { contents, journalUsage, journals } from "../models/schema.js";
+import { classifyDataSupply } from "../services/journals/journal-data-supply.js";
+import { buildCohortFromRow, cohortEligible, usableSlices } from "../services/journals/discipline-cohort.js";
+import { pendingCatalogFacts } from "../services/journals/catalog-facts.js";
+import { snapshotHealthy } from "../services/journals/catalog-snapshot.js";
+import {
+  generateDisciplinePosition,
+  type DisciplinePositionResult,
+} from "../services/content-engine/discipline-position-generator.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const OUT_DIR = resolve(__dirname, "../../data/discipline-position-samples");
+
+/**
+ * 🔴 终稿三篇（老板 8-11 定）。**钉死，不靠排名撞上** ——
+ * A′ 组按近 30 天 journal_usage 取 TOP5，排名随时间漂：8-11 两轮之间
+ * 《民族教育研究》就掉出了 TOP5，导致终稿选定的刊不在产物里。
+ * 定稿用的样例必须可复现，所以这三本每轮强制生成并排在最前。
+ */
+const FINAL_PICKS = ["民族教育研究", "教育学报", "电影评介"];
+
+const A_GROUP_SIZE = 5;
+const B_GROUP_SIZE = 5;
+
+/**
+ * 直接用 drizzle 推断的行类型。
+ * 早先写成 `Record<string, unknown> & {id;name}`，索引签名会让它与 `JournalSupplyInput`
+ * "没有共同属性"而编译不过 —— 而且真用起来会丢掉全部列的类型检查。
+ */
+type Row = typeof journals.$inferSelect;
+
+function esc(s: unknown): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** 可见字数（剥标签） */
+function plainLen(html: string): number {
+  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, "").length;
+}
+
+/** A 组：近 30 天 journal_usage 计数 TOP N。**只读**，不写这张表 */
+async function pickGroupA(n: number): Promise<Row[]> {
+  const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+  const top = await db
+    .select({ journalId: journalUsage.journalId, c: sql<number>`count(*)::int` })
+    .from(journalUsage)
+    .where(gte(journalUsage.usedAt, since))
+    .groupBy(journalUsage.journalId)
+    .orderBy(desc(sql`count(*)`))
+    .limit(n * 4);
+  const out: Row[] = [];
+  for (const t of top) {
+    if (!t.journalId) continue;
+    const [j] = await db.select().from(journals).where(eq(journals.id, t.journalId)).limit(1);
+    if (j) out.push(j);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+/** 全部「有目录的国内刊」—— 准入率就在这个分母上算 */
+async function allDomesticWithCatalog(): Promise<Row[]> {
+  const rows = await db
+    .select()
+    .from(journals)
+    .where(and(eq(journals.journalKind, "cn"), isNotNull(journals.catalogs)));
+  return (rows ).filter((r) => classifyDataSupply(r).has.catalog);
+}
+
+/** B 组：真 sparse 国内刊，优先教育口，保证至少 3 本同一分类 */
+function pickGroupB(pool: Row[], n: number): Row[] {
+  const eligible = pool.filter((r) => {
+    if (classifyDataSupply(r).level !== "sparse") return false;
+    return cohortEligible(buildCohortFromRow(r)).ok;
+  });
+  // 按「目录自带分类」分桶，取最大的教育相关桶
+  const byDiscipline = new Map<string, Row[]>();
+  for (const r of eligible) {
+    const s = usableSlices(buildCohortFromRow(r))[0];
+    if (!s) continue;
+    const k = s.disciplineOfThisJournal;
+    byDiscipline.set(k, [...(byDiscipline.get(k) ?? []), r]);
+  }
+  /**
+   * 取**最大**的教育口分类桶，不是第一个。
+   * 8-11 踩过：原先写 `.find(k => k.includes("教育"))`，取的是 Map 插入序里第一个 ——
+   * 快照对官方校准后遍历顺序一变，它撞上一个只有 1 本的小桶，
+   * B 组当场变成清一色医学刊，「3 篇同教育口暴露雷同风险」这个设计目的直接落空。
+   * 选样脚本的选样逻辑本身不稳，量出来的数就不可比。
+   */
+  const bySize = [...byDiscipline.entries()].sort((a, b) => b[1].length - a[1].length);
+  const eduBucket = bySize.find(([k, v]) => k.includes("教育") && v.length >= 3);
+  // 教育口凑不够 3 本就退而取最大的同分类桶 —— 重复度那个数必须有同学科样本才有意义
+  const cohortBucket = eduBucket ?? bySize[0];
+  const same = (cohortBucket?.[1] ?? []).slice(0, 3);
+  // 多要几本备用：跨组去重会吃掉名额（8-11《教育学报》被 A′ 先占，B 组同学科从 3 篇掉到 2 篇，
+  //   重复度那个数的样本量当场减半）。多带的在主循环里被去重跳过即可。
+  const rest = eligible.filter((r) => !same.includes(r)).slice(0, n + 3 - same.length);
+  if (cohortBucket) {
+    console.log(`  B 组同分类样本取自「${cohortBucket[0]}」（该桶 ${cohortBucket[1].length} 本可用）`);
+  }
+  return [...same, ...rest];
+}
+
+/** 该刊最近一篇存量文章 —— 左栏的「现状文」。没有就留空，不伪造 */
+async function latestExistingContent(journalId: string): Promise<{ title: string; body: string } | null> {
+  const rows = await db
+    .select({ title: contents.title, body: contents.body, metadata: contents.metadata })
+    .from(contents)
+    .where(and(eq(contents.type, "article"), sql`${contents.metadata}->>'journalId' = ${journalId}`))
+    .orderBy(desc(contents.createdAt))
+    .limit(1);
+  const r = rows[0];
+  if (!r?.body) return null;
+  return { title: r.title ?? "", body: r.body };
+}
+
+interface Sample {
+  group: "终稿" | "A" | "A'" | "B";
+  journalId: string;
+  journalName: string;
+  supply: string;
+  eligible: boolean;
+  skipReason?: string;
+  result?: DisciplinePositionResult;
+  existing?: { title: string; body: string } | null;
+}
+
+async function main() {
+  const health = snapshotHealthy();
+  if (!health.ok) {
+    console.error("❌ 目录快照不完整，拒绝生成：", health.errors);
+    process.exit(1);
+  }
+  console.log("📦 目录快照 OK ｜ 未审校的目录常量：", pendingCatalogFacts().join(", ") || "（无）");
+
+  // ── 拍板数字 ①：准入率（全量扫，零 LLM 调用）
+  const pool = await allDomesticWithCatalog();
+  const sparse = pool.filter((r) => classifyDataSupply(r).level === "sparse");
+  const skipCounts = new Map<string, number>();
+  let pass = 0;
+  for (const r of sparse) {
+    const g = cohortEligible(buildCohortFromRow(r));
+    if (g.ok) pass++;
+    else skipCounts.set(g.reason!, (skipCounts.get(g.reason!) ?? 0) + 1);
+  }
+  const admitRate = sparse.length > 0 ? ((pass / sparse.length) * 100).toFixed(1) : "0";
+  console.log(`\n【拍板数字①】sparse 国内刊准入率：${pass}/${sparse.length} = ${admitRate}%`);
+  for (const [k, v] of [...skipCounts].sort((a, b) => b[1] - a[1])) {
+    console.log(`    不通过 ${k}: ${v} 本`);
+  }
+
+  // ── 选刊
+  //   A 组按纯 TOP5 取（结论本身就是拍板材料：8-10 实测 5/5 全部 no_catalog_in_db,
+  //   即本体裁**覆盖不到当前的回头刊**——它们多是国际刊）。
+  //   A′ 组补位：回头刊里真能过准入的，用来出「同一本刊，两种写法」的左右对比。
+  // 终稿三篇：按名字直接取行，与排名无关
+  const picked = await db.select().from(journals).where(inArray(journals.name, FINAL_PICKS));
+  const finals = FINAL_PICKS.map((n) => picked.find((r) => r.name === n)).filter((r): r is Row => !!r);
+  if (finals.length !== FINAL_PICKS.length) {
+    console.log(`  ⚠️ 终稿三篇里有 ${FINAL_PICKS.length - finals.length} 本在 journals 表找不到`);
+  }
+  const groupA = await pickGroupA(A_GROUP_SIZE);
+  const groupB = pickGroupB(pool, B_GROUP_SIZE);
+  console.log(`\n选刊 A 组（回头刊 TOP${A_GROUP_SIZE}）：${groupA.map((r) => r.name).join("、")}`);
+  const groupAPrime = (await pickGroupA(40))
+    .filter((r) => !groupA.some((g) => g.id === r.id) && cohortEligible(buildCohortFromRow(r)).ok)
+    .slice(0, A_GROUP_SIZE);
+  console.log(`选刊 A′ 组（回头刊里能过准入的）：${groupAPrime.map((r) => r.name).join("、") || "（一本都没有）"}`);
+  console.log(`选刊 B 组（真 sparse 国内刊）：${groupB.map((r) => r.name).join("、")}`);
+
+  const samples: Sample[] = [];
+  const emitted = new Set<string>(); // 同一本刊在 A′ 与 B 都被选中过（8-11），出两遍白费一个名额
+  let seed = 0;
+  for (const [group, rows] of [
+    ["终稿", finals],
+    ["A", groupA],
+    ["A'", groupAPrime],
+    ["B", groupB],
+  ] as const) {
+    for (const row of rows) {
+      if (emitted.has(row.id)) {
+        console.log(`  ⏭  ${row.name} 已在前一组出现，跳过（避免同刊出两遍占名额）`);
+        continue;
+      }
+      emitted.add(row.id);
+      const supply = classifyDataSupply(row).level;
+      const gate = cohortEligible(buildCohortFromRow(row));
+      if (!gate.ok) {
+        console.log(`  ⏭  ${row.name}（${supply}）跳过：${gate.reason}`);
+        samples.push({
+          group,
+          journalId: row.id,
+          journalName: row.name,
+          supply,
+          eligible: false,
+          skipReason: gate.reason,
+        });
+        continue;
+      }
+      process.stdout.write(`  ▶ ${row.name}（${supply}）生成中…`);
+      const res = await generateDisciplinePosition({
+        row,
+        variantSeed: seed++,
+        rotationScope: `sample-discipline-position-${group}`,
+      });
+      if (!res.ok) {
+        console.log(` ❌ ${res.reason} ${res.detail ?? ""}`);
+        samples.push({ group, journalId: row.id, journalName: row.name, supply, eligible: true, skipReason: res.reason });
+        continue;
+      }
+      const v = res.checks.numberViolations.length;
+      const f = res.checks.fabrication.length;
+      const h = res.checks.health.issues.length;
+      console.log(` ✅ ${plainLen(res.html)} 字 ｜ 数字违规 ${v} ｜ 编造 ${f} ｜ health ${h}`);
+      samples.push({
+        group,
+        journalId: row.id,
+        journalName: row.name,
+        supply,
+        eligible: true,
+        result: res,
+        existing: await latestExistingContent(row.id),
+      });
+    }
+  }
+
+  const done = samples.filter((s) => s.result);
+
+  // ── 拍板数字 ②：编造命中数
+  // 🔻 措辞检查已降级为影子，**不计入**这个数（台账 37 报 0 中）
+  const totalViolations = done.reduce(
+    (a, s) => a + s.result!.checks.numberViolations.length + s.result!.checks.fabrication.length,
+    0,
+  );
+  console.log(`\n【拍板数字②】${done.length} 篇合计 编造/数字违规命中：${totalViolations} 处（目标 0）`);
+
+  // ── 拍板数字 ③：B 组同学科重复度
+  // 按"B 组里出现最多的那个分类"取同学科样本 —— 不写死教育口(桶会随快照校准变)
+  const bCounts = new Map<string, number>();
+  for (const s of done) {
+    if (s.group !== "B") continue;
+    const d = usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal;
+    if (d) bCounts.set(d, (bCounts.get(d) ?? 0) + 1);
+  }
+  const topDisc = [...bCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const bEdu = done.filter(
+    (s) => s.group === "B" && usableSlices(s.result!.cohort)[0]?.disciplineOfThisJournal === topDisc,
+  );
+  /**
+   * 🔴 分开量两件事。第一版只量了整页 HTML，得出「56% 雷同」——
+   * 但逐条看下去，9 条共同"句子"全是模板标签（「CSSCI（2023-2024 版目录）」
+   * 「数据来源：…」「（以上是整个目录的分类分布…）」）。
+   * 模板骨架相同是**设计使然**，把它算进雷同度只会得出一个吓人但没意义的数。
+   * 老板真正要看的是：**模型写的正文**有多像，以及**同类刊清单**是不是同一份。
+   */
+  let dupNote = "B 组不足 2 篇同学科，无法评估";
+  if (bEdu.length >= 2) {
+    const narrativeOf = (s: Sample) =>
+      new Set(
+        Object.values(s.result!.narrative)
+          .join("\n")
+          .split(/[\n。！？]/)
+          .map((x) => x.trim())
+          .filter((x) => x.length > 12),
+      );
+    const siblingsOf = (s: Sample) => new Set(usableSlices(s.result!.cohort).flatMap((x) => x.siblings));
+    const jac = (sets: Array<Set<string>>) => {
+      let shared = 0;
+      let base = 0;
+      for (let i = 0; i < sets.length; i++) {
+        for (let j = i + 1; j < sets.length; j++) {
+          shared += [...sets[i]!].filter((x) => sets[j]!.has(x)).length;
+          base += Math.min(sets[i]!.size, sets[j]!.size);
+        }
+      }
+      return base > 0 ? (shared / base) * 100 : 0;
+    };
+    const nPct = jac(bEdu.map(narrativeOf));
+    const sPct = jac(bEdu.map(siblingsOf));
+    dupNote =
+      `B 组同属「${topDisc}」的 ${bEdu.length} 篇：模型正文重合 ${nPct.toFixed(1)}%，` +
+      `同类刊清单重合 ${sPct.toFixed(1)}%（模板骨架必然相同，不计入）` +
+      `　⚠️ 样本量 ${bEdu.length} 篇 —— 篇数越少这个百分比越不稳，跨轮比较要先看样本量`;
+  }
+  console.log(`【拍板数字③】${dupNote}`);
+
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(
+    resolve(OUT_DIR, "samples.json"),
+    JSON.stringify(
+      samples.map((s) => ({
+        ...s,
+        result: s.result
+          ? {
+              title: s.result.title,
+              recipe: s.result.recipe,
+              metadata: s.result.metadata,
+              checks: s.result.checks,
+              llm: s.result.llm,
+              plainLen: plainLen(s.result.html),
+            }
+          : undefined,
+        existing: undefined,
+      })),
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+
+  writeFileSync(
+    resolve(OUT_DIR, "compare.html"),
+    buildComparePage(samples, { admitRate, pass, sparseTotal: sparse.length, skipCounts, totalViolations, dupNote }),
+    "utf-8",
+  );
+  console.log(`\n📄 已写出：${OUT_DIR}/compare.html`);
+  console.log(`   取回：ssh bossmate-boss cat ${OUT_DIR}/compare.html > compare.html`);
+  process.exit(0);
+}
+
+function buildComparePage(
+  samples: Sample[],
+  stat: {
+    admitRate: string;
+    pass: number;
+    sparseTotal: number;
+    skipCounts: Map<string, number>;
+    totalViolations: number;
+    dupNote: string;
+  },
+): string {
+  const done = samples.filter((s) => s.result);
+  const rows = done
+    .map((s) => {
+      const r = s.result!;
+      const d = r.checks.density;
+      const len = plainLen(r.html);
+      return `<tr>
+      <td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td>${esc(s.supply)}</td>
+      <td>${len}</td><td>${d.factsAvailable}</td><td>${d.factsCited}</td>
+      <td>${r.metadata.cohortSlices ? (r.metadata.cohortSlices as unknown[]).length : 0}</td>
+      <td>${((r.checks.numberViolations.length / Math.max(1, len)) * 100).toFixed(2)}</td>
+      <td class="${r.checks.numberViolations.length + r.checks.fabrication.length > 0 ? "bad" : "good"}">${
+        r.checks.numberViolations.length + r.checks.fabrication.length
+      }</td>
+      <td class="${r.checks.health.issues.length > 0 ? "bad" : "good"}">${r.checks.health.issues.length}</td>
+    </tr>`;
+    })
+    .join("");
+
+  const skipRows = samples
+    .filter((s) => !s.result)
+    .map((s) => `<tr><td>${esc(s.group)}</td><td>${esc(s.journalName)}</td><td colspan="8">跳过：${esc(s.skipReason)}</td></tr>`)
+    .join("");
+
+  const isFinal = (s: Sample) => s.group === "终稿";
+  const render = (s: Sample) => {
+      const r = s.result!;
+      const evid = [
+        ...r.checks.numberViolations.map((v) => `【${v.kind}】命中「${v.matched}」 ← ${v.sentence}`),
+        ...r.checks.fabrication.map((f) => `【编造】${typeof f === "string" ? f : JSON.stringify(f)}`),
+        ...r.checks.health.issues.map((i) => `【health/${i.code}】${i.detail}`),
+      ];
+      const white = [
+        ...new Set(
+          (r.metadata.cohortSlices as Array<Record<string, unknown>> | undefined)?.flatMap((x) => [
+            String(x.countInDiscipline),
+            String(x.countInCatalogTotal),
+            String(x.shareOfCatalogPct),
+          ]) ?? [],
+        ),
+      ];
+      return `<section class="pair">
+      <h2>${esc(s.group)} 组 ｜ ${esc(s.journalName)} <small>（${esc(s.supply)} ｜ 钩子:${esc(
+        r.recipe.hook,
+      )}）</small></h2>
+      <div class="cols">
+        <div><h3>现状（存量文章）</h3>${
+          s.existing
+            ? `<iframe srcdoc="${esc(s.existing.body)}"></iframe>`
+            : `<p class="none">该刊没有存量文章可对比</p>`
+        }</div>
+        <div><h3>新体裁「学科定位」</h3><p class="t">${esc(r.title)}</p><iframe srcdoc="${esc(
+          r.html,
+        )}"></iframe></div>
+      </div>
+      <details><summary>证据区（命中 ${evid.length} 条 ｜ 本篇数字白名单：${esc(white.join("、"))}）</summary>
+        <pre>${esc(evid.join("\n") || "（零命中）")}</pre></details>
+    </section>`;
+  };
+  const finalBlocks = done.filter(isFinal).map(render).join("");
+  const restBlocks = done.filter((s) => !isFinal(s)).map(render).join("");
+
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>「学科定位」体裁样例对比</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;margin:0;padding:24px;background:#f5f6f7;color:#222;line-height:1.7}
+.banner{background:#fff3cd;border:1px solid #ffe08a;padding:14px 16px;border-radius:6px;margin-bottom:20px;font-size:15px}
+table{border-collapse:collapse;width:100%;background:#fff;font-size:14px;margin-bottom:24px}
+th,td{border:1px solid #e6e6e6;padding:7px 9px;text-align:center}
+th{background:#fafafa}
+.good{color:#2e7d32;font-weight:600}.bad{color:#c62828;font-weight:600}
+.pair{background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:16px;margin-bottom:22px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.cols{grid-template-columns:1fr}}
+iframe{width:100%;height:520px;border:1px solid #eee;background:#fff}
+.none{color:#999;font-size:14px;padding:24px;text-align:center;border:1px dashed #ddd}
+.t{font-weight:600;font-size:16px;margin:6px 0}
+pre{white-space:pre-wrap;font-size:13px;background:#fafafa;padding:10px;border-radius:4px}
+h2{font-size:17px;margin:0 0 12px}h3{font-size:14px;color:#666;margin:0 0 8px}
+small{font-weight:400;color:#888;font-size:13px}
+.stat{background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:14px 16px;margin-bottom:20px;font-size:15px}
+.problems{background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:16px;margin-bottom:20px}
+.pcard{border-left:4px solid #ccc;padding:10px 14px;margin:12px 0;background:#fbfbfb;font-size:14px}
+.pcard p{margin:8px 0}
+.pcard.ok{border-left-color:#2e7d32}.pcard.no{border-left-color:#c62828}
+.tag{font-size:12px;padding:2px 8px;border-radius:10px;color:#fff}
+.tag-ok{background:#2e7d32}.tag-no{background:#c62828}
+code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px}
+</style></head><body>
+<div class="banner">
+  <b>未写库 · 未注册模板 · 未进任何轮换 · 拍板前零上线</b><br>
+  目录快照：CSSCI / CSSCI 扩展版 / CSCD 2023-2024 版，北大核心 / SCI 核心 2023 版。<br>
+  CSCD 与 SCI 核心<b>没有学科分类</b>，只能当徽章，不参与任何本数统计。<br>
+  ⚠️ 「目录是什么/怎么查证」这一章<b>刻意缺席</b> —— 五个目录的编制机构与官方查证入口
+  尚未人工审校（<code>catalog-facts.ts</code> 全部 <code>reviewed:false</code>），
+  不确认就不写，绝不由模型猜一个机构名或网址。
+</div>
+<section class="problems">
+  <h2 style="margin:0 0 12px;font-size:16px;">这页解决什么、不解决什么</h2>
+  <div class="pcard ok">
+    <b>问题 A：国内 sparse 刊被迫编造</b>　<span class="tag tag-ok">A2 解决</span>
+    <p>587 篇实测 sparse 占 57.6%；取样 5 篇 <b>5/5 出现叙述型编造</b>
+    （「审稿流程严谨」「实证研究稿件更受青睐」，DB 里一个字都没有）。
+    病根是模板固定要写投稿指南，而这些刊没有 IF / 分区 / 审稿周期 —— <b>任务本身无解</b>，
+    加闸只能让它闭嘴，不能让它有话说。</p>
+    <p><b>本体裁的做法</b>：不问「这本刊怎么样」，问「它在目录里处在什么位置」。
+    素材来自<b>刊库集合数据</b>而非单刊，所以刊越薄越管用。下方 A′ 组是同一本刊的左右对比。</p>
+  </div>
+  <div class="pcard no">
+    <b>问题 B：国际 education 刊池只有 6 本，30 天被用了 30 次</b>　
+    <span class="tag tag-no">A2 覆盖不到</span>
+    <p><b>这个体裁解决不了 B。</b>它的主料是国内目录的学科分类，
+    而跑量最大的那批回头刊（System / TESOL Quarterly / Modern Language Journal…）是国际刊，
+    在 DB 里没有国内目录归属 —— 下表 A 组 <b>5/5 全部因 <code>no_catalog_in_db</code> 跳过</b>，
+    就是这个事实的直接证据。</p>
+    <p><b>B 需要另外的动作</b>：扩心理学账号（255 本 rich 刊现成可用），
+    或调整账号配额把 education 的排产压下来。<b>拍板通过 A2 ≠ B 被解决了。</b></p>
+  </div>
+</section>
+<div class="stat">
+  <b>拍板数字①</b> sparse 国内刊准入率：${stat.pass}/${stat.sparseTotal} = <b>${stat.admitRate}%</b>
+  ${[...stat.skipCounts].map(([k, v]) => `<br>　　不通过 ${esc(k)}：${v} 本`).join("")}<br><br>
+  <b>拍板数字②</b> ${done.length} 篇合计编造/数字违规：<b class="${
+    stat.totalViolations > 0 ? "bad" : "good"
+  }">${stat.totalViolations}</b> 处（目标 0）<br><br>
+  <b>拍板数字③</b> ${esc(stat.dupNote)}
+</div>
+<table><thead><tr>
+<th>组</th><th>期刊</th><th>供给</th><th>字数</th><th>factsAvailable</th><th>factsCited</th>
+<th>目录切片</th><th>违规/百字</th><th>编造命中</th><th>health</th>
+</tr></thead><tbody>${rows}${skipRows}</tbody></table>
+<h2 style="margin:24px 0 12px;font-size:18px;">终稿三篇</h2>
+${finalBlocks || '<p class="none">终稿三篇未生成</p>'}
+<details style="margin-top:28px;"><summary style="cursor:pointer;font-size:16px;font-weight:600;padding:10px 0;">
+  其余 ${done.filter((s) => !isFinal(s)).length} 篇（附录，展开查看）</summary>
+${restBlocks}
+</details>
+</body></html>`;
+}
+
+main().catch((err) => {
+  console.error("脚本失败：", err);
+  process.exit(1);
+});
