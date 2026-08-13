@@ -54,7 +54,10 @@ describe("① ⑤ 待办建议：每条都要能照着做", () => {
       annotated: 0,
       health: { articles: 20, titleFallback: 0, shortBody: 0, truncated: 0 },
     });
-    const forbidden = ["改代码", "调阈值", "修改配置文件", "改 env", "重启", "SQL", "部署"];
+    // 🔴「设置页/配置页」在此列 —— 后台**没有**检查器开关页, 也没有阈值页。
+    //   指一个不存在的按钮比不给建议更糟: 她会先找半天, 然后再也不信这页。
+    //   （哪天真做了那个页面, 再从这个名单里删掉。）
+    const forbidden = ["改代码", "调阈值", "修改配置文件", "改 env", "重启", "SQL", "部署", "设置页", "配置页"];
     for (const t of todos) {
       for (const f of forbidden) expect(t.action, `建议里出现了运营做不了的动作「${f}」`).not.toContain(f);
     }
