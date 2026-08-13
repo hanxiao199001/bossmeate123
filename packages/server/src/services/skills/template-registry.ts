@@ -92,6 +92,43 @@ export function listTemplates(): TemplateDefinition[] {
   return Array.from(registry.values());
 }
 
+/**
+ * 🔴 `templateId` 合法性校验（8-13）—— 数据链最上游的闸。
+ *
+ * ## 这个字段五步之后变成了决策层的毒数据
+ *
+ * `batch-worker.mapTemplateLetter` 把**数字人主播人设字母**（A/B/C/E，形象+音色）
+ * 映射成了「渲染模板名」，而其中 B/C/E 指向的三个名字 —— `marketing-conversion` /
+ * `popular-science` / `industry-vertical` —— **从来没有过实现**。于是：
+ *
+ * ```
+ * 虚构模板名 → getTemplate() 返 null → 静默 fallback 到默认模板
+ *   → 103 篇内容标着假 templateId（实际全是 shunshi 渲染）
+ *   → 模板分布统计失真（真实单一化 73%，账面 55%）
+ *   → 效果账本把 shunshi 的阅读数记在两个虚构 key 名下
+ *   → 差点污染刚收口的轮换加权决策
+ * ```
+ *
+ * 一个**没有合法性校验的字段**，五步之后成了决策层的毒数据。
+ * 写入侧校验不是防御性编程的洁癖，是数据链最上游的闸。
+ */
+export function isRegisteredTemplateId(id: unknown): id is string {
+  return typeof id === "string" && registry.has(id);
+}
+
+/**
+ * 落库前校验。非法值**拒绝**而不是静默改写 ——
+ * 静默改写会让「传错了」和「传对了」在下游同样看不出来（红线 #14）。
+ */
+export function assertRegisteredTemplateId(id: unknown, where: string): string {
+  if (isRegisteredTemplateId(id)) return id;
+  throw new Error(
+    `INVALID_TEMPLATE_ID: ${where} 收到未注册的 templateId「${String(id)}」。` +
+      `已注册: ${[...registry.keys()].join(" / ")}。` +
+      `若这是数字人主播人设(A/B/C/E)，它属于 personaLetter，不是渲染模板。`,
+  );
+}
+
 export const DEFAULT_TEMPLATE_ID = "shunshi-style";
 
 export function getDefaultTemplateId(): string {
