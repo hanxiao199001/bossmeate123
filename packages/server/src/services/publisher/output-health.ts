@@ -31,7 +31,22 @@ export type OutputHealthCode =
   | "body_truncated"     // 正文明显截断(半句结束 / markdown 语法残留)
   | "body_repetition"    // 同一段落大量重复(LLM 退化)
   | "template_residue"   // 模板/变量残留([object Object] / undefined / {{IMG:...}})
-  | "fallback_phrase";   // 8-06: 与真数据同形态的兜底文案(「高影响力」「权威期刊」这类)
+  | "fallback_phrase"    // 8-06: 与真数据同形态的兜底文案(「高影响力」「权威期刊」这类)
+  | "placeholder_asset_in_body"; // 8-13: body 指向占位/测试素材(dvh-fixtures 等), 见下方常量
+
+/**
+ * 🔴 占位/测试素材的路径特征 —— `contents.body` **永远不该**指向它们。
+ *
+ * 8-13 事故：DVH 失败时退占位样片, 于是内容工坊里躺着 10 条
+ * 「标题是真实期刊、片子是固定占位样片(还烧着 IF6.2 和无关期刊封面)」的记录。
+ * 降级分支已删, 理论上不会再犯 —— 这道闸是**不变式守卫**:
+ * 「contents 的 body 永远不指向占位/测试素材」一条规则管全部,
+ * 比"哪些该摘哪些该留"这种要人记住的分叉可靠。
+ *
+ * 自校验型判据: 素材路径是我们自己定的, 命中即矛盾, 不需要外部信息也不需要人看片。
+ * checkerId 候选: `placeholder_asset_in_body`(Phase 1 台账的客户之一)。
+ */
+export const PLACEHOLDER_ASSET_MARKERS = ["dvh-fixtures/", "/placeholder-", "mock-fixture"] as const;
 
 export interface OutputHealthIssue {
   code: OutputHealthCode;
@@ -195,6 +210,18 @@ export function checkOutputHealth(input: {
   if (title) {
     const m = title.match(TITLE_PLACEHOLDER_RE);
     if (m) issues.push({ code: "title_placeholder", detail: `标题含未替换占位符「${m[0]}」: 「${snippet(title, 40)}」` });
+  }
+
+  // 8-13 占位/测试素材 —— 视频的 body 是 URL, 图文的 body 里也可能嵌到这类地址
+  {
+    const hay = `${input.title ?? ""}\n${input.body ?? ""}`;
+    const marker = PLACEHOLDER_ASSET_MARKERS.find((mk) => hay.includes(mk));
+    if (marker) {
+      issues.push({
+        code: "placeholder_asset_in_body",
+        detail: `内容指向占位/测试素材(命中「${marker}」) —— 这不是真产物, 不得当成品用: 「${snippet(input.body ?? "", 60)}」`,
+      });
+    }
   }
 
   // ④ 模板/变量残留(标题 + 正文)
