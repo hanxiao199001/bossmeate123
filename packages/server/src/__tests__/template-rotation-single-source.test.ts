@@ -79,10 +79,22 @@ describe("③ 扫描守卫：不许再出现第二处模板随机挑选", () => 
     for (const f of files) {
       if (f.endsWith("template-registry.ts")) continue; // 唯一合法实现
       const src = await readFile(f, "utf-8");
-      // 形态：本地写死一组模板 id 常量（含连字符的模板名 ≥2 个并列）后跟随机挑选
-      const localList = /\[\s*"(?:shunshi-style|storytelling|listicle|data-card|popular-science|industry-vertical)"\s*,\s*"[a-z-]+"/.test(src);
-      const randomPick = /Math\.random\(\)/.test(src);
-      if (localList && randomPick) offenders.push(f.replace(root, ""));
+      /**
+       * 🔴 判据必须窄。第一版写成「文件里有模板名列表」&&「文件里有 Math.random」，
+       * 于是 `routes/admin.ts` 被误报：它的模板名列表是 **zod 枚举**（显式选择的 API 契约，
+       * 完全合法），而 Math.random 在几百行外用于生成 `bg_` id —— 两者毫无关系。
+       * 宽判据的代价不是多报几条，是**报了假的就没人再看真的**。
+       *
+       * 现在只认真实危险形态：随机数**就近**索引一个模板名数组。
+       */
+      const TPL = "shunshi-style|storytelling|listicle|data-card|popular-science|industry-vertical";
+      const hit = [...src.matchAll(/Math\.random\(\)/g)].some((m) => {
+        const from = Math.max(0, (m.index ?? 0) - 400);
+        const win = src.slice(from, (m.index ?? 0) + 200);
+        // 窗口内同时出现「模板名数组字面量」与「下标取用」才算
+        return new RegExp(`\\[[^\\]]*"(?:${TPL})"[^\\]]*\\]`).test(win) && /\[[^\]]*Math\.floor|\.length\s*\)\s*\]/.test(win);
+      });
+      if (hit) offenders.push(f.replace(root, ""));
     }
     expect(offenders, `这些文件自建了模板随机挑选，应改用 listRotatableTemplates()：\n${offenders.join("\n")}`).toEqual([]);
   });
