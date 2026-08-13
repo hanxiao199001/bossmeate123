@@ -19,7 +19,7 @@ import { submitDvhTask, submitDvhAudioTask } from "./submit-task.js";
 import { buildSrtFromText } from "./subtitle-from-text.js";
 import { ttsService } from "../video/tts-service.js";
 import { storage } from "../storage/index.js";
-import { queryDvhTaskUntilDone } from "./query-task.js";
+import { queryDvhTaskUntilDone, DvhTaskFailedError } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import type { TemplateId } from "./template-mapping.js";
@@ -319,7 +319,35 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         ...(effective ? { effective } : {}),
       };
     }
-    // ★ submit 成功 (已扣费) 但 query 失败/超时: 阿里云任务可能仍在跑/已完成. 记 orphanTaskUuid 供后续 recover, 不静默吞.
+    /**
+     * 🔴 8-13 先分辨"任务被判失败"与"查不到"—— 这两件事此前被一律当成孤儿。
+     *
+     * 阿里云明确回了 status=4 + failCode + failReason 时：**没有成片，捞无可捞**。
+     * 把它继续叫"孤儿 + 可凭 taskUuid 捞回"，就是给下一个人一条错误指引
+     * （8-13 之前正是如此，5 条 10010002 全带着这句话）。
+     */
+    if (err instanceof DvhTaskFailedError) {
+      logger.error(
+        { taskUuid: err.taskUuid, failCode: err.failCode, failReason: err.failReason, status: err.rawStatus, tenantId },
+        "dvh.task.failed_by_provider — 阿里云判任务失败, 无成片产出",
+      );
+      void recordCost({
+        tenantId, kind: "dvh",
+        amountCents: estimateDvhCents(text),
+        note: `DVH失败任务(预估, 已扣费无产出) ${title.slice(0, 40)} (task ${err.taskUuid} ${err.failCode})`,
+      });
+      void recordIncident({
+        kind: "dvh_task_failed", severity: "error", tenantId,
+        message: `数字人任务被阿里云判失败(已扣费, 无成片): ${err.failCode} ${err.failReason}`.slice(0, 300),
+        detail: {
+          taskUuid: err.taskUuid, failCode: err.failCode, failReason: err.failReason,
+          templateId, title: title.slice(0, 80), backgroundUrl: backgroundUrl ?? null,
+          estimatedCents: estimateDvhCents(text),
+        },
+      });
+      throw err;
+    }
+    // ★ submit 成功 (已扣费) 但 query **取不回**(网络/超时): 任务可能仍在跑, taskUuid 有捞回价值.
     if (taskUuid) {
       logger.error({ err: msg, taskUuid }, "dvh.bridge.paid_task_orphaned_query_failed");
       // 7-31 上简报: 这是**钱花了没拿到货**, 四种兜底里最贵的一种, 且 orphanTaskUuid 拿在手上

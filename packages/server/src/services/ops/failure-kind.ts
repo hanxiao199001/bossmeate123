@@ -356,6 +356,19 @@ export function classifyFailure(err: unknown): FailureKind {
    * taskUuid 已由 DvhOrphanTaskError 带出并落进 deferred detail。
    */
   if (f.name === "DvhOrphanTaskError" || lower.includes("dvh_orphan_task")) return "service_down";
+  /**
+   * 8-13 背景图分辨率不合规 —— 换张图才行，重跑同一张必然同样失败。
+   */
+  if (f.name === "DvhBackgroundInvalidError" || lower.includes("dvh_bg_invalid")) return "content_error";
+
+  /**
+   * 8-13 阿里云明确判任务失败(带 failCode)。归 content_error = **不自动重跑**。
+   *
+   * 保守选择, 理由是钱: 每次重跑都先扣费再失败。failCode 的瞬时/确定性分类我们**还不掌握**
+   * (目前只见过 10010002 背景图分辨率, 那是确定性的)。先一律转人工, 等 incident 里
+   * 攒出 failCode 分布再决定哪些值得自动重跑 —— 而不是先假设它们可重跑然后烧钱验证。
+   */
+  if (f.name === "DvhTaskFailedError" || lower.includes("dvh_task_failed")) return "content_error";
 
   // ---- ③ 兜底: 内容自己的问题, 重跑没用 ----
   return "content_error";

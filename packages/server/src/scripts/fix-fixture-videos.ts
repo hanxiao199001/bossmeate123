@@ -13,9 +13,16 @@
  *
  * > 宁可少几条视频，不能让假数据片挂着"成功"。
  *
- *   · 孤儿任务（已扣费）→ **status=failed + deferred(exhausted)**，转人工。
+ *   · 已扣费但无产出的 → **status=failed**，转人工。
  *     🔴 不重置成「可自动重跑」：重跑 = 重提交 = **再付一次钱**。
- *     正确动作是凭 `orphanTaskUuid` 去阿里云捞回那条已付费的成片。
+ *
+ * ## 8-13 更正：这批根本不是"取不回"，是"任务真失败了"
+ *
+ * 探针（凭 taskUuid 直查阿里云）实测：5 条全部 `status=4`、
+ * `failCode=10010002 图片分辨率必须与输出的视频分辨率一致`、`videoUrl` 为空。
+ * **没有成片，捞无可捞。** 此前 errorMessage 写的「取不回成片（可凭 taskUuid 捞回）」
+ * 是**错误指引** —— 留着这句话，下一个人还会去写捞回脚本。本脚本可重复执行，
+ * 会把文案改成真实原因，并把 `paidButUnretrieved` 换成 `paidButFailed`。
  *   · 7-30 那批测试产物（并发锁测试/幂等测试）→ **不动**，它们已经是 archived，
  *     没有"挂着成功"这个问题，动它反而丢失当时的测试痕迹。
  *
@@ -51,7 +58,7 @@ async function main() {
       skip.push({ row: r, why: "已 archived（7-30 测试产物），不动" });
       continue;
     }
-    if (m.fallbackReason !== "query_failed_orphan") {
+    if (m.fallbackReason !== "query_failed_orphan" && m.paidButUnretrieved !== true && m.paidButFailed !== true) {
       skip.push({ row: r, why: `fallbackReason=${String(m.fallbackReason ?? "无")}，不在本次口径内` });
       continue;
     }
@@ -84,7 +91,9 @@ async function main() {
     //   这也是为什么新代码把 narrationText 落进 metadata（见 recordDvhArticleFailure）。
     const mark = buildDeferred({
       err: new DvhOrphanTaskError(taskUuid, "存量清理：已扣费但取不回成片"),
-      detail: `已提交并扣费但取不回成片（task ${taskUuid}）— 需人工凭该 taskUuid 去阿里云捞回，**不要重跑**（重跑=再付一次钱）`,
+      detail:
+        `任务在阿里云侧失败（10010002 背景图分辨率不符），已扣费但**无成片产出**（task ${taskUuid}）。` +
+        `不要重跑：同一张背景图必然同样失败。根因已修（上传归一 + 提交前分辨率闸）。`,
       input: {
         kind: "dvh_text",
         tenantId: r.tenantId,
@@ -99,12 +108,19 @@ async function main() {
       .update(contents)
       .set({
         status: "failed",
-        errorMessage: `数字人任务已扣费但取不回成片（task ${taskUuid}）— 原内容是占位样片，非真渲染`,
+        errorMessage:
+          `任务在阿里云侧失败（10010002 背景图分辨率必须与输出视频一致），已扣费但无成片产出` +
+          `（task ${taskUuid}）。原内容是占位样片，非真渲染。`,
         metadata: {
           ...m,
           placeholderVideo: true,
-          paidButUnretrieved: true,
-          fixedBy: "fix-fixture-videos 8-12",
+          // 8-13 更正: 不是"取不回"(paidButUnretrieved), 是"付了钱任务失败、无产出"。
+          //   旧字段显式置 false 而不是删掉 —— 留个痕迹说明它被更正过。
+          paidButUnretrieved: false,
+          paidButFailed: true,
+          providerFailCode: "10010002",
+          providerFailReason: "图片分辨率必须与输出的视频分辨率一致",
+          fixedBy: "fix-fixture-videos 8-13",
         },
         updatedAt: new Date(),
       })
