@@ -19,7 +19,7 @@ import { submitDvhTask, submitDvhAudioTask } from "./submit-task.js";
 import { buildSrtFromText } from "./subtitle-from-text.js";
 import { ttsService } from "../video/tts-service.js";
 import { storage } from "../storage/index.js";
-import { queryDvhTaskUntilDone, DvhTaskFailedError } from "./query-task.js";
+import { queryDvhTaskUntilDone, type DvhTaskFailedError } from "./query-task.js";
 import { getMockDvhFixture } from "./mock-fixture.js";
 import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import type { TemplateId } from "./template-mapping.js";
@@ -326,21 +326,28 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
      * 把它继续叫"孤儿 + 可凭 taskUuid 捞回"，就是给下一个人一条错误指引
      * （8-13 之前正是如此，5 条 10010002 全带着这句话）。
      */
-    if (err instanceof DvhTaskFailedError) {
+    /**
+     * ⚠️ 按 `name` 判而不是 `instanceof` —— 与 `failure-kind.ts` 同一写法。
+     * `instanceof` 依赖"两边拿到同一个类对象"：跨模块实例（vitest 的 vi.mock 只导出部分成员、
+     * 打包出现重复副本）时右操作数会是 undefined，`instanceof` 当场抛 TypeError，
+     * **catch 块自己炸掉**，于是连兜底分支都进不去。8-13 实测: pr261 那条测试就是这么红的。
+     */
+    const failed = (err as { name?: string } | null)?.name === "DvhTaskFailedError" ? (err as DvhTaskFailedError) : null;
+    if (failed) {
       logger.error(
-        { taskUuid: err.taskUuid, failCode: err.failCode, failReason: err.failReason, status: err.rawStatus, tenantId },
+        { taskUuid: failed.taskUuid, failCode: failed.failCode, failReason: failed.failReason, status: failed.rawStatus, tenantId },
         "dvh.task.failed_by_provider — 阿里云判任务失败, 无成片产出",
       );
       void recordCost({
         tenantId, kind: "dvh",
         amountCents: estimateDvhCents(text),
-        note: `DVH失败任务(预估, 已扣费无产出) ${title.slice(0, 40)} (task ${err.taskUuid} ${err.failCode})`,
+        note: `DVH失败任务(预估, 已扣费无产出) ${title.slice(0, 40)} (task ${failed.taskUuid} ${failed.failCode})`,
       });
       void recordIncident({
         kind: "dvh_task_failed", severity: "error", tenantId,
-        message: `数字人任务被阿里云判失败(已扣费, 无成片): ${err.failCode} ${err.failReason}`.slice(0, 300),
+        message: `数字人任务被阿里云判失败(已扣费, 无成片): ${failed.failCode} ${failed.failReason}`.slice(0, 300),
         detail: {
-          taskUuid: err.taskUuid, failCode: err.failCode, failReason: err.failReason,
+          taskUuid: failed.taskUuid, failCode: failed.failCode, failReason: failed.failReason,
           templateId, title: title.slice(0, 80), backgroundUrl: backgroundUrl ?? null,
           estimatedCents: estimateDvhCents(text),
         },
