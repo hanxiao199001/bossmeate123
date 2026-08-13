@@ -121,6 +121,12 @@ export interface ChatResponse {
    * 老调用点不读它 → 行为与改造前完全一致。
    */
   ok?: boolean;
+  /**
+   * 8-13 新增：模型侧真实结束原因。`"max_tokens"` = 被截断。
+   * `ok===false`（主备全挂、content 是兜底文案）时恒为 `"error"` —— 兜底文案不是模型输出，
+   * 绝不能报成 `"stop"` 冒充正常结束。
+   */
+  finishReason?: "stop" | "max_tokens" | "error";
 }
 
 // OpenAI 兼容接口的响应格式（DeepSeek / Qwen / OpenAI 均使用此格式）
@@ -199,7 +205,7 @@ async function callOpenAICompatible(
   maxTokens: number,
   timeoutMs: number = env.AI_REQUEST_TIMEOUT_MS,
   temperature: number = 0.7
-): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+): Promise<{ content: string; inputTokens: number; outputTokens: number; finishReason: "stop" | "max_tokens" | "error" }> {
   return withRetry(async () => {
     const { controller, cleanup } = createTimeoutController({
       timeoutMs,
@@ -234,8 +240,18 @@ async function callOpenAICompatible(
       const content = data.choices?.[0]?.message?.content || "";
       const inputTokens = data.usage?.prompt_tokens || 0;
       const outputTokens = data.usage?.completion_tokens || 0;
+      /**
+       * 🔴 8-13 补取 finish_reason。此前整条 skills 链路根本没有这个信号 ——
+       * `routed-provider` 硬编码 "stop", 于是日志里的 finishReason 恒为 "stop",
+       * 「真的正常结束」与「被截断」完全无法区分。
+       * 8-11~8-13 三条兜底标题样本据此被判"截断不成立", 而其中一条
+       * outputTokens=6001 恰好 = maxTokens 6000+1。坏信号吐合理值, 比没信号更难发现。
+       */
+      const rawFinish = String(data.choices?.[0]?.finish_reason ?? "");
+      const finishReason: "stop" | "max_tokens" | "error" =
+        rawFinish === "length" ? "max_tokens" : rawFinish === "stop" ? "stop" : rawFinish ? "error" : "stop";
 
-      return { content, inputTokens, outputTokens };
+      return { content, inputTokens, outputTokens, finishReason };
     } finally {
       cleanup();
     }
@@ -253,7 +269,7 @@ async function executeAICall(
   _systemPrompt: string | undefined,
   timeoutMs: number,
   overrides?: { temperature?: number; maxTokens?: number }
-): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+): Promise<{ content: string; inputTokens: number; outputTokens: number; finishReason: "stop" | "max_tokens" | "error" }> {
   return await callOpenAICompatible(
     provider.baseUrl,
     provider.apiKey,
@@ -359,6 +375,8 @@ async function chatWithSerialMode(
       inputTokens: 0,
       outputTokens: 0,
       ok: false,
+      // 兜底文案不是模型输出 —— 报 error, 不许冒充 stop
+      finishReason: "error",
     };
   }
 
@@ -385,6 +403,7 @@ async function chatWithSerialMode(
         taskType,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        finishReason: result.finishReason,
       },
       "AI 调用成功"
     );
@@ -395,6 +414,7 @@ async function chatWithSerialMode(
       provider: provider.name,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      finishReason: result.finishReason,
       ok: true,
     };
   } catch (err) {
@@ -421,6 +441,7 @@ async function chatWithSerialMode(
           provider: fallback.name,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
+          finishReason: result.finishReason,
           ok: true,
         };
       } catch (fallbackErr) {
@@ -442,6 +463,8 @@ async function chatWithSerialMode(
       inputTokens: 0,
       outputTokens: 0,
       ok: false,
+      // 兜底文案不是模型输出 —— 报 error, 不许冒充 stop
+      finishReason: "error",
     };
   }
 }
@@ -468,6 +491,8 @@ async function chatWithRaceMode(
       inputTokens: 0,
       outputTokens: 0,
       ok: false,
+      // 兜底文案不是模型输出 —— 报 error, 不许冒充 stop
+      finishReason: "error",
     };
   }
 
@@ -527,6 +552,7 @@ async function chatWithRaceMode(
           taskType,
           inputTokens: winner.result.inputTokens,
           outputTokens: winner.result.outputTokens,
+          finishReason: winner.result.finishReason,
         },
         "AI 竞速调用成功"
       );
@@ -537,6 +563,7 @@ async function chatWithRaceMode(
         provider: winner.provider.name,
         inputTokens: winner.result.inputTokens,
         outputTokens: winner.result.outputTokens,
+        finishReason: winner.result.finishReason,
         ok: true,
       };
     } else {
@@ -593,6 +620,7 @@ async function chatWithRaceMode(
           inputTokens: 0,
           outputTokens: 0,
           ok: false,
+          finishReason: "error",
         };
       }
     }
@@ -613,6 +641,8 @@ async function chatWithRaceMode(
       inputTokens: 0,
       outputTokens: 0,
       ok: false,
+      // 兜底文案不是模型输出 —— 报 error, 不许冒充 stop
+      finishReason: "error",
     };
   }
 }

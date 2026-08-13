@@ -45,12 +45,25 @@ export function createRoutedProvider(skillType: "article" | "video"): AIProvider
       temperature: request.temperature,
       maxTokens: request.maxTokens,
     });
+    /**
+     * 🔴 8-13：`finishReason` 原来硬编码 `"stop"`。
+     *
+     * 后果不是"少一个字段"，是**观测层撒了一个看起来合理的谎**：
+     * 8-11~8-13 三条兜底标题样本的 finishReason 全是 "stop"，
+     * 据此得出"截断不成立"的结论 —— 而这个信号在本链路上根本不存在
+     * （其中一条 outputTokens=6001 恰好 = maxTokens 6000+1）。
+     * 坏掉的信号吐出合理值，比信号缺失更难发现。
+     *
+     * `ok===false` 意味着 content 是系统兜底文案(主备全挂)，不是模型说的话 ——
+     * 一并映射成 `"error"`，让下游的 JSON 抽取失败日志能一眼分清
+     * 「模型答了但格式不对」与「模型压根没答」。
+     */
     return {
       content: res.content,
       model: res.model,
       inputTokens: res.inputTokens,
       outputTokens: res.outputTokens,
-      finishReason: "stop",
+      finishReason: res.ok === false ? "error" : (res.finishReason ?? "stop"),
     };
   };
 

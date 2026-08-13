@@ -645,14 +645,27 @@ async function pickScopedFreshJournal(tenantId: string, scope: string, disciplin
 }
 
 /** 按 contentQuota 逐类型生成(多刊盘点 + 国内核心/国外期刊单篇)。数字人暂不自动。 */
-// PR-Q2 模板多元+智能: 在 4 个真·排版模板间按"模板效果"加权轮换(无数据均匀)。
-// data-card/storytelling/listicle/shunshi-style 各有不同 HTML 生成器→真视觉多元; 阅读高的权重高→越用越智能。
-// PR-Q7: 自动轮换暂只用已审过的顺仕美途(其余3个有硬伤: 故事裸标签/数据卡片超时/曾崩溃, 修好再放回)。
-// 用户仍可在"排版样式"下拉手动选其余模板测试/修复。
-// 6-19: 放回 storytelling(其裸标签 bug 已修, 见 task#7); data-card(超时)/listicle(曾崩溃)待复核再放。
-const LAYOUT_TEMPLATES = ["shunshi-style", "storytelling"] as const;
+/**
+ * PR-Q2 模板多元+智能: 在真·排版模板间按「模板效果」加权轮换(无数据均匀)。阅读高的权重高 → 越用越智能。
+ *
+ * ## 🔴 8-13 收口：可选集不再本地写死，改问 registry
+ *
+ * 原来这里有一份本地白名单(PR-Q7 只放 顺仕美途 + 故事叙述)，
+ * 与 `article-skill` 的 `pickRotatingTemplateId()`（从全部已注册模板挑）**各判各的**。
+ * 后果：PR-Q7 那条限制只管住了本文件这条链路，而 article-skill 链路从未受它约束 ——
+ * 近 14 天 130 篇 popular-science / industry-vertical / data-card 就是从那儿出来的。
+ * 在任一处关掉一个模板，另一处随时把它捞回来。
+ *
+ * 现在「能不能被自动挑中」只有一处定义：`TemplateDefinition.rotationEnabled`。
+ * **本函数只保留它真正独有的东西 —— 效果加权**（唯一连着效果数据的部分）。
+ *
+ * ⚠️ 行为变更：可选集由 2 个变为 registry 里 rotationEnabled 的全部。
+ *   8-13 实测复核推翻了 PR-Q7 的旧评估（详见 commit）。
+ */
 async function buildTemplateWeights(tenantId: string): Promise<Record<string, number>> {
-  const w: Record<string, number> = Object.fromEntries(LAYOUT_TEMPLATES.map((t) => [t, 1]));
+  const { listRotatableTemplates } = await import("../skills/template-registry.js");
+  const rotatable = listRotatableTemplates().map((t) => t.id);
+  const w: Record<string, number> = Object.fromEntries(rotatable.map((t) => [t, 1]));
   try {
     const { getAssetPerformance } = await import("../metrics/asset-performance.js");
     const { templates } = await getAssetPerformance(tenantId);
@@ -668,10 +681,14 @@ async function buildTemplateWeights(tenantId: string): Promise<Record<string, nu
   return w;
 }
 function pickTemplateId(weights: Record<string, number>): string {
-  const total = LAYOUT_TEMPLATES.reduce((s, t) => s + (weights[t] ?? 1), 0);
+  // 候选集来自 weights 的键(buildTemplateWeights 已按 rotationEnabled 过滤) —— 两件事各归其位:
+  //   enabled 过滤(registry 唯一归宿) → 效果加权挑选(本函数)
+  const keys = Object.keys(weights);
+  if (keys.length === 0) return "shunshi-style";
+  const total = keys.reduce((s, t) => s + (weights[t] ?? 1), 0);
   let r = Math.random() * total;
-  for (const t of LAYOUT_TEMPLATES) { r -= weights[t] ?? 1; if (r <= 0) return t; }
-  return "shunshi-style";
+  for (const t of keys) { r -= weights[t] ?? 1; if (r <= 0) return t; }
+  return keys[0]!;
 }
 
 /**

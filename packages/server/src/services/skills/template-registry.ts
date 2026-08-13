@@ -51,6 +51,28 @@ export interface TemplateDefinition {
   ) => Promise<string>;
   /** 给 AI 生成 title/scope/recommendation 时附加的风格提示（可选，后续模板使用） */
   aiPromptHints?: string;
+  /**
+   * 🔴 是否参与**自动轮换**（8-13）。这是「能不能被自动挑中」的**唯一归宿**。
+   *
+   * 缺省视为 `true`。置 `false` 必须同时给出 `rotationDisabled` 三件套 ——
+   * 没有日期与依据的关闭，两个月后就是下一条没人敢动的过期注释
+   * （PR-Q7 的「有硬伤，修好再放回」正是这样过期的：8-13 复核实测，
+   *   它点名的 data-card 近 14 天 27 篇 **0 失败**，而白名单里的 shunshi-style
+   *   308 篇 16 失败，失败率反而最高）。
+   *
+   * ⚠️ 关闭轮换 ≠ 注销模板：存量内容的详情页/编辑/重渲染都要 `getTemplate(id)` 非空，
+   *   显式 API 指定也照常可用。
+   */
+  rotationEnabled?: boolean;
+  /** `rotationEnabled: false` 时必填 —— 三件套缺一不可 */
+  rotationDisabled?: {
+    /** 为什么关（一句话，写清现象不是结论） */
+    reason: string;
+    /** 决定日期 YYYY-MM-DD —— 过期复核的锚点 */
+    date: string;
+    /** 谁定的：人名 / 事故编号 / PR 号 */
+    by: string;
+  };
 }
 
 const registry = new Map<string, TemplateDefinition>();
@@ -76,9 +98,23 @@ export function getDefaultTemplateId(): string {
   return DEFAULT_TEMPLATE_ID;
 }
 
-/** PR-G: 主版本模板轮换 — 无显式选择时在已注册模板间随机, 避免内容全是默认 shunshi 一个样。 */
+/**
+ * 可参与自动轮换的模板 —— **全仓唯一的"能不能被自动挑中"判据**。
+ *
+ * 8-13 收口：此前有两处各判各的 ——
+ *   · `article-skill` 走 `pickRotatingTemplateId()`，从**全部已注册模板**里挑
+ *   · `daily-cron` 走自己的 `LAYOUT_TEMPLATES = ["shunshi-style","storytelling"]`（PR-Q7）
+ * 两条链路谁也不知道谁：PR-Q7 那条限制**只管住了 daily-cron**，而占比更大的
+ * article-skill 链路从未受它约束（近 14 天 130 篇 popular-science/industry-vertical/data-card
+ * 就是从那里出来的）。在任一处关掉一个模板，另一处随时会把它捞回来。
+ */
+export function listRotatableTemplates(): TemplateDefinition[] {
+  return listTemplates().filter((t) => t.rotationEnabled !== false);
+}
+
+/** PR-G: 主版本模板轮换 — 无显式选择时在**可轮换**模板间随机, 避免内容全是默认 shunshi 一个样。 */
 export function pickRotatingTemplateId(random: () => number = Math.random): string {
-  const ts = listTemplates();
+  const ts = listRotatableTemplates();
   if (ts.length === 0) return DEFAULT_TEMPLATE_ID;
   return ts[Math.floor(random() * ts.length)]!.id;
 }
@@ -103,6 +139,16 @@ registerTemplate({
 });
 
 registerTemplate({
+  /**
+   * 🔻 8-13 下线轮换（老韩拍板）。**注册保留** —— 存量 44 篇的详情页/编辑/重渲染要 getTemplate 非空。
+   * 显式 API 指定仍可用（向后兼容）。
+   */
+  rotationEnabled: false,
+  rotationDisabled: {
+    reason: "老板认为清单点评型的碎片条目观感差（如「但注意，纯电化教育」这类半句），且字段数据可疑",
+    date: "2026-08-13",
+    by: "老韩拍板",
+  },
   id: "listicle",
   name: "清单点评型",
   description: "5 大优势 + 3 个避雷 + 适合人群清单。扫读友好，决策导向。",
