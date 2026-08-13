@@ -166,15 +166,20 @@ export function pickTodos(input: {
     }
   }
 
-  // 2) 台账没数据 → 唯一能推动的动作是去裁决
-  const immature = input.checkers.filter((c) => c.adjudicated < MIN_ADJUDICATED && c.hits > 0).length;
-  if (out.length < MAX_TODOS && immature > 0) {
+  // 2) 正文过短占比 —— 这条不是运营能修的，但**是运营能推动的**：
+  //    数据摆在这里，去问老板要不要提线（挂着的 CC-待办 #17）。
+  //    🔴 只陈述事实与对照基准，不写"这多半是因为 X"（红线 #13）。
+  const arts = input.health.articles;
+  const shortPct = arts > 0 ? input.health.shortBody / arts : 0;
+  if (out.length < MAX_TODOS && arts >= 30 && shortPct >= 0.2) {
     out.push({
-      what: `有 ${immature} 个检查器攒了命中但还没人裁决过，系统因此不敢下任何结论`,
+      what:
+        `本周 ${arts} 篇里有 ${input.health.shortBody} 篇正文不足 800 字（${Math.round(shortPct * 100)}%）；` +
+        `系统当前只在不足 300 字时才拦，所以这些全部照常放行了`,
       action:
-        "等下周「抽样裁决」上线后，每周花 5 分钟点 10 条「这条拦对了/拦错了」。" +
-        "在那之前无需动作 —— 这条只是让你知道为什么本页很多项写着「暂不评价」。",
-      kind: "点按钮",
+        "把这两个数念给老板，问「过短的线要不要从 300 字提到 800 字」。" +
+        "他说提，你在设置页把出稿健康的正文长度改一下即可；他说不提，这条下周还会出现，不用管。",
+      kind: "找老板拍板",
     });
   }
 
@@ -183,6 +188,20 @@ export function pickTodos(input: {
     out.push({
       what: `本周有 ${input.health.titleFallback} 篇文章的标题是系统兜底文案（AI 当时没返回内容）`,
       action: "在内容工坊按状态筛「待审」，看到标题异常的直接驳回重生成；数量超过 5 篇请提工单。",
+      kind: "点按钮",
+    });
+  }
+
+  // 🔴 解释类**垫底**：它不需要任何动作，不该占掉能做的事的位置。
+  //   （首版把它排在第 2 位，MAX_TODOS=3 时会把「找老板拍板」挤出页面 ——
+  //    一页只给 3 条的前提是这 3 条得是最该做的。）
+  const immature = input.checkers.filter((c) => c.adjudicated < MIN_ADJUDICATED && c.hits > 0).length;
+  if (out.length < MAX_TODOS && immature > 0) {
+    out.push({
+      what: `有 ${immature} 个检查器攒了命中但还没人裁决过，系统因此不敢下任何结论`,
+      action:
+        "等下周「抽样裁决」上线后，每周花 5 分钟点 10 条「这条拦对了/拦错了」。" +
+        "在那之前无需动作 —— 这条只是让你知道为什么本页很多项写着「暂不评价」。",
       kind: "点按钮",
     });
   }

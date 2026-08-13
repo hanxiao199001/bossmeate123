@@ -70,7 +70,32 @@ describe("① ⑤ 待办建议：每条都要能照着做", () => {
   });
 });
 
-describe("② 台账未成熟时诚实说不知道", () => {
+describe("② 正文过短：有数据才推给老板", () => {
+  it("占比 >=20% 且样本够 → 出一条「找老板拍板」，且把两个数都摆出来", () => {
+    const todos = W.pickTodos({
+      checkers: [],
+      annotated: 0,
+      health: { articles: 192, titleFallback: 0, shortBody: 50, truncated: 0 },
+    });
+    const t = todos.find((x) => x.kind === "找老板拍板");
+    expect(t).toBeTruthy();
+    expect(t!.what).toContain("192");
+    expect(t!.what).toContain("50");
+    // 🔴 红线 #13：只摆事实与对照基准，不替老板归因
+    expect(t!.what).not.toMatch(/多半|可能是因为|typically|说明模型/);
+  });
+
+  it("样本太小不推 —— 5 篇里 2 篇短说明不了任何事", () => {
+    const todos = W.pickTodos({
+      checkers: [],
+      annotated: 0,
+      health: { articles: 5, titleFallback: 0, shortBody: 2, truncated: 0 },
+    });
+    expect(todos).toEqual([]);
+  });
+});
+
+describe("③ 台账未成熟时诚实说不知道", () => {
   /**
    * 第一份周报大概率满屏「台账未成熟」—— 这是正确的，不是尴尬的。
    * 关键是**不许用推测填空**：未成熟的项不产生任何"建议降级/建议升回"。
@@ -88,7 +113,27 @@ describe("② 台账未成熟时诚实说不知道", () => {
   });
 });
 
-describe("③ 页脚原则", () => {
+describe("④ 排序：能做的事优先，解释垫底", () => {
+  /**
+   * 一页只给 3 条的前提是这 3 条得是最该做的。
+   * 「台账未成熟」是一条无需动作的解释 —— 它绝不能把真动作挤出页面。
+   */
+  it("满员时，无需动作的解释让位给真动作", () => {
+    const todos = W.pickTodos({
+      checkers: [
+        ck({ checkerId: "a", level: "suggest", action: "建议降级为影子", message: "m", hits: 30, adjudicated: 12 }),
+        ck({ checkerId: "imm", level: "info", message: "未成熟", hits: 40, adjudicated: 0 }),
+      ],
+      annotated: 0,
+      health: { articles: 192, titleFallback: 8, shortBody: 50, truncated: 0 },
+    });
+    expect(todos).toHaveLength(3);
+    expect(todos.some((t) => t.action.includes("无需动作"))).toBe(false);
+    expect(todos.some((t) => t.kind === "找老板拍板")).toBe(true);
+  });
+});
+
+describe("⑤ 页脚原则", () => {
   it("渲染文本里带着「数据不够比假结论值钱」这句话", async () => {
     const r = await W.buildWeeklyReport().catch(() => null);
     // 连不上库时跳过（本条只验渲染，不验数据）
