@@ -112,8 +112,32 @@ export function listTemplates(): TemplateDefinition[] {
  * 一个**没有合法性校验的字段**，五步之后成了决策层的毒数据。
  * 写入侧校验不是防御性编程的洁癖，是数据链最上游的闸。
  */
+/**
+ * 🔴 **刻意不进 registry 的独立体裁** —— 它们有自己的生成器与 adapter，
+ * `metadata.templateId` 只作标签用，`getTemplate()` 对它们返回 null 是**预期行为**。
+ *
+ * 为什么不注册：registry 的 `htmlGenerator` 契约是
+ * `(journal, aiContent, abstracts, tenant, chartConfig, sectionCount) => Promise<string>`，
+ * 而这些体裁的入参完全不同（如 roundup 吃的是多刊 `RoundupData`）。
+ * 硬塞进 registry 只会让契约变成"看情况"。
+ *
+ * ⚠️ 加成员前先确认它**真有独立渲染器**；否则它就是下一个 `popular-science`
+ * （虚构模板名 → 静默 fallback → 统计失真）。
+ */
+export const NON_REGISTRY_GENRES: ReadonlySet<string> = new Set([
+  // daily-cron 的多刊盘点 → services/publisher/adapters/journal-roundup-template.ts
+  "journal-roundup",
+]);
+
+/**
+ * templateId 是否对应**一个真实存在的渲染器**（registry 已注册 ∪ 独立体裁）。
+ *
+ * 判据刻意不是"在 registry 里" —— 8-13 首版就是那么写的，把 109 条合法的
+ * `journal-roundup` 报成了违规。**判据要表达真实不变式（有没有东西真的渲染了它），
+ * 不是表达某一种实现方式。**
+ */
 export function isRegisteredTemplateId(id: unknown): id is string {
-  return typeof id === "string" && registry.has(id);
+  return typeof id === "string" && (registry.has(id) || NON_REGISTRY_GENRES.has(id));
 }
 
 /**
