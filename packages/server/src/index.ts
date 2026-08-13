@@ -319,6 +319,15 @@ async function bootstrap() {
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 
+  // 8-14 Phase 1: 检查器台账接线。**只在服务进程里打开** ——
+  //   脚本/单测不调 = 不记账, 台账里不混测试数据(见 checker-ledger-wiring 文件头)。
+  try {
+    const { wireCheckerLedger } = await import("./services/ops/checker-ledger-wiring.js");
+    wireCheckerLedger();
+  } catch (e) {
+    logger.warn({ err: e instanceof Error ? e.message : e }, "checker_ledger.wire_failed — 台账未接, 不影响出稿");
+  }
+
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });
     logger.info(`🚀 BossMate 服务启动成功 → http://0.0.0.0:${env.PORT}`);

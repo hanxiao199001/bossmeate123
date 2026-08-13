@@ -694,4 +694,41 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         WHERE metadata -> 'deferred' IS NOT NULL;
     `,
   },
+  {
+    version: "033_checker_ledger",
+    description:
+      "8-14 方法论移植 Phase 1: 检查器台账。**聚合计数, 不逐条落行** —— 命中明细继续走各闸自己的 " +
+      "metadata/incident, 本表只做按周聚合, 给 DB 加的写入压力接近零(每个 checker 每周一行, upsert)。" +
+      "为什么要它: 措辞闸 37 报 0 中被降级、排名闸 2 报 2 中被保留, 这两次都是人肉数出来的; " +
+      "移植后每个检查器自动记账, 台账自动生成去留建议。" +
+      "已裁决数(confirmed_true + confirmed_false)是台账成熟度的唯一度量 —— " +
+      "所有自动判定都以它为门槛, 未裁决的命中不计入任何结论" +
+      "(执行顺序上 Phase 3 的人工反馈入口晚于本表, 前两周 confirmed_true 恒为 0; " +
+      " 没有门槛的话, 正在正常干活的反编造四道闸会被一起建议降级)。" +
+      "退回执行: DROP TABLE checker_ledger。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS checker_ledger (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        -- 检查器唯一名, 与 services/ops/checker-registry.ts 的 id 对齐
+        checker_id VARCHAR(80) NOT NULL,
+        -- 聚合周期: 该周周一(UTC)的日期, 按周聚合
+        period_start DATE NOT NULL,
+        -- 评估次数(闸跑过几次) / 命中次数(报了几条)
+        evaluated INTEGER NOT NULL DEFAULT 0,
+        hits INTEGER NOT NULL DEFAULT 0,
+        -- 人工裁决结果(Phase 3 的反馈入口写入); 未裁决的命中两栏都不计
+        confirmed_true INTEGER NOT NULL DEFAULT 0,
+        confirmed_false INTEGER NOT NULL DEFAULT 0,
+        -- 本该拦而没拦(漏网举报)
+        confirmed_miss INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      -- 一个检查器一周一行 —— upsert 的冲突目标
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_checker_ledger_period
+        ON checker_ledger (checker_id, period_start);
+      CREATE INDEX IF NOT EXISTS idx_checker_ledger_period
+        ON checker_ledger (period_start DESC);
+    `,
+  },
 ];

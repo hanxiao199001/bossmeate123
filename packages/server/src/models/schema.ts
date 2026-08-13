@@ -1482,3 +1482,40 @@ export const goldenSetAnnotations = pgTable(
     index("idx_golden_content").on(table.contentId),
   ],
 );
+
+/**
+ * 检查器台账（8-14 方法论移植 Phase 1）。**聚合计数，不逐条落行。**
+ *
+ * 命中明细继续走各闸自己的 metadata / ops_incidents；本表只做按周聚合，
+ * 每个 checker 每周一行（upsert），给 DB 的写入压力接近零。
+ *
+ * 🔴 `confirmedTrue + confirmedFalse` = **已裁决数**，是台账成熟度的唯一度量。
+ * 所有自动判定都以它为门槛，未裁决的命中不计入任何结论 ——
+ * 「没有被确认为真」不等于「被确认为假」。
+ */
+export const checkerLedger = pgTable(
+  "checker_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** 与 services/ops/checker-registry.ts 的 id 对齐 */
+    checkerId: varchar("checker_id", { length: 80 }).notNull(),
+    /** 该周周一(UTC)。按周聚合 */
+    periodStart: date("period_start").notNull(),
+    /** 闸跑过几次 */
+    evaluated: integer("evaluated").notNull().default(0),
+    /** 报了几条 */
+    hits: integer("hits").notNull().default(0),
+    /** 人工裁决为真阳性（Phase 3 反馈入口写入） */
+    confirmedTrue: integer("confirmed_true").notNull().default(0),
+    /** 人工裁决为误报 */
+    confirmedFalse: integer("confirmed_false").notNull().default(0),
+    /** 本该拦而没拦（漏网举报） */
+    confirmedMiss: integer("confirmed_miss").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_checker_ledger_period").on(table.checkerId, table.periodStart),
+    index("idx_checker_ledger_period").on(table.periodStart),
+  ],
+);

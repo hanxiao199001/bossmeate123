@@ -173,6 +173,20 @@ function snippet(s: string, n = 120): string {
  *
  * @param input.type 内容类型。"video" 的 body 是 mp4 URL, 只查标题类判据。
  */
+/**
+ * 🔴 台账记账钩子（8-14 Phase 1）。**默认关闭，由调用方显式打开。**
+ *
+ * 为什么不在 `checkOutputHealth` 里直接写库：本函数是**纯函数**（无 LLM/网络/DB，
+ * 毫秒级，可随便在热路径上调），这是它现在被到处调用的前提。塞进 DB 写入会毁掉这条契约。
+ * 所以记账做成可选回调，由**真正的生产调用点**（draft-distributor / publisher）打开，
+ * 单测与脚本里的调用不记账 —— 否则台账里混进测试数据，第一条记录就不可信。
+ */
+export type HealthLedgerHook = (codes: OutputHealthCode[]) => void;
+let ledgerHook: HealthLedgerHook | null = null;
+export function setHealthLedgerHook(h: HealthLedgerHook | null): void {
+  ledgerHook = h;
+}
+
 export function checkOutputHealth(input: {
   title?: string | null;
   body?: string | null;
@@ -263,6 +277,12 @@ export function checkOutputHealth(input: {
   }
 
   const codes = [...new Set(issues.map((i) => i.code))];
+  // 台账记账（8-14 Phase 1）。默认无钩子 = 零行为变化; 记账失败绝不影响判定结果。
+  try {
+    ledgerHook?.(codes);
+  } catch {
+    /* 台账挂了不该让出稿跟着挂 */
+  }
   return {
     healthy: issues.length === 0,
     issues,
