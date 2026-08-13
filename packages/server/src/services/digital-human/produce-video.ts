@@ -120,6 +120,17 @@ export class DvhSubmitFailedError extends Error {
   }
 }
 
+/**
+ * 8-13 背景图分辨率不合规。**内容自身问题**（换张图才行），重跑同一张图必然同样失败 ——
+ * 所以刻意不归 service_down，让 deferred 判它 content_error、不进自动重跑。
+ */
+export class DvhBackgroundInvalidError extends Error {
+  constructor(reason: string) {
+    super(`DVH_BG_INVALID: ${reason}`);
+    this.name = "DvhBackgroundInvalidError";
+  }
+}
+
 /** 8-12 DVH_REAL_MODE 没开且没显式配置演示素材 —— 配置问题，重跑一万次也一样。 */
 export class DvhNotRealModeError extends Error {
   constructor() {
@@ -179,6 +190,27 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
   let durationMs = 0;
   // 7-31 真正发给阿里云的那份参数 — submit 成功才有值, 一路带回给调用方落 metadata
   let effective: DvhEffectiveParams | undefined;
+  /**
+   * 🔴 8-13 背景图分辨率闸 —— 必须在 submit(=扣费点) 之前。
+   *
+   * 探针实测: 近 14 天**带背景图的 DVH 任务 5 条全失败、0 条成功**,
+   * failCode 一律 10010002「图片分辨率必须与输出的视频分辨率一致」;
+   * 不带背景图的 15 条全成功。也就是说这条路径当时的成功率是 **0%**,
+   * 而每一条都先扣了钱。上传侧已加归一, 这里兜住 OSS 里已存在的旧图。
+   */
+  if (backgroundUrl && backgroundUrl !== "none") {
+    const { checkBackgroundResolution } = await import("./background-library.js");
+    const bad = await checkBackgroundResolution(backgroundUrl);
+    if (bad) {
+      void recordIncident({
+        kind: "dvh_bg_resolution_rejected", severity: "warn", tenantId,
+        message: `背景图分辨率不合规, 已在扣费前中止: ${bad.slice(0, 160)}`,
+        detail: { backgroundUrl, templateId, title: title.slice(0, 80) },
+      });
+      throw new DvhBackgroundInvalidError(bad);
+    }
+  }
+
   // PR-W1 预算闸: submit 即扣费, 所以闸必须在 submit 之前。超限直接抛 — 不退 mock, 让调用方看到原因。
   const gate = await checkBudget(tenantId, estimateDvhCents(text));
   if (!gate.allowed) {
