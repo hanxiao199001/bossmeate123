@@ -231,7 +231,10 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           tenantId,
           user: { userId, role: "owner" }, // batch 用 system user 默认 owner 权限
           metadata: {
+            // 8-13: 只写**真实存在**的模板 id; B/C/E 无对应实现 → 不写, 走默认模板
             templateId: mapTemplateLetter(row.template),
+            // 8-13: 人设字母独立成字段, 不再冒充 templateId
+            ...(personaLetterOf(row.template) ? { personaLetter: personaLetterOf(row.template) } : {}),
             batchId, // 7-03 ④: 钩子/措辞批次内轮换 scope
             ...(boundAccountId ? { accountId: boundAccountId } : {}),
             ...(row.journalId ? { journalId: row.journalId } : {}),
@@ -661,15 +664,35 @@ export async function stopBatchWorker(): Promise<void> {
 }
 
 /** csv 'A/B/C/E' → templateId（Q.2 4 模板）。null → undefined（caller 走 default） */
+/**
+ * `batch_rows.template` → 渲染模板 id。
+ *
+ * ## 🔴 8-13 修正：B/C/E 映射的三个"模板"从来没有实现
+ *
+ * `A/B/C/E` 是**数字人主播人设**（`digital-human/template-mapping.ts` 的
+ * `A_academic | B_marketing | C_popular | E_industry`，决定形象+音色），
+ * 不是渲染模板。此前这里把它们映射成 `marketing-conversion` / `popular-science` /
+ * `industry-vertical` —— 而 `adapters/` 下**根本没有这三个文件**，`getTemplate()`
+ * 必然返回 null，实际全部静默 fallback 到默认模板。
+ *
+ * 后果（90 天 400 篇）：内容标着假 templateId、模板分布统计失真
+ * （真实单一化 73% vs 账面 55%）、效果账本把默认模板的阅读数记在虚构 key 名下。
+ *
+ * 现在：只有 A 有真实对应（shunshi-style）；B/C/E 返回 undefined，
+ * 让上层走默认模板 —— **与实际渲染结果一致**，不再伪造标签。
+ * 人设字母另存 `personaLetter`（见调用处），两个概念各归其位。
+ */
 function mapTemplateLetter(letter: string | null): string | undefined {
   if (!letter) return undefined;
   // PR-Q2: 已是真模板id(含连字符, 如 shunshi-style/data-card) → 直接用, 不走 letter 映射
   if (letter.includes("-")) return letter;
-  const map: Record<string, string> = {
-    A: "shunshi-style",
-    B: "marketing-conversion",
-    C: "popular-science",
-    E: "industry-vertical",
-  };
-  return map[letter.toUpperCase()];
+  // 只保留有真实实现的那一个映射
+  return letter.toUpperCase() === "A" ? "shunshi-style" : undefined;
+}
+
+/** 人设字母（数字人形象+音色）—— 与渲染模板是两个概念，别再混填一个字段 */
+function personaLetterOf(letter: string | null): string | undefined {
+  if (!letter) return undefined;
+  const up = letter.toUpperCase();
+  return ["A", "B", "C", "E"].includes(up) ? up : undefined;
 }
