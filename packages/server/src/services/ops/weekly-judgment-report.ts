@@ -239,11 +239,23 @@ function renderText(d: {
   if (d.checkers.length === 0) {
     L.push("  台账还没有数据 —— 表本周刚建，等出稿跑起来才会有行。");
   } else {
-    for (const c of d.checkers.slice(0, 12)) {
+    // 🔴 零命中的闸**折叠成一行**。它们本周没话说，各占两行只会把
+    //   真正有信息的行淹掉（8-14 首份真实周报：10 项里 8 项零命中，
+    //   两条有命中的挤在一堆重复文案中间）。折叠不丢信息 —— 名字全列出来。
+    const silent = d.checkers.filter((c) => c.hits === 0);
+    const vocal = d.checkers.filter((c) => c.hits > 0);
+    for (const c of vocal.slice(0, 12)) {
       const tag = c.mode === "shadow" ? "[影子]" : "";
       L.push(`  ${tag}${c.checkerId}  命中 ${c.hits} / 已裁决 ${c.adjudicated}`);
       L.push(`      ${c.message}`);
     }
+    if (silent.length > 0) {
+      L.push(
+        `  另有 ${silent.length} 道闸本周零命中（安全闸本就该安静，不必然是坏事）：` +
+          silent.map((c) => c.checkerId.replace(/^output_health\./, "")).join("、"),
+      );
+    }
+    if (vocal.length === 0) L.push("  本周所有闸都没有命中。");
   }
   L.push("");
 

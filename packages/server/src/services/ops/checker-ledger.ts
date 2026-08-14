@@ -160,7 +160,22 @@ export function judge(s: CheckerStats): CheckerVerdict {
     };
   }
 
-  // ② 台账未成熟 —— 门槛之下一律不评价
+  // ② 零命中 —— **必须排在"台账未成熟"之前**。
+  //   零命中的闸没有可裁决的对象，裁决数恒为 0；此时说它"台账未成熟、
+  //   攒够裁决再评价"是**错误归因** —— 攒到天荒地老也不会成熟。
+  //   （8-14 首份真实周报实测：10 个闸里 8 个零命中，全被报成"未成熟"，
+  //    同一句话重复 8 遍，把真正有信息的 2 行淹了。）
+  //   安全闸本就该安静，所以这不是坏消息，只是"这周它没话说"。
+  if (s.hits === 0 && s.evaluated >= 200) {
+    return {
+      checkerId: s.checkerId,
+      level: "info",
+      message: `评估 ${s.evaluated} 次零命中`,
+      action: null,
+    };
+  }
+
+  // ③ 台账未成熟 —— 门槛之下一律不评价
   if (s.adjudicated < MIN_ADJUDICATED) {
     return {
       checkerId: s.checkerId,
@@ -172,7 +187,7 @@ export function judge(s: CheckerStats): CheckerVerdict {
     };
   }
 
-  // ③ 够多且零真阳性 → 建议降级
+  // ④ 够多且零真阳性 → 建议降级
   if (mode === "active" && s.hits >= MIN_HITS_FOR_VERDICT && s.confirmedTrue === 0) {
     return {
       checkerId: s.checkerId,
@@ -182,23 +197,13 @@ export function judge(s: CheckerStats): CheckerVerdict {
     };
   }
 
-  // ④ 影子闸攒够真阳性 → 建议升回
+  // ⑤ 影子闸攒够真阳性 → 建议升回
   if (mode === "shadow" && s.confirmedTrue >= PROMOTE_TRUE_POSITIVES) {
     return {
       checkerId: s.checkerId,
       level: "suggest",
       message: `影子期内确认真阳性 ${s.confirmedTrue} 条（阈值 ${PROMOTE_TRUE_POSITIVES}）`,
       action: "建议升回主动闸",
-    };
-  }
-
-  // ⑤ 长期零命中 —— 注：安全闸本就该接近零命中，所以这条也要裁决数据打底
-  if (s.hits === 0 && s.evaluated >= 200) {
-    return {
-      checkerId: s.checkerId,
-      level: "info",
-      message: `评估 ${s.evaluated} 次零命中`,
-      action: "确认它防的场景是否还存在（安全闸本就该安静，不必然是坏事）",
     };
   }
 

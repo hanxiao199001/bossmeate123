@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 
 const W = await import("../services/ops/weekly-judgment-report.js");
+const { judge } = await import("../services/ops/checker-ledger.js");
 
 const ck = (o: Record<string, unknown>) => ({
   checkerId: "x",
@@ -144,5 +145,40 @@ describe("⑤ 页脚原则", () => {
     expect(r.text).toContain("诚实的「数据不够」比好看的假结论值钱");
     // ⑤ 必须在最前 —— 运营只需读这一段
     expect(r.text.indexOf("这周要你做的事")).toBeLessThan(r.text.indexOf("检查器台账"));
+  });
+});
+
+describe("⑥ 零命中的闸：既不误判成「未成熟」，也不刷屏", () => {
+  const stat = (o: Record<string, unknown>) => ({
+    checkerId: "z",
+    evaluated: 283,
+    hits: 0,
+    confirmedTrue: 0,
+    confirmedFalse: 0,
+    confirmedMiss: 0,
+    adjudicated: 0,
+    hitRate: 0,
+    ...o,
+  });
+
+  /**
+   * 零命中的闸没有可裁决的对象，裁决数恒为 0 —— 说它"攒够裁决再评价"
+   * 是错误归因：攒到天荒地老也不会成熟。
+   */
+  it("评估够多且零命中 → 说「零命中」，不说「台账未成熟」", () => {
+    const v = judge(stat({}));
+    expect(v.message).toContain("零命中");
+    expect(v.message).not.toContain("未成熟");
+    expect(v.action).toBeNull();
+  });
+
+  it("有命中但没人裁决 → 才是「台账未成熟」", () => {
+    const v = judge(stat({ hits: 2, hitRate: 0.007 }));
+    expect(v.message).toContain("未成熟");
+  });
+
+  it("评估量还不够时不下任何结论 —— 零命中也可能只是没跑几次", () => {
+    const v = judge(stat({ evaluated: 12, hits: 0 }));
+    expect(v.message).not.toContain("零命中");
   });
 });
