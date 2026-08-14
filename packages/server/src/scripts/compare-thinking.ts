@@ -28,6 +28,7 @@ import { isNull, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
 import { checkOutputHealth } from "../services/publisher/output-health.js";
+import { env } from "../config/env.js";
 
 const argN = Number(process.argv[process.argv.indexOf("--n") + 1]);
 const N = Number.isFinite(argN) && argN > 0 ? argN : 10;
@@ -51,7 +52,9 @@ const plain = (s: string) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, "").lengt
 async function callOnce(prompt: string, system: string, thinking: boolean): Promise<Run> {
   const key = process.env.QWEN_API_KEY ?? "";
   const body: Record<string, unknown> = {
-    model: "deepseek-v4-pro",
+    // 模型名走 env（红线 #3 的守卫: 业务代码不得硬编码模型名 —— 7-25 DeepSeek
+    //   下线事故就是硬编码散落各处, 换模型时漏改一处就整条链路静默走废）
+    model: env.DEEPSEEK_MODEL_CHAT,
     max_tokens: 6000,
     temperature: 0.6,
     messages: [
@@ -103,7 +106,8 @@ const SYSTEM =
 
 async function main() {
   const rows = await db
-    .select({ name: journals.name, nameEn: journals.nameEn, discipline: journals.discipline, catalogs: journals.catalogs })
+    // 读生成列 discipline_code, 不读原始列 discipline（学科码口径守卫）
+    .select({ name: journals.name, nameEn: journals.nameEn, discipline: journals.disciplineCode, catalogs: journals.catalogs })
     .from(journals)
     // 共享池(tenant_id IS NULL)即可 —— 本脚本只借刊名/学科/目录做提示词, 不碰租户数据
     .where(isNull(journals.tenantId))
