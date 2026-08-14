@@ -57,5 +57,19 @@ if [ -n "$tests" ] && [ -z "$srcs" ] && [ "${ALLOW_TEST_ONLY:-0}" != "1" ]; then
   fail=1
 fi
 
+# ── ④ 编译不过 ─────────────────────────────────────────────────────
+# 8-14 实况: `npx tsc | head; echo tsc=$?` —— echo 的退出码把后面的 && 挡住了,
+#   于是"检查失败"没能阻止提交, 一个编译不过的脚本直接进了 main。
+#   钩子是唯一不依赖"我这次命令写对没有"的那道闸。
+ts=$(echo "$staged" | grep -E '^packages/server/.*\.ts$' || true)
+if [ -n "$ts" ] && [ "${SKIP_TSC:-0}" != "1" ]; then
+  if ! out=$(npx tsc --noEmit -p packages/server/tsconfig.json 2>&1); then
+    say "TypeScript 编译不过："
+    echo "$out" | head -8 | sed 's/^/    /'
+    echo "  真要先提交(半成品分支等) → SKIP_TSC=1 git commit ..."
+    fail=1
+  fi
+fi
+
 [ "$fail" = 0 ] || { printf '\n提交已拦下。逐条看上面的说明，别直接 --no-verify。\n\n'; exit 1; }
 exit 0
