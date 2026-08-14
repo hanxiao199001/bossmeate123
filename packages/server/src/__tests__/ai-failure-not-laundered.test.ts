@@ -46,3 +46,31 @@ describe("③ 兜底标题的形态本身要被出稿健康闸认出来", () => 
     expect(r.issues.some((i) => i.code === "title_placeholder")).toBe(true);
   });
 });
+
+describe("④ 三种「等于没返回」的形态，一种都不能漏", () => {
+  /**
+   * 日志实证（近 45 天 11 条 JSON 抽取失败）：
+   *   7 条 outputTokens=0 / rawLength=18 → 调用失败, 拿到的是道歉文案
+   *   3 条 outputTokens=6001 / rawLength=0 → 撞满 maxTokens, 推理型模型把预算
+   *        全烧在思维链上, 可见输出为空。**它不带任何错误信号** ——
+   *        finishReason 正常、没有异常、没有兜底文案。只认 error 的守卫整类漏掉。
+   *   1 条 outputTokens=2506 / rawLength=2109 → 真的抽不出 JSON（正文是真的）
+   *
+   * 前两类必须转 deferred；第三类不在本守卫范围（它确实拿到了内容）。
+   */
+  const shapes = [
+    { name: "调用失败(道歉文案)", content: "抱歉，AI暂时无法响应，请稍后重试。", finishReason: "error", outputTokens: 0, mustFail: true },
+    { name: "道歉文案但 finishReason 正常(修复前的硬编码值)", content: "抱歉，AI暂时无法响应，请稍后重试。", finishReason: "stop", outputTokens: 0, mustFail: true },
+    { name: "正文为空但烧满 token", content: "", finishReason: "stop", outputTokens: 6001, mustFail: true },
+    { name: "只有空白字符", content: "  \n  ", finishReason: "stop", outputTokens: 6001, mustFail: true },
+    { name: "真内容抽不出 JSON —— 不归本守卫管", content: '{ "title": "投北大核心还是CSSCI？', finishReason: "stop", outputTokens: 2506, mustFail: false },
+  ];
+
+  for (const s of shapes) {
+    it(`${s.name} → ${s.mustFail ? "必须拦下" : "放行"}`, () => {
+      const failed =
+        s.finishReason === "error" || isAiFallbackText(s.content) || s.content.trim().length === 0;
+      expect(failed).toBe(s.mustFail);
+    });
+  }
+});

@@ -250,17 +250,27 @@ function assertRealAiOutput(
   result: { content?: string | null; finishReason?: string; outputTokens?: number },
   where: string,
 ): void {
-  const failed = result.finishReason === "error" || isAiFallbackText(result.content ?? "");
-  if (!failed) return;
+  const text = String(result.content ?? "");
+  const reason =
+    result.finishReason === "error" ? "call_failed"
+    : isAiFallbackText(text) ? "fallback_text"
+    // 🔴 正文为空但烧掉了大量 token —— 推理型模型(v4-pro)把预算全花在思维链上,
+    //   可见输出一个字都没有。日志实证 3/11: outputTokens=6001(撞满 maxTokens=6000)、
+    //   rawLength=0。这才是"截断"的真形态, 而且它**不带任何错误信号**:
+    //   finishReason 正常、没有异常、没有兜底文案 —— 只认 error 的守卫会整类漏掉。
+    : text.trim().length === 0 ? "empty_output"
+    : null;
+  if (!reason) return;
   logger.error(
     {
       where,
+      reason,
       finishReason: result.finishReason ?? null,
       outputTokens: result.outputTokens ?? null,
-      rawLength: String(result.content ?? "").length,
-      rawHead: String(result.content ?? "").slice(0, 200),
+      rawLength: text.length,
+      rawHead: text.slice(0, 200),
     },
-    "🔴 AI 调用失败被当成内容返回 —— 本篇转 deferred, 不产出兜底成品",
+    "🔴 AI 这次等于没返回 —— 本篇转 deferred, 不产出兜底成品",
   );
   throw new AiUnavailableError("exhausted", "unknown", "unknown");
 }
