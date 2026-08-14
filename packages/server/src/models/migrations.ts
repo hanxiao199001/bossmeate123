@@ -731,4 +731,34 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON checker_ledger (period_start DESC);
     `,
   },
+  {
+    version: "034_checker_adjudications",
+    description:
+      "8-14 方法论移植 Phase 3(后端数据路径): 人工裁决记录。**只存裁决, 不存命中** —— " +
+      "命中实例由 checkOutputHealth 现算(判据永远等于当前代码), 存下来的只有'人怎么判的'。" +
+      "为什么不建命中表: 033 定的硬纪律是聚合不逐条落行; 而且命中一旦落表就会与闸的当前判据漂移, " +
+      "裁决一条三周前按旧判据命中的记录, 得到的结论对今天的闸没有意义。" +
+      "本表是台账 confirmed_true/false 的来源与去重依据(同一人对同一条命中只算一次)。" +
+      "退回执行: DROP TABLE checker_adjudications。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS checker_adjudications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        -- 与 services/ops/checker-registry.ts 的 id 对齐
+        checker_id VARCHAR(80) NOT NULL,
+        -- 被裁决的那条内容
+        content_id UUID NOT NULL,
+        -- true_positive=拦对了 / false_positive=拦错了 / miss=本该拦没拦
+        verdict VARCHAR(20) NOT NULL,
+        -- 谁判的(users.id)。不做外键: 用户删了裁决记录仍应保留, 否则台账会凭空缩水
+        annotator_id UUID,
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      -- 同一人对同一条命中只算一次(改判走 upsert 覆盖, 不叠加)
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_checker_adjudication
+        ON checker_adjudications (checker_id, content_id, annotator_id);
+      CREATE INDEX IF NOT EXISTS idx_checker_adjudication_created
+        ON checker_adjudications (created_at DESC);
+    `,
+  },
 ];

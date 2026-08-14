@@ -218,6 +218,11 @@ async function bootstrap() {
     //   路由内**在服务端**剔掉六维分/AI审稿/质检状态(防锚定), 见 services/golden-set/anchor-guard.ts。
     const { goldenSetRoutes } = await import("./routes/golden-set.js");
     await protectedApp.register(goldenSetRoutes, { prefix: `${env.API_PREFIX}/golden-set` });
+
+    // 8-14 Phase 3(后端数据路径): 检查器裁决。接口通了但周报不提它、前端还没页面 ——
+    //   按老韩定的两段式, 按钮等"研小二读懂周报"的确认再上。
+    const { opsCheckerRoutes } = await import("./routes/ops-checkers.js");
+    await protectedApp.register(opsCheckerRoutes, { prefix: `${env.API_PREFIX}/ops/checkers` });
   });
 
   // 7-26 启动期自检: LLM baseURL 与 API Key 必须成对(DEEPSEEK_VIA 一个开关切两者)。

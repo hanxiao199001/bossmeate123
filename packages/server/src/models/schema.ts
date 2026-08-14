@@ -1519,3 +1519,29 @@ export const checkerLedger = pgTable(
     index("idx_checker_ledger_period").on(table.periodStart),
   ],
 );
+
+/**
+ * 人工裁决记录（8-14 Phase 3 后端数据路径）。
+ *
+ * **只存裁决，不存命中。** 命中实例由 `checkOutputHealth` 现算 ——
+ * 判据永远等于当前代码。命中一旦落表就会与闸的当前判据漂移：
+ * 裁决一条三周前按旧判据命中的记录，结论对今天的闸没有意义。
+ */
+export const checkerAdjudications = pgTable(
+  "checker_adjudications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    checkerId: varchar("checker_id", { length: 80 }).notNull(),
+    contentId: uuid("content_id").notNull(),
+    /** true_positive=拦对了 / false_positive=拦错了 / miss=本该拦没拦 */
+    verdict: varchar("verdict", { length: 20 }).notNull(),
+    /** 不做外键：用户删了裁决仍应保留，否则台账会凭空缩水 */
+    annotatorId: uuid("annotator_id"),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_checker_adjudication").on(table.checkerId, table.contentId, table.annotatorId),
+    index("idx_checker_adjudication_created").on(table.createdAt),
+  ],
+);

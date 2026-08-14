@@ -67,10 +67,17 @@ export async function recordCheckerRun(checkerId: string, evaluated: number, hit
   }
 }
 
-/** 人工裁决入账（Phase 3 的反馈入口调用） */
+/**
+ * 人工裁决入账（Phase 3 的反馈入口调用）。
+ *
+ * @param delta 通常 +1。**改判时先用 -1 撤旧票再 +1 投新票** ——
+ *   本表是计数器，不撤就等于一个人投了两票，直接污染 confirmed_true/false。
+ *   下限钳在 0：计数器不该出现负数（真出现说明撤票逻辑写错了，宁可停在 0 也不写脏数）。
+ */
 export async function recordAdjudication(
   checkerId: string,
   verdict: "true_positive" | "false_positive" | "miss",
+  delta = 1,
 ): Promise<void> {
   const col =
     verdict === "true_positive" ? "confirmed_true" : verdict === "false_positive" ? "confirmed_false" : "confirmed_miss";
@@ -82,7 +89,7 @@ export async function recordAdjudication(
       .onConflictDoNothing();
     await db
       .update(checkerLedger)
-      .set({ [col]: sql`${sql.identifier(col)} + 1`, updatedAt: new Date() } as never)
+      .set({ [col]: sql`GREATEST(0, ${sql.identifier(col)} + ${delta})`, updatedAt: new Date() } as never)
       .where(and(eq(checkerLedger.checkerId, checkerId), eq(checkerLedger.periodStart, period)));
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, checkerId }, "checker_ledger.adjudicate_failed");
