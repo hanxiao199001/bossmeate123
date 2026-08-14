@@ -12,6 +12,8 @@
 
 import { logger } from "../../config/logger.js";
 import { extractJsonObject } from "../content-engine/llm-json.js";
+import { AiUnavailableError, isAiUnavailableError } from "../ai/chat-service.js";
+import { isAiFallbackText } from "../ai/fallback-messages.js";
 import type { AIProvider, ChatMessage } from "../ai/providers/base.js";
 import type { ISkill, SkillContext, SkillResult } from "./base-skill.js";
 import { retrieveForArticle } from "../knowledge/rag-retriever.js";
@@ -226,6 +228,42 @@ const PROMPT_BLOCK_OUTPUT_JSON = `请输出纯 JSON（不要 markdown）：
   "videoScript": "数字人口播脚本，纯文本无 HTML/分点，**220-320 字**(目标 55-80 秒)。第一句是开口3秒强钩子(痛点/数字/反常识/身份/悬念，绝不温吞)。五段一口气念下来：钩子 + 报刊定位 + 投稿数据 + 适合谁/避开谁 + 行动号召；中段留一句悬念防划走。对一个人说话(多用你)、短句、数字说人话。仅供数字人朗读，不进图文。"
 }`;
 
+
+
+/**
+ * 🔴 一次 AI 调用**失败了没有**，在这里问清楚，不要等到抽 JSON 抽不出再猜。
+ *
+ * 8-14 实证（红线 #14 第七次）：8-13 百炼返回 403（Workspace.AccessDenied /
+ * AccessDenied.Unpurchased），主备模型全挂。chat-service 于是把一句人类可读的
+ * 道歉文案当作 `content` 返回（这对聊天场景友好，对生成链路是炸弹）。
+ * 本函数原来拿着这 18 个字去抽 JSON，抽不出，然后产出
+ * 「期刊推荐：图书与情报，影响因子 N/A」落库 needs_review ——
+ * **一次外部故障被洗成了一篇成品**。
+ *
+ * 日志当时全都在（finishReason=error / outputTokens=0 / rawLength=18），
+ * 但没有任何**结构化**痕迹说"这篇是外部故障的产物"，所以谁也没法凭数据裁决它。
+ *
+ * 抛出 AiUnavailableError 后：failure-kind 判 service_down → 进 deferred →
+ * 服务恢复自动重跑。上游 403 我们控制不了，把失败洗成成品是我们自己的。
+ */
+function assertRealAiOutput(
+  result: { content?: string | null; finishReason?: string; outputTokens?: number },
+  where: string,
+): void {
+  const failed = result.finishReason === "error" || isAiFallbackText(result.content ?? "");
+  if (!failed) return;
+  logger.error(
+    {
+      where,
+      finishReason: result.finishReason ?? null,
+      outputTokens: result.outputTokens ?? null,
+      rawLength: String(result.content ?? "").length,
+      rawHead: String(result.content ?? "").slice(0, 200),
+    },
+    "🔴 AI 调用失败被当成内容返回 —— 本篇转 deferred, 不产出兜底成品",
+  );
+  throw new AiUnavailableError("exhausted", "unknown", "unknown");
+}
 
 export class ArticleSkill implements ISkill {
   readonly name = "article";
@@ -1532,6 +1570,7 @@ ${angleHint}`,
         // V7：原 2048 不够装 7 短字段 + 4 新章节（每章 200-500 字 ≈ 4000+ tokens 输出）
         maxTokens: 6000,
       });
+      assertRealAiOutput(result, "generateJournalRecommendation");
 
       // PR Q.6.1：检测 title 历史峰值幻觉，命中 → 加更强约束 + LLM 重生 1 次（最多 1 次重试）。
       // 5-8 D5 C 套实测违反："IF从44飙升到98.4" — NUMBER_CONSTRAINT 在 prompt 中但 LLM 偶发不严格遵守。
@@ -1550,6 +1589,8 @@ ${angleHint}`,
           temperature: 0.4,  // 降 temperature 让 LLM 更严格遵守
           maxTokens: 6000,
         });
+        // 重生这一次同样要问 —— 第一次成功、重生时服务挂了, 结果一样是废稿。
+        assertRealAiOutput(result, "generateJournalRecommendation.retry");
       }
 
       // 8-07 ② 换成共享 JSON 修复器(唯一归宿, services/content-engine/llm-json.ts)。
@@ -1601,6 +1642,9 @@ ${angleHint}`,
         repairsTried: extracted?.repairs ?? [],
       }, "🔴 期刊推荐 JSON 抽取失败 — 本篇走兜底标题(内容缺深度章节与视频脚本)");
     } catch (err) {
+      // 🔴 AI 主备全挂 ≠ 这篇内容有问题 —— 不许在这里被洗成兜底成品。
+      //   放它出去, failure-kind 判 service_down → deferred → 服务恢复后自动重跑。
+      if (isAiUnavailableError(err)) throw err;
       logger.warn({ err, journal: journal.name }, "AI 生成期刊推荐内容失败");
     }
 

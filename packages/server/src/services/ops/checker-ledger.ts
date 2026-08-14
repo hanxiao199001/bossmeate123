@@ -101,6 +101,18 @@ export interface CheckerStats {
   hitRate: number | null;
 }
 
+/**
+ * 台账**开始记账的日期**（最早一行的写入时刻）。
+ *
+ * 周报必须把它印出来：「出稿健康」是整周口径，台账只有开始记账之后的数据。
+ * 8-14 首份周报同页并列「兜底标题 8（全周）」与「命中 2（昨起）」，
+ * 不标窗口的话读者只会当成两个数打架。
+ */
+export async function ledgerSince(): Promise<string | null> {
+  const r = await db.select({ d: sql<string | null>`min(${checkerLedger.createdAt})::date::text` }).from(checkerLedger);
+  return r[0]?.d ?? null;
+}
+
 /** 汇总近 N 周（默认 4）的台账 */
 export async function summarize(weeks = 4): Promise<CheckerStats[]> {
   const since = new Date(Date.now() - weeks * 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);

@@ -20,7 +20,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, opsIncidents, goldenSetAnnotations } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
-import { summarize, judge, MIN_ADJUDICATED, type CheckerVerdict } from "./checker-ledger.js";
+import { summarize, judge, ledgerSince, MIN_ADJUDICATED, type CheckerVerdict } from "./checker-ledger.js";
 import { getChecker } from "./checker-registry.js";
 import { bjDateString, truncateForWecom } from "./daily-briefing.js";
 
@@ -70,6 +70,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
 
   // ① 检查器台账
   const stats = await summarize(4);
+  const since0 = await ledgerSince();
   const checkers = stats
     .map((s) => {
       const def = getChecker(s.checkerId);
@@ -115,7 +116,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
   };
 
   const todos = pickTodos({ checkers, annotated, health });
-  const text = renderText({ weekOf, checkers, annotated, health, todos });
+  const text = renderText({ weekOf, checkers, annotated, health, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -218,6 +219,7 @@ function renderText(d: {
   annotated: number;
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number };
   todos: WeeklyTodo[];
+  ledgerSince: string | null;
 }): string {
   const L: string[] = [];
   L.push(`【判断层体检】${d.weekOf}`);
@@ -236,6 +238,11 @@ function renderText(d: {
   L.push("");
 
   L.push("■ 检查器台账（下面都是证据，不用逐条看）");
+  // 🔴 两套口径必须标清楚, 否则读者会把「兜底标题 8」和「命中 2」当成打架的数。
+  if (d.ledgerSince) {
+    L.push(`  【口径】台账自 ${d.ledgerSince} 起记录；下面「出稿健康」是整周口径。`);
+    L.push("        两边数字覆盖的时间不同，不能直接相减。");
+  }
   if (d.checkers.length === 0) {
     L.push("  台账还没有数据 —— 表本周刚建，等出稿跑起来才会有行。");
   } else {

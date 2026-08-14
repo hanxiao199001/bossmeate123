@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# pre-commit —— 拦三类已经出过事的提交。
+#
+# 每条都对应一次真实事故，不是洁癖：
+#   ① 散落的 *.md          —— AI 生成的报告/纪要往仓库里堆，越堆越没人看
+#   ② 半拉暂存             —— 同一个文件既在暂存区又有未暂存改动 = 提交的是半个想法
+#   ③ 只改测试不改代码     —— 8-14 实况：改生产代码的脚本断言失败中断了，
+#                             改测试的脚本照跑，git add -A 把半拉状态打包推了上去，
+#                             等于推了一个必红的测试。git add -A 已经失灵两次。
+#
+# 逃生口（都要显式写，不许养成习惯）：
+#   ALLOW_MD=1        本次提交确实该带 md
+#   ALLOW_PARTIAL=1   本次确实要分批暂存
+#   ALLOW_TEST_ONLY=1 本次确实只动测试（补断言 / 删死断言）
+#   git commit --no-verify   全部跳过
+set -uo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail=0
+say() { printf '\n\033[31m✗ %s\033[0m\n' "$1"; }
+
+# ── ① 散落的 markdown ────────────────────────────────────────────────
+# docs/ 与 CLAUDE.md 是有主的，放行；其余 md 一律问一句。
+md=$(echo "$staged" | grep -E '\.md$' | grep -vE '^(docs/|CLAUDE\.md$|README\.md$|.*/README\.md$)' || true)
+if [ -n "$md" ] && [ "${ALLOW_MD:-0}" != "1" ]; then
+  say "这次提交带了 md 文件："
+  echo "$md" | sed 's/^/    /'
+  echo "  报告/纪要请留在 scratchpad，不要进仓库。"
+  echo "  确实该进仓库 → ALLOW_MD=1 git commit ..."
+  fail=1
+fi
+
+# ── ② 半拉暂存 ───────────────────────────────────────────────────────
+# 同一文件既已暂存、又有未暂存改动：你提交的不是你手上的那个版本。
+partial=$(comm -12 <(git diff --cached --name-only | sort -u) <(git diff --name-only | sort -u))
+if [ -n "$partial" ] && [ "${ALLOW_PARTIAL:-0}" != "1" ]; then
+  say "这些文件既在暂存区、又有未暂存的改动（提交的不是你手上的版本）："
+  echo "$partial" | sed 's/^/    /'
+  echo "  多半是多步脚本中途失败：前一步写了、后一步没写。先看一眼 git diff。"
+  echo "  确实要分批 → ALLOW_PARTIAL=1 git commit ..."
+  fail=1
+fi
+
+# ── ③ 只改测试不改代码 ───────────────────────────────────────────────
+# 判据绑的是**结构关系**（测试文件 vs 同包非测试源码），不是文件级共现（红线 #16）。
+tests=$(echo "$staged" | grep -E '(__tests__/|\.test\.ts$|\.spec\.ts$)' || true)
+srcs=$(echo "$staged" | grep -E '^(packages|apps)/.*\.(ts|tsx|js|mjs)$' | grep -vE '(__tests__/|\.test\.ts$|\.spec\.ts$)' || true)
+if [ -n "$tests" ] && [ -z "$srcs" ] && [ "${ALLOW_TEST_ONLY:-0}" != "1" ]; then
+  say "这次只改了测试，没有任何生产代码改动："
+  echo "$tests" | sed 's/^/    /'
+  echo "  8-14 就是这么推上去一个必红的测试的：改生产代码那一步失败中断了，"
+  echo "  改测试那一步照跑，git add -A 把半拉状态打包了。"
+  echo "  确实只补断言/删死断言 → ALLOW_TEST_ONLY=1 git commit ..."
+  fail=1
+fi
+
+[ "$fail" = 0 ] || { printf '\n提交已拦下。逐条看上面的说明，别直接 --no-verify。\n\n'; exit 1; }
+exit 0
