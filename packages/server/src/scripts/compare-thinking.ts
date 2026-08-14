@@ -24,7 +24,7 @@
  * npx tsx src/scripts/compare-thinking.ts --n 4      # 少跑几篇先看看
  * ```
  */
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { isNull, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { journals } from "../models/schema.js";
 import { checkOutputHealth } from "../services/publisher/output-health.js";
@@ -105,7 +105,8 @@ async function main() {
   const rows = await db
     .select({ name: journals.name, nameEn: journals.nameEn, discipline: journals.discipline, catalogs: journals.catalogs })
     .from(journals)
-    .where(and(or(isNull(journals.tenantId), sql`true`), eq(journals.isActive, true)))
+    // 共享池(tenant_id IS NULL)即可 —— 本脚本只借刊名/学科/目录做提示词, 不碰租户数据
+    .where(isNull(journals.tenantId))
     .orderBy(sql`random()`)
     .limit(N);
 
