@@ -141,6 +141,11 @@ export interface AIGeneratedContent {
    * 落进 content.metadata 后, 兜底率一条查询即可统计(此前只能靠标题句式指纹考古)。
    */
   titleFallback?: boolean;
+  /**
+   * 8-14：JSON 二次抽取仍失败时的留证（原始返回前 3000 字）。
+   * 有值 = 这篇是抽取失败的降级产物，且真内容还能从这里捞回来。
+   */
+  extractionFailure?: Record<string, unknown>;
   title: string;           // 吸引眼球的文章标题
   // 7-03 A: 开头钩子导语（评分器和读者读的"开头"就是它）。2-3 句痛点场景切入, 小编口吻,
   // 走 8 钩子库选型(article-skill p0Suffix 注入)。空则区块0降级不渲染(老文章兼容)。

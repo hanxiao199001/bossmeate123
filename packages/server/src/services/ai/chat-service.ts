@@ -224,6 +224,21 @@ async function callOpenAICompatible(
           messages,
           max_tokens: maxTokens,
           temperature,
+          /**
+           * 8-14 思维链开关。**默认不变（不传 = 保持推理开启）** ——
+           * 关掉是个待验证的假设，不是既定结论，验证前不许偷偷改行为。
+           *
+           * 为什么需要它：百炼实测 `reasoning_tokens` **算在 completion_tokens 里**
+           * （探针：默认 completion 40 / reasoning 29；关掉后 completion 9，
+           * 可见输出一字不差）。所以 maxTokens 是推理与正文**共用**的预算，
+           * 日志里那 3 条 `outputTokens=6001 / rawLength=0` 就是预算被推理吃光、
+           * 正文一个字都没轮上。
+           *
+           * 开关只在 `LLM_DISABLE_THINKING=true` 时才发这个参数 ——
+           * 关掉后必须先跑 10 篇对比（质量分 / 违规数 / 完整性）确认无劣化，
+           * 才谈得上全量。提 maxTokens 是最后选项：抬成本且只挪悬崖不除悬崖。
+           */
+          ...(env.LLM_DISABLE_THINKING ? { enable_thinking: false } : {}),
         }),
         signal: controller.signal,
       });

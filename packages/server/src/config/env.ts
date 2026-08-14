@@ -373,6 +373,15 @@ const envSchema = z.object({
   // 每日运营简报: 每天固定时间汇总"过去 24h 的异常 + 要人动手的事", 企微推给运营。
   //   正常也发(不发就分不清"没事"还是"简报本身挂了"); 推送失败会降级落库 + 今日驾驶舱展示。
   OPS_BRIEFING_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  /**
+   * 8-14 关闭 LLM 思维链（百炼 `enable_thinking:false`）。**默认 false = 不改现状。**
+   *
+   * 实测 reasoning_tokens 算在 completion_tokens 里，与正文共用 maxTokens 预算 ——
+   * 日志里 3 条 `outputTokens=6001 / rawLength=0` 就是预算被推理吃光、正文没轮上。
+   * 但"推理对结构化生成没用"目前只是假设：**先跑 10 篇对比（质量分/违规数/完整性）
+   * 确认无劣化，再谈默认开启。** 开关先落地，是为了让那次对比跑得起来。
+   */
+  LLM_DISABLE_THINKING: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   OPS_BRIEFING_PUSH_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"), // 只落库不推企微时设 false
   OPS_BRIEFING_CRON_HOUR: z.coerce.number().int().min(0).max(23).default(9),    // 每日几点(BJ)发简报
   OPS_BRIEFING_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(30), // 默认 09:30 — 生成(03:00)/分发(07:00)/草稿(08:00)/数据回流(09:10) 都跑完之后

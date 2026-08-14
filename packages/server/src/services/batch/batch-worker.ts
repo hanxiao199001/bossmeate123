@@ -267,7 +267,9 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           // 8-07: titleFallback 必须在白名单里 —— 这层是 cherry-pick, 不在名单的字段会被
           //   静默过滤掉。红线 #14 要求降级产物可区分, 而"可区分"的前提是标记真的落了库;
           //   标记被过滤 = 观测等于白做(promptVersion 上一轮就踩过同一个坑, 见上方注释)。
-          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion", "titleFallback"]) {
+          // 8-14: extractionFailure 同理 —— 它装着抽取失败那篇的原始返回(2000+ 字真内容),
+          //   被过滤掉就等于"留档"只留在会滚的日志里, 运营想救也捞不回来。
+          for (const k of ["hasWarnings", "validatorIssues", "qualityScore", "qualityPassed", "aiScore", "hardMetrics", "templateId", "videoScript", "variationRecipe", "promptVersion", "titleFallback", "extractionFailure"]) {
             if (artMeta[k] !== undefined) metaMerge[k] = artMeta[k];
           }
           // 8-07 P1-A 【影子】事实密度 —— 只统计、只落 metadata, **不参与任何判定**。

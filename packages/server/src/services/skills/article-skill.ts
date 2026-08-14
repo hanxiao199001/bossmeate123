@@ -109,6 +109,11 @@ interface OutlineSection {
 interface GeneratedArticle {
   /** 8-07: AI 返回抽不出 JSON 的降级产物(标题是拼的, 无深度章节/videoScript)。红线 #14 */
   titleFallback?: boolean;
+  /**
+   * 8-14：JSON 二次抽取仍失败时的留证（原始返回前 3000 字）。
+   * 有值 = 这篇是抽取失败的降级产物，且真内容还能从这里捞回来。
+   */
+  extractionFailure?: Record<string, unknown>;
   title: string;
   body: string;
   summary: string;
@@ -1570,6 +1575,9 @@ ${angleHint}`,
     const p0Suffix = `${hookPick ? `\n【开头钩子·主】openingHook 字段按【${hookPick.name}】模式写 2-3 句: ${hookPick.structure} 用痛点场景切入、小编口吻, 🚫 禁止"该刊是一本…"式平铺开场。\n【结尾钩子·复读】recommendation 收尾可呼应同一痛点做行动号召(CTA), 但主钩子在 openingHook, 别把开场留空。` : ""}${hookBanLine}${buildClicheBanPrompt(20)}`;
     const finalSystemPrompt = q3PromptSuffix ? `${baseSystemPrompt}${q3PromptSuffix}${p0Suffix}` : `${baseSystemPrompt}${p0Suffix}`;
 
+    /** 二次抽取仍失败时的留证。null = 没走到那一步 */
+    let extractionFailure: Record<string, unknown> | null = null;
+
     try {
       let result = await this.provider.chat({
         messages: [
@@ -1609,7 +1617,33 @@ ${angleHint}`,
       //   曾因同一个坑单日 28 次不可解析、历史累计 192 次。修复器修过的坑, 这里原样又踩了一遍。
       //   ⚠️ 但它救不了**截断** —— 没有闭合的 `}` 就没有完整对象可取, 那种情况必须在
       //     客户端层按 finishReason 拦(见下方观测)。
-      const extracted = extractJsonObject(result.content);
+      let extracted = extractJsonObject(result.content);
+
+      // 8-14 ②【自动重试 1 次】拿到了真内容却抽不出 JSON —— 这一类与前面两类不同:
+      //   模型确实生成了东西(日志实证那条 outputTokens=2506 / rawLength=2109),
+      //   只是格式没对上。LLM 输出非确定, 重试一次大概率就能解析。
+      //   **上限 1 次**(成本闸老规矩): 频率是 1/11, 一次重试的成本可控;
+      //   无限重试会把一个格式问题变成一笔持续开销。
+      if (!extracted.value) {
+        logger.warn({
+          journal: journal.name,
+          rawLength: String(result?.content ?? "").length,
+          finishReason: result?.finishReason ?? null,
+          repairsTried: extracted?.repairs ?? [],
+        }, "JSON 抽取失败 — 自动重试 1 次(上限 1 次)");
+        result = await this.provider.chat({
+          messages: [
+            { role: "system", content: `${finalSystemPrompt}\n\n### ⚠️ 上次输出无法解析为 JSON\n本次**只输出一个 JSON 对象**: 第一个字符是 {, 最后一个字符是 }。不要 markdown 围栏, 不要解释文字。` },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.3,
+          maxTokens: 6000,
+        });
+        assertRealAiOutput(result, "generateJournalRecommendation.jsonRetry");
+        extracted = extractJsonObject(result.content);
+        if (extracted.value) logger.info({ journal: journal.name }, "JSON 抽取重试成功");
+      }
+
       if (extracted.value) {
         const parsed = extracted.value as Record<string, any>;
         return {
@@ -1650,7 +1684,16 @@ ${angleHint}`,
         outputTokens: result?.outputTokens ?? null,
         model: `${result?.model ?? "?"}`,             // 进程内实际用的模型, 不是 .env 文件
         repairsTried: extracted?.repairs ?? [],
-      }, "🔴 期刊推荐 JSON 抽取失败 — 本篇走兜底标题(内容缺深度章节与视频脚本)");
+      }, "🔴 期刊推荐 JSON 抽取失败(已重试 1 次) — 本篇转 needs_review, 原始返回留档");
+      // 🔴 原始返回**带出函数**, 不只落日志。日志会滚, 而这 2000 多字是真内容:
+      //   运营真想救这一篇, 得有地方能取。落 metadata 后从库里就能捞。
+      extractionFailure = {
+        rawHead: String(result?.content ?? "").slice(0, 3000),
+        rawLength: String(result?.content ?? "").length,
+        finishReason: result?.finishReason ?? null,
+        attempts: 2,
+        at: new Date().toISOString(),
+      };
     } catch (err) {
       // 🔴 AI 主备全挂 ≠ 这篇内容有问题 —— 不许在这里被洗成兜底成品。
       //   放它出去, failure-kind 判 service_down → deferred → 服务恢复后自动重跑。
@@ -1667,6 +1710,7 @@ ${angleHint}`,
       scopeDescription: journal.scopeDescription || "",
       recommendation: "",
       titleFallback: true,
+      ...(extractionFailure ? { extractionFailure } : {}),
     };
   }
 }
