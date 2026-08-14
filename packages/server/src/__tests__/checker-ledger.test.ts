@@ -86,7 +86,10 @@ describe("④ 长期零命中：提示而非判死", () => {
   it("评估 200+ 次零命中 → info 级提示，措辞要说明安全闸本就该安静", () => {
     const v = L.judge(stats({ checkerId: "placeholder_asset_in_body", evaluated: 500, hits: 0, adjudicated: 10, confirmedFalse: 10, hitRate: 0 }));
     expect(v.level).toBe("info");
-    expect(v.action).toContain("安静");
+    // 8-14 行为变更: 安慰话从 action 挪进 message —— 零命中**不需要任何动作**,
+    //   给它一个 action 等于让人去做一件其实不用做的事。意图(提示而非判死)不变。
+    expect(v.message).toContain("安静");
+    expect(v.action).toBeNull();
   });
 });
 
