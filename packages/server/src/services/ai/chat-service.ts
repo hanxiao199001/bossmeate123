@@ -6,6 +6,28 @@
  * 2. 通过模型路由器选择合适模型
  * 3. 调用模型 API 获取回复（支持 DeepSeek / OpenAI 兼容接口）
  * 4. 记录 Token 使用
+ *
+ * ## 🔴 别关 deepseek-v4-pro 的推理预算（8-14 实测记录）
+ *
+ * **推理预算与正文丰富度正相关，不是纯开销。** 10 刊同刊 A/B 实测：
+ *
+ * ```
+ * 推理开   均 tok 1746(推理 609)   均字数 889   章节 1.8/4   口播 10/10
+ * 推理关   均 tok  831(推理   0)   均字数 585   章节 1.9/4   口播 10/10
+ * ```
+ *
+ * 字数 **-34%**，直接跌出 800-1200 目标区间；章节/口播/健康问题/JSON 成功率全部持平。
+ * 换句话说：关掉它是拿三分之一的正文长度去换 900 token。
+ *
+ * 会有人（包括我）再想关一次 —— 动机很充分：百炼的 `reasoning_tokens` **算在
+ * completion_tokens 里**，与正文共用 `maxTokens` 预算，日志里 3 条
+ * `outputTokens=6001 / rawLength=0` 就是预算被推理吃光、正文一个字都没轮上。
+ * 但"烧了钱"不等于"没用"。**想省它之前，先跑
+ * `scripts/compare-thinking.ts` 复现这组数字。**
+ *
+ * 开关本身留着（`env.LLM_DISABLE_THINKING`，默认 false）—— 留的是复现实验的能力，
+ * 不是留一个"随时可以打开省钱"的口子。
+
  */
 
 import { modelRouter, type TaskType } from "./model-router.js";
