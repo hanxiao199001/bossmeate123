@@ -45,6 +45,28 @@
  * `getDisciplineCohort` 只做"取行 + 拼集合"，null 仅代表**期刊行不存在**。
  * 能不能写由 `cohortEligible(cohort)` 判定，它不碰 DB —— 于是四条准入规则可以脱库单测，
  * 也能在样例脚本里对着 200 本刊批量跑准入率（拍板需要的三个数之一）。
+ *
+ * ## 📌 A2 拍板材料补一个数：内容偏短是**常态**，不是长尾（8-15）
+ *
+ * 推理参数 A/B 实验顺手量到的，与实验结论无关但对 A2 更有用：
+ *
+ * ```
+ * 现状臂（推理开满）  全样本 n=18  均字数 755
+ *                     仅 2 本中文教育刊 n=10  均字数 769
+ * ```
+ *
+ * 出处要说清：这两个数来自 `scripts/compare-thinking.ts` 的**简化 harness**，
+ * 它的 system prompt **明写「正文 800-1200 字」**，且推理预算全开。
+ * 也就是说 —— **在明确要求字数、模型敞开想的条件下，sparse 教育刊也只写得出 769 字。**
+ *
+ * 与生产侧互为印证：周报口径下近 7 天 191 篇里 53 篇（28%）正文不足 800 字。
+ * 两个来源、两套口径，指向同一件事。
+ *
+ * **这不是推理参数问题，是 sparse 刊没料可写的老病** —— 也正是 A2「学科定位」
+ * 体裁要解决的那个问题：任务本身无解时，加多少推理预算都变不出事实来。
+ * 拍板时这个数可以直接用：换体裁不是嫌现在写得不好，是现在这个体裁在 sparse 刊上
+ * **写不满**。
+
  */
 import { classifyDataSupply, type DataSupplyLevel, type JournalSupplyInput } from "./journal-data-supply.js";
 import { normName } from "./journal-name-normalize.js";
