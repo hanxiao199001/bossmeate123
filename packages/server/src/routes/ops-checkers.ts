@@ -96,7 +96,10 @@ export async function opsCheckerRoutes(app: FastifyInstance) {
             checkerId: s.checkerId,
             guards: def?.guards ?? "(未注册)",
             mode: def?.mode ?? "unknown",
-            evaluated: s.evaluated,
+            // ⚠️ 字段名带 Runs —— 它是**运行次数**不是内容篇数。
+            //   8-16 实测 841 次 vs 同期 191 篇出稿(存量草稿每日重扫)。
+            //   前端展示时必须写「次」, 或与 coveredContents 一起给。
+            evaluatedRuns: s.evaluated,
             hits: s.hits,
             adjudicated: s.adjudicated,
             votesCast: byChecker.get(s.checkerId) ?? 0,

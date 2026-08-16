@@ -191,7 +191,9 @@ export function judge(s: CheckerStats): CheckerVerdict {
       level: "info",
       // 安慰话留在 message 里, 不留在 action 里 —— 它是**结论的一部分**
       //   ("这不是坏消息"), 不是一个要人去做的动作。
-      message: `评估 ${s.evaluated} 次零命中（安全闸本就该安静，不必然是坏事）`,
+      // ⚠️ 写「次」不写「篇」, 并点明重扫 —— evaluated 是运行次数,
+      //   存量草稿每天重过一遍闸, 8-16 实测是出稿篇数的 4.4 倍。
+      message: `评估 ${s.evaluated} 次零命中（次数含存量草稿每日重扫，不等于内容篇数；安全闸本就该安静，不必然是坏事）`,
       action: null,
     };
   }
