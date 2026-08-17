@@ -1289,6 +1289,13 @@ export async function adminRoutes(app: FastifyInstance) {
         await db.insert(journalUsage).values(
           journalIds.map((jid) => ({ tenantId: request.tenantId, journalId: jid, contentId: row.id }))
         );
+        // 8-17 留痕: 这条路是**运营在后台手点**的, 不是 cron ——
+        //   追 education 日耗时我只在 cron 里找, 完全没考虑它。一本刊一行。
+        const { traceJournalConsumptionBatch } = await import("../services/ops/decision-trace.js");
+        void traceJournalConsumptionBatch(journalIds, {
+          requestedBy: "admin_roundup", slotDiscipline: b.discipline ?? null, scope: "roundup",
+          tenantId: request.tenantId, contentId: row.id,
+        });
       }
       return { code: "OK", data: { contentId: row?.id, title } };
     } catch (err) {

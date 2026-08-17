@@ -1533,6 +1533,46 @@ export const checkerLedger = pgTable(
  * 判据永远等于当前代码。命中一旦落表就会与闸的当前判据漂移：
  * 裁决一条三周前按旧判据命中的记录，结论对今天的闸没有意义。
  */
+/**
+ * 决策留痕（8-17，第一批：选刊链路）。**纯观测。**
+ *
+ * 两类行：`intent`（调用选刊器**之前**记"我要请求了"）与 `consumption`（每消耗一本刊一行）。
+ * 只记选中的话，遇到空白分不清「这条路没跑」还是「跑了但没接留痕」——
+ * 意图与消耗对不上的就是漏接路径。
+ *
+ * 🔴 两个学科口径都在这张表里，**绝不能互换**：
+ *   · `slotDiscipline`（需求侧）—— 配额按它计
+ *   · `journalDiscipline`（供给侧）—— 池子余量按它算
+ * generic 通配刊被 education 槽位选中时，消耗的是 education 的配额、减少的是 generic 池的余量。
+ */
+export const decisionTraces = pgTable(
+  "decision_traces",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    point: varchar("point", { length: 40 }).notNull(),
+    /** intent | consumption */
+    phase: varchar("phase", { length: 16 }).notNull(),
+    correlationId: uuid("correlation_id"),
+    /** unknown = 调用方没传上下文 = 漏接的路径 */
+    requestedBy: varchar("requested_by", { length: 40 }).notNull().default("unknown"),
+    slotDiscipline: varchar("slot_discipline", { length: 32 }),
+    journalDiscipline: varchar("journal_discipline", { length: 32 }),
+    scope: varchar("scope", { length: 24 }),
+    journalId: uuid("journal_id"),
+    contentId: uuid("content_id"),
+    /** 降级链，任意层数：[{layer, tier, reason}] */
+    fallback: jsonb("fallback").notNull().default([]),
+    genericWildcard: boolean("generic_wildcard").notNull().default(false),
+    tenantId: uuid("tenant_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_decision_traces_created").on(table.createdAt),
+    index("idx_decision_traces_point").on(table.point, table.phase),
+    index("idx_decision_traces_corr").on(table.correlationId),
+  ],
+);
+
 export const checkerAdjudications = pgTable(
   "checker_adjudications",
   {

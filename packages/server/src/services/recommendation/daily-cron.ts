@@ -27,6 +27,7 @@ import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
 import { verifiedJournalCondition, journalPoolCriteria } from "../journals/journal-sql.js";
 import { getPoolInventory, disciplineCn, type PoolInventory } from "../journals/pool-inventory.js";
 import { GENERIC_DISCIPLINE_CODE, DISCIPLINE_CODES } from "./discipline-mapping.js";
+import { traceJournalConsumptionBatch } from "../ops/decision-trace.js";
 import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
@@ -633,7 +634,25 @@ async function unverifiedUsedToday(tenantId: string): Promise<number> {
  *  修复动机: 旧层②(已核实+对口, LRU **无 fresh 条件**)只要 verified 对口池非空必然短路返回 ——
  *  小学科 verified 池(如 5 本)新鲜耗尽后天天 LRU 回头同几本, 旧⑤-⑧ 永远到不了,
  *  15 天冷却形同虚设("国际刊反复就那几本"的主因)。 */
-async function pickScopedFreshJournal(tenantId: string, scope: string, discipline: string): Promise<string | null> {
+async function pickScopedFreshJournal(
+  tenantId: string,
+  scope: string,
+  discipline: string,
+  /**
+   * 🔴 留痕上下文。**不传 = requestedBy 记成 unknown** —— 那正是"漏接的路径"的信号。
+   *   留痕装在选刊器内部而不是调用点, 就是为了让漏接可见: 只在调用点接的话,
+   *   没接的路径不会留下任何痕迹, 于是分不清"这条路没跑"还是"跑了没记"。
+   */
+  traceCtx?: { requestedBy: import("../ops/decision-trace.js").RequestedBy },
+): Promise<string | null> {
+  const { traceJournalIntent } = await import("../ops/decision-trace.js");
+  const correlationId = await traceJournalIntent({
+    requestedBy: traceCtx?.requestedBy ?? "unknown",
+    slotDiscipline: discipline,
+    scope,
+    tenantId,
+  });
+  void correlationId; // consumption 侧按 journalId 关联(本轮不串 id, 见文件头口径)
   // 7-30 条件片段收口: active / verified / sc / discExact / discOrGeneric / fresh 六个片段
   //   全部取自 journal-sql.ts 的 journalPoolCriteria() —— 与「期刊池盘点」
   //   (services/journals/pool-inventory.ts, 回答"这个学科还剩几本可选")**同一份 WHERE**。
@@ -879,6 +898,11 @@ export async function runDailyContentByType(
           }).returning({ id: contents.id });
           if (row?.id && journalIds.length) {
             await db.insert(journalUsage).values(journalIds.map((jid) => ({ tenantId: SYS, journalId: jid, contentId: row.id })));
+            // 留痕: **一本刊一行**(roundup 一篇用 3 本 = 3 行)
+            void traceJournalConsumptionBatch(journalIds, {
+              requestedBy: "daily_cron_roundup", slotDiscipline: discipline, scope: "roundup",
+              tenantId: SYS, contentId: row.id,
+            });
             journalIds.forEach((jid) => uniqueJournals.add(jid));
           }
           roundupCount++;
@@ -936,7 +960,7 @@ export async function runDailyContentByType(
           if (row?.id) batchIds.push(row.id);
           await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, pick.id));
         } else if (type === "domestic" || type === "international") {
-          const journalId = await pickScopedFreshJournal(SYS, type, discipline);
+          const journalId = await pickScopedFreshJournal(SYS, type, discipline, { requestedBy: "daily_cron_article" });
           if (!journalId) {
             logger.info({ type, discipline }, "PR-O3 该范围无可用新刊, 跳过");
             // 7-28 ①a: 十层兜底都选不出刊 = 该定位+学科的池子是空的, 这个名额直接蒸发。
@@ -975,6 +999,9 @@ export async function runDailyContentByType(
           //   batch-worker 生成成功后会把近 2 天窗口内的占位行回填 contentId; 生成彻底失败的回滚
           //   也只删 2 天窗口内 contentId 为空的行 —— 不再一次失败清光该刊全部历史冷却。
           await db.insert(journalUsage).values({ tenantId: SYS, journalId });
+          void traceJournalConsumptionBatch([journalId], {
+            requestedBy: "daily_cron_article", slotDiscipline: discipline, scope: type, tenantId: SYS,
+          });
           if (cands[0]) await db.update(keywordsTable).set({ lastRecommendedAt: new Date() }).where(eq(keywordsTable.id, cands[0].id));
         }
       } catch (err) {

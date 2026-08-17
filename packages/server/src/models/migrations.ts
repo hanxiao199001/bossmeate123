@@ -780,4 +780,47 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON contents (batch_row_id) WHERE batch_row_id IS NOT NULL;
     `,
   },
+  {
+    version: "036_decision_traces",
+    description:
+      "8-17 决策留痕(第一批: 选刊链路)。**纯观测, 零行为变更。** " +
+      "动机: 追查 education 期刊日耗 14 本时, 静态读代码只追到 5 本, 剩下 9 本追不出来 —— " +
+      "一条内容为什么用了这本刊, 答案只存在于'当时那次运行的控制流'里, 跑完就没了。" +
+      "两类行: intent(调用选刊器之前记'我要请求了') 与 consumption(每消耗一本刊记一行)。" +
+      "**为什么要记 intent**: 只记选中的话, 遇到空白分不清'这条路没跑'还是'跑了但没接留痕'; " +
+      "意图与消耗对不上的就是漏接路径 —— 接线完整性检查的运行时版本。" +
+      "口径: 一行 consumption = **一次期刊消耗**(不是一篇内容、不是一次请求); " +
+      "roundup 一篇用 3 本刊 = 3 行; 重试不重复计(batch_row_id 幂等已上, migration 035)。" +
+      "退回执行: DROP TABLE decision_traces。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS decision_traces (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        -- 决策点名: journal_pick / topic_pick / ...
+        point VARCHAR(40) NOT NULL,
+        -- intent = 请求之前; consumption = 真的消耗了一本刊
+        phase VARCHAR(16) NOT NULL,
+        -- 把同一次决策的 intent 与 consumption 串起来
+        correlation_id UUID,
+        -- 谁在请求: daily_cron_article / daily_cron_roundup / admin_roundup / batch / unknown
+        --   unknown = 有人没传上下文 = 漏接的路径, 正是要抓的
+        requested_by VARCHAR(40) NOT NULL DEFAULT 'unknown',
+        -- 🔴 需求侧: 配额按它计
+        slot_discipline VARCHAR(32),
+        -- 🔴 供给侧: 池子余量按它算。两个口径都对, 绝不能互换
+        journal_discipline VARCHAR(32),
+        scope VARCHAR(24),
+        journal_id UUID,
+        content_id UUID,
+        -- 降级链, 任意层数: [{layer, tier, reason}]
+        fallback JSONB NOT NULL DEFAULT '[]'::jsonb,
+        -- 是否落到 generic 通配兜底(它在任何学科槽位都算命中, 是配额的潜在后门)
+        generic_wildcard BOOLEAN NOT NULL DEFAULT false,
+        tenant_id UUID,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_decision_traces_created ON decision_traces (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_decision_traces_point ON decision_traces (point, phase, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_decision_traces_corr ON decision_traces (correlation_id);
+    `,
+  },
 ];
