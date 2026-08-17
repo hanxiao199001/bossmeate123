@@ -65,8 +65,33 @@ function reportAiCallFailure(err: unknown, ctx: { provider: string; model: strin
   void (async () => {
     try {
       const { isTimeoutLikeError, recordIncidentThrottled } = await import("../ops/incidents.js");
-      if (!isTimeoutLikeError(err)) return; // 只记超时/中断类; 额度类由 openai-compatible 的 llm_quota 覆盖
+      const { isQuotaLikeError } = await import("../ops/failure-kind.js");
       const msg = err instanceof Error ? err.message : String(err);
+
+      /**
+       * 🔴 8-17：欠费必须落 incident，否则整条线停摆没人知道要去充值。
+       *
+       * 原来这里是 `if (!isTimeoutLikeError(err)) return`，注释写着"额度类由
+       * openai-compatible 的 llm_quota 覆盖" —— **但生产链路根本不走那个文件**，
+       * 它走本文件的 executeAICall 直连 fetch。于是额度类在两边都没人记：
+       * 那边覆盖不到，这边直接 return。
+       *
+       * 实况：百炼欠费从 7-23 起断续发作 6 次（7-23/7-24/7-30/7-31/8-02~8-06/8-16~8-17），
+       * 8-16 单日 154 次 400 Arrearage，`ops_incidents` **零条**，简报一个字没提。
+       */
+      if (isQuotaLikeError(0, msg)) {
+        await recordIncidentThrottled({
+          kind: "llm_quota",
+          severity: "error",
+          // 红线 #13：只写事实 + 可执行动作，不猜"大概是谁忘了充"
+          message: `LLM 账户额度不可用: ${ctx.provider}/${ctx.model} — 调用被拒。需去阿里云百炼充值后自动恢复。原文: ${msg.slice(0, 160)}`,
+          tenantId: ctx.tenantId ?? null,
+          detail: { provider: ctx.provider, model: ctx.model, taskType: ctx.taskType, raw: msg.slice(0, 400) },
+        }, { key: `llm_quota:${ctx.provider}:${ctx.model}` });
+        return;
+      }
+
+      if (!isTimeoutLikeError(err)) return; // 其余非超时类不记(噪声太大)
       await recordIncidentThrottled({
         kind: "llm_timeout",
         severity: "warn",
@@ -99,10 +124,22 @@ export class AiUnavailableError extends Error {
   readonly model: string;
   /** no_model = 压根没选出模型; exhausted = 主备都调用失败 */
   readonly kind: "no_model" | "exhausted";
-  constructor(kind: "no_model" | "exhausted", provider: string, model: string) {
-    super(kind === "no_model"
+  /**
+   * 🔴 最后一次底层错误的原文。**必须带上，否则失败分类会把欠费判成"服务挂了"。**
+   *
+   * 8-17 实测：原始 `API 400 ... "type":"Arrearage"` → classifyFailure = quota_exceeded ✓；
+   * 一旦被本类包住而不带原文 → service_down ✗。
+   * 而 failure-kind 的文件头早就写着这句预言：「欠费时下游表现常常是'超时'或'主备全挂'，
+   * 若先判 service_down，探测会一直探到服务'不通'却永远说不出'是因为没钱'」——
+   * 包装丢掉原文，就是亲手制造它预言的那个情形。
+   */
+  readonly lastError: string;
+  constructor(kind: "no_model" | "exhausted", provider: string, model: string, lastError?: unknown) {
+    const tail = lastError === undefined ? "" : ` | 底层: ${lastError instanceof Error ? lastError.message : String(lastError)}`.slice(0, 300);
+    super((kind === "no_model"
       ? `AI 不可用: 无可用模型(路由表空或全部熔断) [${provider}/${model}]`
-      : `AI 不可用: 主备模型全部调用失败 [${provider}/${model}]`);
+      : `AI 不可用: 主备模型全部调用失败 [${provider}/${model}]`) + tail);
+    this.lastError = tail;
     this.name = "AiUnavailableError";
     this.kind = kind;
     this.provider = provider;
@@ -442,6 +479,9 @@ async function chatWithSerialMode(
     "AI 调用开始"
   );
 
+  /** 最后一次底层错误 —— 抛 AiUnavailableError 时必须带上（见该类 lastError 字段注释） */
+  let lastCallError: unknown;
+
   try {
     const result = await executeAICall(provider, messages, request.systemPrompt, timeoutMs, { temperature: request.temperature, maxTokens: request.maxTokens });
     modelRouter.recordSuccess(provider.name, provider.model);
@@ -468,6 +508,7 @@ async function chatWithSerialMode(
       ok: true,
     };
   } catch (err) {
+    lastCallError = err;
     modelRouter.recordFailure(provider.name, provider.model);
     const errorMsg = err instanceof Error ? err.message : String(err);
     logger.error(
@@ -495,6 +536,7 @@ async function chatWithSerialMode(
           ok: true,
         };
       } catch (fallbackErr) {
+        lastCallError = fallbackErr;
         modelRouter.recordFailure(fallback.name, fallback.model);
         logger.error(
           { err: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) },
@@ -505,7 +547,7 @@ async function chatWithSerialMode(
     }
 
     // 7-28 ②b: 生产链路(throwOnExhausted)要的是"知道失败了", 不是一句能被当成正文的道歉话
-    if (request.throwOnExhausted) throw new AiUnavailableError("exhausted", provider.name, provider.model);
+    if (request.throwOnExhausted) throw new AiUnavailableError("exhausted", provider.name, provider.model, lastCallError);
     return {
       content: AI_FALLBACK_UNAVAILABLE,
       model: provider.model,

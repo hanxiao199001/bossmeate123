@@ -45,6 +45,37 @@ async function probe(ep: LlmEndpoint): Promise<string> {
   }
 }
 
+
+/**
+ * 🔴 计费探针 —— `/models` 探不出欠费，必须真发一次最小的计费请求。
+ *
+ * 8-17 血的教训：百炼欠费期间 `GET /models` **照样 200**，本脚本于是回
+ *「✅ 配置成对，可以起服务」，而同一时刻任何 chat 调用都返回
+ * `400 {"type":"Arrearage"}`，整条内容线停摆。欠费从 7-23 起断续发作 6 次，
+ * 8-16 单日 154 次，全程没有任何工具说过一句"是因为没钱"。
+ *
+ * 成本：max_tokens=1 的一次调用，可忽略；换来的是"能不能真的干活"这个答案。
+ * 不计费探活回答的是"地址和 key 对不对"，这两个问题不是一回事。
+ */
+async function probeBilled(ep: { baseUrl: string; apiKey: string }, model: string): Promise<string> {
+  try {
+    const res = await fetch(`${ep.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ep.apiKey}` },
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "1" }] }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.ok) return "✅ 计费调用通(账户可用)";
+    const body = await res.text();
+    if (/arrearage|overdue|欠费|in good standing/i.test(body)) {
+      return `🔴 **账户欠费** —— 去阿里云百炼充值, 充完自动恢复。原文: ${body.slice(0, 140)}`;
+    }
+    return `❌ ${res.status}: ${body.slice(0, 160)}`;
+  } catch (e) {
+    return `❌ 请求异常: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 async function main() {
   const offline = process.argv.includes("--offline");
 
@@ -81,16 +112,34 @@ async function main() {
     for (const i of issues) console.log(`  ${i.level === "error" ? "❌" : "⚠️"} [${i.code}] ${i.message}`);
   }
 
+  let billedBad = false;
   if (!offline) {
     console.log("\n---------- 联网探活(GET /models, 不计费) ----------");
     for (const [name, ep] of endpoints) {
       if (!ep) continue;
       console.log(`  ${name}: ${await probe(ep)}`);
     }
+    // 🔴 /models 探不出欠费 —— 必须再发一次真实计费请求(见 probeBilled 注释)
+    console.log("\n---------- 账户探活(真发一次 max_tokens=1 的计费调用) ----------");
+    for (const [name, ep] of endpoints) {
+      if (!ep) continue;
+      // 模型名走 env(红线 #3: 不许硬编码)
+      const model = name === "qwen" ? env.QWEN_MODEL_PLUS : env.DEEPSEEK_MODEL_CHAT;
+      const r = await probeBilled(ep, model);
+      if (!r.startsWith("✅")) billedBad = true;
+      console.log(`  ${name}: ${r}`);
+    }
   }
 
   const fatal = issues.some((i) => i.level === "error");
-  console.log(fatal ? "\n结论: ❌ 有致命配置错误, 生产启动会被拦下, 先按上面提示改 .env" : "\n结论: ✅ 配置成对, 可以起服务");
+  // 配置对但账户不可用, 照样干不了活 —— 结论必须体现这一点, 不能再回"可以起服务"
+  console.log(
+    fatal
+      ? "\n结论: ❌ 有致命配置错误, 生产启动会被拦下, 先按上面提示改 .env"
+      : billedBad
+        ? "\n结论: ⚠️ 配置成对, 但**账户侧调用不通**(见上方账户探活) —— 起了服务也生成不出东西"
+        : "\n结论: ✅ 配置成对且账户可用",
+  );
   process.exit(fatal ? 1 : 0);
 }
 
