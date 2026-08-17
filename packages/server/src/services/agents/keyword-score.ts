@@ -149,3 +149,83 @@ export function scoreDistributionHealth(scores: number[]): {
 
   return { total, maxScore, atMaxCount, atMaxRatio, top100DistinctRatio, healthy: reasons.length === 0, reasons };
 }
+
+// ══════════════════════════════════════════════════════════════════
+// 存量刷新 —— 回填与日常刷新是**同一个函数**
+// ══════════════════════════════════════════════════════════════════
+//
+// 🔴 为什么必须刷：**分数含时间衰减，存下来的标量会过期。**
+//
+// 新公式里 recency 是半衰 21 天的指数衰减。今天算 84 分的词，三周后实际应该是 42，
+// 但库里还写着 84 —— 而选题器读的就是库里那个值（`ORDER BY composite_score DESC`）。
+// 不刷的话，老词会永远压着新词，等于换了个方式重演「霸榜」。
+//
+// 两个选择里选了"每天刷"而不是"选题时现算"：
+//   · 现算要把公式塞进 SQL 表达式或把全表拉进内存排序，贵且难测；
+//   · 刷一遍是 2938 行纯计算 + 一次批量 UPDATE，几百毫秒。
+//
+// 回填（一次性）与日常刷新（每天）用同一个函数，避免两套口径漂移 ——
+// 这正是「余量的定义只有一个才有意义」那条教训的同构情形。
+
+export interface RefreshResult {
+  scanned: number;
+  updated: number;
+  before: ReturnType<typeof scoreDistributionHealth>;
+  after: ReturnType<typeof scoreDistributionHealth>;
+}
+
+/**
+ * 重算所有 active 关键词的综合分。
+ *
+ * @param apply false = 只算不写（dry-run，用于上线前看分布变化）
+ */
+export async function refreshKeywordScores(opts: { apply: boolean; now?: Date } = { apply: false }): Promise<RefreshResult> {
+  const { db } = await import("../../models/db.js");
+  const { sql } = await import("drizzle-orm");
+  const now = opts.now ?? new Date();
+
+  const rows = (await db.execute(sql`
+    select id, heat_score, composite_score, appear_count, last_seen_at, last_recommended_at, source_platform
+    from keywords where status = 'active'`)).rows as Array<Record<string, unknown>>;
+
+  const before: number[] = [];
+  const after: number[] = [];
+  const updates: Array<{ id: string; score: number }> = [];
+
+  for (const r of rows) {
+    before.push(Number(r.composite_score ?? 0));
+    const score = computeKeywordScore({
+      heatScore: Number(r.heat_score ?? 0),
+      appearCount: Number(r.appear_count ?? 0),
+      lastSeenAt: (r.last_seen_at as Date | null) ?? null,
+      // 单条记录只记一个来源平台；跨平台佐证在采集侧合并，这里保守取 1
+      platformCount: 1,
+      lastRecommendedAt: (r.last_recommended_at as Date | null) ?? null,
+      now,
+    });
+    after.push(score);
+    updates.push({ id: String(r.id), score });
+  }
+
+  let updated = 0;
+  if (opts.apply) {
+    // 分批 UPDATE，避免单条 2938 次往返
+    const CHUNK = 200;
+    for (let i = 0; i < updates.length; i += CHUNK) {
+      const batch = updates.slice(i, i + CHUNK);
+      const ids = batch.map((b) => b.id);
+      const cases = batch.map((b) => sql`when ${b.id}::uuid then ${b.score}::real`);
+      await db.execute(sql`
+        update keywords set composite_score = case id ${sql.join(cases, sql` `)} end
+        where id = any(${sql`array[${sql.join(ids.map((x) => sql`${x}::uuid`), sql`, `)}]`})`);
+      updated += batch.length;
+    }
+  }
+
+  return {
+    scanned: rows.length,
+    updated,
+    before: scoreDistributionHealth(before),
+    after: scoreDistributionHealth(after),
+  };
+}
