@@ -446,6 +446,29 @@ TOP5：TESOL Quarterly 30次 / Modern Language Journal 30次 / 教育前沿 30�
 
 ---
 
+## 19. 模板选择三路收口（#6/#7/#8）🔴 阻塞决策留痕（8-17）
+
+**先收口，再留痕 —— 顺序不能反。** 给一个自相矛盾的机制记账，记出来的账也是矛盾的。
+
+图文线上「选哪个模板」有**三条各判各的路径**：
+
+| # | 位置 | 机制 |
+|---|---|---|
+| #6 | `services/recommendation/daily-cron.ts:683` `pickTemplateId(weights)` | `Math.random()` 加权抽样（:689） |
+| #7 | `services/skills/template-registry.ts` `pickRotatingTemplateId` | 从全部**可轮换**模板里随机 |
+| #8 | `services/skills/template-preference.ts:145` `selectVariantTemplates` | 偏好变体选择 |
+
+`daily-cron.ts:654` 的注释自己写明了：「与 `article-skill` 的 `pickRotatingTemplateId()`（从全部已注册模板挑）**各判各的**」。
+
+**这是 8-13 轮换收口的遗留**：那次把 `rotationEnabled` 收成了唯一归宿（谁**可以**被轮换有了单一真相源），但**选择路径**仍是三条 —— 收的是候选集，没收选择器。当时守卫抓出的第三处（`routes/admin.ts` 的 `LAYOUT_POOL`）是同一个结构问题的另一个面。
+
+**为什么阻塞留痕**：决策留痕若只接一处，另两条路径产出的内容会记出**自相矛盾的账**（同一篇内容的 metadata 说模板是 X，实际渲染用的是 Y）。而"查不出来源"正是留痕要消灭的东西。
+
+**动作**：三路收口成一个选择器（候选集已经统一，只需统一入口），然后再接留痕。
+相关：决策留痕四处（#1 选题打分 / #2 趋势分层 / #3 选刊十层 / #4 选刊三级放宽）本轮先做，模板不在其中。
+
+---
+
 ## 附：这个项目反复出现的反模式（写代码时对照）
 
 **降级产物必须在数据上可区分于真产物。**
