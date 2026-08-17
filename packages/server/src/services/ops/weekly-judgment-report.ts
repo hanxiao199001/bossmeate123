@@ -51,6 +51,14 @@ export interface WeeklyReport {
   shadow: { note: string };
   /** ④ 内容健康摘要 */
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number; note: string };
+  /**
+   * ④ 待审积压 —— 8-16 加。
+   *
+   * 这个数不是"运营慢"的指标，是**人在不在环里**的指标：
+   * 8-10 起每天新增约 23 篇 needs_review，而 7 天内一条都没被清掉。
+   * 持续上涨 = 人是瓶颈；稳定 = 正常水位。让它每周自己报，不用人去查。
+   */
+  backlog: { total: number; stale7d: number; addedThisWeek: number };
   /** ⑤ 待办建议 —— 整页的目的，最多 3 条 */
   todos: WeeklyTodo[];
   text: string;
@@ -107,6 +115,17 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     .from(opsIncidents)
     .where(and(gte(opsIncidents.createdAt, since), sql`${opsIncidents.kind} = 'output_unhealthy'`));
 
+  // ④ 待审积压(见 backlog 字段注释)
+  const [bk] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      stale7d: sql<number>`count(*) filter (where ${contents.createdAt} < now() - interval '7 days')::int`,
+      addedThisWeek: sql<number>`count(*) filter (where ${contents.createdAt} >= now() - interval '7 days')::int`,
+    })
+    .from(contents)
+    .where(and(eq(contents.type, "article"), eq(contents.status, "needs_review")));
+  const backlog = { total: bk?.total ?? 0, stale7d: bk?.stale7d ?? 0, addedThisWeek: bk?.addedThisWeek ?? 0 };
+
   const health = {
     articles: arts.length,
     titleFallback,
@@ -116,7 +135,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
   };
 
   const todos = pickTodos({ checkers, annotated, health });
-  const text = renderText({ weekOf, checkers, annotated, health, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, backlog, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -130,6 +149,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     },
     shadow: { note: "影子放行一致率待 Phase 3 的裁决入口上线后才有输入" },
     health,
+    backlog,
     todos,
     text,
   };
@@ -218,6 +238,7 @@ function renderText(d: {
   checkers: Array<CheckerVerdict & { guards: string; mode: string; hits: number; adjudicated: number }>;
   annotated: number;
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number };
+  backlog: { total: number; stale7d: number; addedThisWeek: number };
   todos: WeeklyTodo[];
   ledgerSince: string | null;
 }): string {
@@ -268,6 +289,12 @@ function renderText(d: {
 
   L.push("■ 出稿健康");
   L.push(`  本周文章 ${d.health.articles} 篇 ｜ 兜底标题 ${d.health.titleFallback} ｜ 正文过短 ${d.health.shortBody} ｜ 出稿闸拦下 ${d.health.truncated}`);
+  // 🔴 只陈述事实与对照基准, 不写"这多半是因为运营没审"(红线 #13)
+  L.push(
+    `  待审积压 ${d.backlog.total} 篇（本周新增 ${d.backlog.addedThisWeek}，` +
+      `其中 ${d.backlog.stale7d} 篇已超过 7 天还挂着）` +
+      (d.backlog.stale7d > 0 ? "。这个数逐周涨 = 没人在清；持平 = 正常水位。" : ""),
+  );
   L.push("");
 
   L.push("■ 系统分 vs 人工");
