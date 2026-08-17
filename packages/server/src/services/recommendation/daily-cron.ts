@@ -26,7 +26,7 @@ import { createBatch } from "../batch/batch-service.js";
 import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
 import { verifiedJournalCondition, journalPoolCriteria } from "../journals/journal-sql.js";
 import { getPoolInventory, disciplineCn, type PoolInventory } from "../journals/pool-inventory.js";
-import { DISCIPLINE_CODES } from "./discipline-mapping.js";
+import { GENERIC_DISCIPLINE_CODE, DISCIPLINE_CODES } from "./discipline-mapping.js";
 import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
@@ -448,6 +448,46 @@ export async function runDailyRecommendation(): Promise<DailyRecommendationResul
 //   不含 generic —— 这里是"轮转生成哪些学科的内容", 综合刊(generic)只在选刊阶段兜底, 不作生成目标。
 const ALL_DISC_CODES: readonly string[] = DISCIPLINE_CODES;
 
+/**
+ * 学科轮转偏移（8-17 修）。
+ *
+ * ## 原来它从不轮转
+ *
+ * ```ts
+ * const discipline = discs[i % discs.length];   // i 只到 count-1
+ * ```
+ *
+ * `count = 4`、`discs.length = 13` → `i % 13` 恒取 0,1,2,3，
+ * 而且**每天都从 i=0 重新开始** —— 于是永远只用
+ * `medicine / education / economics / engineering`，
+ * `computer` 及其后 9 个学科**一次都轮不到**（8-17 实测：近 4 天全库只有
+ * education 56 / generic 44 / medicine 12 被碰过，其余 0）。
+ * "轮转"这个名字是假的。
+ *
+ * 改成按**日**推进：今天从第 dayOfYear 个学科起排，明天顺延。
+ *
+ * ## ⚠️ 它与学科配额各管各的，别混为一谈
+ *
+ * · **轮转**决定「今天优先试哪些学科」（顺序）
+ * · **配额**决定「每个学科最多耗几本刊」（上限）
+ *
+ * 两者不冲突：轮转把机会均摊出去，配额防止某个学科被吃干。
+ * 下一个人若把其中一个当成另一个，会得出"配了轮转就不用配额"这种错结论。
+ */
+export function rotationOffsetForDay(now: Date = new Date()): number {
+  const start = Date.UTC(now.getUTCFullYear(), 0, 0);
+  const dayOfYear = Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - start) / 86_400_000);
+  return dayOfYear;
+}
+
+/** 取今日第 i 个槽位该用的学科 —— 纯函数, 便于"连续 30 天每个学科都轮到"这类断言 */
+export function disciplineForSlot(discs: readonly string[], i: number, now: Date = new Date()): string {
+  if (discs.length === 0) return GENERIC_DISCIPLINE_CODE;
+  return discs[(rotationOffsetForDay(now) + i) % discs.length]!;
+}
+
+
+
 // 7-30: 冷却天数不再在这里各读一遍 env —— 单一真相源是 journal-sql.ts 的 journalCooldownDays()
 //   (选刊器的 fresh 条件、盘点服务的余量估算都从那里取, 保证"15 天"只有一个定义)。
 
@@ -805,7 +845,7 @@ export async function runDailyContentByType(
     if (!cfg.count) continue;
     const discs = cfg.disciplines.length ? cfg.disciplines : ALL_DISC_CODES;
     for (let i = 0; i < cfg.count; i++) {
-      const discipline = discs[i % discs.length];
+      const discipline = disciplineForSlot(discs, i);
       usedDisc.add(discipline);
       try {
         if (type === "roundup") {
