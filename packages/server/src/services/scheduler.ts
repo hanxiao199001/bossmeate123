@@ -138,6 +138,37 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
         }
       }
 
+      /**
+       * 🔴 8-17: 刷新全部 active 关键词的综合分 —— **必须在选题推荐之前**。
+       *
+       * 新公式含半衰 21 天的新鲜度衰减, 而库里存的是标量: 不刷就是拿三周前的分数排今天的序,
+       * 老词永远压着新词 = 换个方式重演霸榜(旧公式 1098 条并列满分那个病的时间版)。
+       *
+       * 放在这里而不是单独 cron: 采集刚更新了 lastSeenAt/appearCount, 紧接着刷分,
+       * 下一步的选题推荐读到的就是当日口径 —— 三步同一次运行内完成, 不会读到半新半旧。
+       */
+      try {
+        const { refreshKeywordScores } = await import("./agents/keyword-score.js");
+        const rs = await refreshKeywordScores({ apply: true });
+        logger.info(
+          { scanned: rs.scanned, updated: rs.updated, atMaxRatio: rs.after.atMaxRatio, healthy: rs.after.healthy },
+          "关键词综合分已刷新",
+        );
+        // 分布塌了要出声 —— 打分打到人人满分等于没打分, 这条不该只在人想起来查的时候才发现
+        if (!rs.after.healthy) {
+          const { recordIncidentThrottled } = await import("./ops/incidents.js");
+          await recordIncidentThrottled({
+            kind: "keyword_score_flat",
+            severity: "warn",
+            message: `关键词分数分布不健康: ${rs.after.reasons.join("; ")} —— 排序区分度不足, 选题会趋同`,
+            tenantId: null,
+            detail: { scanned: rs.scanned, ...rs.after },
+          }, { key: "keyword_score_flat" });
+        }
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err }, "关键词综合分刷新失败(不阻塞选题)");
+      }
+
       // 生成每日选题推荐
       const { generateDailyRecommendations } = await import("./content-engine/topic-recommender.js");
       for (const tenant of activeTenants) {

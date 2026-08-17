@@ -12,6 +12,7 @@
  * 核心原则：宁可漏掉，不要混入无关内容
  */
 
+import { computeKeywordScore } from "./keyword-score.js";
 import { db } from "../../models/db.js";
 import { keywords } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
@@ -205,10 +206,19 @@ export async function analyzeKeywords(
     if (hitWord) hitWords.push(hitWord);
   }
 
-  // Step 4: 计算综合热度分（跨平台权重更高）
+  /**
+   * Step 4: **入库筛选用**的初排分（只决定"这批抓回来的取哪 100 个入库"）。
+   *
+   * ⚠️ 它**不再是**落库的 compositeScore —— 落库分在 Step 6 用
+   * `computeKeywordScore()` 算，因为真正的主区分信号 `appearCount`
+   * 要等查到 DB 记录才知道（新词=1，老词=历史累计+1）。
+   *
+   * 为什么这里还留着旧式乘法：本步只需在**同一批**抓取结果内部排个序取前 100，
+   * 同批之间 platforms/heat 的相对关系仍然可用；而它作为**落库分**已被证伪
+   * (1098 条并列满分，见 keyword-score.ts 文件头)。
+   */
   for (const [, item] of keywordMap) {
     const platformMultiplier = 1 + (item.platforms.length - 1) * 0.5;
-    // 行业相关的权重 ×3
     const industryMultiplier = item.isIndustryRelated ? 3 : 1;
     item.compositeScore = item.totalHeatScore * platformMultiplier * industryMultiplier;
   }
@@ -241,13 +251,23 @@ export async function analyzeKeywords(
       if (existing.length > 0) {
         const record = existing[0];
         const newAppearCount = (record.appearCount || 0) + 1;
+        const seenAt = new Date();
+        // 8-17: 落库分走新公式(appearCount 主导 + 新鲜度 + 防霸榜), 不再用 Step 4 的旧式乘法
+        const score = computeKeywordScore({
+          heatScore: kw.totalHeatScore,
+          appearCount: newAppearCount,
+          lastSeenAt: seenAt,
+          platformCount: kw.platforms.length,
+          lastRecommendedAt: record.lastRecommendedAt ?? null,
+          now: seenAt,
+        });
 
         await db
           .update(keywords)
           .set({
             heatScore: kw.totalHeatScore,
-            compositeScore: kw.compositeScore,
-            lastSeenAt: new Date(),
+            compositeScore: score,
+            lastSeenAt: seenAt,
             appearCount: newAppearCount,
             category: kw.category || record.category,
           })
@@ -257,12 +277,23 @@ export async function analyzeKeywords(
           sustainedKeywords.push(kw.keyword);
         }
       } else {
+        const seenAt = new Date();
         await db.insert(keywords).values({
           tenantId,
           keyword: kw.keyword,
           sourcePlatform: kw.platforms[0],
           heatScore: kw.totalHeatScore,
-          compositeScore: kw.compositeScore,
+          // 新词 appearCount=1 → appear 分量为 0, 靠新鲜度与跨平台起步。
+          //   刻意如此: 只出现过一次的词不该一上来就顶格(旧公式正是这么把垃圾词顶上去的)。
+          compositeScore: computeKeywordScore({
+            heatScore: kw.totalHeatScore,
+            appearCount: 1,
+            lastSeenAt: seenAt,
+            platformCount: kw.platforms.length,
+            lastRecommendedAt: null,
+            now: seenAt,
+          }),
+          lastSeenAt: seenAt,
           category: kw.category,
           crawlDate: today,
           metadata: {
