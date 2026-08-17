@@ -13,7 +13,7 @@
  * 强依赖 P0 状态机。
  */
 import { Worker, Job } from "bullmq";
-import { eq, sql, and, isNull } from "drizzle-orm";
+import { eq, sql, and, isNull, isNotNull } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { batchRows, contents, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
@@ -198,7 +198,11 @@ export function startBatchWorker(): Worker<BatchRowJob> {
          * 约束上线那天重试风暴撞上唯一键就是 batch 全线崩 ——
          * 约束防重复, 冲突处理保韧性, 缺一半都不行。
          */
-        .onConflictDoNothing({ target: contents.batchRowId })
+        //  ⚠️ **必须带 targetWhere** —— 唯一索引是**部分索引**(WHERE batch_row_id IS NOT NULL),
+        //    Postgres 的 ON CONFLICT 推断匹配不上部分索引, 除非把索引谓词原样写进来。
+        //    不带它 → 运行期直接抛 42P10「no unique or exclusion constraint matching」,
+        //    正是"约束上线那天 batch 全线崩"的另一种死法(8-17 部署后自测当场抓到)。
+        .onConflictDoNothing({ target: contents.batchRowId, where: isNotNull(contents.batchRowId) })
         .returning({ id: contents.id });
 
       if (!content) {

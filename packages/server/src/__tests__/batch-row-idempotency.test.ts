@@ -38,6 +38,19 @@ describe("② 冲突处理必须同时存在", () => {
    * 🔴 只加约束不加冲突处理 = 约束上线那天重试风暴撞上唯一键，batch 全线崩。
    * 约束防重复，冲突处理保韧性，缺一半都不行。
    */
+  /**
+   * 🔴 部分索引必须把索引谓词写进 ON CONFLICT，否则 Postgres 推断不出来，
+   * 运行期直接抛 42P10「no unique or exclusion constraint matching」——
+   * 8-17 部署后自测当场撞到，正是"约束上线那天 batch 全线崩"的另一种死法。
+   * 这条比 onConflictDoNothing 本身更容易漏：类型检查过、单测过，只有真连库才炸。
+   */
+  it("ON CONFLICT 带上索引谓词(where isNotNull) —— 部分索引推断不出来会 42P10", () => {
+    const src = readFileSync(new URL("../services/batch/batch-worker.ts", import.meta.url), "utf8");
+    const i = src.indexOf(".onConflictDoNothing");
+    expect(i).toBeGreaterThan(0);
+    expect(src.slice(i, i + 200)).toMatch(/where:\s*isNotNull\(/);
+  });
+
   it("插入点带 onConflictDoNothing，且冲突后复用既有行", () => {
     const src = readFileSync(new URL("../services/batch/batch-worker.ts", import.meta.url), "utf8");
     const i = src.indexOf(".insert(contents)");
