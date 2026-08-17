@@ -761,4 +761,23 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON checker_adjudications (created_at DESC);
     `,
   },
+  {
+    version: "035_contents_batch_row_unique",
+    description:
+      "8-17: 一个 batch_row 最多一条 content。8-16 夜百炼欠费致生成全失败, 同一 batch_row 被重试 4 次, " +
+      "每次新插一行空壳(标题=topic, 正文 0 字), 一晚 32 条。" +
+      "为什么用 batch_row_id 而不是(标题+日期): 后者会误伤合法内容 —— 同一标题配不同刊本来就会撞, " +
+      "实测 3 组'普通院校教师发核心'是非 batch 链路的真产物; 而 batch_row_id 表达的是真正的不变量。" +
+      "**部分索引(仅 NOT NULL)**: 历史行该列为 NULL 不受约束 —— 存量有 30 组 [failed(有正文)+archived] " +
+      "是历史真实产物, 不该为了加约束去删它们。新行由 batch-worker 写入该列, 从此受管。" +
+      "配套: 插入侧 ON CONFLICT DO NOTHING(冲突=已存在=跳过, 不是报错) —— " +
+      "约束防重复, 冲突处理保韧性, 缺一半都不行(约束上线那天重试风暴撞上它就是 batch 全线崩)。" +
+      "退回执行: DROP INDEX uq_contents_batch_row; ALTER TABLE contents DROP COLUMN batch_row_id。",
+    sql: `
+      ALTER TABLE contents ADD COLUMN IF NOT EXISTS batch_row_id UUID;
+      -- 部分唯一: 只管有值的行(= 新行), 历史 NULL 行不受影响
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_contents_batch_row
+        ON contents (batch_row_id) WHERE batch_row_id IS NOT NULL;
+    `,
+  },
 ];

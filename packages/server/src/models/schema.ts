@@ -161,6 +161,12 @@ export const messages = pgTable(
 export const contents = pgTable(
   "contents",
   {
+    /**
+     * 8-17：产出本行的 batch_row。**部分唯一索引的键** —— 一个 batch_row 最多一条 content。
+     * 历史行为 NULL（不受约束）；新行由 batch-worker 写入。
+     * metadata.batchRowId 仍保留（历史查询用），但**被 DB 约束的是这一列**。
+     */
+    batchRowId: uuid("batch_row_id"),
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
       .references(() => tenants.id, { onDelete: "cascade" })

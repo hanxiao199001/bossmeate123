@@ -172,13 +172,15 @@ export function startBatchWorker(): Worker<BatchRowJob> {
       }
 
       // 2. INSERT contents (status='draft') — initialStatusFields 走状态机初始化
-      const [content] = await db
+      let [content] = await db
         .insert(contents)
         .values({
           tenantId,
           userId,
           type: "article",
           title: row.topic,
+          // 🔴 8-17: 落进**列**而不只是 metadata —— 被 DB 唯一索引管的是这一列
+          batchRowId: rowId,
           ...initialStatusFields("draft"),
           metadata: {
             batchId,
@@ -188,8 +190,28 @@ export function startBatchWorker(): Worker<BatchRowJob> {
             ...supplyMeta,
           },
         })
+        /**
+         * 🔴 冲突 = 这个 batch_row 已经有 content 了 = 这是一次**重试** → 复用那一行, 不是报错。
+         *
+         * 8-16 夜实况: 百炼欠费致生成全失败, 同一 batch_row 被重试 4 次, 每次新插一行空壳,
+         * 一晚 32 条。约束(migration 035)防住重复插入; 但**只加约束不加这一句**,
+         * 约束上线那天重试风暴撞上唯一键就是 batch 全线崩 ——
+         * 约束防重复, 冲突处理保韧性, 缺一半都不行。
+         */
+        .onConflictDoNothing({ target: contents.batchRowId })
         .returning({ id: contents.id });
-      if (!content) throw new Error("contents insert 失败");
+
+      if (!content) {
+        // 没拿到新行 = 冲突跳过。取回既有那条继续走(重试更新它, 而不是再造一条)。
+        const [existing] = await db
+          .select({ id: contents.id })
+          .from(contents)
+          .where(eq(contents.batchRowId, rowId))
+          .limit(1);
+        if (!existing) throw new Error("contents insert 失败");
+        logger.info({ batchId, rowId, contentId: existing.id }, "batch_row 已有 content, 复用(重试)");
+        content = existing;
+      }
 
       // 3. draft → generating
       try {
