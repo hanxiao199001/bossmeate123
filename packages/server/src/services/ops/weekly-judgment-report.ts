@@ -59,6 +59,15 @@ export interface WeeklyReport {
    * 持续上涨 = 人是瓶颈；稳定 = 正常水位。让它每周自己报，不用人去查。
    */
   backlog: { total: number; stale7d: number; addedThisWeek: number };
+  /**
+   * ④ 关键词分数分布 —— 8-18 加。
+   *
+   * 这是「常数判据检测」在**数据侧**的应用：8-17 发现关键词综合分有 1098/2938 = 37.4%
+   * 并列满分，排序退化成插入序，选题因此坍缩到同一批词。修完回填过一次，
+   * 但那只是**一张快照** —— 上游热度源随时可能再次饱和，或有人改权重把分布压平。
+   * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
+   */
+  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
   /** ⑤ 待办建议 —— 整页的目的，最多 3 条 */
   todos: WeeklyTodo[];
   text: string;
@@ -134,8 +143,29 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     note: arts.length === 0 ? "本周无出稿" : "",
   };
 
+  // ④ 关键词分数分布(见 keywordScore 字段注释)
+  let keywordScore = { total: 0, atMaxRatio: 0, topDisciplines: "(无数据)", healthy: true };
+  try {
+    const { scoreDistributionHealth } = await import("../agents/keyword-score.js");
+    const rows = (await db.execute(sql`
+      select composite_score s, category from keywords where status = 'active'`)).rows as Array<Record<string, unknown>>;
+    const h = scoreDistributionHealth(rows.map((r) => Number(r.s ?? 0)));
+    const top = (await db.execute(sql`
+      select coalesce(category, '(未分类)') c, count(*)::int n from (
+        select category from keywords where status = 'active' order by composite_score desc limit 100
+      ) t group by 1 order by 2 desc limit 3`)).rows as Array<Record<string, unknown>>;
+    keywordScore = {
+      total: h.total,
+      atMaxRatio: h.atMaxRatio,
+      topDisciplines: top.map((t) => `${t.c} ${t.n}`).join(" · ") || "(无)",
+      healthy: h.healthy,
+    };
+  } catch {
+    /* 关键词表读不到不该拖垮整张周报 */
+  }
+
   const todos = pickTodos({ checkers, annotated, health });
-  const text = renderText({ weekOf, checkers, annotated, health, backlog, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, backlog, keywordScore, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -150,6 +180,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     shadow: { note: "影子放行一致率待 Phase 3 的裁决入口上线后才有输入" },
     health,
     backlog,
+    keywordScore,
     todos,
     text,
   };
@@ -239,6 +270,15 @@ function renderText(d: {
   annotated: number;
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number };
   backlog: { total: number; stale7d: number; addedThisWeek: number };
+  /**
+   * ④ 关键词分数分布 —— 8-18 加。
+   *
+   * 这是「常数判据检测」在**数据侧**的应用：8-17 发现关键词综合分有 1098/2938 = 37.4%
+   * 并列满分，排序退化成插入序，选题因此坍缩到同一批词。修完回填过一次，
+   * 但那只是**一张快照** —— 上游热度源随时可能再次饱和，或有人改权重把分布压平。
+   * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
+   */
+  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
   todos: WeeklyTodo[];
   ledgerSince: string | null;
 }): string {
@@ -298,6 +338,12 @@ function renderText(d: {
   //   首周 stale7d 恰好为 0(积压从 8-10 起, 最老的卡在 7 天线上),
   //   挂条件的话最该看的那句话第一周就不出现了。
   L.push("        逐周看这个数：涨 = 没人在清，持平 = 正常水位。");
+  // 关键词分数分布 —— 「常数判据检测」的数据侧版本，见 keywordScore 字段注释
+  L.push(
+    `  选题打分 ${d.keywordScore.total} 词 ｜ 并列满分占比 ${(d.keywordScore.atMaxRatio * 100).toFixed(1)}%` +
+      `（>5% 就是打分失效）｜ TOP100 学科：${d.keywordScore.topDisciplines}` +
+      (d.keywordScore.healthy ? "" : "  ← 分布已塌，选题会趋同"),
+  );
   L.push("");
 
   L.push("■ 系统分 vs 人工");

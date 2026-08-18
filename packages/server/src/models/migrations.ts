@@ -823,4 +823,35 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_decision_traces_corr ON decision_traces (correlation_id);
     `,
   },
+  {
+    version: "037_runtime_params",
+    description:
+      "8-18 Phase 4 参数外化(第一批)。目标: **老韩不碰代码改掉一个阈值**。" +
+      "现状是各读各的: quality-thresholds 里散着 70/85、daily-cron 里 KEYWORD_COOLDOWN_DAYS=30 硬编码、" +
+      "冷却读 process.env、闸开关读 env —— 改任何一个都要改代码 + 重启。" +
+      "**定义在代码、值在库**: 有哪些参数/类型/边界/说明由 runtime-params.ts 的注册表定, " +
+      "值存本表; 读取顺序 DB → env → 代码默认(三层都在, 没配过的参数行为零变化)。" +
+      "审计单独一张表: 谁、何时、改前值→改后值 —— 参数能被运营改, 就必须能回答'谁把它改成这样的'。" +
+      "退回执行: DROP TABLE runtime_param_audits; DROP TABLE runtime_params。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS runtime_params (
+        key VARCHAR(64) PRIMARY KEY,
+        -- jsonb 而非 text: 参数有数值/布尔/字符串三种, 存 jsonb 免去各处解析口径不一
+        value JSONB NOT NULL,
+        updated_by UUID,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS runtime_param_audits (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        key VARCHAR(64) NOT NULL,
+        old_value JSONB,
+        new_value JSONB NOT NULL,
+        -- 不做外键: 用户删了审计仍要保留, 否则"谁改的"这个问题会凭空消失
+        changed_by UUID,
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_runtime_param_audits_key ON runtime_param_audits (key, created_at DESC);
+    `,
+  },
 ];

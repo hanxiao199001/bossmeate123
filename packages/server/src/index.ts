@@ -223,6 +223,10 @@ async function bootstrap() {
     //   按老韩定的两段式, 按钮等"研小二读懂周报"的确认再上。
     const { opsCheckerRoutes } = await import("./routes/ops-checkers.js");
     await protectedApp.register(opsCheckerRoutes, { prefix: `${env.API_PREFIX}/ops/checkers` });
+
+    // 8-18 Phase 4: 运行时参数(第一批四个) —— 目标是老韩不碰代码改阈值
+    const { runtimeParamRoutes } = await import("./routes/runtime-params.js");
+    await protectedApp.register(runtimeParamRoutes, { prefix: `${env.API_PREFIX}/ops/params` });
   });
 
   // 7-26 启动期自检: LLM baseURL 与 API Key 必须成对(DEEPSEEK_VIA 一个开关切两者)。

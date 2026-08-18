@@ -1545,6 +1545,36 @@ export const checkerLedger = pgTable(
  *   · `journalDiscipline`（供给侧）—— 池子余量按它算
  * generic 通配刊被 education 槽位选中时，消耗的是 education 的配额、减少的是 generic 池的余量。
  */
+/**
+ * 运行时参数（8-18 Phase 4）。**定义在代码，值在库。**
+ *
+ * 有哪些参数、什么类型、边界多少、给运营怎么解释 —— 由 `services/ops/runtime-params.ts`
+ * 的注册表决定；本表只存**值**。读取顺序：DB → env → 代码默认，
+ * 三层都在，所以没被配过的参数行为零变化。
+ */
+export const runtimeParams = pgTable("runtime_params", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedBy: uuid("updated_by"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** 参数变更审计。**参数能被运营改，就必须能回答「谁把它改成这样的」** */
+export const runtimeParamAudits = pgTable(
+  "runtime_param_audits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: varchar("key", { length: 64 }).notNull(),
+    oldValue: jsonb("old_value"),
+    newValue: jsonb("new_value").notNull(),
+    /** 不做外键：用户删了审计仍要保留，否则「谁改的」会凭空消失 */
+    changedBy: uuid("changed_by"),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("idx_runtime_param_audits_key").on(table.key, table.createdAt)],
+);
+
 export const decisionTraces = pgTable(
   "decision_traces",
   {
