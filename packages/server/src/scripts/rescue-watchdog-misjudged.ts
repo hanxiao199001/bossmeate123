@@ -31,6 +31,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { contents } from "../models/schema.js";
 import { transitionToStatus } from "../services/articles/state-machine.js";
+import { WATCHDOG_ERROR_MESSAGE } from "../services/articles/watchdog.js";
 
 const APPLY = process.argv.includes("--apply");
 /**
@@ -51,12 +52,36 @@ const MIN_BODY_CHARS = 400;
 
 async function main() {
   const rows = await db
-    .select({ id: contents.id, title: contents.title, body: contents.body, meta: contents.metadata })
+    .select({
+      id: contents.id,
+      title: contents.title,
+      body: contents.body,
+      meta: contents.metadata,
+      err: contents.errorMessage,
+      createdAt: contents.createdAt,
+      failedAt: contents.updatedAt,
+    })
     .from(contents)
     .where(and(eq(contents.status, "failed"), eq(contents.type, "article")));
 
   const plain = (b: string | null) => String(b ?? "").replace(/<[^>]+>/g, "").replace(/\s+/g, "").length;
-  const candidates = rows.filter((r) => plain(r.body) >= MIN_BODY_CHARS);
+  /**
+   * 🔴 两个条件**都要**满足，缺一不可：
+   *   ① 净正文 ≥ 下限 —— 内容确实写出来了
+   *   ② error_message 是 watchdog 的超时文案 —— 它确实是被**误杀**的
+   *
+   * 只用 ① 是不够的：那只证明"内容写出来了"，不证明"它该被救"。
+   * 被编造闸/合规闸正当拦下的内容同样有完整正文，救回去就是把该拦的放进待审。
+   * （实测这批恰好 35/35 都是 timeout，但判据不能建立在"恰好"上 —— 红线 #16。）
+   */
+  const isWatchdogKill = (r: { err: string | null; meta: unknown }) => {
+    const m = (r.meta ?? {}) as Record<string, unknown>;
+    const text = `${r.err ?? ""} ${String(m.errorMessage ?? "")}`;
+    return text.includes(WATCHDOG_ERROR_MESSAGE) || /Generation timeout/i.test(text);
+  };
+  const candidates = rows.filter(
+    (r) => plain(r.body) >= MIN_BODY_CHARS && isWatchdogKill({ err: r.err, meta: r.meta }),
+  );
 
   console.log(`failed 的文章 ${rows.length} 条 ｜ 正文 ≥ ${MIN_BODY_CHARS} 字（= 内容其实跑完了）${candidates.length} 条\n`);
   for (const r of candidates) {
@@ -81,7 +106,14 @@ async function main() {
           metadata: sql`coalesce(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify({
             rescuedFrom: "watchdog_false_kill",
             rescuedAt: new Date().toISOString(),
-            rescueNote: "内容已生成完整但被 10 分钟判死线误判为失败；救回后按质检结果落 needs_review",
+            /**
+             * 🔴 原始生成时间必须留 —— 审的人要一眼看到「这是 7-28 生成的」，
+             * 自己决定数据过没过期。**让人能区分，而不是替人决定**：
+             * 脚本不该按日期替审稿人筛掉三周前的内容，那是他的判断不是我的。
+             */
+            originalCreatedAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
+            originalFailedAt: r.failedAt instanceof Date ? r.failedAt.toISOString() : String(r.failedAt),
+            rescueNote: "内容已生成完整但被 10 分钟判死线误判为失败；救回后按质检结果落 needs_review。数据为原始生成时的快照。",
           })}::jsonb`,
         })
         .where(eq(contents.id, r.id));
