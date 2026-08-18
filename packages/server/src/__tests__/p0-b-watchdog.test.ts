@@ -82,8 +82,20 @@ describe("P0-B watchdog: 常量", () => {
    * 越线的 3 篇并没有停，继续跑到 34-41 分钟才完成，钱花了、内容也出来了
    * （11027/11420/6736 字），只因状态被判死而作废。30 = 3× 实测 max。
    */
-  it("超时阈值 30 分钟（= 3× 实测最慢成功耗时 9.7 分）", () => {
-    expect(WATCHDOG_TIMEOUT_MS).toBe(30 * 60 * 1000);
+  /**
+   * 40 由**两个**约束取更严者决定，不只是 3× 实测 max：
+   *   · ≥ 3× 实测最慢成功耗时（9.7 × 3 ≈ 30）
+   *   · ≥ 3× 心跳最坏间隔（12 × 3 = 36）← 这条更严
+   * 心跳间隔必须 ≤ 阈值的 1/3，而链路最坏一段是六维质检单次
+   * （AI_QUALITY_CHECK_TIMEOUT 180s × withRetry 4 次 = 12 分钟）。
+   */
+  it("超时阈值 40 分钟（取 3×实测max 与 3×心跳最坏间隔 的更严者）", () => {
+    expect(WATCHDOG_TIMEOUT_MS).toBe(40 * 60 * 1000);
+  });
+
+  it("阈值必须 ≥ 3× 心跳最坏间隔 —— 否则「慢但活着」仍会被误杀", () => {
+    const WORST_HEARTBEAT_GAP_MS = 12 * 60 * 1000; // 六维质检单次最坏
+    expect(WATCHDOG_TIMEOUT_MS).toBeGreaterThanOrEqual(WORST_HEARTBEAT_GAP_MS * 3);
   });
 
   it("阈值必须显著高于实测最慢成功耗时 —— 这条锁的是「不许再压回分布顶部」", () => {
