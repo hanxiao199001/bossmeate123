@@ -66,7 +66,7 @@ async function main() {
         .update(contents)
         .set({
           metadata: sql`coalesce(${contents.metadata}, '{}'::jsonb) || ${JSON.stringify({
-            rescuedFrom: "watchdog_timeout_misjudge",
+            rescuedFrom: "watchdog_false_kill",
             rescuedAt: new Date().toISOString(),
             rescueNote: "内容已生成完整但被 10 分钟判死线误判为失败；救回后按质检结果落 needs_review",
           })}::jsonb`,
