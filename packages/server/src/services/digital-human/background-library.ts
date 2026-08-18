@@ -371,6 +371,41 @@ function normalize(e: DvhBackground): DvhBackground {
   };
 }
 
+/**
+ * 这张背景图能不能拿去生成。**纯函数，判据就是"分辨率恰好等于 DVH 输出"。**
+ *
+ * ## 为什么要有它（8-18）
+ *
+ * 8-13 修的是**上传侧**：新图上传时自动归一到精确尺寸。但存量图没被处理 ——
+ * 实测图库里唯一那张（7-31 上传，1600×2848）**100% 不合规**，
+ * 于是每一条带背景的数字人视频都必然撞上提交前的分辨率闸：
+ * `dvh_bg_resolution_rejected` 8-13 / 8-14 / 8-18 各触发一次，
+ * 闸每次都拦住了（零扣费），但产出也永远是 0。
+ *
+ * > **止血成功不等于治病。** 闸把损失从"扣费+废片"降到"零扣费+空壳"，
+ * > 但只要不合规的图还能被选中，它就会一直安静地拦下去。
+ *
+ * 所以根治不是"换掉这一张"，是**让不合规的图选不出来** ——
+ * 候选过滤用本函数，与提交前那道闸同一个判据（`DVH_OUTPUT_SIZE`），
+ * 两处口径必须同源，否则又是一次「校验器与被校验方各写一套判据」。
+ *
+ * 判据用**存储的 width/height**，不重新抓图：上传时已经量过，
+ * 生成时再抓一遍既慢又会把网络故障变成选不出图。
+ */
+export function isBackgroundUsableForGeneration(bg: Pick<DvhBackground, "width" | "height">): boolean {
+  return Object.values(DVH_OUTPUT_SIZE).some((s) => bg.width === s.width && bg.height === s.height);
+}
+
+/** 拆成"能用的"和"不能用的" —— 后者要能被列出来给运营看，而不是静默消失 */
+export function partitionUsableBackgrounds<T extends Pick<DvhBackground, "width" | "height">>(
+  list: T[],
+): { usable: T[]; unusable: T[] } {
+  const usable: T[] = [];
+  const unusable: T[] = [];
+  for (const b of list) (isBackgroundUsableForGeneration(b) ? usable : unusable).push(b);
+  return { usable, unusable };
+}
+
 /** 读系统背景图库。读不到(库表挂/没配)返空数组 —— 背景是增益, 不能反过来把生成搞崩。 */
 export async function loadDvhBackgrounds(): Promise<DvhBackground[]> {
   try {
