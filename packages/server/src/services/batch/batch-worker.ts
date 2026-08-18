@@ -223,7 +223,22 @@ export function startBatchWorker(): Worker<BatchRowJob> {
       } catch (err) {
         if (!(err instanceof InvalidTransitionError)) throw err;
       }
+      // A: 起点 —— statusUpdatedAt 的基准就是这一刻
+      await (async () => {
+        const { touchGenerationHeartbeat } = await import("../articles/watchdog.js");
+        await touchGenerationHeartbeat(content.id, "A_generating");
+      })();
       await updateRowProgress(rowId, "generating", { articleId: content.id });
+
+      /**
+       * 心跳（8-18）。**纯观测**：写失败绝不中断生成（内部已 catch），
+       * 观测手段不许有业务影响力。
+       * 打点位置与点间最坏耗时见 `services/articles/watchdog.ts` 文件头那张表。
+       */
+      const beat = async (point: string) => {
+        const { touchGenerationHeartbeat } = await import("../articles/watchdog.js");
+        await touchGenerationHeartbeat(content.id, point);
+      };
 
       // 4. 调 ArticleSkill 真生成（同步 / 用 retry 包）
       const article = SkillRegistry.get("article");
@@ -283,6 +298,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           // 5-23 hotfix #164: merge artifact.metadata 进 contents.metadata
           // 之前只 set body+title, artifact.metadata (含 PR #162 hasWarnings/validatorIssues + qualityScore 等) 全丢
           // 用 jsonb_set / || merge 保住老 metadata (batchId/journalId/...) + 加新 artifact 字段
+          await beat("B_article_llm");   // 拿到模型输出 = 最大的一段过去了
           const artMeta = (result.artifact as { metadata?: Record<string, unknown> }).metadata || {};
           // 只 cherry-pick 有意义的字段, 防 LLM artifact 杂字段污染 contents.metadata
           // PR #242 (5-23): 加 videoScript — PR #241 输出该字段, bridge 读 metadata.videoScript
@@ -364,6 +380,7 @@ export function startBatchWorker(): Worker<BatchRowJob> {
                   await db.update(contents).set({ title: titles[0], updatedAt: new Date() }).where(eq(contents.id, content.id));
                   logger.info({ contentId: content.id, title: titles[0] }, "6-25 标题DNA已覆盖标题");
                 }
+                await beat("C_titles");
               }
             } catch (e) {
               logger.warn({ contentId: content.id, err: e instanceof Error ? e.message : e }, "标题DNA生成失败, 保留原标题");
@@ -433,6 +450,9 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           logger.warn({ contentId: content.id, err: msg }, "7-28 P0四件套流水线异常 → 判「质检没跑成」转 needs_review(异常 ≠ 通过)");
           reportGateIncident(tenantId, content.id, "quality_pipeline_error", msg);
         }
+
+        // H: 质检与各道闸都跑完, 只剩终态迁移 —— 这一段是纯函数, 到这里就等于活干完了
+        await beat("H_output_health");
 
         // 5. PR-U2 质检前置: 质检明确未过 → needs_review(待审, 不进可发); 否则 generated
         const artMetaForGate = (result.artifact as { metadata?: Record<string, unknown> } | undefined)?.metadata || {};

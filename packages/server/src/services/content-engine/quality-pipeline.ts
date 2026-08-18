@@ -95,6 +95,20 @@ export async function runArticleQualityPasses(params: {
   contentId?: string; // 7-27: 透传给质检告警(ops_incidents.detail.contentId), 简报能点开是哪几篇
 }): Promise<QualityPipelineResult> {
   const { tenantId, userId, title, journalId, contentId } = params;
+
+  /**
+   * 心跳（8-18）。**纯观测**：写失败绝不中断生成，内部 catch 掉只记日志 ——
+   * 观测手段不许有业务影响力（与"旁路告警绝不搞挂主流程"同源）。
+   *
+   * 打在**有外部可验证进展**的点之后（LLM 返回、章节写完、质检出分），
+   * 不打在循环入口或纯 CPU 步骤前后 —— 那些不证明活干到哪了。
+   * 点位与点间最坏耗时见 `services/articles/watchdog.ts` 文件头那张表。
+   */
+  const beat = async (point: string) => {
+    if (!contentId) return;
+    const { touchGenerationHeartbeat } = await import("../articles/watchdog.js");
+    await touchGenerationHeartbeat(contentId, point);
+  };
   let body = params.body || "";
   const originalBody = body;
   let llmCalls = 0;
@@ -131,6 +145,7 @@ export async function runArticleQualityPasses(params: {
     });
     body = c.body;
     llmCalls += c.llmCalls;
+    await beat("D_condense");   // 压缩产物落定 = 有进展
     condenseMeta = { applied: c.applied, reason: c.reason, ratio: c.ratio };
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, "P0④ condense pass 异常，跳过");
@@ -144,6 +159,7 @@ export async function runArticleQualityPasses(params: {
       body = d.text;
       llmCalls += d.llmCalls;
       declicheMeta = { hits: d.hits.length, rewritten: d.rewritten };
+      await beat("E_decliche");   // 去 AI 腔产物落定
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, "P0③ decliche pass 异常，跳过");
     }
@@ -181,6 +197,7 @@ export async function runArticleQualityPasses(params: {
   } else {
     sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts, ...(contentId ? { contentId } : {}) });
     llmCalls += 1;
+    await beat("F_sixdim");   // 拿到分数 = 最坏的一段(12 分)刚过去
 
     const maxRounds = Math.max(0, env.ARTICLE_QUALITY_REWRITE_MAX);
     if (sixDim.degraded) {
@@ -208,6 +225,7 @@ export async function runArticleQualityPasses(params: {
           // 重新六维质检（重写后的效果要用同一把尺子验证）
           sixDim = await sixDimQualityCheck({ tenantId, title, body, journalFacts, ...(contentId ? { contentId } : {}) });
           llmCalls += 1;
+          await beat(`G_rewrite_round${loop.rounds}`);   // 每轮重写 + 复评之后
           loop.rounds = roundNo;
           if (sixDim.degraded) break;
         } catch (err) {

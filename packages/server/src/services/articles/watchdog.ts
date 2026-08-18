@@ -212,17 +212,43 @@ export const HEARTBEAT_MAX_INTERVAL_RATIO = 1 / 3;
  * 打一次心跳。**在生成的工作循环里调**（每完成一个可观测的步骤就调一次），
  * 不要包进定时器。
  */
-export async function touchGenerationHeartbeat(contentId: string): Promise<void> {
+export async function touchGenerationHeartbeat(contentId: string, point: string): Promise<void> {
   try {
     await db
       .update(contents)
-      .set({ metadata: sql`coalesce(${contents.metadata}, '{}'::jsonb) || jsonb_build_object('genHeartbeatAt', to_jsonb(now()))` })
+      .set({
+        metadata: sql`coalesce(${contents.metadata}, '{}'::jsonb)
+          || jsonb_build_object('genHeartbeatAt', to_jsonb(now()))
+          || jsonb_build_object('genHeartbeatPoint', ${point}::text)
+          || jsonb_build_object('genHeartbeatPoints',
+               coalesce(${contents.metadata}->'genHeartbeatPoints', '[]'::jsonb) || to_jsonb(${point}::text))`,
+      })
       .where(eq(contents.id, contentId));
   } catch (err) {
-    // 心跳失败绝不能打断生成 —— 它是观测手段, 不是业务步骤
-    logger.warn({ contentId, err: err instanceof Error ? err.message : err }, "watchdog.heartbeat_failed");
+    // 🔴 心跳失败**绝不能打断生成** —— 它是观测手段, 不是业务步骤。
+    //   与"旁路告警绝不搞挂主流程"同源: 观测不许有业务影响力。
+    logger.warn({ contentId, point, err: err instanceof Error ? err.message : err }, "watchdog.heartbeat_failed");
   }
 }
+
+/**
+ * 本次生成打到了哪些点 —— **接线完整性验证用**。
+ *
+ * 「没报错」不等于「接上了」：少接一个点不会报任何错，只会静默留个洞，
+ * 而那个洞正好是心跳最该覆盖的那一段（台账 codes:9 那次的同款教训）。
+ * 所以验收是「跑一次真实生成，确认 8 个点全部出现」，不是「跑完没报错」。
+ */
+export const EXPECTED_HEARTBEAT_POINTS = [
+  "A_generating",
+  "B_article_llm",
+  "C_titles",
+  "D_condense",
+  "E_decliche",
+  "F_sixdim",
+  "H_output_health",
+] as const;
+/** G 是重写轮次，按需出现（质检一次过就没有），所以不在必达列表里 */
+export const OPTIONAL_HEARTBEAT_POINT_PREFIX = "G_rewrite_round";
 
 /** 这条内容在判死窗口内有没有心跳 */
 export async function hasRecentHeartbeat(contentId: string, windowMs: number): Promise<boolean> {
