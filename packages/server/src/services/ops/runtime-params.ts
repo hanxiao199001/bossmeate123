@@ -90,6 +90,20 @@ export const REGISTRY: readonly ParamDef[] = [
     audience: "运营",
   },
   {
+    key: "watchdog.timeoutMinutes",
+    type: "number",
+    label: "生成超时判死线（分钟）",
+    impact:
+      "一篇内容处于「生成中」超过这么久，watchdog 就判它失败。" +
+      "🔴 调得太紧会杀掉「慢但还活着」的生成 —— 8-17 实测：成功组耗时最大 9.7 分钟，" +
+      "而当时的线是 10 分钟，只剩 3% 余量，当晚 3 篇被误判（内容其实已生成 11000+ 字，钱也花了，然后被扔掉）。" +
+      "现值 30 = 3× 实测 max。调低前先看 watchdog 文件头里的耗时分布。",
+    fallback: 30,
+    min: 5,
+    max: 240,
+    audience: "运营",
+  },
+  {
     key: "gate.outputHealthEnabled",
     type: "boolean",
     label: "出稿健康闸",
