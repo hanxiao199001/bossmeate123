@@ -33,8 +33,21 @@ import { contents } from "../models/schema.js";
 import { transitionToStatus } from "../services/articles/state-machine.js";
 
 const APPLY = process.argv.includes("--apply");
-/** 完整成品的下限：低于这个字数说明生成真的没跑完，不该救 */
-const MIN_BODY_CHARS = 3000;
+/**
+ * 完整成品的下限（**净正文**，剥 HTML 与空白之后）。
+ *
+ * 🔴 8-18 我第一次把这个数定成 3000，结果 0 条候选 —— **因为定错了单位**：
+ * 那 3 条的 raw body 是 11027/11420/6736 字，但那里面绝大部分是 HTML 标签与样式，
+ * 净正文只有 869 / 972 / 1277 字。我拿 raw 长度去卡净长度的门槛。
+ *
+ * 用同晚的真实分布校准：
+ * ```
+ * needs_review(正常成品) n=20  净长度 min 401 / 均 1312 / max 2051
+ * 被误杀的 3 条                869 / 972 / 1277   ← 同一量级
+ * ```
+ * 400 = 正常成品的实测下限。低于它才谈得上"生成真没跑完"。
+ */
+const MIN_BODY_CHARS = 400;
 
 async function main() {
   const rows = await db
