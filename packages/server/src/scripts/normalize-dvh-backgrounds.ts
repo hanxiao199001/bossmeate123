@@ -71,6 +71,16 @@ async function main() {
       if (!res.ok) throw new Error(`取原图失败 HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
 
+      /**
+       * 🔴 先备份再覆盖。**裁切不可逆** —— cover 会按 attention 焦点裁掉长边，
+       * 万一把人物/主体切掉了，没有原图就回不去了。
+       * 备份用 `_original` 后缀另存，不动原对象。
+       */
+      const origPath = `${(b.remotePath ?? `dvh-backgrounds/${b.id}`).replace(/\.([a-z]+)$/i, "")}_original.$1`
+        .replace("$1", (b.remotePath?.match(/\.([a-z]+)$/i)?.[1] ?? "png"));
+      const backupUrl = await storage.upload(buf, origPath, "image/png");
+      console.log(`   ↳ 原图已备份: ${origPath}`);
+
       // 与上传侧同一套：cover 裁切到精确尺寸（比例已在上传时校过，这里只做最终对齐）
       const out = await sharp(buf)
         .resize(want.width, want.height, { fit: "cover", position: "attention" })
@@ -81,7 +91,16 @@ async function main() {
       const newUrl = await storage.upload(out, newPath, "image/png");
 
       const i = updated.findIndex((x) => x.id === b.id);
-      updated[i] = { ...b, url: newUrl, remotePath: newPath, width: want.width, height: want.height };
+      updated[i] = {
+        ...b,
+        url: newUrl,
+        remotePath: newPath,
+        width: want.width,
+        height: want.height,
+        // 留退路：裁错构图时凭它取回原图
+        originalUrl: backupUrl,
+        originalSize: `${b.width}x${b.height}`,
+      } as DvhBackground;
       ok++;
       console.log(`   ✔ 已归一 ${b.id} → ${want.width}×${want.height}`);
     } catch (err) {
