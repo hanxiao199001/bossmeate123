@@ -75,8 +75,20 @@ afterEach(() => {
 });
 
 describe("P0-B watchdog: 常量", () => {
-  it("超时阈值 10 分钟", () => {
-    expect(WATCHDOG_TIMEOUT_MS).toBe(10 * 60 * 1000);
+  /**
+   * 8-18 行为变更：10 → 30 分钟。**不是放宽，是原来的线压在耗时分布顶部。**
+   *
+   * 8-17 实测：成功组耗时 min 2.6 / 均 6.9 / **max 9.7** 分钟 —— 距 10 分钟的线只差 18 秒。
+   * 越线的 3 篇并没有停，继续跑到 34-41 分钟才完成，钱花了、内容也出来了
+   * （11027/11420/6736 字），只因状态被判死而作废。30 = 3× 实测 max。
+   */
+  it("超时阈值 30 分钟（= 3× 实测最慢成功耗时 9.7 分）", () => {
+    expect(WATCHDOG_TIMEOUT_MS).toBe(30 * 60 * 1000);
+  });
+
+  it("阈值必须显著高于实测最慢成功耗时 —— 这条锁的是「不许再压回分布顶部」", () => {
+    const OBSERVED_MAX_SUCCESS_MS = 9.7 * 60 * 1000; // 8-17 实测
+    expect(WATCHDOG_TIMEOUT_MS).toBeGreaterThan(OBSERVED_MAX_SUCCESS_MS * 2);
   });
   it("检测间隔 1 分钟", () => {
     expect(WATCHDOG_INTERVAL_MS).toBe(60 * 1000);

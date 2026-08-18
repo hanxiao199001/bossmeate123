@@ -57,13 +57,14 @@ let intervalHandle: ReturnType<typeof setInterval> | null = null;
  */
 export async function checkStuckGenerating(
   now: Date = new Date(),
+  /**
+   * 判死线。**由调用方读取运行时参数后传入**，本函数不自己读 ——
+   * 检测函数多打一次 DB 会让它更难测（8-18 实测：加了参数读取之后，
+   * 测试 mock 的返回序列被这次额外查询吃掉，三条用例全挂），
+   * 而且"读配置"和"扫超时"本就是两件事。
+   */
+  timeoutMs: number = WATCHDOG_TIMEOUT_MS,
 ): Promise<{ stuck: number; failed: number }> {
-  // 读运行时参数(DB → env → 代码默认)。读失败自动退回默认, 参数系统不该成为新的故障点
-  let timeoutMs = WATCHDOG_TIMEOUT_MS;
-  try {
-    const { getParam } = await import("../ops/runtime-params.js");
-    timeoutMs = (await getParam<number>("watchdog.timeoutMinutes")) * 60 * 1000;
-  } catch { /* 用默认 */ }
   const cutoff = new Date(now.getTime() - timeoutMs);
   const stuckRows = await db
     .select({ id: contents.id })
@@ -73,18 +74,16 @@ export async function checkStuckGenerating(
   let failedCount = 0;
   for (const row of stuckRows) {
     try {
-      /**
-       * 🔴 判死前先看心跳，两种情形语义完全不同：
-       *   · **有心跳但超时** = 真慢 → 阈值可能仍偏紧，记 warn
-       *   · **无心跳超时**   = 真死 → 记 error
-       * 混在一起记，就会出现 8-17 那种「3 篇被判死没人知道」。
-       */
-      const alive = await hasRecentHeartbeat(row.id, timeoutMs);
-      await transitionToStatus(row.id, "failed", {
-        errorMessage: alive ? `${WATCHDOG_ERROR_MESSAGE}（有心跳，疑似阈值偏紧）` : WATCHDOG_ERROR_MESSAGE,
-      });
+      await transitionToStatus(row.id, "failed", { errorMessage: WATCHDOG_ERROR_MESSAGE });
       failedCount++;
-      void reportWatchdogKill(row.id, alive, timeoutMs);
+      /**
+       * ⚠️ 心跳**尚未接进生成链路**，所以此刻分不出「慢」与「死」——
+       * 这时若按 hasRecentHeartbeat 的返回值去标 slow/dead，
+       * 结果会是「全部标成真死」，而那是**假话**（8-17 那 3 篇明明还在跑）。
+       * 所以现在只记一种，并在文案里明说分不出来；
+       * 等 `touchGenerationHeartbeat` 接线后再拆成 slow / dead 两类。
+       */
+      void reportWatchdogKill(row.id, timeoutMs);
     } catch (err) {
       if (err instanceof InvalidTransitionError) {
         // race：可能业务流程刚好把它转走了（→ generated / → archived）
@@ -116,7 +115,15 @@ export function startWatchdog(): void {
     return;
   }
   intervalHandle = setInterval(() => {
-    checkStuckGenerating().catch((err) =>
+    void (async () => {
+      // 定时器这层负责读配置(DB → env → 默认); 读失败退回默认, 参数系统不该成为新故障点
+      let timeoutMs = WATCHDOG_TIMEOUT_MS;
+      try {
+        const { getParam } = await import("../ops/runtime-params.js");
+        timeoutMs = (await getParam<number>("watchdog.timeoutMinutes")) * 60 * 1000;
+      } catch { /* 用默认 */ }
+      await checkStuckGenerating(new Date(), timeoutMs);
+    })().catch((err) =>
       logger.error({ err }, "P0-B watchdog: 顶层未捕获异常"),
     );
     checkStaleNeedsReview().catch((err) =>
@@ -214,20 +221,22 @@ export async function hasRecentHeartbeat(contentId: string, windowMs: number): P
  * 于是「内容其实已生成 11000+ 字、钱也花了、然后被扔掉」这件事无人知晓。
  * 与背景图那个案子同构：正确地工作，安静地损失。
  */
-async function reportWatchdogKill(contentId: string, alive: boolean, timeoutMs: number): Promise<void> {
+async function reportWatchdogKill(contentId: string, timeoutMs: number): Promise<void> {
   try {
     const { recordIncidentThrottled } = await import("../ops/incidents.js");
+    const mins = Math.round(timeoutMs / 60000);
     await recordIncidentThrottled(
       {
-        kind: alive ? "watchdog_kill_slow" : "watchdog_kill_dead",
-        severity: alive ? "warn" : "error",
-        message: alive
-          ? `生成超时被判死，但**有心跳** —— 它在跑，只是超过了 ${Math.round(timeoutMs / 60000)} 分钟的线。阈值可能偏紧，产出被浪费。`
-          : `生成超时被判死，且**无心跳** —— 判定为真卡死（${Math.round(timeoutMs / 60000)} 分钟无进展）。`,
+        kind: "watchdog_kill",
+        severity: "warn",
+        // 红线 #13: 只陈述事实, 不猜是慢还是死 —— 心跳没接线之前**确实分不出来**
+        message:
+          `生成超过 ${mins} 分钟被判死。⚠️ 心跳尚未接线，无法区分「跑得慢」与「真卡死」——` +
+          `8-17 那 3 篇属前者（内容已生成 11000+ 字、钱已花，仍被判死）。接线后本告警将拆为 slow / dead 两类。`,
         tenantId: null,
-        detail: { contentId, hadHeartbeat: alive, timeoutMinutes: Math.round(timeoutMs / 60000) },
+        detail: { contentId, timeoutMinutes: mins, heartbeatWired: false },
       },
-      { key: alive ? "watchdog_kill_slow" : "watchdog_kill_dead" },
+      { key: "watchdog_kill" },
     );
   } catch {
     /* 告警旁路失败不影响主流程 */
