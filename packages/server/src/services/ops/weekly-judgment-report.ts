@@ -164,7 +164,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     /* 关键词表读不到不该拖垮整张周报 */
   }
 
-  const todos = pickTodos({ checkers, annotated, health });
+  const todos = pickTodos({ checkers, annotated, health, backlog });
   const text = renderText({ weekOf, checkers, annotated, health, backlog, keywordScore, todos, ledgerSince: since0 });
 
   return {
@@ -197,6 +197,7 @@ export function pickTodos(input: {
   checkers: Array<CheckerVerdict & { hits: number; adjudicated: number }>;
   annotated: number;
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number };
+  backlog?: { total: number; stale7d: number; addedThisWeek: number };
 }): WeeklyTodo[] {
   const out: WeeklyTodo[] = [];
 
@@ -235,6 +236,22 @@ export function pickTodos(input: {
         "把这两个数念给老板，问「过短的线要不要从 300 字提到 800 字」。" +
         "他说提，把这行转给开发（这条线是代码里的常量，后台改不了）；他说不提，这条下周还会再出现，你不用管。",
       kind: "找老板拍板",
+    });
+  }
+
+  // 2.5) 待审积压 —— 8-18 加。
+  //   🔴 这是**产能与审核能力的差**，不是内容质量问题。
+  //   实测积压 186 篇、其中 29 篇超 7 天没人动，而每天还在 +23。
+  //   两条动作都在运营手里：多审一点，或少产一点。
+  if (out.length < MAX_TODOS && input.backlog && input.backlog.stale7d > 0) {
+    out.push({
+      what:
+        `待审积压 ${input.backlog.total} 篇，其中 ${input.backlog.stale7d} 篇超过 7 天没人动` +
+        `（每天还在新增约 ${Math.round(input.backlog.addedThisWeek / 7)} 篇）`,
+      action:
+        "两条路选一条：① 每天在内容工坊审 10 条（积压会慢慢降）；" +
+        "② 觉得审不过来，就在设置页把每日篇数调低 —— 这是产能和审核能力的差，不是内容不好。",
+      kind: "点按钮",
     });
   }
 

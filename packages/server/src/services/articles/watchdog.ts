@@ -35,12 +35,35 @@ import { transitionToStatus, InvalidTransitionError } from "./state-machine.js";
  * LLM 的钱全花了、内容也算出来了（11027 / 11420 / 6736 字），
  * 然后因为状态已被判死，最后那步 `generating → generated` 撞状态机、产出作废。
  *
- * 30 = 3× 实测 max。**下一个想调紧的人，先看上面这组分布。**
+ * **40 分钟**，由两个约束共同决定（取更严的那个）：
+ *   · ≥ 3× 实测 max（9.7 × 3 ≈ 30）
+ *   · ≥ 3× **心跳最坏间隔**（12 分钟 × 3 = 36）—— 心跳间隔必须 ≤ 阈值的 1/3，
+ *     否则"慢但活着"仍会被误杀；而链路上最坏的一段是六维质检单次
+ *     （`AI_QUALITY_CHECK_TIMEOUT_MS 180s` × `withRetry` 4 次 = 12 分钟）。
+ *
+ * 打点位置与点间最坏耗时（8-18 实测/推算，接线时按此表打）：
+ *
+ * ```
+ * A draft→generating 之后          ——
+ * B 主生成 LLM 返回后        A→B   8 分  (AI_ARTICLE_TIMEOUT 120s × 4)
+ * C 标题生成返回后            B→C   3 分  (AI_FAST 45s × 4)
+ * D condense 返回后           C→D   8 分
+ * E 去 AI 腔返回后            D→E   8 分
+ * F 六维质检返回后            E→F  12 分  ← 最坏的一段
+ * G 每轮定向重写返回后        F→G   8 分  (≤2 轮)
+ * H 出稿健康闸之后            G→H  ≈0
+ * ```
+ *
+ * 为什么不把心跳打进 `withRetry` 的每次尝试（那样最坏只 3 分）：
+ * **失败的重试不是进展**，那是假心跳 —— 它证明的是"进程还在内存里"，
+ * 不是"活干到哪了"。为迁就观测手段去改业务重试策略同样本末倒置。
+ *
+ * **下一个想调紧的人，先看上面这两组数。**
  *
  * ⚠️ 真正的根治是**心跳**（见 `touchGenerationHeartbeat`）：现在 watchdog 杀的是
  * "跑得慢的"，而"慢"和"死"在数据上分不清。心跳跑稳一周之后这条线才谈得上回调。
  */
-export const WATCHDOG_TIMEOUT_FALLBACK_MINUTES = 30;
+export const WATCHDOG_TIMEOUT_FALLBACK_MINUTES = 40;
 export const WATCHDOG_TIMEOUT_MS = WATCHDOG_TIMEOUT_FALLBACK_MINUTES * 60 * 1000;
 export const WATCHDOG_INTERVAL_MS = 60 * 1000; // 1 分钟
 export const WATCHDOG_ERROR_MESSAGE = "Generation timeout (10 minutes)";
