@@ -600,7 +600,7 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
               disciplineCode: String(r.disciplineCode ?? ""),
               scope: String(r.scope ?? ""),
               freshVerified: Number(r.freshVerified ?? 0),
-              sustainable: Boolean(r.sustainable),
+              exhaustedInDays: r.exhaustedInDays === null || r.exhaustedInDays === undefined ? null : Number(r.exhaustedInDays),
             }));
             const plan = planAutoQuota(
               accts.map((a) => ({
@@ -622,9 +622,10 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
                 await recordIncidentThrottled({
                   kind: "quota_floor_exceeds_pool",
                   severity: "warn",
+                  // 🔴 文案要让人**每天想起那两个决策**, 不是让人麻木的技术描述
                   message:
-                    `${s.discipline}(${s.scope}) 保底需 ${s.need} 篇, 池子冷却外可选 ${s.available} 本 —— ` +
-                    `缺口由 generic 通配刊兜底。要么扩这个学科的刊池, 要么调整账号定位。`,
+                    `${disciplineCn(s.discipline)}：需 ${s.need} 篇，冷却外可选 ${s.available} 本。当前靠通配刊顶替。` +
+                    `解法：A2 换体裁（等老板拍板）或给该学科的号扩方向。`,
                   tenantId: null,
                   detail: { ...s, defaultSet: plan.defaultSet },
                 }, { key: `quota_floor:${s.scope}:${s.discipline}` });

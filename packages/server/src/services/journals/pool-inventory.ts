@@ -100,7 +100,20 @@ export interface PoolInventoryRow {
   replenishPerDay: number;
   /** 估算还能撑几天; null = 不预测(无用量 或 回补 ≥ 消耗即可持续) */
   exhaustedInDays: number | null;
-  /** 回补 ≥ 消耗 —— 池子转得过来, 不会枯竭 */
+  /**
+   * 回补 ≥ 消耗 —— 池子**永续**转得过来。
+   *
+   * ⚠️ **不要拿它当「能不能投放」的判据**（8-19 踩过）。它区分的是
+   * 「有没有人在用」而非「够不够用」：`dailyUsage = 0` 直接短路返回 true，
+   * 而有消耗且净减的一律 false —— 哪怕还能撑 50000 天。实测：
+   *
+   * ```
+   * medicine/international  可选 1143, 撑 20002 天  → sustainable = false
+   * engineering/international 可选 631, 日耗 0      → sustainable = true
+   * ```
+   *
+   * 要判「能不能投放」用 `isViableForAllocation()`。
+   */
   sustainable: boolean;
   /** 低于水位线(freshVerified ≤ 阈值 或 预计 ≤ 阈值天枯竭), 且**确实有人在用** */
   low: boolean;
@@ -298,6 +311,32 @@ export function estimateExhaustion(x: {
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** 「够用多久才算能投放」的地平线（天）。30 天 = 一个排产周期的量级 */
+export const ALLOCATION_HORIZON_DAYS = 30;
+
+/**
+ * 这个学科池**现在能不能接排产**。
+ *
+ * 🔴 判据是「**排除明确不可持续的**」，不是「只要明确可持续的」——
+ * 这两个集合**不互补**，中间隔着一大批「还没数据」的（`dailyUsage = 0`，
+ * 既没被证明健康也没被证明不行）。用后者会把从没用过的大池子一并排除掉。
+ *
+ * 排除两类：
+ *   · `freshVerified === 0` —— 现在就没得选（education 就是这样）
+ *   · `exhaustedInDays` 有值且 < 地平线 —— 有实测消耗且很快见底
+ *
+ * `exhaustedInDays === null` 表示「不预测」（零使用 或 回补跟得上），
+ * 两种都不构成排除理由：**没有证据说明它不行，不等于有证据说明它不行。**
+ */
+export function isViableForAllocation(
+  row: Pick<PoolInventoryRow, "freshVerified" | "exhaustedInDays">,
+  horizonDays: number = ALLOCATION_HORIZON_DAYS,
+): boolean {
+  if (row.freshVerified <= 0) return false;
+  if (row.exhaustedInDays !== null && row.exhaustedInDays < horizonDays) return false;
+  return true;
+}
 
 // ============ 消费方 ①: 每日简报 ============
 

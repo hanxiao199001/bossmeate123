@@ -40,8 +40,27 @@
  *
  * 为什么保底不参与余量排序：否则 education 池空了它就永远选不到，
  * 那 2 个 education 号会从「独占」直接翻转成「断供」—— 两个极端都不对。
+ *
+ * ## 🔴 总产量从 24 掉到 18：这是**刻意的**，不要把 buffer 加回来
+ *
+ * 旧算法 `scale(n) = ceil(n × target × buffer)` 里有一个 `DRAFT_GEN_BUFFER` 乘数，
+ * 把量放大到 24。v2 没有它 —— 18 = 号数 × 每号保底篇数，**语义干净且可解释**。
+ *
+ * 三条理由（老韩 8-19 定）：
+ *   ① 那个 buffer 的值**没人能解释它为什么是那个值**；
+ *   ② 当前瓶颈不是产量是消化 —— 待审积压 186 篇、七天零消化、每天 +23，
+ *      产量降 25% 恰好缓解积压，不是损失；
+ *   ③ 真要提产量，应该由运营在参数页把「每号保底篇数」从 2 调到 3
+ *      （可解释、可审计、可回退），**而不是靠一个隐藏的乘数**。
+ *
+ * 下一个看到产量掉了的人：请调 `perAccountFloor`，别重新引入不可解释的乘数。
  */
 import { logger } from "../../config/logger.js";
+import { isViableForAllocation } from "../journals/pool-inventory.js";
+
+/** 供给行 → 能不能投放。判据收在 pool-inventory，两处口径同源 */
+const isViable = (s: DisciplineSupply): boolean =>
+  isViableForAllocation({ freshVerified: s.freshVerified, exhaustedInDays: s.exhaustedInDays });
 
 /** 一个账号在分配中的画像 */
 export interface AccountProfile {
@@ -56,7 +75,8 @@ export interface DisciplineSupply {
   disciplineCode: string;
   scope: string;
   freshVerified: number;
-  sustainable: boolean;
+  /** null = 不预测（零使用 或 回补跟得上）；有值 = 按当前消耗还能撑几天 */
+  exhaustedInDays: number | null;
 }
 
 export interface QuotaPlan {
@@ -92,13 +112,26 @@ export function planAutoQuota(
     supply.find((s) => s.scope === scope && s.disciplineCode === disc);
 
   /**
-   * 默认学科集：第一版取 `sustainable=true` 的学科 —— **默认值从数据来，不手写列表**。
-   * 手写列表会在池子变化时悄悄过期，而 sustainable 是 inventory 每次现算的。
+   * 默认学科集。**默认值从数据来，不手写列表** —— 手写的会在池子变化时悄悄过期。
+   *
+   * 🔴 判据是「**排除明确不可持续的**」，不是「只要明确可持续的」。
+   *
+   * 第一版我用了 `sustainable=true`，**错的**：那个字段的语义是「回补 ≥ 消耗」（永续），
+   * 零使用直接短路返回 true、有消耗且净减一律 false。实测后果：
+   *
+   * ```
+   * medicine/international  可选 1143 本、撑 20002 天  → sustainable=false（被排除）
+   * engineering/international 可选 631 本、日耗 0      → sustainable=true （被选中）
+   * ```
+   *
+   * **能撑 55 年的池子被排除，从没人用过的被选中。**
+   * 「明确可持续」与「明确不可持续」这两个集合**不互补** ——
+   * 中间隔着一大批「还没数据」的，而它们恰恰是最大的那些池子。
    */
   const defaultSet =
     defaultSetOverride && defaultSetOverride.length > 0
       ? defaultSetOverride
-      : [...new Set(supply.filter((s) => s.sustainable).map((s) => s.disciplineCode))];
+      : [...new Set(supply.filter((s) => isViable(s)).map((s) => s.disciplineCode))];
 
   for (const scope of scopes) {
     const inScope = accounts.filter((a) => a.scope === scope || a.scope === "both");
