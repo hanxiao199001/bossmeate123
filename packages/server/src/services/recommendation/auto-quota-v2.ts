@@ -138,7 +138,18 @@ export function planAutoQuota(
     if (inScope.length === 0) continue;
     const alloc: Record<string, number> = {};
 
-    // ① 保底：按**号数 × 每号最低篇数**，绝对值不按比例
+    /**
+     * ① 保底：按**号数 × 每号最低篇数**，绝对值不按比例。
+     *
+     * 🔴 **保底的单位是「号 × 它的 scope」，不是「学科」。**
+     *
+     * 那 2 个 education 号一个发国内刊、一个发国际刊 —— 它们的内容**不能互相顶替**：
+     * 给 domestic 号 4 篇国际刊内容，它一篇也用不上。
+     * 所以每个号只在自己的 scope 里保底 2 篇，合计 4 篇/晚**分布在两个 scope**，
+     * 而不是某一个 scope 里 4 篇。
+     *
+     * ⚠️ 别"优化"成按学科汇总（`education 共 4 篇`）—— 那样 scope 的约束就丢了。
+     */
     const floorCounts = new Map<string, number>();
     for (const a of inScope) for (const d of a.disciplines) floorCounts.set(d, (floorCounts.get(d) ?? 0) + 1);
     let floorTotal = 0;
