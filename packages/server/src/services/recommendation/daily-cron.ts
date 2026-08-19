@@ -580,6 +580,61 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
         const rc = Math.floor(Number(manual?.roundup?.count)) || 0;
         if (rc > 0) aq.roundup = { count: rc, disciplines: Array.isArray(manual?.roundup?.disciplines) ? manual!.roundup!.disciplines!.map(String) : [] };
         logger.info({ quota: aq }, "6-20 用账号自动配齐配额(7-20: roundup 沿用手配值)");
+
+        /**
+         * 8-19 影子：v2 算法(保底 + 余量分配)**只记录不生效**。
+         *   旧算法的病: 领域不限的号贡献篇数却不贡献学科 → 24 槽位全 education。
+         *   先跑一晚对比分布, 确认符合预期再切 —— 冲击面先量, 老规矩。
+         */
+        void (async () => {
+          try {
+            const { planAutoQuota, describePlan, logShadowComparison } = await import("./auto-quota-v2.js");
+            const { getPoolInventory } = await import("../journals/pool-inventory.js");
+            const { platformAccounts } = await import("../../models/schema.js");
+            const accts = await db
+              .select({ scope: platformAccounts.journalScope, disciplines: platformAccounts.disciplines, discipline: platformAccounts.discipline })
+              .from(platformAccounts)
+              .where(and(eq(platformAccounts.platform, "wechat"), eq(platformAccounts.status, "active")));
+            const inv = (await getPoolInventory({ tenantId: SYSTEM_RECOMMENDATION_TENANT_ID } as never)) as unknown as { rows?: Array<Record<string, unknown>> };
+            const supply = (inv.rows ?? []).map((r) => ({
+              disciplineCode: String(r.disciplineCode ?? ""),
+              scope: String(r.scope ?? ""),
+              freshVerified: Number(r.freshVerified ?? 0),
+              sustainable: Boolean(r.sustainable),
+            }));
+            const plan = planAutoQuota(
+              accts.map((a) => ({
+                scope: a.scope || "both",
+                disciplines: Array.isArray(a.disciplines) && (a.disciplines as string[]).length
+                  ? (a.disciplines as string[])
+                  : a.discipline ? [a.discipline] : [],
+              })),
+              supply,
+              Math.max(1, Math.floor(env.DRAFT_TARGET_PER_ACCOUNT)),
+            );
+            logShadowComparison(aq, plan);
+            logger.info({ plan: "\n" + describePlan(plan) }, "auto_quota_v2.shadow_detail");
+
+            // 保底 > 池子可选量 → 出声。这条会每天喊, 直到扩池或改定位解决它
+            if (plan.shortfalls.length > 0) {
+              const { recordIncidentThrottled } = await import("../ops/incidents.js");
+              for (const s of plan.shortfalls) {
+                await recordIncidentThrottled({
+                  kind: "quota_floor_exceeds_pool",
+                  severity: "warn",
+                  message:
+                    `${s.discipline}(${s.scope}) 保底需 ${s.need} 篇, 池子冷却外可选 ${s.available} 本 —— ` +
+                    `缺口由 generic 通配刊兜底。要么扩这个学科的刊池, 要么调整账号定位。`,
+                  tenantId: null,
+                  detail: { ...s, defaultSet: plan.defaultSet },
+                }, { key: `quota_floor:${s.scope}:${s.discipline}` });
+              }
+            }
+          } catch (err) {
+            logger.warn({ err: err instanceof Error ? err.message : err }, "auto_quota_v2.shadow_failed");
+          }
+        })();
+
         return aq;
       }
     }
