@@ -44,11 +44,15 @@ describe("② cron 不再无条件注册", () => {
     const src = read("services/scheduler.ts");
     const i = src.indexOf("wechat-stats-collect-schedule");
     expect(i).toBeGreaterThan(0);
-    // 锁结构关系而非共现(红线 #16)：注册语句必须落在 if (EXTERNAL_FEEDBACK_AVAILABLE) 之后
-    const before = src.slice(0, i);
-    expect(before.lastIndexOf("if (EXTERNAL_FEEDBACK_AVAILABLE)")).toBeGreaterThan(
-      before.lastIndexOf("await crawlerQueue.upsertJobScheduler"),
-    );
+    // 锁结构关系而非共现(红线 #16)：注册语句必须紧跟在 if (EXTERNAL_FEEDBACK_AVAILABLE) 之后。
+    // 用"同窗口"判据 —— 文件里别处也有 EXTERNAL_FEEDBACK_AVAILABLE 和 upsertJobScheduler，
+    // 只断言两者都存在(共现)证明不了它们有关系。
+    const guard = src.lastIndexOf("if (EXTERNAL_FEEDBACK_AVAILABLE)", i);
+    expect(guard, "注册点之前找不到停用闸").toBeGreaterThan(0);
+    const window = src.slice(guard, i);
+    expect(window).toContain("upsertJobScheduler");
+    // 闸与注册之间不许夹着别的语句块（夹了就说明注册不在这个 if 里）
+    expect(window.length).toBeLessThan(200);
   });
 
   it("🔴 显式移除既有调度 —— 不 upsert ≠ 旧调度消失（它存在 Redis 里）", () => {
