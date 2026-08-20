@@ -32,6 +32,16 @@ export interface MotivatingCase {
   source: string;
 }
 
+/**
+ * 🔴 零命中的守卫怎么判死活（老韩 8-20 立）：
+ * **看的不是命中数，是触发条件在现实中可不可达。**
+ *
+ * 8-20 两个实例凑成一对 —— draft_only 能力过滤 0 命中（那个号真实存在 → 保留）
+ * vs published_by_operator 探测 0 行（依赖的 wechat_stats 表根本没建过 → 死代码）。
+ * 命中数一样，处置相反。
+ *
+ * 所以每个注册项应当能回答：**触发它需要什么？那件事现在能不能发生？**
+ */
 export interface CheckerDefinition {
   /** 唯一名。与 checker_ledger.checker_id、日志里的 checkerId 字段一致 */
   id: string;
