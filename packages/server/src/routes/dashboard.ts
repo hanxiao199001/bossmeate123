@@ -129,7 +129,10 @@ export async function dashboardRoutes(app: FastifyInstance) {
 
       // hero pipeline24h.articlesPublished: caller tenant 24h published
       db.select({ c: count() }).from(contents)
-        .where(and(eq(contents.tenantId, tenantId), eq(contents.status, "published"), gte(contents.updatedAt, dayAgo))),
+        // 8-20: 改用 published_at。原来用 status='published' + updatedAt —— 而全库
+        //   status='published' 是 **0 条**(状态机从没走到那), 于是这个数恒为 0;
+        //   updatedAt 还会被运维批量操作刷新。两个错叠在一起, 报了三个月的假零。
+        .where(and(eq(contents.tenantId, tenantId), gte(contents.publishedAt, dayAgo))),
 
       // hero latestArticlePreview: SYSTEM tenant 最新 1 篇 (coverUrl 留 null, 前端 emoji fallback)
       db.select({ id: contents.id, title: contents.title, createdAt: contents.createdAt })
@@ -138,10 +141,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
         .orderBy(desc(contents.createdAt)).limit(1),
 
       // hero recentPublished: caller tenant 最近 3 条 published (platform 从 platforms jsonb 第一项取)
-      db.select({ id: contents.id, title: contents.title, platforms: contents.platforms, updatedAt: contents.updatedAt })
+      db.select({ id: contents.id, title: contents.title, platforms: contents.platforms, publishedAt: contents.publishedAt })
         .from(contents)
         .where(and(eq(contents.tenantId, tenantId), eq(contents.status, "published")))
-        .orderBy(desc(contents.updatedAt)).limit(3),
+        // 最近发布: 按真实发布时刻排, NULL(没发过的)自然排在后面
+        .orderBy(sql`${contents.publishedAt} DESC NULLS LAST`).limit(3),
 
       // 7-06 ④: 拔 8500 假数据 — 昨日以来真实回流阅读求和。
       //   wechat-stats-collector 写 content_metrics 时把"当日阅读增量"存 metadata.dailyReadDelta
@@ -221,7 +225,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
           recentPublished: heroRecentPublished.map((r) => {
             const platformsArr = Array.isArray(r.platforms) ? r.platforms : [];
             const firstPlatform = (platformsArr[0] as { platform?: string } | undefined)?.platform;
-            return { id: r.id, title: r.title || "(无标题)", platform: firstPlatform || "multi", publishedAt: r.updatedAt };
+            // 8-20: 这个字段一直叫 publishedAt, 取的却是 updatedAt —— **名字对、来源错**。
+            //   前端照着字段名信了三个月。
+            return { id: r.id, title: r.title || "(无标题)", platform: firstPlatform || "multi", publishedAt: r.publishedAt };
           }),
         },
       },

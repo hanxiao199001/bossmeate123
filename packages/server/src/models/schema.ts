@@ -167,6 +167,16 @@ export const contents = pgTable(
      * metadata.batchRowId 仍保留（历史查询用），但**被 DB 约束的是这一列**。
      */
     batchRowId: uuid("batch_row_id"),
+    /**
+     * 真实发布时刻。**只在「运营标记已发」那一处写**（`routes/content.ts` 的 posted 分支）。
+     *
+     * 🔴 与 `updatedAt` 严格区分：`updatedAt` 是「最后被任何人/任何脚本改过」，
+     * 会被批量运维操作刷新（8-13 摘 body、8-18 救 35 条都刷过它）。
+     * 拿它当发布时间用，等于让运维动作改写业务指标。
+     *
+     * NULL = 没发布过（诚实）。**不要用任何推断值填充它。**
+     */
+    publishedAt: timestamp("published_at", { withTimezone: true }),
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id")
       .references(() => tenants.id, { onDelete: "cascade" })

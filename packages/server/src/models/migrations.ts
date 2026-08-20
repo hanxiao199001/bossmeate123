@@ -854,4 +854,24 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_runtime_param_audits_key ON runtime_param_audits (key, created_at DESC);
     `,
   },
+  {
+    version: "038_contents_published_at",
+    description:
+      "8-20: contents.published_at —— 真实发布时刻的唯一归宿。" +
+      "**病**: dashboard 的「24h 已发布」用 `status='published' AND updated_at > 24h` 算, " +
+      "而全库 status='published' **0 条**(状态机从没推进到该状态, 发布记账走 content_publish_log 平行链路), " +
+      "所以这个数**恒为 0** —— 它没坏、没报错, 只是一直在报一个假的零。" +
+      "一个每天显示 0 的指标比没有这个指标更糟: 它让人以为'系统说今天没发', 而不是'这个数根本没接上'。" +
+      "顺带 updated_at 本身也被运维批量操作污染(8-13 摘 body / 8-18 救 35 条都刷了它)。" +
+      "**回填口径**: 只用 content_publish_log 里 status='success' 的最早一条(= 运营在后台手动标记已发, " +
+      "initiatedBy=manual, 是真实记录)。draft_pushed/draft_expired/failed **不算已发布**。" +
+      "**绝不用 updated_at 回填** —— 那等于把污染原样搬进新字段, 且从此看不出哪些是真的。" +
+      "NULL 是诚实的, 猜出来的时间戳是毒数据。退回执行: ALTER TABLE contents DROP COLUMN published_at。",
+    sql: `
+      ALTER TABLE contents ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+      -- 部分索引: 只有真发布过的行进索引(绝大多数是 NULL)
+      CREATE INDEX IF NOT EXISTS idx_contents_published_at
+        ON contents (published_at DESC) WHERE published_at IS NOT NULL;
+    `,
+  },
 ];
