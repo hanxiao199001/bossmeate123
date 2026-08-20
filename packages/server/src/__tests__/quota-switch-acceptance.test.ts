@@ -62,7 +62,31 @@ describe("② 回滚线（任一命中即回滚）", () => {
   });
 });
 
-describe("③ 判据不许被调用方软化", () => {
+describe("③ 无数据 ≠ 产量塌了", () => {
+  /**
+   * 🔴 8-20 实测踩到：切换后 1 分钟跑判据，窗口取的是当晚（还没发生），
+   * totalSlots=0 触发了「产量塌了 → 回滚」。
+   * **判据把「还没有数据」和「产量塌了」判成了同一件事。**
+   *
+   * 照那个 rollback 执行，就会基于一个尚未发生的夜晚关掉刚上线的功能。
+   * 这是红线 #18 的漏项：我写完判据没拿**空窗口**验过它。
+   */
+  it("空窗口 → noData，既不 pass 也不 rollback", () => {
+    const v = evaluateSwitch({ educationSlots: 0, disciplineCount: 0, totalSlots: 0, failedArticles: 0 });
+    expect(v.noData).toBe(true);
+    expect(v.rollback).toBe(false);
+    expect(v.pass).toBe(false);
+    expect(v.reasons.join()).toContain("什么都别做");
+  });
+
+  it("有数据但产量低 → 才是真回滚", () => {
+    const v = evaluateSwitch({ educationSlots: 2, disciplineCount: 3, totalSlots: 5, failedArticles: 0 });
+    expect(v.noData).toBe(false);
+    expect(v.rollback).toBe(true);
+  });
+});
+
+describe("④ 判据不许被调用方软化", () => {
   /**
    * 阈值写死在函数里，不接受传参覆盖 —— 能被传参调整的判据等于没有判据。
    * 这条用签名锁：evaluateSwitch 只收观测值，不收阈值。

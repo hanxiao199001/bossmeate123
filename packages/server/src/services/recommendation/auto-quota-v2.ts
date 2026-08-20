@@ -242,6 +242,8 @@ export interface SwitchObservation {
 export interface SwitchVerdict {
   pass: boolean;
   rollback: boolean;
+  /** 🔴 数据还没到 —— 既不 pass 也不 rollback，什么都别做 */
+  noData: boolean;
   reasons: string[];
 }
 
@@ -251,6 +253,28 @@ export interface SwitchVerdict {
  */
 export function evaluateSwitch(obs: SwitchObservation): SwitchVerdict {
   const reasons: string[] = [];
+
+  /**
+   * 🔴 前置条件：**窗口里必须有数据**。
+   *
+   * 8-20 实测踩到：切换后 1 分钟就跑判据，窗口是当晚 19:00 之后（还没发生），
+   * `totalSlots = 0` 触发了「总量 < 12 → 产量塌了」——
+   * **判据把「还没有数据」和「产量塌了」判成了同一件事。**
+   *
+   * 这是我写判据时漏掉的：红线 #18 说「判据先拿基线跑一遍」，
+   * 而我没拿**空窗口**验过它。照那个 rollback 执行，
+   * 就会基于一个尚未发生的夜晚关掉刚上线的功能 —— 不是止血，是自伤。
+   *
+   * 所以无数据单独返回一档：`noData`，既不 pass 也不 rollback。
+   */
+  if (obs.totalSlots === 0) {
+    return {
+      pass: false,
+      rollback: false,
+      noData: true,
+      reasons: ["窗口内没有任何排产记录 —— 批次还没跑，或时间窗取错了。不是结论，什么都别做。"],
+    };
+  }
 
   // ── 回滚线（任一命中即回滚）──────────────────────────────
   const rollbackReasons: string[] = [];
@@ -274,6 +298,7 @@ export function evaluateSwitch(obs: SwitchObservation): SwitchVerdict {
   return {
     pass: passOk && rollbackReasons.length === 0,
     rollback: rollbackReasons.length > 0,
+    noData: false,
     reasons: rollbackReasons.length > 0 ? rollbackReasons : reasons,
   };
 }
