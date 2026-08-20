@@ -63,14 +63,43 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
         errorMessage = (err instanceof Error ? err.message : String(err)).slice(0, 500);
       }
 
+      /**
+       * 🔴 8-20 质量快照: 冻结"按下发布键那一刻"的达标判定。
+       * 语义/为什么记在这张表/为什么三档: 见 `services/publisher/quality-verdict.ts` 文件头。
+       *
+       * 本路径与 draft-distributor 不同 —— 这里没有建池阶段, 内容是运营在后台点选的,
+       * 所以就地查一次 metadata。**判定仍走同一个纯函数**, 不在这里另写一套。
+       *
+       * 查不到内容行时 verdict 留 NULL(而不是塞 'unscored'):
+       * "没查到"和"查到了但没评分"是两件事, 后者是内容的属性, 前者是我们的读取出了问题。
+       */
+      let verdict: string | null = null;
+      let sixDimTotal: string | null = null;
+      try {
+        const { resolveQualitySnapshot } = await import("../publisher/quality-verdict.js");
+        const mrows = await db.execute(sql`SELECT metadata FROM contents WHERE id = ${contentId}::uuid`);
+        const meta = ((mrows as unknown as { rows?: Array<{ metadata?: unknown }> }).rows ?? [])[0]?.metadata;
+        if (meta !== undefined) {
+          const snap = resolveQualitySnapshot(meta);
+          verdict = snap.verdict;
+          sixDimTotal = snap.sixDimTotal != null ? String(snap.sixDimTotal) : null;
+        }
+      } catch (err) {
+        // 打标失败绝不能拖垮分发本身 —— 标记是为将来的分析服务的, 分发是当下的业务。
+        logger.warn({ contentId, err: err instanceof Error ? err.message : String(err) }, "bulk-distribute 质量快照读取失败, verdict 留 NULL");
+      }
+
       // INSERT log (ON CONFLICT UPDATE — 防 race / 重发) 用 raw sql 走 jsonb merge 兼容
       await db.execute(sql`
-        INSERT INTO content_publish_log (tenant_id, content_id, account_id, status, media_id, error_message, initiated_by, initiated_user_id)
-        VALUES (${tenantId}::uuid, ${contentId}::uuid, ${accountId}::uuid, ${status}, ${mediaId}, ${errorMessage}, 'bulk_distribute', ${userId}::uuid)
+        INSERT INTO content_publish_log (tenant_id, content_id, account_id, status, media_id, error_message, initiated_by, initiated_user_id, quality_verdict, six_dim_total)
+        VALUES (${tenantId}::uuid, ${contentId}::uuid, ${accountId}::uuid, ${status}, ${mediaId}, ${errorMessage}, 'bulk_distribute', ${userId}::uuid, ${verdict}, ${sixDimTotal}::numeric)
         ON CONFLICT (content_id, account_id) DO UPDATE
           SET status = EXCLUDED.status,
               media_id = EXCLUDED.media_id,
               error_message = EXCLUDED.error_message,
+              -- 冲突更新也写快照: 记的是**这一次**分发时的判定, 与 status 描述同一次事件
+              quality_verdict = EXCLUDED.quality_verdict,
+              six_dim_total = EXCLUDED.six_dim_total,
               updated_at = NOW()
       `);
 

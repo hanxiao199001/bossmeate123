@@ -25,8 +25,20 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { computeSmartPairs } from "./smart-assign.js";
 import { publishToAccounts } from "./index.js";
+import type { QualitySnapshot } from "./quality-verdict.js";
 
 const POOL_WINDOW_DAYS = 7; // 可发池回看窗口: 太老的文章时效性差, 不推
+
+/**
+ * 可发池元素。8-20 把 `quality` 加进来 —— 质量判定在**建池时**已经算过一次
+ * (下限闸要用), 带着走比在插入点重新读 metadata 好: 后者等于同一个判定算两遍,
+ * 两处迟早漂移(同 fallback-messages.ts 注释里那个"检查器与被检查方各写一套判据"的失效)。
+ */
+interface PoolItem {
+  id: string;
+  title: string | null;
+  quality: QualitySnapshot;
+}
 
 // ============ 7-27 可发池准入判据(模块级导出, 供单测锁行为) ============
 
@@ -40,7 +52,11 @@ const POOL_WINDOW_DAYS = 7; // 可发池回看窗口: 太老的文章时效性�
 //   = 'ai_fabricated')。这是**判据⑤**的硬红线 —— 反编造的另外三道判据校的都是"数字有没有源",
 //   而影子刊的每个数字都能在那条假记录里找到"源", 三道闸全绿, 但整本刊不存在。
 //   判定是确定性的(一个字段值, 零推断), 所以拦得起; 只有它进红线, "未核实"那档走队尾(见 TAIL_REASONS)。
-export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy", "ai_fabricated_journal"];
+// 8-20 补 six_dim_below_floor: 六维总分下限闸(distribute.minSixDimTotal)自己打的标。
+//   同 body_fabrication / output_unhealthy 的道理 —— 不进名单会被反复重拦(白跑 + 日志刷屏)。
+//   ⚠️ 它与上面那条"未评上分"的区分是本闸的要害: 这里进红线的是**评过分且分低**,
+//   "评分器挂了"仍然走队尾(UNSCORED_REASONS), 绝不能因为加了这道闸又把 7-27 的零产出重演一遍。
+export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy", "ai_fabricated_journal", "six_dim_below_floor"];
 
 /**
  * "没评上分"的 reason(不是"分低")。sixdim_degraded 是 7-27 前的旧名, 库里有存量, 一并识别。
@@ -196,7 +212,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   // 2. 可发池构建 —— 7-28 抽成内部函数(唯一改动: 时效窗口 windowDays 变成参数)。
   //    补救轮(①c)要用同一套闸门、同一套排序、只把回看窗口放宽, 复制一份判据 = 必然漂移
   //    (fallback-messages.ts 注释里说的"检查器与被检查方各写一套判据"的经典失效)。
-  const buildFreshPool = async (windowDays: number): Promise<Array<{ id: string; title: string | null }>> => {
+  const buildFreshPool = async (windowDays: number): Promise<PoolItem[]> => {
   // 可发池: 近 N 天、article
   //    7-13 修复"草稿箱饿死": 草稿箱本身就是运营人工筛选台(推进去还要人工挑+手动发, 非自动群发),
   //    所以"质检没过但不危险"的文章应带分数流进草稿箱让运营挑 —— 质检门不该在草稿箱前二次拦死。
@@ -243,7 +259,25 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   //   ⚠️ 关键: 这道闸放在**不看 status** 的位置 —— 上面的 reasonPassed 对 status=generated 是**无条件放行**的,
   //   7-27 那篇标题="抱歉，AI暂时无法响应，请稍后重试。"、六维 80 分、status=generated 的废稿正是从这个口子溜进草稿箱的。
   const { checkOutputHealth, OUTPUT_UNHEALTHY_REASON } = await import("./output-health.js");
-  const pool: Array<{ id: string; title: string | null }> = [];
+  /**
+   * 🔴 8-20 六维总分下限闸（老韩拍板 (c)：先只拦最烂的）。
+   *
+   * **为什么 7-13 的设计到今天才需要改**：那条注释（上面 :201）写着「草稿箱本身就是
+   * 运营人工筛选台，质检门不该在草稿箱前二次拦死」—— 这个设计**依赖一个前提**：
+   * 运营真的会在草稿箱里挑。8-16 起的实测把前提推翻了：`needs_review` 积压 186 篇、
+   * 七天零消化。没人在筛的筛选台 = 内容直接流到读者面前。
+   *
+   * **所以本闸只拦最差的一档，不搬发布达标线**（80 分 + 每维 ≥6）。
+   * 搬过来的话产量掉到约 1/5，而「少而精是不是更好」目前**没有数据能回答** ——
+   * 那个判断要等 wechat_stats 接上、拿 quality_verdict 分组的效果数据才做得了。
+   * 在能测量之前，只做无争议的部分。
+   *
+   * 阈值走配置表（红线 #22），改它不用发版；设 0 = 关闭本闸。
+   */
+  const { getParam } = await import("../ops/runtime-params.js");
+  const minSixDimTotal = await getParam<number>("distribute.minSixDimTotal");
+  const { resolveQualitySnapshot } = await import("./quality-verdict.js");
+  const pool: PoolItem[] = [];
   const unscoredIds = new Set<string>(); // 7-27: 没评上分的, 排队尾(见 UNSCORED_REASONS)
   for (const c of reasonPassed) {
     const health = checkOutputHealth({ title: c.title, body: c.body, type: "article" });
@@ -259,6 +293,19 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
         message: `草稿分发拦下废稿(${health.codes.join("/")}): ${health.summary}`.slice(0, 500),
         detail: { contentId: c.id, stage: "draft_distribute", status: c.status, codes: health.codes, issues: health.issues },
       })).catch(() => { /* 告警旁路, 不阻塞分发 */ });
+      continue;
+    }
+    // 🔴 8-20 六维总分下限闸(判据说明见上方 minSixDimTotal 处)。
+    //   ⚠️ 只拦**评过分且分低**的。`unscored`(没跑过六维)**不拦** ——
+    //   实测近 14 天有 29 篇进分发的内容从没跑过六维, 拦掉等于砍 28% 产量,
+    //   而我们还不知道它们为什么没评上分。那是另一个洞, 要单独查, 不能用这道闸顺手掩盖掉
+    //   (7-27 的教训原样重演: 把"我们的评分器挂了"当成"内容有问题"处理, 当天零产出)。
+    const snap = resolveQualitySnapshot(c.metadata);
+    if (minSixDimTotal > 0 && snap.sixDimTotal !== null && snap.sixDimTotal < minSixDimTotal) {
+      await db.update(contents)
+        .set({ status: "needs_review", metadata: sql`COALESCE(${contents.metadata},'{}'::jsonb) || ${JSON.stringify({ needsReviewReason: "six_dim_below_floor", sixDimFloor: minSixDimTotal })}::jsonb`, updatedAt: new Date() })
+        .where(eq(contents.id, c.id));
+      logger.warn({ contentId: c.id, sixDimTotal: snap.sixDimTotal, floor: minSixDimTotal }, "草稿分发硬闸: 六维总分低于下限, 剔除不进草稿箱, 转 needs_review");
       continue;
     }
     const cMeta = (c.metadata as { journalId?: string; journalIds?: string[] } | null) ?? {};
@@ -299,7 +346,9 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     // 7-28 ②d: 把"闸没检查成"(quality_gate_unavailable)也归进队尾组 —— 与"没评上分"同一逻辑:
     //   不剔除(内容本身没查出问题), 但让检查全过的内容先占名额。
     if (c.status === "needs_review" && reason && TAIL_REASONS.has(reason)) unscoredIds.add(c.id);
-    pool.push({ id: c.id, title: c.title });
+    // snap 在上面的下限闸处已算过, 直接带走 —— 别在插入点二次读 metadata,
+    //   那等于同一个判定算两遍, 两处迟早漂移。
+    pool.push({ id: c.id, title: c.title, quality: snap });
   }
   // 7-27: 有分的排前面, 没评上分的垫底(stable, 组内仍保持 createdAt desc)。
   //   正常日子 unscoredIds 是空的, 排序等于没发生; 只有质检大面积挂掉那天才轮到它们顶上,
@@ -338,6 +387,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   const pushPairs = async (
     pairs: Array<{ articleId: string; accountId: string }>,
     titleById: Map<string, string | null>,
+    qualitySnapshotById: Map<string, QualitySnapshot>,
   ): Promise<number> => {
     let pushedNow = 0;
     for (const pair of pairs) {
@@ -355,6 +405,9 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
         const r = results[0];
         if (r?.success) {
           // 落 log 防重复推: status='draft_pushed' (区别于浏览器推草稿的 'draft' 与真发布的 'success')
+          // 🔴 8-20 质量快照: 冻结"按下发布键那一刻"的达标判定, 供将来接上 wechat_stats 后做对照组。
+          //   为什么不直接读 contents.metadata、为什么三档、为什么不回填存量: 见 quality-verdict.ts 文件头。
+          const vs = qualitySnapshotById.get(pair.articleId);
           await db.insert(contentPublishLog).values({
             tenantId,
             contentId: pair.articleId,
@@ -362,9 +415,20 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
             status: "draft_pushed",
             mediaId: r.mediaId ?? null,
             initiatedBy: "draft_dist",
+            qualityVerdict: vs?.verdict ?? null,
+            sixDimTotal: vs?.sixDimTotal != null ? String(vs.sixDimTotal) : null,
           }).onConflictDoUpdate({
             target: [contentPublishLog.contentId, contentPublishLog.accountId],
-            set: { status: "draft_pushed", mediaId: r.mediaId ?? null, initiatedBy: "draft_dist", updatedAt: new Date() },
+            // ⚠️ 冲突更新也写快照: 同一篇被重推时, 记的是**这一次**推送时的判定。
+            //   漏掉的话重推行会保留上一次的 verdict, 与 status/media_id 描述的不是同一次事件。
+            set: {
+              status: "draft_pushed",
+              mediaId: r.mediaId ?? null,
+              initiatedBy: "draft_dist",
+              qualityVerdict: vs?.verdict ?? null,
+              sixDimTotal: vs?.sixDimTotal != null ? String(vs.sixDimTotal) : null,
+              updatedAt: new Date(),
+            },
           });
           acct.pushed.push({ contentId: pair.articleId, title: titleById.get(pair.articleId) ?? null });
           report.pushed++;
@@ -405,6 +469,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   let unmatchedCount = 0;
   if (fresh.length > 0) {
     const titleById = new Map(fresh.map((p) => [p.id, p.title]));
+    const snapById = new Map(fresh.map((p) => [p.id, p.quality]));
     const { pairs, unmatched } = await computeSmartPairs({
       tenantId,
       articleIds: fresh.map((p) => p.id),
@@ -413,7 +478,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       target,               // 7-14 保底下限: 两轮保底填到该数
     });
     unmatchedCount = unmatched.length;
-    if (pairs.length > 0) await pushPairs(pairs, titleById);
+    if (pairs.length > 0) await pushPairs(pairs, titleById, snapById);
   } else {
     report.skippedReason = "可发池为空";
   }
@@ -440,6 +505,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
           report.remedy = { attempted: false, skippedReason: "no_extra_content", windowDays: remedyWindow, shortfallsBefore: shortBefore.length };
         } else {
           const titleById2 = new Map(older.map((p) => [p.id, p.title]));
+          const snapById2 = new Map(older.map((p) => [p.id, p.quality]));
           const { pairs: pairs2 } = await computeSmartPairs({
             tenantId,
             articleIds: older.map((p) => p.id),
@@ -447,7 +513,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
             dailyCap: perAccount,
             target,
           });
-          const pushed2 = pairs2.length > 0 ? await pushPairs(pairs2, titleById2) : 0;
+          const pushed2 = pairs2.length > 0 ? await pushPairs(pairs2, titleById2, snapById2) : 0;
           report.remedy = {
             attempted: true, windowDays: remedyWindow, pushed: pushed2,
             shortfallsBefore: shortBefore.length,

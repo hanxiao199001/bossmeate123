@@ -6,6 +6,7 @@
  */
 import { useState } from "react";
 import { dataSourceLabel } from "../utils/i18n";
+import { htmlToPlainText } from "../utils/html-text";
 
 // 5-15 PR #141: 4 套数字人模板（对应 PR #137 template-mapping 的 4 主播）
 export const DVH_TEMPLATES = [
@@ -45,7 +46,8 @@ const EMOJI_BY_PARTITION: Record<string, string> = { Q1: "🥇", Q2: "🥈", Q3:
 
 function summarize(body: string | null, maxLen = 100): string {
   if (!body) return "AI 已生成完整 article，点击查看详情。";
-  const plain = body.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  // 8-20: 同 ContentPreviewPane，原来不解实体，卡片摘要会显示 &amp; 等字面量。
+  const plain = htmlToPlainText(body);
   return plain.length > maxLen ? plain.slice(0, maxLen) + "…" : plain;
 }
 

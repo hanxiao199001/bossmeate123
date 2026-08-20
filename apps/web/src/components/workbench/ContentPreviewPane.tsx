@@ -3,6 +3,7 @@
  * 点 [✏️ 完整编辑] 跳 /content/:id 走老 ContentDetailPage 编辑全套。
  */
 import { Link } from "react-router-dom";
+import { htmlToPlainText } from "../../utils/html-text";
 
 export interface PreviewContent {
   id: string;
@@ -17,9 +18,9 @@ export interface ContentPreviewPaneProps {
   loading: boolean;
 }
 
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-}
+// 8-20: 原来这里自己 replace 标签但不解实体，运营在预览区看到「Statistics &amp; Probability」。
+//   收口到 utils/html-text.ts，别再在组件里写第三份。
+const stripHtml = htmlToPlainText;
 
 export default function ContentPreviewPane({ content, loading }: ContentPreviewPaneProps) {
   if (loading) {

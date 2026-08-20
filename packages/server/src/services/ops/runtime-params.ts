@@ -123,6 +123,21 @@ export const REGISTRY: readonly ParamDef[] = [
     fallback: true,
     audience: "开发",
   },
+  {
+    key: "distribute.minSixDimTotal",
+    type: "number",
+    label: "进草稿箱的六维总分下限",
+    min: 0,
+    max: 100,
+    impact:
+      "低于这个分数的文章不进草稿箱，转待审留人工。" +
+      "**这不是发布达标线**（那条是 80 分 + 每维 ≥6，写在 quality-thresholds.ts，改不了）—— " +
+      "这条只拦最差的那一档。8-20 实测：设 60 会拦掉近 14 天进分发 103 篇里的 27 篇（其中 18 篇总分 <50）。" +
+      "设 0 = 关闭本闸（回到 8-20 之前）。往上调会同时减少草稿箱产量，" +
+      "调到 80 等于把发布达标线搬到分发口，当前产能下草稿箱会掉到约 1/5。",
+    fallback: 60,
+    audience: "开发",
+  },
 ] as const;
 
 const byKey = new Map(REGISTRY.map((d) => [d.key, d]));

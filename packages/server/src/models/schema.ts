@@ -10,6 +10,7 @@ import {
   index,
   date,
   real,
+  numeric,
   uniqueIndex,
   primaryKey,
 } from "drizzle-orm/pg-core";
@@ -1338,6 +1339,20 @@ export const contentPublishLog = pgTable(
     errorMessage: varchar("error_message", { length: 500 }),
     initiatedBy: varchar("initiated_by", { length: 20 }),
     initiatedUserId: uuid("initiated_user_id").references(() => users.id, { onDelete: "set null" }),
+    /**
+     * 🔴 8-20 分发时点的质量快照 —— 'passed' | 'below_bar' | 'unscored'。
+     * 语义、为什么记在这张表、为什么三档不能合成两档：见
+     * `services/publisher/quality-verdict.ts` 的文件头。
+     *
+     * **NULL = 这行早于打标机制（8-20 之前），不是"没判断"。** 存量刻意不回填：
+     * 回填只能拿 metadata 的**当前**值冒充**当时**值，而"冻结当时的判断"正是本字段的全部意义。
+     *
+     * 用途是将来接上 wechat_stats 后按它分组，回答
+     * 「发 14 篇不达标的 vs 发 2 篇达标的，哪个对生意更好」—— 这个问题今天答不了。
+     */
+    qualityVerdict: varchar("quality_verdict", { length: 16 }),
+    /** 分发时点的六维总分快照；unscored 时为 NULL。与 qualityVerdict 同批写入。 */
+    sixDimTotal: numeric("six_dim_total", { precision: 5, scale: 2 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

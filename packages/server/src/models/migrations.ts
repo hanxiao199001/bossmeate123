@@ -874,4 +874,28 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON contents (published_at DESC) WHERE published_at IS NOT NULL;
     `,
   },
+  {
+    version: "039_publish_log_quality_verdict",
+    description:
+      "8-20: content_publish_log 加 quality_verdict + six_dim_total —— 分发时点的质量快照。" +
+      "**为什么**: 实测近 14 天进分发 103 篇里 86 篇(83.5%)没过六维线, 但我们答不出" +
+      "「多而差 vs 少而精哪个对生意更好」—— 没有阅读数据。老韩处置: 在还不能测量的时候先把标记打好, " +
+      "让将来的测量能回溯。等 wechat_stats 接上, 从今天起打的标就是【现成的对照组】, 不用再等一个实验期。" +
+      "**为什么记在 log 而不是直接读 contents.metadata**: ① log 行是「按下发布键那一刻知道什么」, " +
+      "metadata 后来被改写历史就没了 ② 将来 wechat_stats 按 (content_id, account_id) 落行, 与本表同键, " +
+      "一次 join 出「达标组阅读数 vs 未达标组」 ③ 达标线将来若改, 回头算历史算出的是「按新线」, 不是当年的对照组。" +
+      "**三档不是两档**: unscored(从没跑过六维, 实测 29 篇)必须与 below_bar 分开 —— " +
+      "前者是评分环节没执行, 后者是评分了没过, 混一档就再也分不开(红线 #20)。" +
+      "**不回填存量**: 历史行留 NULL。回填只能用 contents.metadata 的**当前**值冒充**当时**值, " +
+      "那正是本字段要避免的东西; NULL 诚实地表示「这行早于打标机制」(红线 #14 同族)。" +
+      "退回执行: ALTER TABLE content_publish_log DROP COLUMN quality_verdict, DROP COLUMN six_dim_total。",
+    sql: `
+      ALTER TABLE content_publish_log ADD COLUMN IF NOT EXISTS quality_verdict VARCHAR(16);
+      ALTER TABLE content_publish_log ADD COLUMN IF NOT EXISTS six_dim_total NUMERIC(5,2);
+      -- 部分索引: 只有打过标的行进索引(存量全 NULL, 不占空间)。
+      -- 将来的对照分析是「按 verdict 分组看效果」, 所以索引带 created_at 便于按时间切窗口。
+      CREATE INDEX IF NOT EXISTS idx_cpl_quality_verdict
+        ON content_publish_log (quality_verdict, created_at DESC) WHERE quality_verdict IS NOT NULL;
+    `,
+  },
 ];
