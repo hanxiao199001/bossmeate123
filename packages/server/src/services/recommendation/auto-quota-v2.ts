@@ -219,3 +219,61 @@ export function logShadowComparison(
     "auto_quota_v2.shadow —— 新算法会这么分（本次不生效）",
   );
 }
+
+// ══════════════════════════════════════════════════════════════════
+// 切换验收判据 —— **写在切换之前**
+// ══════════════════════════════════════════════════════════════════
+//
+// 🔴 为什么现在写死：**明早看到数字之后再定标准，人总能给任何结果编一个「这也合理」的解释。**
+//    这与红线 #18（判据先注册后跑）是同一条纪律，只是这次的对象是上线切换而非实验。
+//
+// 判据来自影子实测（8-19 夜）：新算法 18 篇 / 12 学科 / education 4。
+// 容差是「不该出现的偏离」而非「希望达到的目标」——
+// 通过线宽一点没关系，回滚线必须清晰。
+
+/** 切换后第一晚的观测值 */
+export interface SwitchObservation {
+  educationSlots: number;
+  disciplineCount: number;
+  totalSlots: number;
+  failedArticles: number;
+}
+
+export interface SwitchVerdict {
+  pass: boolean;
+  rollback: boolean;
+  reasons: string[];
+}
+
+/**
+ * 判定切换成败。**阈值写死在这里，不接受调用方覆盖** ——
+ * 能被传参调整的判据，等于没有判据。
+ */
+export function evaluateSwitch(obs: SwitchObservation): SwitchVerdict {
+  const reasons: string[] = [];
+
+  // ── 回滚线（任一命中即回滚）──────────────────────────────
+  const rollbackReasons: string[] = [];
+  if (obs.educationSlots > 10) rollbackReasons.push(`education ${obs.educationSlots} 篇 > 10 —— 新算法没起作用`);
+  if (obs.totalSlots < 12) rollbackReasons.push(`总量 ${obs.totalSlots} < 12 —— 产量塌了`);
+  if (obs.failedArticles > 0) rollbackReasons.push(`出现 ${obs.failedArticles} 篇 failed —— 引入了新的失败`);
+
+  // ── 通过线（全部满足才算通过）────────────────────────────
+  const passOk =
+    Math.abs(obs.educationSlots - 4) <= 1 &&
+    obs.disciplineCount >= 10 &&
+    Math.abs(obs.totalSlots - 18) <= 2 &&
+    obs.failedArticles === 0;
+  if (!passOk) {
+    if (Math.abs(obs.educationSlots - 4) > 1) reasons.push(`education ${obs.educationSlots} 篇，期望 4±1`);
+    if (obs.disciplineCount < 10) reasons.push(`只覆盖 ${obs.disciplineCount} 个学科，期望 ≥10`);
+    if (Math.abs(obs.totalSlots - 18) > 2) reasons.push(`总量 ${obs.totalSlots}，期望 18±2`);
+    if (obs.failedArticles !== 0) reasons.push(`failed ${obs.failedArticles} 篇，期望 0`);
+  }
+
+  return {
+    pass: passOk && rollbackReasons.length === 0,
+    rollback: rollbackReasons.length > 0,
+    reasons: rollbackReasons.length > 0 ? rollbackReasons : reasons,
+  };
+}

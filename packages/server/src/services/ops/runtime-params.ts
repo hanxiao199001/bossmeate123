@@ -104,6 +104,17 @@ export const REGISTRY: readonly ParamDef[] = [
     audience: "运营",
   },
   {
+    key: "quota.useV2",
+    type: "boolean",
+    label: "用新版学科配额算法（v2：保底 + 池子余量分配）",
+    impact:
+      "🔴 重大行为变更。开 = 每晚 18 篇分散到 12 个学科（education 4 篇保底）；" +
+      "关 = 旧算法，每晚 24 篇**全是 education**（因为领域不限的号不贡献学科，见 auto-quota-v2 文件头）。" +
+      "**这是一键回退开关** —— 出问题改这里，不要回滚代码。",
+    fallback: false,
+    audience: "开发",
+  },
+  {
     key: "gate.outputHealthEnabled",
     type: "boolean",
     label: "出稿健康闸",

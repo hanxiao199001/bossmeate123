@@ -565,6 +565,57 @@ export async function computeAutoQuota(): Promise<Record<string, { count: number
   } catch (err) { logger.warn({ err: String(err) }, "computeAutoQuota 失败"); return null; }
 }
 
+/**
+ * v2 方案 → getContentQuota 的返回格式。
+ *
+ * v2 给的是「scope → 学科 → 篇数」，而下游 `runDailyContentByType` 吃的是
+ * 「scope → {count, disciplines[]}」并按 `disciplineForSlot` 轮转。
+ * 所以把每学科的篇数**展开成重复元素**：`{education:2, medicine:1}` →
+ * `["education","education","medicine"]`，count = 3。
+ * 这样轮转天然按 v2 定的比例出，不需要改下游。
+ */
+async function buildQuotaFromV2(
+  fallbackQuota: Record<string, { count: number; disciplines: string[] }>,
+): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
+  try {
+    const { planAutoQuota } = await import("./auto-quota-v2.js");
+    const { getPoolInventory } = await import("../journals/pool-inventory.js");
+    const { platformAccounts } = await import("../../models/schema.js");
+    const accts = await db
+      .select({ scope: platformAccounts.journalScope, disciplines: platformAccounts.disciplines, discipline: platformAccounts.discipline })
+      .from(platformAccounts)
+      .where(and(eq(platformAccounts.platform, "wechat"), eq(platformAccounts.status, "active")));
+    const inv = (await getPoolInventory({ tenantId: SYSTEM_RECOMMENDATION_TENANT_ID } as never)) as unknown as { rows?: Array<Record<string, unknown>> };
+    const plan = planAutoQuota(
+      accts.map((a) => ({
+        scope: a.scope || "both",
+        disciplines: Array.isArray(a.disciplines) && (a.disciplines as string[]).length
+          ? (a.disciplines as string[])
+          : a.discipline ? [a.discipline] : [],
+      })),
+      (inv.rows ?? []).map((r) => ({
+        disciplineCode: String(r.disciplineCode ?? ""),
+        scope: String(r.scope ?? ""),
+        freshVerified: Number(r.freshVerified ?? 0),
+        exhaustedInDays: r.exhaustedInDays === null || r.exhaustedInDays === undefined ? null : Number(r.exhaustedInDays),
+      })),
+      Math.max(1, Math.floor(env.DRAFT_TARGET_PER_ACCOUNT)),
+    );
+    const out: Record<string, { count: number; disciplines: string[] }> = {};
+    for (const [scope, alloc] of Object.entries(plan.byScope)) {
+      const expanded: string[] = [];
+      for (const [d, n] of Object.entries(alloc)) for (let i = 0; i < n; i++) expanded.push(d);
+      if (expanded.length > 0) out[scope] = { count: expanded.length, disciplines: expanded };
+    }
+    // roundup 不由 v2 决定(它不绑账号定位), 沿用旧配额里的那一项
+    if (fallbackQuota.roundup) out.roundup = fallbackQuota.roundup;
+    return Object.keys(out).length > 0 ? out : null;
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, "buildQuotaFromV2 失败");
+    return null;
+  }
+}
+
 export async function getContentQuota(): Promise<Record<string, { count: number; disciplines: string[] }> | null> {
   try {
     const [t] = await db.select({ config: tenants.config }).from(tenants).where(eq(tenants.id, SYSTEM_RECOMMENDATION_TENANT_ID)).limit(1);
@@ -579,6 +630,26 @@ export async function getContentQuota(): Promise<Record<string, { count: number;
         const manual = (t?.config as { automationConfig?: { contentQuota?: Record<string, { count?: number; disciplines?: string[] }> } } | null)?.automationConfig?.contentQuota;
         const rc = Math.floor(Number(manual?.roundup?.count)) || 0;
         if (rc > 0) aq.roundup = { count: rc, disciplines: Array.isArray(manual?.roundup?.disciplines) ? manual!.roundup!.disciplines!.map(String) : [] };
+        /**
+         * 8-20：v2 一键切换。**开关是配置值, 不是代码** ——
+         * 冲击面 −83%(education 24→4) 属重大行为变更, 回退路径必须在切之前就存在,
+         * 而且回退动作要是"改一个配置", 不是"回滚代码 + 重新部署"。
+         */
+        try {
+          const { getParam } = await import("../ops/runtime-params.js");
+          if (await getParam<boolean>("quota.useV2")) {
+            const v2 = await buildQuotaFromV2(aq);
+            if (v2) {
+              logger.info({ quota: v2, switchedFrom: aq }, "8-20 已切 v2 配额(保底 + 池子余量)");
+              return v2;
+            }
+            logger.warn("v2 配额算不出结果, 本次回落旧算法");
+          }
+        } catch (err) {
+          // 开关读不到 → 走旧算法。切换开关本身不该成为新的故障点
+          logger.warn({ err: err instanceof Error ? err.message : err }, "quota.useV2 读取失败, 用旧算法");
+        }
+
         logger.info({ quota: aq }, "6-20 用账号自动配齐配额(7-20: roundup 沿用手配值)");
 
         /**
