@@ -52,6 +52,34 @@ export interface WeeklyReport {
   /** ④ 内容健康摘要 */
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number; note: string };
   /**
+   * ④ 达标率 —— 8-20 加（老韩）。
+   *
+   * **必须两个数并排报，缺一个就会被读反**（红线 #20 的形态）：
+   *
+   *   达标率 = 达标量 / 产量         低 → **可能是对的**。80 分是高线，
+   *                                  严格的闸本来就该筛掉大部分。
+   *   进箱未达标率                   高 → **只可能是闸没接上**。已经决定要发的东西
+   *                                  不达标，说明判据根本没参与这个决定。
+   *
+   * 只报前者会得出"内容质量差"的错结论，而真问题在后者。
+   * 周报此前只报产量（"本周文章 N 篇"），两个都没有。
+   *
+   * 8-20 实测（近 14 天）：产量 335 / 达标 49（15%）；
+   * 进过草稿箱 103 篇，其中 86 篇（83.5%）未达标 —— 且 44 篇状态是 `needs_review`、
+   * 18 篇是 `archived`。根因：**分发链路零处读六维**
+   * （`services/publisher/` + `services/bulk-distribute/` grep `sixDim` 无命中）。
+   *
+   * `unqualified` 口径 = `sixDimPassed !== true`，**把"没跑过六维"也算未达标** ——
+   * 无记录和明确不通过对"该不该发出去"是同一个答案，分开算会让 28 篇无记录的凭空消失。
+   */
+  qualification: {
+    scored: number;
+    passed: number;
+    passRate: number;
+    distributed: number;
+    distributedUnqualified: number;
+  };
+  /**
    * ④ 待审积压 —— 8-16 加。
    *
    * 这个数不是"运营慢"的指标，是**人在不在环里**的指标：
@@ -135,6 +163,33 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     .where(and(eq(contents.type, "article"), eq(contents.status, "needs_review")));
   const backlog = { total: bk?.total ?? 0, stale7d: bk?.stale7d ?? 0, addedThisWeek: bk?.addedThisWeek ?? 0 };
 
+  // ④ 达标率(见 qualification 字段注释)
+  const scored = arts.filter((a) => (a.meta as Record<string, unknown> | null)?.sixDimScores != null).length;
+  const passed = arts.filter((a) => (a.meta as Record<string, unknown> | null)?.sixDimPassed === true).length;
+  // 进过分发的 = 在 content_publish_log 里留下过任一"已投递"状态的。
+  // 用 exists 而非 join：一篇内容可能有多条日志(多号分发)，join 会把它数成多篇。
+  const distRes = await db.execute(sql`
+    SELECT count(*)::int AS distributed,
+           count(*) FILTER (
+             WHERE coalesce((c.metadata->>'sixDimPassed') = 'true', false) = false
+           )::int AS unqualified
+    FROM contents c
+    WHERE c.type = 'article' AND c.created_at >= ${since}
+      AND EXISTS (
+        SELECT 1 FROM content_publish_log l
+        WHERE l.content_id = c.id
+          AND l.status IN ('draft_pushed', 'success', 'dispatched')
+      )`);
+  const distRow = ((distRes as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? [])[0];
+  const distributed = Number(distRow?.distributed ?? 0);
+  const qualification = {
+    scored,
+    passed,
+    passRate: scored === 0 ? 0 : Math.round((passed / scored) * 1000) / 10,
+    distributed,
+    distributedUnqualified: Number(distRow?.unqualified ?? 0),
+  };
+
   const health = {
     articles: arts.length,
     titleFallback,
@@ -165,7 +220,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
   }
 
   const todos = pickTodos({ checkers, annotated, health, backlog });
-  const text = renderText({ weekOf, checkers, annotated, health, backlog, keywordScore, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -179,6 +234,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     },
     shadow: { note: "影子放行一致率待 Phase 3 的裁决入口上线后才有输入" },
     health,
+    qualification,
     backlog,
     keywordScore,
     todos,
@@ -286,6 +342,13 @@ function renderText(d: {
   checkers: Array<CheckerVerdict & { guards: string; mode: string; hits: number; adjudicated: number }>;
   annotated: number;
   health: { articles: number; titleFallback: number; shortBody: number; truncated: number };
+  qualification: {
+    scored: number;
+    passed: number;
+    passRate: number;
+    distributed: number;
+    distributedUnqualified: number;
+  };
   backlog: { total: number; stale7d: number; addedThisWeek: number };
   /**
    * ④ 关键词分数分布 —— 8-18 加。
@@ -341,6 +404,23 @@ function renderText(d: {
       );
     }
     if (vocal.length === 0) L.push("  本周所有闸都没有命中。");
+  }
+  L.push("");
+
+  // 🔴 达标率必须排在"出稿健康"之前 —— 出稿健康报的是次品率(兜底标题/过短/截断),
+  //   那是"废稿有多少"; 达标率报的是"合格品有多少"。先看后者, 前者才有分母。
+  L.push("■ 产量 / 达标量");
+  const q = d.qualification;
+  L.push(`  本周出稿 ${d.health.articles} 篇 ｜ 跑过六维 ${q.scored} 篇 ｜ 达标 ${q.passed} 篇（${q.passRate}%）`);
+  // 🔴 只陈述事实与对照基准, 不写归因(红线 #13)。达标率低本身可能是对的 —— 见下一行的对照。
+  L.push("        达标线 = 六维总分 ≥80 且每个维度 ≥6。这是高线，达标率低不一定是坏事。");
+  if (q.distributed > 0) {
+    const pct = Math.round((q.distributedUnqualified / q.distributed) * 1000) / 10;
+    L.push(`  进入分发 ${q.distributed} 篇，其中未达标 ${q.distributedUnqualified} 篇（${pct}%）`);
+    L.push("        ↑ 这个数才是要盯的：达标率低可以是闸严，进箱未达标率高只可能是闸没接上。");
+  } else {
+    // 零分发不等于正常 —— 分开报, 免得"0 篇未达标"被读成"全达标"
+    L.push("  本周没有内容进入分发。");
   }
   L.push("");
 
