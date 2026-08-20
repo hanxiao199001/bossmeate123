@@ -74,6 +74,39 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
               updated_at = NOW()
       `);
 
+      /**
+       * 🔴 8-20：`contents.published_at` 的**唯一写入点**。
+       *
+       * 只在 `success` **且账号是 `full` 能力**时写 —— 那种情况下适配器确实调了
+       * `freepublish/submit`；`draft_only` 的账号只 `draft/add`（进草稿箱），
+       * 两者在本表里都记 `status='success'`，**从 log 里分不出来**（同一状态两种语义）。
+       *
+       * 写进去的确切含义：**「运营点了批量分发，账号是 full 能力，提交发布的调用返回成功」**
+       * —— 不是"读者收到了"（freepublish/submit 是异步接口，提交成功 ≠ 审核通过 ≠ 推送到达）。
+       *
+       * 只在首次写（`IS NULL`）：重发不覆盖，第一次提交的时刻才是这个时刻。
+       */
+      if (status === "success") {
+        try {
+          const { platformAccounts, contents } = await import("../../models/schema.js");
+          const { eq, and, isNull } = await import("drizzle-orm");
+          const [acct] = await db
+            .select({ cap: platformAccounts.capability })
+            .from(platformAccounts)
+            .where(eq(platformAccounts.id, accountId))
+            .limit(1);
+          if (acct?.cap === "full") {
+            await db
+              .update(contents)
+              .set({ publishedAt: new Date() })
+              .where(and(eq(contents.id, contentId), isNull(contents.publishedAt)));
+          }
+        } catch (err) {
+          // 记账失败不影响分发本身 —— 观测不许有业务影响力
+          logger.warn({ contentId, accountId, err: err instanceof Error ? err.message : err }, "published_at 写入失败");
+        }
+      }
+
       // 更新 progress (含每账号明细; SSE 订阅者会收到事件)
       if (status === "success") {
         updateBulkProgress(batchId, { success: true, contentId, accountId });

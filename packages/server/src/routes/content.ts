@@ -1200,21 +1200,6 @@ async function tryDeleteDouyinVideos(contentId: string): Promise<Array<{ account
             set: { status: "success", initiatedBy: "manual", updatedAt: new Date() },
           });
 
-        /**
-         * 🔴 8-20：`published_at` 的**唯一写入点**。就这一处，别再加第二处。
-         *
-         * 这里是运营在后台标记「已发布」的地方 —— 全系统唯一一个"人确认发出去了"的信号。
-         * 只在**首次**写（`IS NULL` 时），重复标记不覆盖：第一次发布的时刻才是发布时刻。
-         *
-         * ⚠️ 不推进 `status` 到 `published`：状态机里 `needs_review`/`archived`
-         * 都到不了 `published`（只有 `generated` 可以），强推会撞 InvalidTransitionError。
-         * `published_at` 记录的是**事实**，与状态机的流转是两件事 ——
-         * 混在一起会让"发布记账"依赖"状态恰好在对的位置"。
-         */
-        await db
-          .update(contents)
-          .set({ publishedAt: new Date() })
-          .where(and(eq(contents.id, id), isNull(contents.publishedAt)));
       } else {
         await db
           .delete(contentPublishLog)

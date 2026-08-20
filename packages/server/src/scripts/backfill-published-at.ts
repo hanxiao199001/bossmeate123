@@ -1,10 +1,19 @@
 /**
  * 回填 `contents.published_at`（8-20）。**默认只读，加 --apply 才写。**
  *
- * ## 唯一数据源：`content_publish_log` 里 `status='success'` 的最早一条
+ * ## 数据源：`status='success'` **且账号 `capability='full'`** 的最早一条
  *
- * 那是运营在后台标记「已发布」时写的（`initiatedBy='manual'`）—— 全系统唯一一个
- * 「人确认发出去了」的信号，是**真实记录**，不是推断。
+ * 🔴 为什么要加 capability 这一层：适配器里 `full` 会调 `freepublish/submit`（真提交发布），
+ * `draft_only` 只调 `draft/add`（进草稿箱就返回）—— **两者都记 `status='success'`**，
+ * 从 log 里分不出来。不加这一层，就把"进了草稿箱"当成"发布了"。
+ * （实测 7 个活跃号里 6 个 full、1 个 draft_only。）
+ *
+ * ## 填进去的确切含义，一个字都不要省
+ *
+ * > 「运营点了批量分发，账号是 full 能力，提交发布的调用返回成功」
+ *
+ * **不是**"读者收到了" —— `freepublish/submit` 是**异步**接口：
+ * 提交成功 ≠ 微信审核通过 ≠ 推送到达读者。
  *
  * 不算已发布的三类，**一条都不填**：
  * ```
@@ -41,15 +50,27 @@ async function main() {
     select
       (select count(*)::int from contents where type = 'article') total,
       (select count(*)::int from contents where published_at is not null) already,
-      (select count(distinct content_id)::int from content_publish_log where status = 'success') fillable,
+      (select count(distinct l.content_id)::int from content_publish_log l
+         join platform_accounts a on a.id = l.account_id
+         where l.status = 'success' and a.capability = 'full') fillable,
+      (select count(distinct l.content_id)::int from content_publish_log l
+         join platform_accounts a on a.id = l.account_id
+         where l.status = 'success' and a.capability is distinct from 'full') draft_only_success,
       (select count(distinct content_id)::int from content_publish_log where status <> 'success') non_success`);
   const s = stat.rows[0] as Record<string, unknown>;
-  console.log(`contents 总数 ${s.total} ｜ 已有 published_at ${s.already} ｜ 可回填(success) ${s.fillable} ｜ 非 success 的 ${s.non_success} 条不填\n`);
+  console.log(
+    `contents 总数 ${s.total} ｜ 已有 published_at ${s.already}\n` +
+    `可回填(success + full 能力) ${s.fillable}\n` +
+    `success 但 draft_only 能力 ${s.draft_only_success} 条 —— **不填**(那只是进了草稿箱)\n` +
+    `非 success ${s.non_success} 条 —— 不填\n`,
+  );
 
   const preview = await db.execute(sql`
     select c.id, left(c.title, 30) t, c.status, min(l.created_at) pub
-    from contents c join content_publish_log l on l.content_id = c.id
-    where l.status = 'success' and c.published_at is null
+    from contents c
+      join content_publish_log l on l.content_id = c.id
+      join platform_accounts a on a.id = l.account_id
+    where l.status = 'success' and a.capability = 'full' and c.published_at is null
     group by 1, 2, 3 order by 4 desc limit 6`);
   console.log("样例（取最早的 success 时刻）：");
   for (const r of preview.rows as Array<Record<string, unknown>>) {
@@ -61,7 +82,8 @@ async function main() {
     select count(*)::int n from contents where status = 'published' and updated_at > now() - interval '24 hours'`);
   const after = await db.execute(sql`
     select count(distinct l.content_id)::int n from content_publish_log l
-    where l.status = 'success' and l.created_at > now() - interval '24 hours'`);
+      join platform_accounts a on a.id = l.account_id
+    where l.status = 'success' and a.capability = 'full' and l.created_at > now() - interval '24 hours'`);
   console.log(`\n「24h 已发布」这个数：旧算法 ${(before.rows[0] as Record<string, unknown>).n} → 回填后 ${(after.rows[0] as Record<string, unknown>).n}`);
 
   if (!APPLY) {
@@ -73,8 +95,10 @@ async function main() {
     update contents c
     set published_at = src.pub
     from (
-      select content_id, min(created_at) pub from content_publish_log
-      where status = 'success' group by content_id
+      select l.content_id, min(l.created_at) pub
+      from content_publish_log l join platform_accounts a on a.id = l.account_id
+      where l.status = 'success' and a.capability = 'full'
+      group by l.content_id
     ) src
     where c.id = src.content_id and c.published_at is null`);
   console.log(`\n✔ 已回填 ${r.rowCount ?? "?"} 条`);
