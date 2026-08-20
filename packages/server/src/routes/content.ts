@@ -115,7 +115,22 @@ export async function contentRoutes(app: FastifyInstance) {
           .select()
           .from(contents)
           .where(whereClause)
-          .orderBy(desc(contents.updatedAt))
+          /**
+           * 🔴 8-20：按 `createdAt` 排，**不是 `updatedAt`**。
+           *
+           * `updatedAt` 反映的是「最后被任何人/任何脚本改过」，不是「最新产出的」。
+           * 后果实测：8-13 摘 placeholder body、8-18 救回 35 条被误杀的内容 ——
+           * 每一次批量运维 UPDATE 都把那批的 `updatedAt` 刷到当天，
+           * 于是**一批 8-12 生成、早已 archived 的旧稿集体顶到第一页**，
+           * 运营打开列表第一眼看到的是四条归档旧内容。
+           *
+           * 而这个洞存在很久没人发现，因为**没有人每天在用这个列表**（同背景图闸那次）。
+           * 20-30 天后运营接手时，这是他每天第一眼看的东西。
+           *
+           * 要「最近编辑」视图请另加排序参数，别把默认改回去 ——
+           * 运维动作不该改写业务视图的顺序。
+           */
+          .orderBy(desc(contents.createdAt))
           .limit(pageSize)
           .offset(offset),
         db
