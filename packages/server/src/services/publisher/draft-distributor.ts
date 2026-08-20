@@ -191,7 +191,22 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   const report: DraftDistributeReport = { tenantId, perAccount: [], poolSize: 0, pushed: 0, failed: 0 };
   // 7-14: cap=每号上限(DRAFT_PUSH_PER_ACCOUNT); target=每号保底下限(DRAFT_TARGET_PER_ACCOUNT), 夹 ≤ cap。
   const perAccount = Math.max(1, Math.floor(env.DRAFT_PUSH_PER_ACCOUNT));
-  const target = Math.max(1, Math.min(perAccount, Math.floor(env.DRAFT_TARGET_PER_ACCOUNT)));
+  /**
+   * 🔴 8-20: 保底下限外化成 draft.targetPerAccount（默认仍读 env，行为不变）。
+   *
+   * 为什么它排在第一批被外化的「人工拍的数」里：**它从来没有和产能对齐过**。
+   * 7 号 × 2 篇 = 14 篇/天，而实测达标产能约 1.6 篇/天 —— 差 8.75 倍。
+   * 缺口不是靠拒发补的，是靠放低标准补的（实测进分发 103 篇里 86 篇不达标）。
+   * 而「发 14 篇不达标 vs 2 篇达标哪个更好」**没有数据能回答**
+   * （公众号阅读回流永远不可用，见 metrics/external-feedback-status.ts）。
+   * 所以它是**生意判断**，得让人改得动，并在参数页上标明无数据依据。
+   *
+   * 下限改成 0 而不是 1：参数页写着「设 0 = 不保底」，这里若仍 Math.max(1,…)
+   * 就是文案承诺了一件代码不做的事 —— 那类不一致比参数本身危险。
+   */
+  const { getParam: getRuntimeParam } = await import("../ops/runtime-params.js");
+  const targetRaw = await getRuntimeParam<number>("draft.targetPerAccount");
+  const target = Math.max(0, Math.min(perAccount, Math.floor(targetRaw)));
   report.targetPerAccount = target;
   report.capPerAccount = perAccount;
 

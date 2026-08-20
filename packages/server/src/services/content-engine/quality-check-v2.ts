@@ -68,6 +68,21 @@ export interface SixDimDetail {
   justification: string;
 }
 
+/**
+ * 发布达标线（总分部分）的**生效值**。8-20 外化，见 runtime-params 的 publish.sixDimTotalLine。
+ *
+ * 读失败一律退回代码常量 —— 参数系统挂了应该表现为「回到外化之前的行为」，
+ * 而不是让质检判据变成 undefined/NaN 把所有内容判成不达标。
+ */
+async function getPublishTotalLine(): Promise<number> {
+  try {
+    const { getParam } = await import("../ops/runtime-params.js");
+    return await getParam<number>("publish.sixDimTotalLine");
+  } catch {
+    return SIX_DIM_PUBLISH_TOTAL;
+  }
+}
+
 export interface SixDimResult {
   dims: Record<SixDimKey, SixDimDetail>;
   /**
@@ -84,8 +99,16 @@ export interface SixDimResult {
    * 正确范式参考 `services/review/ai-reviewer-rules.ts` 的 `!Number.isFinite(total)` → 不入池。
    */
   totalScore: number | null;
-  /** 总分 ≥80 且无维度 <6；没评上分时恒 false */
+  /** 总分 ≥publishTotalLine 且无维度 <6；没评上分时恒 false */
   passed: boolean;
+  /**
+   * 🔴 8-20: 本次判定**实际用的**总分线（读 publish.sixDimTotalLine，默认 80）。
+   *
+   * 为什么要带出来：给运营看的文案「未达 N 分发布线」必须用**判定时那条线**。
+   * 用代码常量的话，参数一改，显示的线和实际判定的线就是两个数 —— 红线 #20 的形态。
+   * 降级/未评分路径为 undefined（没判定过，也就没有"当时那条线"）。
+   */
+  publishTotalLine?: number;
   /** 硬数据密度统计（来自 dataAccuracy 的 justification，如"全文1800字/硬数据11个≈163字/个"） */
   dataDensity: string;
   /**
@@ -746,9 +769,17 @@ ${scorerView}
       ) / 10
     );
 
-    // 通过标准照 md：总分 ≥80 且无维度 <6
+    // 通过标准照 md：总分 ≥线 且无维度 <6
+    //
+    // 🔴 8-20: 总分线外化成 publish.sixDimTotalLine（默认仍是 SIX_DIM_PUBLISH_TOTAL=80，行为不变）。
+    //   原因：8-20 确认公众号阅读回流永远不会有数据，「80 该不该是 80」从此没有数据答案、
+    //   只能由人拍 —— 那就得让人改得动，并在参数页上写明「人工设定，无数据依据」。
+    //
+    // ⚠️ 每维 ≥6 的地板**刻意不外化**：它防的是"五项优秀掩盖一项致命"，
+    //   是个约束不是偏好，不该和总分线放进同一个可互相补偿的旋钮里。
+    const publishTotalLine = await getPublishTotalLine();
     const passed =
-      total >= SIX_DIM_PUBLISH_TOTAL &&
+      total >= publishTotalLine &&
       (Object.values(dims) as SixDimDetail[]).every((d) => d.score >= SIX_DIM_PUBLISH_MIN_DIM);
 
     // 7-27: 分是降级快模型给的 → 落 incident(供简报统计 + 日后抽检降级分的可信度)。
@@ -763,6 +794,7 @@ ${scorerView}
       dims,
       totalScore: total,
       passed,
+      publishTotalLine,
       dataDensity: dims.dataAccuracy.justification,
       degraded: false,
       scoredBy: tier,
@@ -933,8 +965,11 @@ function generateFeedback(
   if (sixDim.totalScore === null) {
     parts.push(`⚠️ 未评上分(${sixDim.degradedReason ?? "评分服务降级"}) —— 这不是"0 分", 是评分器当时不可用, 已转人工复核`);
   } else if (sixDim.totalScore >= SIX_DIM_EXCELLENT_SCORE) parts.push("内容质量优秀");
-  else if (sixDim.passed) parts.push(`内容质量达到 ${SIX_DIM_PUBLISH_TOTAL} 分发布线`);
-  else parts.push(`内容质量未达 ${SIX_DIM_PUBLISH_TOTAL} 分发布线`);
+  // 🔴 这里显示的线必须是**当时判定用的那条线**, 不能是代码常量 ——
+  //   参数改过之后两者会不一致, 运营看到"未达 80"而系统按 75 判, 正是红线 #20 的形态。
+  //   sixDim.publishTotalLine 由判定处一同带出。
+  else if (sixDim.passed) parts.push(`内容质量达到 ${sixDim.publishTotalLine ?? SIX_DIM_PUBLISH_TOTAL} 分发布线`);
+  else parts.push(`内容质量未达 ${sixDim.publishTotalLine ?? SIX_DIM_PUBLISH_TOTAL} 分发布线`);
 
   // 列出 <8 的低分维度（老韩打分流程：标出 <8 的维度逐个抬）
   const lows = (Object.keys(sixDim.dims) as SixDimKey[])

@@ -1333,7 +1333,16 @@ export const contentPublishLog = pgTable(
     contentId: uuid("content_id").references(() => contents.id, { onDelete: "cascade" }).notNull(), // 7-18 审计: 补外键防孤儿(migration 025)
     accountId: uuid("account_id").references(() => platformAccounts.id, { onDelete: "cascade" }).notNull(),
     // 7-06 ② 扩到 30 (migration 023): success | failed | skipped | draft | draft_pushed | dispatched
-    //   | published_by_operator (推的草稿被运营群发 = 市场选择正信号) | draft_expired (推了7天没发 = 负信号)
+    //   | published_by_operator (推的草稿被运营群发 = 市场选择正信号)
+    //
+    // 🔴 8-20: `draft_expired`(推了7天没发 = 负信号) **已废弃并全量改标为 `publish_state_unknown`**。
+    //   原语义是错的: 它声称"运营没发", 而判定前提是"我们能看见运营发了什么" ——
+    //   实测公众号数据接口 7 个号全部 48001 无权限, `matched` 恒为 0,
+    //   `published_by_operator` 永远不可能触发, 于是**每篇推出去的草稿最后都会被标 expired,
+    //   无论运营实际发没发**。系统把「我看不见」记成了「没发生」(红线 #14 在信号层的形态)。
+    //   269 条已于 8-20 改标(只改标记不重生成, 红线 #21);
+    //   回退: UPDATE content_publish_log SET status='draft_expired' WHERE status='publish_state_unknown'。
+    //   ⚠️ 恢复 draft_expired 语义的前提是公众号完成微信认证 —— 见 metrics/external-feedback-status.ts。
     status: varchar("status", { length: 30 }).notNull(),
     mediaId: varchar("media_id", { length: 200 }),
     errorMessage: varchar("error_message", { length: 500 }),

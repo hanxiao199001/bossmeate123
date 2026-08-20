@@ -17,6 +17,7 @@ import { db } from "../../models/db.js";
 import { platformAccounts, journals } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
 import { fillTrendZeros, computeCoverage, toDateStr, type TrendPoint } from "./effect-dashboard-utils.js";
+import { getExternalFeedbackStatus, type ExternalFeedbackStatus } from "./external-feedback-status.js";
 
 // 纯函数从 effect-dashboard-utils.ts 复用 (单测在 effect-dashboard-utils.test.ts), 此处再导出保持 API 兼容
 export { fillTrendZeros, computeCoverage };
@@ -75,13 +76,26 @@ export interface EffectDashboard {
   ranking: ContentRankItem[];
   trend: TrendPoint[];
   disciplines: DisciplineStat[];
-  /** 无回流数据的维度标记, 前端据此显示"暂无回流数据"而非 0/空白 */
+  /**
+   * 无回流数据的维度标记, 前端据此区分"空"与"零"。
+   *
+   * ⚠️ 8-20: 原注释写的是显示「**暂无**回流数据」—— 这个措辞现在是错的。
+   * 实测公众号阅读回流从未产生过任何数据(7 个号全部 48001 无权限, content_metrics 空表),
+   * 所以这里的"空"不是"还没攒够", 是"这条管道永远不会有数据"。
+   * **必须配合下面的 externalFeedback 一起读** —— 只看 emptyDimensions 会把
+   * 结构性缺失显示成暂时性缺失, 让人以为再等等就有了。
+   */
   emptyDimensions: {
     accounts: boolean;
     ranking: boolean;
     trend: boolean;
     disciplines: boolean;
   };
+  /**
+   * 🔴 8-20: 外部效果数据可用性声明。不可用时带 notice, 前端**必须**显示横幅。
+   * 唯一真相源见 metrics/external-feedback-status.ts。
+   */
+  externalFeedback: ExternalFeedbackStatus;
 }
 
 // ============ 聚合主函数 ============
@@ -305,5 +319,6 @@ export async function buildEffectDashboard(tenantId: string, rangeDays: RangeDay
       trend: !hasTrendData,
       disciplines: disciplines.length === 0,
     },
+    externalFeedback: getExternalFeedbackStatus(),
   };
 }

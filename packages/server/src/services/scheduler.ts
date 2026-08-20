@@ -11,6 +11,7 @@
 import { Worker, Queue } from "bullmq";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { EXTERNAL_FEEDBACK_AVAILABLE, EXTERNAL_FEEDBACK_DISABLED_SINCE } from "./metrics/external-feedback-status.js";
 import { crawlAll, crawlByTrack, crawlPlatform } from "./crawler/index.js";
 import { analyzeKeywords } from "./agents/keyword-analyzer.js";
 import { db } from "../models/db.js";
@@ -801,11 +802,28 @@ async function registerCronJobs() {
 
   // 7-06 ①: 每日 WECHAT_STATS_CRON_HOUR 点(默认 09:00 BJ):10 拉各公众号"昨日"图文阅读数据回流。
   // 微信 datacube T+1 出数, 上午拉最稳; :10 错开整点的推草稿/爬虫任务。
-  await crawlerQueue.upsertJobScheduler(
-    "wechat-stats-collect-schedule",
-    { pattern: `10 ${env.WECHAT_STATS_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
-    { name: "wechat-stats-collect", data: { type: "wechat-stats-collect" as SchedulerJobType } }
-  );
+  //
+  // 🔴 8-20 停用(老韩拍板)。原因与解锁条件见 metrics/external-feedback-status.ts 文件头:
+  //   7 个公众号全部返回 48001「无数据分析权限」, content_metrics 空表, 跑了一个多月零产出。
+  //   **不是让它继续"优雅跳过", 是不跑** —— 留着一个每天跑、每天失败的任务就是在制造下一个盲区。
+  //   任务处理器(case "wechat-stats-collect")刻意保留: 认证一通, 把下面的常量改回 true 即可复活,
+  //   删掉处理器会让"恢复"变成一次重写。
+  if (EXTERNAL_FEEDBACK_AVAILABLE) {
+    await crawlerQueue.upsertJobScheduler(
+      "wechat-stats-collect-schedule",
+      { pattern: `10 ${env.WECHAT_STATS_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
+      { name: "wechat-stats-collect", data: { type: "wechat-stats-collect" as SchedulerJobType } }
+    );
+  } else {
+    // 已注册过的 repeat job 不会因为这里不再 upsert 就消失 —— 必须显式移除, 否则旧调度继续跑。
+    // (BullMQ 的 job scheduler 存在 Redis 里, 与本次进程启动与否无关。)
+    try {
+      await crawlerQueue.removeJobScheduler("wechat-stats-collect-schedule");
+      logger.info({ since: EXTERNAL_FEEDBACK_DISABLED_SINCE }, "8-20 公众号数据回流 cron 已停用并移除既有调度(48001 无权限)");
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "移除 wechat-stats-collect 调度失败");
+    }
+  }
 
   // 7-25: 每日 OPS_BRIEFING_CRON_HOUR:MINUTE(默认 09:30 BJ) 运营简报。
   // 排在最后 — 生成(03:00)/期刊补全(05:30)/分发(07:00)/草稿箱(08:00)/公众号数据回流(09:10) 全跑完再汇总,

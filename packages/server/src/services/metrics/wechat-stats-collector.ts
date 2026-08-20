@@ -37,6 +37,7 @@ import { logger } from "../../config/logger.js";
 import { decryptCredentialField, ensureFreshAccessToken } from "../publisher/credentials-loader.js";
 import { recordMetric } from "./roi.js";
 import { matchArticleToContent, normalizeTitle } from "./title-match.js";
+import { EXTERNAL_FEEDBACK_AVAILABLE, EXTERNAL_FEEDBACK_DISABLED_SINCE } from "./external-feedback-status.js";
 
 const WX_API = "https://api.weixin.qq.com/cgi-bin";
 const DATACUBE_API = "https://api.weixin.qq.com/datacube";
@@ -284,6 +285,24 @@ async function collectForAccount(
 /** cron 主入口: 全部启用中的公众号跑一轮 (默认拉"昨日"), 单号失败不阻塞其他号 */
 export async function runWechatStatsCollection(opts?: { date?: string }): Promise<WechatStatsRunReport> {
   const date = opts?.date ?? bjYesterday();
+
+  /**
+   * 🔴 8-20 停用闸（老韩拍板）。cron 已在 scheduler 里摘掉，这里再堵一道 ——
+   * 手动触发／别处误调仍会走进来，而本函数有**副作用**：
+   * `markExpiredDrafts` 会把 draft_pushed 改成 draft_expired，
+   * 而那个标签的语义已被证伪（`matched` 恒为 0 → 每篇最后都会被标 expired，
+   * 无论运营实际发没发）。跑一次就会重新制造一批假负信号。
+   *
+   * 用 `opts.force` 可越过（认证做完后验证用）。恢复常态请改
+   * `external-feedback-status.ts` 的 EXTERNAL_FEEDBACK_AVAILABLE，别在这里加分支。
+   */
+  if (!EXTERNAL_FEEDBACK_AVAILABLE && !(opts as { force?: boolean } | undefined)?.force) {
+    logger.info(
+      { date, since: EXTERNAL_FEEDBACK_DISABLED_SINCE },
+      "公众号数据回流已停用(48001 无数据分析权限), 本次不执行 —— 见 metrics/external-feedback-status.ts",
+    );
+    return { date, accountsProcessed: 0, matched: 0, unmatched: 0, expiredDrafts: 0, perAccount: [] };
+  }
   const accounts = await db
     .select({
       id: platformAccounts.id, tenantId: platformAccounts.tenantId,
