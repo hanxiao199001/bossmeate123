@@ -83,7 +83,13 @@ describe("htmlToPlainText — 空白与常见实体", () => {
   });
 
   it("换行与多空格折叠成一个空格", () => {
-    expect(htmlToPlainText("<p>a</p>\n\n   <p>b</p>")).toBe("ab");
+    // 标签之间的空白**保留为一个空格**：那是原文里真实存在的分隔
+    expect(htmlToPlainText("<p>a</p>\n\n   <p>b</p>")).toBe("a b");
+  });
+
+  it("标签之间没有空白时不凭空插空格", () => {
+    // 剥标签用的是空串不是空格，所以这里粘在一起 —— 这是当前行为，钉住它
+    expect(htmlToPlainText("<b>前</b><b>后</b>")).toBe("前后");
   });
 
   it("中文排版实体", () => {
