@@ -1362,6 +1362,13 @@ export const contentPublishLog = pgTable(
     qualityVerdict: varchar("quality_verdict", { length: 16 }),
     /** 分发时点的六维总分快照；unscored 时为 NULL。与 qualityVerdict 同批写入。 */
     sixDimTotal: numeric("six_dim_total", { precision: 5, scale: 2 }),
+    /**
+     * 🔴 8-21: 这条 verdict 是**哪把尺子**打的（metadata.sixDimScoringVersion 的快照）。
+     * 规矩见 content-engine/quality-thresholds.ts 的 SIX_DIM_SCORING_VERSION。
+     * NULL = 8-21 之前，按 legacy 归类。**跨版本对比必须显式标注两侧版本**，
+     * 否则「达标率涨了」可能只是尺子放宽了，一篇内容都没变过。
+     */
+    scoringVersion: varchar("scoring_version", { length: 16 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

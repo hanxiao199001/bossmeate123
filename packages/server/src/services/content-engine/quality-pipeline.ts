@@ -34,6 +34,7 @@ import {
 } from "./quality-check-v2.js";
 import { splitByH2, rewriteSectionInBody, spliceSection } from "./section-rewrite.js";
 import { applyImageSlots, applyImageSlotsFallback, fixDoubleEscapedEntities } from "./image-slots.js";
+import { SIX_DIM_SCORING_VERSION } from "./quality-thresholds.js";
 
 // ============ 类型 ============
 
@@ -445,6 +446,15 @@ export function qualityPipelineMeta(qp: QualityPipelineResult): Record<string, u
     sixDimScores: qp.qualityLoop.finalScores,
     sixDimTotal: qp.qualityLoop.finalTotal,
     sixDimPassed: qp.qualityLoop.passed,
+    /**
+     * 🔴 8-21: 打这个分用的**标尺版本**。规矩见 quality-thresholds.ts 的
+     * SIX_DIM_SCORING_VERSION 文件注释 —— 改评分 prompt 必须同时 +1。
+     *
+     * 没有它的话，8-21 之后的判据改动会让新旧分静默混在同一列里：
+     * 「本周达标率比上周高」在跨版本时是一句无意义的话，而它看起来完全正常。
+     * 存量行没有此字段 = v2 之前，统计时按 legacy 单独归类，别并进任何一版。
+     */
+    sixDimScoringVersion: SIX_DIM_SCORING_VERSION,
     sixDimDegraded: qp.sixDim?.degraded ?? null,
     // 7-27: 降级原因(AI 超时/无响应 vs 输出解析失败)。sixDimTotal 此时是 null(未评分, 非 0 分)。
     ...(qp.sixDim?.degraded ? { sixDimDegradedReason: qp.sixDim.degradedReason ?? "评分服务降级" } : {}),

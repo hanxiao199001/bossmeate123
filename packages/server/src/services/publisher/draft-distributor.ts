@@ -432,6 +432,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
             initiatedBy: "draft_dist",
             qualityVerdict: vs?.verdict ?? null,
             sixDimTotal: vs?.sixDimTotal != null ? String(vs.sixDimTotal) : null,
+            scoringVersion: vs?.scoringVersion ?? null,
           }).onConflictDoUpdate({
             target: [contentPublishLog.contentId, contentPublishLog.accountId],
             // ⚠️ 冲突更新也写快照: 同一篇被重推时, 记的是**这一次**推送时的判定。
@@ -442,6 +443,7 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
               initiatedBy: "draft_dist",
               qualityVerdict: vs?.verdict ?? null,
               sixDimTotal: vs?.sixDimTotal != null ? String(vs.sixDimTotal) : null,
+              scoringVersion: vs?.scoringVersion ?? null,
               updatedAt: new Date(),
             },
           });

@@ -45,6 +45,12 @@ export interface QualitySnapshot {
   verdict: QualityVerdict;
   /** 当时的六维总分；unscored 时为 null */
   sixDimTotal: number | null;
+  /**
+   * 🔴 8-21: 打这个分用的标尺版本（metadata.sixDimScoringVersion）。
+   * null = 8-21 之前落库的分，按 legacy 归类。
+   * 没有它，改判据之后的 verdict 会和改之前的静默混成一列 —— 对照组横跨两把尺子。
+   */
+  scoringVersion: string | null;
 }
 
 /**
@@ -56,6 +62,7 @@ export interface QualitySnapshot {
  */
 export function resolveQualitySnapshot(metadata: unknown): QualitySnapshot {
   const m = (metadata ?? {}) as Record<string, unknown>;
+  const ver = typeof m.sixDimScoringVersion === "string" ? m.sixDimScoringVersion : null;
   const rawTotal = m.sixDimTotal;
   const total =
     typeof rawTotal === "number" && Number.isFinite(rawTotal)
@@ -66,13 +73,13 @@ export function resolveQualitySnapshot(metadata: unknown): QualitySnapshot {
 
   // 没跑过六维：既没有总分，也没有维度明细
   if (total === null && m.sixDimScores == null) {
-    return { verdict: "unscored", sixDimTotal: null };
+    return { verdict: "unscored", sixDimTotal: null, scoringVersion: null };
   }
   // 有评分痕迹但 sixDimPassed 缺失 —— 也算 unscored，但把总分留下来供排查。
   // 🔴 不许在这里"总分 ≥80 就当 passed" —— 那是漏掉了每维 ≥6 的地板（红线 #20 的形态：
   //    总分和地板是两个判据，只看前一个会把被地板挡下的算成达标）。
   if (typeof m.sixDimPassed !== "boolean") {
-    return { verdict: "unscored", sixDimTotal: total };
+    return { verdict: "unscored", sixDimTotal: total, scoringVersion: ver };
   }
-  return { verdict: m.sixDimPassed ? "passed" : "below_bar", sixDimTotal: total };
+  return { verdict: m.sixDimPassed ? "passed" : "below_bar", sixDimTotal: total, scoringVersion: ver };
 }

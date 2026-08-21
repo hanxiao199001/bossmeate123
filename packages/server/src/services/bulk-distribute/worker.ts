@@ -75,6 +75,7 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
        */
       let verdict: string | null = null;
       let sixDimTotal: string | null = null;
+      let scoringVersion: string | null = null;
       try {
         const { resolveQualitySnapshot } = await import("../publisher/quality-verdict.js");
         const mrows = await db.execute(sql`SELECT metadata FROM contents WHERE id = ${contentId}::uuid`);
@@ -83,6 +84,7 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
           const snap = resolveQualitySnapshot(meta);
           verdict = snap.verdict;
           sixDimTotal = snap.sixDimTotal != null ? String(snap.sixDimTotal) : null;
+          scoringVersion = snap.scoringVersion;
         }
       } catch (err) {
         // 打标失败绝不能拖垮分发本身 —— 标记是为将来的分析服务的, 分发是当下的业务。
@@ -91,8 +93,8 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
 
       // INSERT log (ON CONFLICT UPDATE — 防 race / 重发) 用 raw sql 走 jsonb merge 兼容
       await db.execute(sql`
-        INSERT INTO content_publish_log (tenant_id, content_id, account_id, status, media_id, error_message, initiated_by, initiated_user_id, quality_verdict, six_dim_total)
-        VALUES (${tenantId}::uuid, ${contentId}::uuid, ${accountId}::uuid, ${status}, ${mediaId}, ${errorMessage}, 'bulk_distribute', ${userId}::uuid, ${verdict}, ${sixDimTotal}::numeric)
+        INSERT INTO content_publish_log (tenant_id, content_id, account_id, status, media_id, error_message, initiated_by, initiated_user_id, quality_verdict, six_dim_total, scoring_version)
+        VALUES (${tenantId}::uuid, ${contentId}::uuid, ${accountId}::uuid, ${status}, ${mediaId}, ${errorMessage}, 'bulk_distribute', ${userId}::uuid, ${verdict}, ${sixDimTotal}::numeric, ${scoringVersion})
         ON CONFLICT (content_id, account_id) DO UPDATE
           SET status = EXCLUDED.status,
               media_id = EXCLUDED.media_id,
@@ -100,6 +102,7 @@ export function startBulkDistributeWorker(): Worker<BulkDistributeJob> {
               -- 冲突更新也写快照: 记的是**这一次**分发时的判定, 与 status 描述同一次事件
               quality_verdict = EXCLUDED.quality_verdict,
               six_dim_total = EXCLUDED.six_dim_total,
+              scoring_version = EXCLUDED.scoring_version,
               updated_at = NOW()
       `);
 

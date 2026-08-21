@@ -898,4 +898,19 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
         ON content_publish_log (quality_verdict, created_at DESC) WHERE quality_verdict IS NOT NULL;
     `,
   },
+  {
+    version: "040_publish_log_scoring_version",
+    description:
+      "8-21: content_publish_log.scoring_version —— 这条 quality_verdict 是**哪把尺子**打的。" +
+      "**为什么紧接着 039 就加**: 8-21 决定改六维判据(解除双重计分/practicality 体裁中立化/" +
+      "topicHook 去硬上限)。改完之后分数整体上移, 而 039 打的标是旧尺子。" +
+      "两把尺子的 verdict 混在同一列里, 将来的对照分析会把「线变松了」读成「内容变好了」——" +
+      "红线 #20 最经典的形态, 且这次是我们主动制造的。" +
+      "**存量留 NULL**: 8-21 之前的行按 legacy 处理, 不回填(回填只能猜, 而猜出来的版本号比没有更危险)。" +
+      "跨版本趋势对比一律禁止, 除非显式标注两侧版本。" +
+      "退回执行: ALTER TABLE content_publish_log DROP COLUMN scoring_version。",
+    sql: `
+      ALTER TABLE content_publish_log ADD COLUMN IF NOT EXISTS scoring_version VARCHAR(16);
+    `,
+  },
 ];
