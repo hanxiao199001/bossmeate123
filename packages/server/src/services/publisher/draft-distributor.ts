@@ -147,6 +147,89 @@ export interface DraftDistributeReport {
 //           ③ env 开关 DRAFT_SHORTFALL_REMEDY_ENABLED(默认 true), 出事一秒关掉;
 //           ④ 补救本身抛错 → 落 draft_remedy_failed incident, 不影响主轮已推的结果。
 
+
+/**
+ * 可发池里**过了闸、还没推过**的内容篇数。8-22 加。
+ *
+ * 存在的唯一理由：`draft_shortfall` 告警在报「不够分」之前必须先知道**到底有没有货**。
+ * 旧版不查就断言「内容不够分」，而实测当时池里有 54 篇合格存货 ——
+ * 「没货」与「有货送不出去」是两个完全不同的故障，处置相反：
+ * 前者要提生成量，后者要查配对（账号领域/国别 scope/负载均衡）。
+ *
+ * 口径与 buildFreshPool 对齐：同样的 7 天窗口、同样排除已推过的。
+ * 不含红线剔除那几类（它们本来就不该进池），所以这个数是**乐观上界** ——
+ * 报出来是为了否定「没货」这个假设，不是为了精确预测能推几篇。
+ */
+async function countDistributableStock(tenantId: string): Promise<number> {
+  try {
+    const since = new Date(Date.now() - POOL_WINDOW_DAYS * 24 * 3600_000);
+    const rows = await db.execute(sql`
+      SELECT count(*)::int AS n
+      FROM contents c
+      WHERE c.type = 'article'
+        AND c.status IN ('generated', 'needs_review')
+        AND c.created_at >= ${since}
+        AND (c.tenant_id = ${tenantId}::uuid OR c.tenant_id = ${SYSTEM_RECOMMENDATION_TENANT_ID}::uuid)
+        AND NOT EXISTS (SELECT 1 FROM content_publish_log l WHERE l.content_id = c.id)`);
+    return Number(((rows as unknown as { rows?: Array<{ n?: number }> }).rows ?? [])[0]?.n ?? 0);
+  } catch {
+    // 查不到就返回 -1，让文案显示"存货未知"而不是伪造一个 0 ——
+    // 0 会被读成"确实没货"，正是本函数要消灭的误读（红线 #14）。
+    return -1;
+  }
+}
+
+/**
+ * 「某号长期零供给」独立告警。8-22 加（老韩拍板拆分）。
+ *
+ * 为什么必须与 `draft_shortfall` 分开：
+ *
+ * ```
+ * draft_shortfall        今天大家不够分     —— 每天都可能响，属水位波动
+ * account_supply_starved 这个号根本进不去   —— 是故障，且会被上面那条淹没
+ * ```
+ *
+ * 实测：`Paper咨询与发表` 7-28 起连续 25 天零进箱，而 `draft_shortfall`
+ * 每天都在响、每天都说「内容不够分」—— **故障在告警底下沉默了 25 天。**
+ *
+ * 严重度按断供天数升级：≥3 天 warn，≥7 天 error。
+ * 25 天这种必须是最高级 —— 一个数字在告警里躺着不动，说明没人在处理它。
+ */
+async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Promise<void> {
+  const STARVE_WARN_DAYS = 3;
+  const STARVE_ERROR_DAYS = 7;
+  try {
+    if (accountIds.length === 0) return;
+    const rows = await db.execute(sql`
+      SELECT a.id, a.account_name AS name,
+             MAX(l.created_at) AS last_at,
+             COUNT(l.id)::int AS total30
+      FROM platform_accounts a
+      LEFT JOIN content_publish_log l
+        ON l.account_id = a.id AND l.created_at > now() - interval '30 days'
+      WHERE a.id = ANY(${accountIds})
+      GROUP BY a.id, a.account_name`);
+    const list = ((rows as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? []);
+    for (const r of list) {
+      const lastAt = r.last_at ? new Date(String(r.last_at)) : null;
+      const days = lastAt ? Math.floor((Date.now() - lastAt.getTime()) / 86400_000) : 999;
+      if (days < STARVE_WARN_DAYS) continue;
+      reportDistIncident({
+        kind: "account_supply_starved",
+        severity: days >= STARVE_ERROR_DAYS ? "error" : "warn",
+        tenantId,
+        // 🔴 只陈述事实（红线 #13）：断供天数 + 最后一次 + 近 30 天总量。
+        //   不写"可能是配对问题/凭证失效" —— 那是排查者的工作，写死会带偏方向。
+        message: `公众号「${String(r.name ?? "?")}」连续 ${days === 999 ? "30+" : days} 天零进箱` +
+          `（最后一次 ${lastAt ? lastAt.toISOString().slice(0, 10) : "近 30 天内无记录"}，近 30 天共 ${Number(r.total30 ?? 0)} 篇）`,
+        detail: { accountId: String(r.id), accountName: r.name ?? null, starvedDays: days, total30d: Number(r.total30 ?? 0) },
+      });
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "长期零供给告警计算失败(旁路, 不阻塞分发)");
+  }
+}
+
 /** 记一条告警(旁路, 绝不抛错 —— 告警挂了不能反过来搞挂分发) */
 function reportDistIncident(input: {
   kind: string; severity: "error" | "warn"; tenantId: string; message: string; detail: Record<string, unknown>;
@@ -556,17 +639,53 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
     if (report.remedy) report.remedy.shortfallsAfter = shortAfter.length;
 
     if (shortAfter.length > 0) {
-      // 严重度分档: 还有号**一条都没有**(assigned=0) → 红(该号今天彻底没东西发);
-      //             只是没填满下限 → 黄(有货, 少了点)。
+      /**
+       * 🔴 8-22 重写（老韩）。**错误的告警比没有告警更危险。**
+       *
+       * ═══ 这条告警干过什么 ═══
+       *
+       * 旧文案结尾硬写「— 内容不够分, 需提高生成量或补期刊/选题」。
+       * 它**不查存货就断言原因**。8-22 实测：可发池未推过 99 篇、其中过闸 54 篇 ——
+       * 内容多得是，真问题是 `Paper咨询与发表` 这个号**配对不上**，
+       * 7-28 起连续 25 天零进箱。
+       *
+       * 后果：一条**每天都在响**的告警，把注意力引向产量，
+       * 于是一个 25 天的故障在它底下沉默了 25 天。
+       *
+       * ▎ 没有告警至少不消耗注意力；错误的告警会把注意力引向错的方向，
+       * ▎ 并且提供一种「系统在监控」的虚假安心。
+       *
+       * 与红线 #14 的「缺失不是否定」同族：那条说**沉默被误读**，
+       * 这条说**发声被误读**。
+       *
+       * ═══ 三条修法 ═══
+       *
+       * ① 拆成两条独立 incident，严重度不同（见下方 starvedAccounts 分支）
+       * ② **报之前先查存货**，再决定说什么 ——「没货」和「有货送不出去」
+       *    是两个完全不同的故障，处置也完全相反
+       * ③ 只陈述事实，不写归因（红线 #13）：把存货数和断供天数摆出来，
+       *    读的人自己就知道问题在配对
+       */
       const starved = shortAfter.filter((s) => s.assigned === 0);
+      // ② 先查存货：可发池里**过了闸、没推过**的还有多少
+      const availableStock = await countDistributableStock(tenantId);
+      // ① 拆分：长期零供给单独喊。**对全部号算**，不只今天缺口名单里的那几个 ——
+      //   保底数一调低，长期断供的号就会从 shortfall 名单里消失，而故障还在。
+      await reportStarvedAccounts(tenantId, accounts.map((a) => a.id));
       reportDistIncident({
         kind: "draft_shortfall",
         severity: starved.length > 0 ? "error" : "warn",
         tenantId,
-        message: `${shortAfter.length}/${accounts.length} 个公众号未达每日保底(${target}篇)` +
-          (starved.length > 0 ? `, 其中 ${starved.length} 个号今日 0 篇` : "") +
+        // 🔴 8-22 点名到号。**这是 25 天失明的直接病灶**：
+        //   号名与 assigned:0 一直写在 detail 里、每天都在，
+        //   但人读的这行 message 从来没提过名字，只说"N/7 个号未达保底"。
+        //   数据不缺，缺的是把它放到人会读的那一行 —— 写进 detail 不等于报出来。
+        message: `${shortAfter.length}/${accounts.length} 个公众号未达每日保底(${target}篇)：` +
+          shortAfter.map((x) => `${x.accountName ?? x.accountId}(${x.assigned}/${target})`).join("、") +
+          (starved.length > 0 ? `; 其中 ${starved.length} 个号今日 0 篇` : "") +
           `${report.remedy?.attempted ? `; 已自动补救(放宽到 ${report.remedy.windowDays} 天窗口)补进 ${report.remedy.pushed ?? 0} 篇` : ""}` +
-          ` — 内容不够分, 需提高生成量或补期刊/选题`,
+          // 🔴 只报事实：存货多少 + 未配对多少。原因由读的人判断，不由文案断言。
+          `; 可发池尚有 ${availableStock} 篇合格未推送内容, 本轮未配对 ${unmatchedCount} 篇`,
         detail: {
           target, cap: perAccount, accounts: accounts.length,
           poolSize: report.poolSize, unmatched: unmatchedCount,

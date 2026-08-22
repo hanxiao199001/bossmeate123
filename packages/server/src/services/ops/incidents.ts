@@ -61,7 +61,9 @@ export type IncidentKind =
   | "journal_pool_forecast"     // 排产前盘点发现: 某学科可选新刊为 0, 而今天还要给它排产
   | "candidate_skipped"         // 候选被学科配额/期刊限流大量跳过, 导致未达目标(旧按学科链路)
   | "generation_failed"         // 单篇生成失败(排产环节, 非质检)
-  | "draft_shortfall"           // 公众号未达每日保底(草稿分发缺口)
+  | "draft_shortfall"           // 公众号未达每日保底(草稿分发缺口) —— 水位波动，每天都可能响
+  | "account_supply_starved"    // 8-22: 某号连续多日零进箱 —— 是**故障**，与上面那条刻意分开
+                                //   (实测 Paper咨询与发表 断供 25 天，被每天都在响的 draft_shortfall 淹没)
   | "draft_remedy_failed"       // 缺口自动补救本身失败
   | "quality_gate_unavailable"  // 质检闸"没能跑成"(规则检索/红线解析/一致性检查异常) ≠ 内容违规
   // ---- 7-28 阶段1-C Prompt 治理 ----
@@ -107,6 +109,7 @@ export const KIND_LABEL: Record<string, string> = {
   candidate_skipped: "候选被配额/限流大量跳过(没凑够篇数)",
   generation_failed: "单篇生成失败(排产环节)",
   draft_shortfall: "公众号未达每日保底(草稿分发缺口)",
+  account_supply_starved: "公众号长期零进箱(疑配对/凭证故障, 非产量问题)",
   draft_remedy_failed: "草稿缺口自动补救失败",
   quality_gate_unavailable: "质检闸不可用(没检查成, 已转人工; ≠ 内容违规)",
   prompt_contradiction: "prompt 指令自相矛盾(同一字段既要求写又禁止写, 已自动修正; 需回看代码)",
