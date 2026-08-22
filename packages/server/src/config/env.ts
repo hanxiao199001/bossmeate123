@@ -90,7 +90,14 @@ const envSchema = z.object({
   AI_ARTICLE_TIMEOUT_MS: z.coerce.number().default(120000),
   // 7-27 分任务档: 一个数值管不了"3000 token 推理型质检"和"人在对面等的客服"两头。
   //   质检 180s: 提示最长、模型最慢, 而且超了还有降级重试兜着, 宁可多等也别白烧一次推理钱。
-  AI_QUALITY_CHECK_TIMEOUT_MS: z.coerce.number().default(180000),
+  //
+  // 🔴 8-22: 180s → **300s**, 与 `SIX_DIM_MAX_TOKENS` 4096→8000 **同一次改动, 必须成对**。
+  //   8-10 `discipline-position-generator` 修同一个截断病时只抬了 maxTokens 没抬超时,
+  //   结果 10 篇里 3 篇撞超时 —— 修好一个失败模式换来另一个。
+  //   推理模型吐 8000 token 实测 100~200s, 300s 是留一倍余量。
+  //   ⚠️ 服务器 .env **未设置**此项(8-22 核实), 即实际生效值就是这里的默认值;
+  //      日后若有人往 .env 里写它, 按红线 #22 —— 生效值以配置为准, 改这里不算数。
+  AI_QUALITY_CHECK_TIMEOUT_MS: z.coerce.number().default(300000),
   //   客服/日常问答 45s: 走 qwen-plus(非推理型, 实测个位数秒), 早失败早给兜底话术,
   //   让客服跟着质检一起等 120s 是把两个不相干的需求绑在一根绳上。
   AI_FAST_TIMEOUT_MS: z.coerce.number().default(45000),
