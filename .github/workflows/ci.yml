@@ -103,6 +103,19 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 🔴 `config/env.ts` 是 **fail-fast**：`findEnvFile()` 找不到 .env 直接 throw，
+      #   于是一批测试在 **import 期**就挂 —— 整个文件一条用例都不跑。
+      #   CI 一直只设了环境变量、没有这个**文件**，实测 36 个测试文件因此从没跑过
+      #   （总用例数 2439，服务器 2785，差 346 —— 正是红线 #12 规则 6 那个识别信号）。
+      #   dotenv 默认不覆盖已存在的 process.env，所以上面 env: 里的值仍然说了算。
+      - name: 造 .env（缺文件会让 36 个测试文件在 import 期就挂）
+        run: |
+          cat > .env <<'ENVEOF'
+          DATABASE_URL=postgres://ci:ci@127.0.0.1:5432/ci_unused
+          JWT_SECRET=ci-secret-12345678
+          REDIS_URL=redis://127.0.0.1:6379
+          NODE_ENV=test
+          ENVEOF
       - name: 基线闸
         run: bash scripts/ci/baseline-gate.sh
       # 基线尚未建立时，把候选清单带出来给人看过再提交（脚本刻意不自动写基线）
