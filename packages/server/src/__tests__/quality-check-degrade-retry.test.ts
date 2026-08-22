@@ -190,3 +190,82 @@ vi.mock("../config/system-recommendation.js", () => ({ SYSTEM_RECOMMENDATION_TEN
 vi.mock("../config/env.js", () => ({ env: { DRAFT_PUSH_PER_ACCOUNT: 3, DRAFT_TARGET_PER_ACCOUNT: 2 } }));
 vi.mock("../services/publisher/smart-assign.js", () => ({ computeSmartPairs: vi.fn() }));
 vi.mock("../services/publisher/index.js", () => ({ publishToAccounts: vi.fn() }));
+
+/**
+ * ⑤ 8-22 撞顶闸（v5）—— 行为锁，不锁写法（红线 #15）。
+ *
+ * 生产实测：`cost_ledger` 全量 4289 次 quality_check 调用里 **26.0% 撞顶**（out>=4096），
+ * 而缺维崩溃只有 7.6% —— 中间约 19% 是「撞顶了但 JSON 侥幸完整」。
+ * 那 19% 现在不报错，但和崩溃的那批是同一个病，只是这次没断在字段中间。
+ */
+describe("⑤ 输出撞顶(finishReason=max_tokens) → 拒收", () => {
+  const truncatedButValid = (model: string) => ({
+    content: GOOD_JSON,                 // ← JSON 完整！只有模型自述说被截断了
+    model, provider: "deepseek", inputTokens: 3000, outputTokens: 8000,
+    finishReason: "max_tokens" as const,
+  });
+
+  it("🔴 JSON 恰好完整但 finishReason=max_tokens → 仍然拒收(这正是那侥幸的 19%)", async () => {
+    chatMock
+      .mockResolvedValueOnce(truncatedButValid("deepseek-v4-pro"))
+      .mockResolvedValueOnce(ok("deepseek-v4-pro"));
+
+    const r = await sixDimQualityCheck(PARAMS);
+
+    // 第一次的分**没有被采用** —— 若被采用则只会调用一次
+    expect(chatMock).toHaveBeenCalledTimes(2);
+    expect(r.degraded).toBe(false);
+    expect(r.scoredBy).toBe("primary");
+  });
+
+  it("🔴 撞顶归类为「输出坏」而非「超时」→ 原模型重打, 不换降级快模型(换模型=换尺子)", async () => {
+    chatMock
+      .mockResolvedValueOnce(truncatedButValid("deepseek-v4-pro"))
+      .mockResolvedValueOnce(ok("deepseek-v4-pro"));
+
+    await sixDimQualityCheck(PARAMS);
+
+    // v4-pro 与 qwen-plus 对同一批文章相关性只有 r=0.254，
+    // 截断该做的是按更大预算重打，不是拿另一把尺子去量。
+    expect((chatMock.mock.calls[1][0] as { skillType: string }).skillType).toBe("quality_check");
+  });
+
+  it("一路撞顶到底 → 判「没评上分」(degraded), 绝不返回一个分数", async () => {
+    chatMock
+      .mockResolvedValueOnce(truncatedButValid("deepseek-v4-pro"))
+      .mockResolvedValueOnce(truncatedButValid("deepseek-v4-pro"))
+      .mockResolvedValueOnce(truncatedButValid("qwen-plus"));
+
+    const r = await sixDimQualityCheck(PARAMS);
+
+    expect(r.degraded).toBe(true);
+    expect(r.totalScore).toBeNull();     // 没评上分 ≠ 评了 0 分
+    await flushIncidents(1);
+    const kinds = recordIncidentSpy.mock.calls.map((c) => (c[0] as { kind: string }).kind);
+    expect(kinds).toContain("quality_check_unavailable");
+  });
+});
+
+/**
+ * ⑥ 8-22 输出预算 —— 这是 v5 与 v4 的**唯一实质差别**，必须锁住。
+ * 不传 maxTokens 就会吃 `model-router.materializeChoice` 的全局默认 4096，
+ * 而 quality_check 槽走推理模型，思维链和 JSON 共用这一个预算。
+ */
+describe("⑥ 六维评分必须显式传输出预算", () => {
+  it("🔴 chat() 收到 maxTokens=8000(不是路由表默认 4096)", async () => {
+    chatMock.mockResolvedValueOnce(ok("deepseek-v4-pro"));
+    await sixDimQualityCheck(PARAMS);
+
+    const req = chatMock.mock.calls[0][0] as { maxTokens?: number };
+    expect(req.maxTokens).toBe(8000);
+  });
+
+  it("降级重打那次同样带着预算(别只给第一次)", async () => {
+    chatMock
+      .mockRejectedValueOnce(new Error("This operation was aborted"))
+      .mockResolvedValueOnce(ok("qwen-plus"));
+    await sixDimQualityCheck(PARAMS);
+
+    expect((chatMock.mock.calls[1][0] as { maxTokens?: number }).maxTokens).toBe(8000);
+  });
+});

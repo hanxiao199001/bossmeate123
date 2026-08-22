@@ -588,6 +588,39 @@ export function checkHtmlIntegrity(body: string): QualityCheckV2Result["htmlInte
  *   注：`data-collection/quality-check-engine.ts` 的 prompt 有同类问题（示例全是 "score": 0），
  *   是另一条独立评分链路，本次刻意不动 —— 一次只改一个变量，保证分布变化可归因。
  */
+/**
+ * 🔴 六维评分的输出预算。**8-22 从路由表默认 4096 提到 8000**。
+ *
+ * ## 病灶
+ *
+ * `sixDimQualityCheck` 从来没传过 `maxTokens`，于是吃 `model-router.materializeChoice`
+ * 里硬编码的全局默认 **4096**。而 `quality_check` 槽走的是 deepseek-v4-pro ——
+ * **推理模型，思维链和 JSON 共用这一个预算**。思维链烧超了，JSON 就从尾部断掉。
+ *
+ * 生产实测（8-22，`cost_ledger` 全量 4289 次 quality_check 调用）：
+ *
+ * ```
+ * out >= 4096(撞顶)   1116 次 / 4289 = 26.0%
+ * ```
+ *
+ * 这与零维分布的指纹严格对应 —— 零维频率按 JSON 字段出场顺序单调递增
+ * （topicHook 56 → originalityCompliance 178，全量 1214 篇），因为断的总是尾部。
+ *
+ * ## 为什么必须连超时一起抬（8-10 已经踩过一次）
+ *
+ * `discipline-position-generator.ts` 8-10 修同一个病时把 MAX_TOKENS 3000→8000，
+ * **却没动超时** —— 10 篇里 3 篇撞超时，修好一个失败模式换来另一个。
+ * 推理模型吐 8000 token 的实测耗时 100~200s，故本次同步把
+ * `AI_QUALITY_CHECK_TIMEOUT_MS` 默认 180s → 300s（留一倍余量）。
+ *
+ * ## 验收指标用「撞顶率」不用「崩溃率」（老韩 8-22）
+ *
+ * 撞顶 26% 而缺维崩溃只有 7.6% —— 中间约 19% 是**撞顶了但 JSON 侥幸完整**的调用。
+ * 它们现在不报错，但和崩溃的那批是同一个病，只是这次没断在字段中间。
+ * 所以修复的验收看撞顶率归零，不看崩溃率归零 —— 后者会把侥幸的那 19% 算作"没问题"。
+ */
+const SIX_DIM_MAX_TOKENS = 8000;
+
 export async function sixDimQualityCheck(params: {
   tenantId: string;
   title: string;
@@ -680,6 +713,9 @@ ${scorerView}
   "practicality": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"},
   "originalityCompliance": {"score": <0-10整数>, "weakestSection": "<章节名>", "fixHint": "<一句话怎么修>", "justification": "<一句评分理由>"}
 }`,
+      // 8-22: 显式给推理链留出预算, 不吃路由表那个全局 4096(见 SIX_DIM_MAX_TOKENS)。
+      //   刻意传在调用点而不是改 model-router 的默认 —— 那是全局值, 会波及所有技能。
+      maxTokens: SIX_DIM_MAX_TOKENS,
       // 7-27: primary → 路由表 quality_check 槽(推理型 v4-pro); fallback → quality_check_fast 槽(qwen-plus)
       skillType: tier === "primary" ? "quality_check" : "quality_check_fast",
       // 7-28 ②b: 主备全挂直接抛错。下面那行 isAiFallbackText 判据保留 —— 它防的是**别的路径**
@@ -691,6 +727,36 @@ ${scorerView}
     //   "六维评分输出无 JSON" —— 于是"AI 根本没响应"被记成了"模型输出格式不对", 两种完全
     //   不同的故障混成一类, 告警也就无从区分。先显式识别兜底文案, 标成 AI 不可用。
     if (isAiFallbackText(response.content)) throw new QualityCheckAiUnavailable("AI 兜底文案(模型超时/主备全挂), 未评分");
+
+    /**
+     * 🔴 8-22 早期闸：**模型自己说被截断了 → 直接拒收**，不进解析。
+     *
+     * 与下面那道「缺维即抛错」的晚期闸**两道都要，不是二选一**（老韩 8-22 拍板）：
+     *
+     * ```
+     * finishReason=max_tokens 但 JSON 恰好完整  →  只有本闸抓得到
+     *     ← 这次侥幸, 下次就会断在字段中间。生产里这类占 ~19%(撞顶 26% - 崩溃 7.6%)
+     * finishReason=stop 但 JSON 仍不完整        →  只有下面那道闸抓得到
+     *     ← 别的原因造成的残缺(模型自己吐坏了/围栏没闭合)
+     * ```
+     *
+     * 两道判据的信息来源不同（模型的自述 vs 解析后的实际字段），所以覆盖面不重合。
+     * 少一道就少一层网 —— 同 `isAiFallbackText` 与 `throwOnExhausted` 并存的道理。
+     *
+     * 归类为「输出坏」而非「超时」：错误文案里刻意不出现 timeout/超时 字样，
+     * 否则 `classifyQualityFailure` 的正则会把它判成 timeout → 直接换降级快模型，
+     * 而那是**换了一把尺子**(v4-pro → qwen-plus, 两者相关性只有 r=0.254)。
+     * 截断该做的是原模型按更大预算重打，不是换模型。
+     */
+    if (response.finishReason === "max_tokens") {
+      logger.warn(
+        { tenantId, contentId, tier, model: response.model,
+          outputTokens: response.outputTokens, maxTokens: SIX_DIM_MAX_TOKENS,
+          outputLen: String(response.content ?? "").length },
+        "🔴 六维评分输出撞顶(finishReason=max_tokens) —— 拒收, 不进解析",
+      );
+      throw new Error(`六维评分输出被截断(finishReason=max_tokens, 预算 ${SIX_DIM_MAX_TOKENS})`);
+    }
 
     // 7-30: 原来是 `match(/\{[\s\S]*\}/)` + JSON.parse —— 对推理型模型不够。
     //   v4-pro 输出前跑思维链, reasoning/围栏/中途插话都会混进来; 而那个贪婪正则还会把
