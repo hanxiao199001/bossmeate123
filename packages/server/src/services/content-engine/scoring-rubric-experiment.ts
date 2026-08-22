@@ -146,3 +146,74 @@ export function evaluateDedupCriteria(base: RubricRunStats, after: RubricRunStat
   }
   return { verdicts: v, decision: decisive.every((x) => x.pass) ? "PASS" : "FAIL" };
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 件 2：practicality 体裁中立化（v3 → v4）。8-22 预注册。
+// ═══════════════════════════════════════════════════════════════
+
+import { registerCriteria, MEASURED_NOISE, type ScoringCriterion } from "./criterion-registry.js";
+
+/**
+ * 🔴 与件 1 的关键差别：**这批判据在注册期就被机器校验过**。
+ *
+ * 件 1 那次我手写了 0.5 / 0.3 这种阈值，而单维噪音是 1.3 ——
+ * 判据在写下的那一刻就已经答不出东西，跑完才发现。
+ * 现在 `registerCriteria` 会在实验开跑前抛错。
+ *
+ * 阈值取 **2× 噪音 = 2.6**（老韩定的门槛）。
+ * 件 2 预期效应 3-4 分（practicality 从结构性 0 分变成有分），够穿透。
+ */
+export const PIECE2_CRITERIA: readonly ScoringCriterion[] = registerCriteria(
+  [
+    {
+      id: "p2-1",
+      statement: "A2_new 组 practicality 上升 ≥2.6（主效应：不再因为没写投稿建议而拿不到分）",
+      threshold: 2.6,
+      unit: "sixdim_dim_0_10",
+      noiseLevel: MEASURED_NOISE.sixdim_dim_0_10.level,
+      noiseUnit: "sixdim_dim_0_10",
+      noiseSource: MEASURED_NOISE.sixdim_dim_0_10.source,
+      noiseMeasuredAt: MEASURED_NOISE.sixdim_dim_0_10.at,
+      direction: "increase",
+    },
+    {
+      id: "p2-2",
+      // 🔴 单向（红线 #18）：rich 组本来就写投稿建议，中立化不该让它变差；变好也不算问题
+      statement: "rich_prod 组 practicality 不变差（单向，≥-1.3）—— 放宽定义不该惩罚原本合格的",
+      threshold: -1.3,
+      unit: "sixdim_dim_0_10",
+      noiseLevel: MEASURED_NOISE.sixdim_dim_0_10.level,
+      noiseUnit: "sixdim_dim_0_10",
+      noiseSource: MEASURED_NOISE.sixdim_dim_0_10.source,
+      noiseMeasuredAt: MEASURED_NOISE.sixdim_dim_0_10.at,
+      direction: "no_worse",
+      // 阈值恰好等于噪音，作为单向下界是可接受的：它问的是"有没有塌"，不是"有没有动"
+      observationOnly: true,
+    },
+    {
+      id: "p2-3",
+      statement: "A2_new 组 practicality 逐篇同向 ≥7/9（方向一致性优先于均值差）",
+      threshold: 7,
+      unit: "article_count",
+      noiseLevel: 0,
+      noiseUnit: "article_count",
+      noiseSource: "计数无评分噪音（同一次运行内的确定性比较）",
+      noiseMeasuredAt: MEASURED_NOISE.sixdim_dim_0_10.at,
+      direction: "increase",
+    },
+    {
+      id: "p2-4",
+      // 配套②：放宽定义 → 分数上移 → 达标率可能虚涨。必须先看分位再决定要不要挪线
+      statement: "记录 80 分在 v4 下的分位（若较 v3 下移 >5 个百分点，视为线变松，需重新校准）",
+      threshold: 5,
+      unit: "percent_0_100",
+      noiseLevel: 0,
+      noiseUnit: "percent_0_100",
+      noiseSource: "分位为样本内确定性统计，无评分噪音；但样本本身 n=30 有抽样误差",
+      noiseMeasuredAt: MEASURED_NOISE.sixdim_dim_0_10.at,
+      direction: "no_worse",
+      observationOnly: true,
+    },
+  ],
+  MEASURED_NOISE.sixdim_dim_0_10.at,
+);
