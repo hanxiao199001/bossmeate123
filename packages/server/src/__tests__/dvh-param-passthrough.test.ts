@@ -139,8 +139,27 @@ async function buildApp(): Promise<FastifyInstance> {
 }
 
 /** fire-and-forget: 等落库 */
+/**
+ * 等异步落库。**8-22 两处修正**：
+ *
+ * ① 预算从硬编码 1.2s（60×20ms）提到 8s。
+ *    CI 修好 .env 之后同批要跑的用例从 2439 涨到 2865，并行负载上去，
+ *    1.2s 这个拍脑袋的数就不够了 —— 实测当天连续两次 CI 里这两条一次绿一次红。
+ *
+ * ② 🔴 **超时必须抛错，不许返回 undefined。**
+ *    原来超时后 `inserted[0]?.metadata` 返回 undefined，调用方的断言随后炸在
+ *    "expected undefined to be 'https://...'" —— 于是**「没等到」被伪装成「值不对」**，
+ *    看日志的人会去查透传逻辑，而真正的问题是这个函数没等够。
+ *    红线 #14 的同一个形态：降级产物（等不到）与真产物（值错）在下游无法区分。
+ */
 async function waitInsert() {
-  for (let i = 0; i < 60 && inserted.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  const deadline = Date.now() + 8000;
+  while (inserted.length === 0) {
+    if (Date.now() > deadline) {
+      throw new Error("waitInsert 超时(8s)：没等到落库 —— 这是等待超时，不是值不对，别去查透传逻辑");
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
   return inserted[0]?.metadata;
 }
 function aliyunReq() { return captured.find((c) => c.kind === "text")?.req; }
