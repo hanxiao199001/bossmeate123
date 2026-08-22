@@ -324,6 +324,78 @@ export interface PlatformSignals {
  */
 export const QUALITY_FAIL_ALERT_COUNT = 5;
 
+/**
+ * 六维评分「撞顶率」—— 每日常驻检查（8-23 加，老韩）。
+ *
+ * ## 为什么是常驻而不是一次性验收
+ *
+ * 8-22 修了一次截断：`SIX_DIM_MAX_TOKENS` 4096 → 8000（撞顶率实测 26.0%，
+ * 1116/4289 全量调用）。当时想的是「明早验收一次」——
+ *
+ * ▎ 一次性验收任务的问题是：它验完就没了，而它验的那件事会一直有可能坏。
+ *
+ * 换模型、加 prompt、判据变长，都会把这个数顶回去。所以让它每天自己说话。
+ *
+ * ## 🔴 口径跟着预算走，不写死 8000（红线 #16：绑关系不绑常数）
+ *
+ * 判据是 `outputTokens >= SIX_DIM_MAX_TOKENS`。谁改了预算，这个检查自动跟上；
+ * 写死 8000 的话，下次预算一变它就永远报 0%，而那正是它该喊的时候。
+ *
+ * ## 🔴 三种「没有撞顶」必须彼此可区分（红线 #14 / #23）
+ *
+ * ```
+ * 查询挂了       → 标记不可用，绝不当成 0%     ← 检查器自己挂了必须能看出来
+ * 当天零调用     → 「今天没跑过质检」，不是「很健康」
+ * 真的零撞顶     → 这才是我们要的那个 0%
+ * ```
+ *
+ * 三者在下游长得一样的话，这个检查就变成了它自己要防的东西。
+ *
+ * ## 阈值依据
+ *
+ * - `≥5%` 黄：修复后预期接近 0。日质检调用量约 100，真值为 0 时看到 5 条属极小概率，
+ *   所以 5% 是「明显不是噪音、确实有东西变了」的线。
+ * - `≥20%` 红：已经回到修复前水位（26~40%），说明有新的截断源，成品在被静默削尾。
+ *
+ * 看了能做什么（CC-待办 #1 第三条判据）：抬 `SIX_DIM_MAX_TOKENS`，或缩短评分输出
+ * （justification 字段是大头）。两条都是技术动作，所以这条只进技术侧，不写成运营待办。
+ */
+export async function collectTruncationItems(now: Date = new Date()): Promise<BriefItem[]> {
+  const WARN_PCT = 5;
+  const ALERT_PCT = 20;
+  try {
+    const since = new Date(now.getTime() - 24 * 3600_000).toISOString();
+    const { SIX_DIM_MAX_TOKENS } = await import("../content-engine/quality-check-v2.js");
+    const rows = (await db.execute(sql`
+      SELECT count(*)::int AS calls,
+             coalesce(sum(CASE WHEN (regexp_match(note, 'out=([0-9]+)'))[1]::int >= ${SIX_DIM_MAX_TOKENS}
+                               THEN 1 ELSE 0 END), 0)::int AS capped
+      FROM cost_ledger
+      WHERE kind = 'llm' AND note LIKE '%task=quality_check%' AND created_at > ${since}::timestamptz
+    `) as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+    const calls = Number(rows[0]?.calls ?? 0);
+    const capped = Number(rows[0]?.capped ?? 0);
+
+    // 零调用 ≠ 零撞顶。整句改说另一件事，绝不报 "0%"。
+    if (calls === 0) {
+      return [{ level: "warn", text: `近 24 小时没有跑过六维质检 —— 撞顶率无从算起(不是 0%)。先确认生成链路在跑。` }];
+    }
+    const pct = Math.round((capped / calls) * 1000) / 10;
+    if (pct < WARN_PCT) return [];   // 正常水位不占版面
+    // 🔴 只陈述事实 + 对照基准，不写归因(红线 #13)
+    return [{
+      level: pct >= ALERT_PCT ? "alert" : "warn",
+      text: `六维评分输出撞顶 ${capped}/${calls} 次(${pct}%，预算 ${SIX_DIM_MAX_TOKENS} token)` +
+        ` —— 对照：8-22 修复前 26~40%，修复后应接近 0。撞顶的那些成品是被削了尾的，` +
+        `处置是抬预算或缩短评分输出。`,
+    }];
+  } catch (err) {
+    // 🔴 红线 #23：检查器自己挂了必须报出来，不许静默当成"没有撞顶"。
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "撞顶率检查失败");
+    return [{ level: "warn", text: `六维撞顶率**没算出来**(查询失败) —— 这不等于没有撞顶，今天这项等于没查。` }];
+  }
+}
+
 /** 平台级(跨租户)信号 → 简报条目 + 待办 */
 export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: string[] } {
   const items: BriefItem[] = [];
@@ -862,7 +934,9 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
   const outcomeItems = await collectOutcomeItems(now);
   // 8-03 积压待重跑(自带 try/catch, 绝不抛错)
   const deferredItems = await collectDeferredItems(now);
-  const allItems = [...streakItems, ...outcomeItems, ...deferredItems, ...items, ...pool.items];
+  // 8-23 撞顶率常驻检查(自带 try/catch)。正常水位返回空数组, 不占版面。
+  const truncationItems = await collectTruncationItems(now);
+  const allItems = [...streakItems, ...outcomeItems, ...deferredItems, ...truncationItems, ...items, ...pool.items];
   return {
     health, supplier, incidents,
     items: allItems, todos: [...todos, ...pool.todos],

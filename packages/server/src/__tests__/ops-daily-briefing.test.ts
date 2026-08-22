@@ -31,7 +31,14 @@ const h = vi.hoisted(() => {
     });
     return proxy;
   }
-  return { selectQueue, chain };
+  /**
+   * 8-23: `db.execute`(原生 SQL)的返回队列。
+   * 原来这个 harness 根本没 mock execute —— 用原生 SQL 的收集器一调就抛,
+   * 被自己的 catch 吞掉, **测试绿而那段代码从来没真跑过**(同一天在
+   * draft-distributor 的 harness 上踩过一次)。
+   */
+  const executeQueue: Array<{ rows: Row[] } | Error> = [];
+  return { selectQueue, chain, executeQueue };
 });
 
 vi.mock("../models/db.js", () => ({
@@ -40,6 +47,11 @@ vi.mock("../models/db.js", () => ({
     // 8-02: collectZeroStreakPlatform 用 selectDistinct 查"有可分发账号的租户"
     selectDistinct: () => h.chain(h.selectQueue.shift() ?? []),
     insert: () => h.chain([]),
+    execute: async () => {
+      const next = h.executeQueue.shift();
+      if (next instanceof Error) throw next;
+      return next ?? { rows: [] };
+    },
   },
   testConnection: vi.fn(async () => true),
 }));
@@ -75,6 +87,7 @@ const {
   worstLevel,
   collectTenantBriefing,
   collectZeroStreakPlatform,
+  collectTruncationItems,
 } = await import("../services/ops/daily-briefing.js");
 const { judgeSupplier } = await import("../services/ops/supplier-balance.js");
 const { isQuotaLikeError } = await import("../services/ops/incidents.js");
@@ -621,5 +634,70 @@ describe("8-02 collectZeroStreakPlatform — 连续异常升级(平台级)", () 
   it("统计失败只降级为不升级, 绝不把整份简报拖挂", async () => {
     h.selectQueue.push(new Error("db down"));
     await expect(collectZeroStreakPlatform()).resolves.toEqual([]);
+  });
+});
+
+/**
+ * 8-23 撞顶率常驻检查 —— 行为锁。
+ *
+ * ▎ 一次性验收任务的问题是：它验完就没了，而它验的那件事会一直有可能坏。
+ *
+ * 8-22 把 SIX_DIM_MAX_TOKENS 从 4096 抬到 8000（撞顶率实测 26.0%）。
+ * 换模型、加 prompt、判据变长都会把这个数顶回去，所以让它每天自己说话。
+ *
+ * 🔴 本组重点锁的是**三种「没有撞顶」互相可区分**（红线 #14 / #23）——
+ * 查询挂了 / 当天零调用 / 真的零撞顶，三者在下游长得一样的话，
+ * 这个检查就变成了它自己要防的东西。
+ */
+describe("撞顶率每日检查", () => {
+  beforeEach(() => { h.executeQueue.length = 0; });
+
+  it("正常水位(<5%) → 不占版面", async () => {
+    h.executeQueue.push({ rows: [{ calls: 120, capped: 2 }] });   // 1.7%
+    expect(await collectTruncationItems(new Date())).toEqual([]);
+  });
+
+  it("≥5% → 黄，文案必须带原始两个数(不能只给百分比)", async () => {
+    h.executeQueue.push({ rows: [{ calls: 100, capped: 9 }] });
+    const items = await collectTruncationItems(new Date());
+    expect(items).toHaveLength(1);
+    expect(items[0]!.level).toBe("warn");
+    expect(items[0]!.text).toContain("9/100");   // 分子分母都在, 读者能自己判断样本量
+    expect(items[0]!.text).toContain("9%");
+  });
+
+  it("≥20%(回到修复前水位) → 红", async () => {
+    h.executeQueue.push({ rows: [{ calls: 100, capped: 31 }] });
+    const items = await collectTruncationItems(new Date());
+    expect(items[0]!.level).toBe("alert");
+  });
+
+  it("🔴 当天零调用 → 说「无从算起」，绝不报 0%", async () => {
+    h.executeQueue.push({ rows: [{ calls: 0, capped: 0 }] });
+    const items = await collectTruncationItems(new Date());
+    expect(items).toHaveLength(1);
+    expect(items[0]!.text).toContain("无从算起");
+    // 判据是「不许给出一个算出来的比率」，不是「文本里不许出现 0%」——
+    // 文案本身写着「不是 0%」是**对的**，那正是在提醒读者别把它当 0。
+    // 第一版断言写成 not.toContain("0%") 被自己的文案命中了：
+    // **判据钉的是措辞，不是那件事**（红线 #15 的微缩版）。
+    expect(items[0]!.text).not.toMatch(/撞顶 \d+\/\d+/);   // 不出现"撞顶 N/M 次"那种成绩单
+  });
+
+  it("🔴 查询自己挂了 → 报出来，不许静默当成「没有撞顶」(红线 #23)", async () => {
+    h.executeQueue.push(new Error("connection reset"));
+    const items = await collectTruncationItems(new Date());
+    // 断言**副作用**(真的产出了一条告警), 不是断言"没抛错" —— 后者会绿到底
+    expect(items).toHaveLength(1);
+    expect(items[0]!.text).toContain("没算出来");
+    expect(items[0]!.text).toContain("这不等于没有撞顶");
+  });
+
+  it("🔴 口径跟着 SIX_DIM_MAX_TOKENS 走，不是写死 8000(红线 #16: 绑关系不绑常数)", async () => {
+    // 预算一旦改动而判据写死, 这个检查就永远报 0% —— 而那正是它该喊的时候
+    const { SIX_DIM_MAX_TOKENS } = await import("../services/content-engine/quality-check-v2.js");
+    h.executeQueue.push({ rows: [{ calls: 100, capped: 9 }] });
+    const items = await collectTruncationItems(new Date());
+    expect(items[0]!.text).toContain(String(SIX_DIM_MAX_TOKENS));
   });
 });
