@@ -37,9 +37,47 @@ import { transitionToStatus, InvalidTransitionError } from "./state-machine.js";
  *
  * **40 分钟**，由两个约束共同决定（取更严的那个）：
  *   · ≥ 3× 实测 max（9.7 × 3 ≈ 30）
- *   · ≥ 3× **心跳最坏间隔**（12 分钟 × 3 = 36）—— 心跳间隔必须 ≤ 阈值的 1/3，
- *     否则"慢但活着"仍会被误杀；而链路上最坏的一段是六维质检单次
- *     （`AI_QUALITY_CHECK_TIMEOUT_MS 180s` × `withRetry` 4 次 = 12 分钟）。
+ *   · ≥ 3× **心跳最坏间隔** —— 心跳间隔必须 ≤ 阈值的 1/3，否则"慢但活着"仍会被误杀；
+ *     链路上最坏的一段是六维质检单次（当前 **10 分钟** = 2 × 300s，推算见 `worstHeartbeatGapMs`）。
+ *
+ * ### 🔴 8-22 更正：原来那个 12 分钟是错的，而 40 这个结论侥幸是对的
+ *
+ * 原文写的是「`AI_QUALITY_CHECK_TIMEOUT_MS 180s` × `withRetry` 4 次 = 12 分钟」。
+ * **这个乘法不成立** —— `utils/retry.ts` 的 `defaultShouldRetry` 第一条就是：
+ *
+ * ```ts
+ * // ① 超时/中断 —— 最优先, 永不重试
+ * if (isAbortLike(error)) return false;
+ * ```
+ *
+ * 质检超时正是 AbortController 掐断 → AbortError → **`withRetry` 一次都不重试**。
+ * 那 4 次只对 429/5xx/连接瞬断生效，而那些是快失败。
+ *
+ * 真实的最坏路径在**外层** `MAX_SCORE_ATTEMPTS` 循环：超时 → `cls="timeout"`
+ * → 立刻转 fallback；而 `tier==="fallback"` 即 `willBeLast`。所以是
+ * **最多 2 次全额超时**（最坏混合路径：primary 快失败 + primary 超时 + fallback 超时）。
+ *
+ * ```
+ * 180s 时代（8-18 写这段时）  2 × 180s = 6 分     原文写 12 分
+ * 8-22 起 timeout=300s        2 × 300s = 10 分    （见 SIX_DIM_MAX_TOKENS 那次改动）
+ *
+ * （最坏混合路径 = primary 快失败 + primary 超时 + fallback 超时，
+ *   比纯 2× 多一次快失败的零头，不足 1 分钟，不改变结论。）
+ * ```
+ *
+ * 40 分钟阈值当初是按虚高的 12 分推出来的（`36 = 12 × 3`）。
+ * **结论侥幸偏保守（余量比以为的更大），但依据是错的。**
+ *
+ * 🔴 **为什么必须把这件事写出来，而不是默默把 12 改成 6：**
+ * 这个阈值的正当性挂在"最坏间隔 × 3"这条推算上。
+ * 如果哪天依据变了 —— 比如真给超时加了重试、或者 `MAX_SCORE_ATTEMPTS` 改大、
+ * 或者 fallback 不再是最后一跳 —— **阈值就该跟着变**。
+ * 而如果只改数不改理由，下一个人看到的是一个对得上的数字，
+ * 不会知道它是怎么来的，也就不会知道它什么时候该重算。
+ *
+ * 当前余量：10 分 × 3 = 30 ≤ 40 ✅（改动前是 6 × 3 = 18）。
+ * **再抬 timeout 前先算这一步** —— `timeout > 40/3/2 = 6.67 分钟`（400 秒）就会越线。
+ * 这条已由 `p0-b-watchdog.test.ts` 写死断言，不再靠人记得。
  *
  * 打点位置与点间最坏耗时（8-18 实测/推算，接线时按此表打）：
  *
@@ -49,7 +87,9 @@ import { transitionToStatus, InvalidTransitionError } from "./state-machine.js";
  * C 标题生成返回后            B→C   3 分  (AI_FAST 45s × 4)
  * D condense 返回后           C→D   8 分
  * E 去 AI 腔返回后            D→E   8 分
- * F 六维质检返回后            E→F  12 分  ← 最坏的一段
+ * F 六维质检返回后            E→F  10 分  ← 最坏的一段（8-22 更正，见上方；
+ *                                       = 2 × AI_QUALITY_CHECK_TIMEOUT_MS 300s，
+ *                                       **不是** ×4，超时不进 withRetry）
  * G 每轮定向重写返回后        F→G   8 分  (≤2 轮)
  * H 出稿健康闸之后            G→H  ≈0
  * ```
@@ -63,6 +103,24 @@ import { transitionToStatus, InvalidTransitionError } from "./state-machine.js";
  * ⚠️ 真正的根治是**心跳**（见 `touchGenerationHeartbeat`）：现在 watchdog 杀的是
  * "跑得慢的"，而"慢"和"死"在数据上分不清。心跳跑稳一周之后这条线才谈得上回调。
  */
+/**
+ * 心跳最坏间隔的推算 —— **只写这一处**，watchdog 文件头、`p0-b-watchdog.test.ts`、
+ * `runtime-params` 的运营文案原来各抄了一份 12 分钟，三处都错且要分别改。
+ *
+ * 链路最坏的一段是六维质检单次 = **最多 2 次全额超时**：
+ * 超时 → `cls="timeout"` → 立刻转 fallback；而 `tier==="fallback"` 即 `willBeLast`。
+ *
+ * 🔴 **不是** `× withRetry 4 次` —— `defaultShouldRetry` 第一条
+ * 「超时/中断，永不重试」把 abort 直接放弃了，那 4 次只对 429/5xx 生效。
+ * 8-18 原推算就错在这里，见文件头。
+ */
+export function worstHeartbeatGapMs(qualityCheckTimeoutMs: number): number {
+  return 2 * qualityCheckTimeoutMs;
+}
+
+/** 心跳间隔必须 ≤ 阈值的 1/3，否则"慢但活着"会被误杀。这是 40 这个数的第二个约束。 */
+export const HEARTBEAT_GAP_SAFETY_FACTOR = 3;
+
 export const WATCHDOG_TIMEOUT_FALLBACK_MINUTES = 40;
 export const WATCHDOG_TIMEOUT_MS = WATCHDOG_TIMEOUT_FALLBACK_MINUTES * 60 * 1000;
 export const WATCHDOG_INTERVAL_MS = 60 * 1000; // 1 分钟

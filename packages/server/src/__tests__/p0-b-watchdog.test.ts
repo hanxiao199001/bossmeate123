@@ -61,6 +61,8 @@ const {
   WATCHDOG_TIMEOUT_MS,
   WATCHDOG_INTERVAL_MS,
   WATCHDOG_ERROR_MESSAGE,
+  worstHeartbeatGapMs,
+  HEARTBEAT_GAP_SAFETY_FACTOR,
 } = await import("../services/articles/watchdog.js");
 
 beforeEach(() => {
@@ -85,17 +87,35 @@ describe("P0-B watchdog: 常量", () => {
   /**
    * 40 由**两个**约束取更严者决定，不只是 3× 实测 max：
    *   · ≥ 3× 实测最慢成功耗时（9.7 × 3 ≈ 30）
-   *   · ≥ 3× 心跳最坏间隔（12 × 3 = 36）← 这条更严
-   * 心跳间隔必须 ≤ 阈值的 1/3，而链路最坏一段是六维质检单次
-   * （AI_QUALITY_CHECK_TIMEOUT 180s × withRetry 4 次 = 12 分钟）。
+   *   · ≥ 3× 心跳最坏间隔 ← 这条更严
+   *
+   * 🔴 8-22 更正：原注释写「180s × withRetry 4 次 = 12 分钟」，**那个乘法不成立** ——
+   * `defaultShouldRetry` 第一条「超时/中断，永不重试」把 abort 直接放弃了。
+   * 真实是外层最多 2 次全额超时。180s 时代真值 6 分（不是 12），
+   * 8-22 timeout 抬到 300s 后是 10 分。
+   * 40 当初按虚高的 12 推出（36=12×3），**结论侥幸偏保守，依据是错的**。
    */
   it("超时阈值 40 分钟（取 3×实测max 与 3×心跳最坏间隔 的更严者）", () => {
     expect(WATCHDOG_TIMEOUT_MS).toBe(40 * 60 * 1000);
   });
 
   it("阈值必须 ≥ 3× 心跳最坏间隔 —— 否则「慢但活着」仍会被误杀", () => {
-    const WORST_HEARTBEAT_GAP_MS = 12 * 60 * 1000; // 六维质检单次最坏
-    expect(WATCHDOG_TIMEOUT_MS).toBeGreaterThanOrEqual(WORST_HEARTBEAT_GAP_MS * 3);
+    /**
+     * 🔴 原来这里硬编码 `12 * 60 * 1000`。那样锁的是**常数**不是**关系**（红线 #16）：
+     * 谁再抬一次 `AI_QUALITY_CHECK_TIMEOUT_MS`，这条断言照样绿 ——
+     * 而它本该正是拦住那件事的人。
+     * 改成从 `worstHeartbeatGapMs()` 推，推算只存在于生产代码一处。
+     */
+    const QUALITY_CHECK_TIMEOUT_MS = 300_000; // env.AI_QUALITY_CHECK_TIMEOUT_MS 默认值（本文件 mock 了 env）
+    expect(WATCHDOG_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      worstHeartbeatGapMs(QUALITY_CHECK_TIMEOUT_MS) * HEARTBEAT_GAP_SAFETY_FACTOR,
+    );
+  });
+
+  it("🔴 再抬 timeout 会越线的那个点 —— 写死它，免得下次靠脑补", () => {
+    // 40 分阈值 ÷ 3 ÷ 2 = 6.67 分钟/次。当前 5 分钟，还剩 1.33 倍。
+    const maxAllowedTimeoutMs = WATCHDOG_TIMEOUT_MS / HEARTBEAT_GAP_SAFETY_FACTOR / 2;
+    expect(Math.round(maxAllowedTimeoutMs / 1000)).toBe(400); // 秒
   });
 
   it("阈值必须显著高于实测最慢成功耗时 —— 这条锁的是「不许再压回分布顶部」", () => {
