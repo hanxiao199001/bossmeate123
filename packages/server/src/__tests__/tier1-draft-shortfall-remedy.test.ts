@@ -59,6 +59,8 @@ interface State {
   pushedIds: Set<string>;
   /** 今日各号载荷(pushPairs 成功即 +1) */
   load: Map<string, number>;
+  /** 8-23: reportStarvedAccounts 那条原生 SQL 的返回行(长期零供给告警用) */
+  starvedRows?: Array<{ id: string; name: string; last_at: string | null; total30: number }>;
 }
 let S: State;
 let poolCall = 0;
@@ -116,6 +118,12 @@ vi.mock("../models/db.js", () => ({
       self.then = (res: (v: unknown) => void) => res(undefined);
       return self;
     },
+    /**
+     * 8-23 补：原来没 mock `execute`，于是 `reportStarvedAccounts` 里那条原生 SQL
+     * 一调就抛，被它自己的 try/catch 吞掉 —— **测试里这条告警从来没真跑过**。
+     * 默认返回空行（不影响既有用例），要测时往 S.starvedRows 里塞。
+     */
+    execute: async () => ({ rows: S.starvedRows ?? [] }),
   },
 }));
 
@@ -133,7 +141,7 @@ const art = (id: string) => ({ id, title: `文章${id}`, body: "<p>正文</p>", 
 
 beforeEach(() => {
   poolCall = 0;
-  S = { accounts: [{ id: "acc-1", accountName: "教育号" }], poolBatches: [[]], pushedIds: new Set(), load: new Map() };
+  S = { accounts: [{ id: "acc-1", accountName: "教育号" }], poolBatches: [[]], pushedIds: new Set(), load: new Map(), starvedRows: [] };
   recordIncidentSpy.mockReset();
   computeSmartPairsMock.mockReset();
   publishMock.mockClear();
@@ -267,5 +275,54 @@ describe("④ 缺口按实推结果重算, 不是按配对预期", () => {
     expect(r.shortfalls?.[0]).toMatchObject({ accountId: "acc-1", assigned: 0, target: 2 });
     await flushIncidents(1);
     expect(recordIncidentSpy.mock.calls.some((c) => (c[0] as { kind: string }).kind === "draft_shortfall")).toBe(true);
+  });
+});
+
+/**
+ * ⑤ 8-23：长期零供给告警**必须无条件执行** —— 不许挂在"今天有没有缺口"下面。
+ *
+ * 8-22 加这条告警时只解耦了一半：参数改成了「对全部号算」，但整个调用
+ * 留在 `if (shortAfter.length > 0)` 里。于是它仍然只在今天有人缺口时才睁眼 ——
+ * 而这正是它自己的注释预言过的那件事（保底数一调低，长期断供的号就从
+ * shortfall 名单里消失，而故障还在）。
+ *
+ * ▎ 一个正确的检查，被包在一个错误的条件里，和没有这个检查是同一个结果 ——
+ * ▎ 但它更糟，因为代码在那儿，读代码的人会以为它在跑。
+ */
+describe("⑤ 长期零供给告警不依赖「今天有没有缺口」", () => {
+  it("🔴 今天所有号都达标(零缺口) → 仍然要为长期断供的号报 account_supply_starved", async () => {
+    // 目标 2 篇、实推 2 篇 → shortAfter 为空 → 旧代码这里整个块都不进
+    S.poolBatches = [[art("a1"), art("a2")]];
+    computeSmartPairsMock.mockImplementation(async (opts: { articleIds: string[]; accountIds?: string[] }) => ({
+      pairs: opts.articleIds.slice(0, 2).map((articleId) => ({ articleId, accountId: "acc-1", discipline: null })),
+      unmatched: [], shortfalls: [],
+    }));
+    // 另一个号 58 天零进箱（Paper 咨询与发表的真实形态）
+    S.starvedRows = [{ id: "acc-paper", name: "Paper咨询与发表", last_at: new Date(Date.now() - 58 * 86400_000).toISOString(), total30: 0 }];
+
+    const r = await distributeDraftsForTenant(TENANT);
+    expect(r.shortfalls).toEqual([]);            // 前提：今天确实零缺口
+
+    await flushIncidents(1);
+    const kinds = recordIncidentSpy.mock.calls.map((c) => (c[0] as { kind: string }).kind);
+    expect(kinds).toContain("account_supply_starved");
+    expect(kinds).not.toContain("draft_shortfall");   // 今天没缺口，那条不该响
+
+    const inc = recordIncidentSpy.mock.calls.find((c) => (c[0] as { kind: string }).kind === "account_supply_starved")![0] as
+      { severity: string; message: string; detail: Record<string, unknown> };
+    expect(inc.severity).toBe("error");           // ≥7 天 → 最高级
+    expect(inc.message).toContain("Paper咨询与发表");
+    expect(inc.detail.starvedDays).toBe(58);
+  });
+
+  it("没有长期断供的号 → 不响(判据得能区分，不能恒响)", async () => {
+    S.poolBatches = [[art("a1"), art("a2")]];
+    computeSmartPairsMock.mockImplementation(pairFirst(2));
+    S.starvedRows = [{ id: "acc-1", name: "教育号", last_at: new Date().toISOString(), total30: 30 }];
+
+    await distributeDraftsForTenant(TENANT);
+    await settle();
+    const kinds = recordIncidentSpy.mock.calls.map((c) => (c[0] as { kind: string }).kind);
+    expect(kinds).not.toContain("account_supply_starved");
   });
 });

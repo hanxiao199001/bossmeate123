@@ -586,6 +586,48 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
   // 5. 7-28 ①c 缺口补救 —— 从"只 logger.warn"升级成"落库 + 真去补"
   const shortBefore = await computeEffectiveShortfalls() ?? [];
   report.shortfalls = shortBefore;
+  /**
+   * 🔴 长期零供给告警：**无条件执行**，两层缺口门都不进。
+   *
+   * ## 8-22 加它时只解耦了一半，8-23 才补齐
+   *
+   * 当时把参数改成了「对**全部号**算，不只今天缺口名单里的那几个」—— 内层是对的。
+   * 但调用被留在缺口块里，于是它仍然**只在今天有人缺口时才睁眼**。
+   *
+   * 而这条链路上有**两层**门（8-23 修的时候第一次只搬出了内层，被新加的守卫当场抓住）：
+   *
+   * ```
+   * if (shortBefore.length > 0) {        ← 外层：今天有没有缺口
+   *   ...补救...
+   *   if (shortAfter.length > 0) {       ← 内层：补救之后还有没有缺口
+   * ```
+   *
+   * 这正是它自己的注释预言过的那件事：
+   * 「保底数一调低，长期断供的号就会从 shortfall 名单里消失，而故障还在。」
+   *
+   * ## 为什么这比"没有这个检查"更糟
+   *
+   * ▎ 一个正确的检查，被包在一个错误的条件里，和没有这个检查是同一个结果 ——
+   * ▎ 但它更糟，因为代码在那儿，读代码的人会以为它在跑。
+   *
+   * ## 🔴 规矩（老韩 8-23 立）
+   *
+   * **告警类函数的调用条件，不得依赖「今天有没有别的问题」。**
+   * 长期故障的检查必须无条件执行 —— 否则它只在系统已经出问题时才睁眼，
+   * 而「今天看起来没事」恰恰是长期故障最容易藏身的状态。
+   *
+   * 同族第四次（8-22~23 一天之内）：
+   * ```
+   * 评分器崩了      → 返回一个数字        （红线 #14）
+   * CI 恒红         → 零信息量            （命中率 100% = 零判别力）
+   * 基线闸提取器    → 自己 fail-open      （红线 #23）
+   * 本条            → 内部对了，外层不执行
+   * ```
+   *
+   * 回归锁：`tier1-draft-shortfall-remedy.test.ts` ⑤（零缺口场景下仍须报警）。
+   */
+  await reportStarvedAccounts(tenantId, accounts.map((a) => a.id));
+
   if (shortBefore.length > 0) {
     logger.warn(
       { tenantId, target, cap: perAccount, pool: report.poolSize, accounts: accounts.length, shortfalls: shortBefore },
@@ -669,9 +711,6 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       const starved = shortAfter.filter((s) => s.assigned === 0);
       // ② 先查存货：可发池里**过了闸、没推过**的还有多少
       const availableStock = await countDistributableStock(tenantId);
-      // ① 拆分：长期零供给单独喊。**对全部号算**，不只今天缺口名单里的那几个 ——
-      //   保底数一调低，长期断供的号就会从 shortfall 名单里消失，而故障还在。
-      await reportStarvedAccounts(tenantId, accounts.map((a) => a.id));
       reportDistIncident({
         kind: "draft_shortfall",
         severity: starved.length > 0 ? "error" : "warn",
