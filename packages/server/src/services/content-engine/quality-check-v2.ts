@@ -619,7 +619,7 @@ export function checkHtmlIntegrity(body: string): QualityCheckV2Result["htmlInte
  * 它们现在不报错，但和崩溃的那批是同一个病，只是这次没断在字段中间。
  * 所以修复的验收看撞顶率归零，不看崩溃率归零 —— 后者会把侥幸的那 19% 算作"没问题"。
  */
-const SIX_DIM_MAX_TOKENS = 8000;
+export const SIX_DIM_MAX_TOKENS = 8000;
 
 export async function sixDimQualityCheck(params: {
   tenantId: string;
