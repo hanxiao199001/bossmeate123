@@ -1,6 +1,19 @@
-# BossMate CI 门禁（Phase 1c, 2026-06-10）
-# 每次 push/PR 到 main: 类型检查(必过) + 单元测试(必过)
-# 这是防"坏代码直接进生产"的第一道闸 — deploy:smart 拉的就是 main
+# BossMate CI 门禁
+#
+# 2026-06-10 Phase 1c 建立：类型检查(必过) + 单元测试(必过)
+# 2026-08-22 改判据：单测从「全绿才过」改为「**不许比基线更红**」
+#
+#   查：最近 200 次运行 failure 198 / cancelled 2 / success 0，翻不到任何一次绿。
+#   全量基线 72 红 → `vitest run` 恒非零 → CI 恒红 → 没人看 →
+#   但它的存在让每个人以为"有闸在把关"。**比没有 CI 更坏。**
+#
+#   恒红的 CI = 命中率 100% 的检查器 = 零信息量
+#   （Phase 1 判定规则第一条，我们写给了内容检查器，却没想到它同样适用于 CI）
+#
+#   a892a64 带着 3 个新失败合进 main 不是意外，是必然：
+#   在一片红里多三条红，系统里没有任何东西会变化。
+#
+# 判据见 scripts/ci/baseline-gate.sh。
 name: CI
 
 on:
@@ -31,8 +44,22 @@ jobs:
       - name: tsc --noEmit (server)
         run: npx tsc --noEmit -p packages/server/tsconfig.json
 
+  # 🔴 基线只许单向收缩。不加这条，一个月后 known-failures.txt 会有 200 行，
+  #    闸变成"红了就把它加进白名单"，形同虚设。
+  baseline-shrink-only:
+    name: 基线单向收缩
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 基线不得扩大（除非 commit message 显式声明）
+        run: bash scripts/ci/baseline-shrink-only.sh
+
   test:
-    name: 单元测试
+    name: 单元测试（不许比基线更红）
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -56,5 +83,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: vitest run
-        run: npx vitest run --reporter=basic
+      - name: 基线闸
+        run: bash scripts/ci/baseline-gate.sh
+      # 基线尚未建立时，把候选清单带出来给人看过再提交（脚本刻意不自动写基线）
+      - name: 上传基线候选（仅当基线文件还不存在）
+        if: always() && hashFiles('.github/known-failures.txt') == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: known-failures-candidate
+          path: ${{ runner.temp }}/known-failures.candidate.txt
+          if-no-files-found: ignore

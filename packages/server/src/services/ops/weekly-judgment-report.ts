@@ -96,6 +96,23 @@ export interface WeeklyReport {
    * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
    */
   keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
+  /**
+   * ④ 测试基线失败数 —— 8-22 加。
+   *
+   * **只报数，不催。** 这是「让没人看的东西自己发声」的第三次应用
+   * （前两次：列表体检、外部反馈倒计时）。
+   *
+   * 背景：CI 从 8-22 起改判「不许比基线更红」（`scripts/ci/baseline-gate.sh`），
+   * 那道闸挡得住**新增**失败，但对**存量** 72 红完全无感 ——
+   * 它们可以永远躺在 `known-failures.txt` 里，没有任何机制会提起它们。
+   *
+   * 所以让这个数每周出现一次。逐周看它：降 = 有人在清；持平 = 没人清（这不一定错，
+   * 但它是个**决定**，应该被看见，而不是默默发生）。
+   *
+   * 🔴 不设阈值、不判健康与否、不写待办 —— 它不需要任何动作。
+   *   一个天天报但没人能据此行动的告警，消耗的是整个仪表盘的信任（CC-待办 #1）。
+   */
+  testBaseline: { knownFailures: number | null };
   /** ⑤ 待办建议 —— 整页的目的，最多 3 条 */
   todos: WeeklyTodo[];
   text: string;
@@ -219,8 +236,26 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     /* 关键词表读不到不该拖垮整张周报 */
   }
 
+  /**
+   * 测试基线失败数（见 testBaseline 字段注释）。
+   * 读文件而不是跑测试 —— 周报是只读汇报，不该在里面跑一遍全量单测。
+   * 读不到就报 null（那一行整句不出现），**绝不写 0** —— 红线 #14：
+   * "文件没读到"和"基线真的清空了"对读者是天差地别的两件事。
+   */
+  let testBaseline: { knownFailures: number | null } = { knownFailures: null };
+  try {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { join, dirname } = await import("node:path");
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
+    const raw = readFileSync(join(repoRoot, ".github/known-failures.txt"), "utf8");
+    testBaseline = { knownFailures: raw.split("\n").filter((l) => l.trim().length > 0).length };
+  } catch {
+    /* 基线文件读不到 → 保持 null, 那一行不出现 */
+  }
+
   const todos = pickTodos({ checkers, annotated, health, backlog });
-  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, testBaseline, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -237,6 +272,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     qualification,
     backlog,
     keywordScore,
+    testBaseline,
     todos,
     text,
   };
@@ -359,6 +395,7 @@ function renderText(d: {
    * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
    */
   keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
+  testBaseline: { knownFailures: number | null };
   todos: WeeklyTodo[];
   ledgerSince: string | null;
 }): string {
@@ -441,6 +478,10 @@ function renderText(d: {
       `（>5% 就是打分失效）｜ TOP100 学科：${d.keywordScore.topDisciplines}` +
       (d.keywordScore.healthy ? "" : "  ← 分布已塌，选题会趋同"),
   );
+  // 测试基线失败数 —— 只报数不催，见 testBaseline 字段注释
+  if (d.testBaseline.knownFailures !== null) {
+    L.push(`  测试基线失败 ${d.testBaseline.knownFailures} 条（逐周看：降 = 有人在清，持平 = 没人清）`);
+  }
   L.push("");
 
   L.push("■ 系统分 vs 人工");
