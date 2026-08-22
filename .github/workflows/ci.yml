@@ -1,6 +1,39 @@
-# BossMate CI 门禁（Phase 1c, 2026-06-10）
-# 每次 push/PR 到 main: 类型检查(必过) + 单元测试(必过)
-# 这是防"坏代码直接进生产"的第一道闸 — deploy:smart 拉的就是 main
+# BossMate CI 门禁
+#
+# 2026-06-10 Phase 1c 建立：类型检查(必过) + 单元测试(必过)
+# 2026-08-22 两件一起修：①CI 从建立起就没跑通过一次 ②改判据为「不许比基线更红」
+#
+# ═══ ① 这条 CI 从来没有跑起来过 ═══
+#
+#   最近 200 次运行 failure 198 / cancelled 2 / success 0，翻不到任何一次绿。
+#   而根因不是测试红 —— 是**两个 job 都死在 setup，从没到过 tsc / vitest**：
+#
+#     Error: Multiple versions of pnpm specified:
+#       - version 9 in the GitHub Action config with the key "version"
+#       - version pnpm@9.15.0 in the package.json with the key "packageManager"
+#
+#   `packageManager` 是 2026-03-25 项目初始化就有的，`version: 9` 是 2026-06-10
+#   建这条 CI 时加的 —— **从第一天起就冲突。门禁装上了，线从来没接通。**
+#   推论：这两个半月里，唯一真正在跑的类型检查是 .githooks/pre-commit 里那条。
+#
+# ═══ ② 但只修 ① 会立刻掉进第二个坑 ═══
+#
+#   全量基线有 72 红。setup 修好之后 `vitest run` 照样恒非零 → CI 还是恒红。
+#
+#     恒红的 CI = 命中率 100% 的检查器 = 零信息量
+#
+#   （Phase 1 判定规则第一条：命中率 ≈100% → 常数判据，零判别力。
+#     我们把它写给了内容检查器，却没想到它同样适用于 CI 自己。）
+#
+#   所以两件必须一起做：接通线路 + 换成能给出信号的判据。
+#
+#   恒红的 CI = 命中率 100% 的检查器 = 零信息量
+#   （Phase 1 判定规则第一条，我们写给了内容检查器，却没想到它同样适用于 CI）
+#
+#   a892a64 带着 3 个新失败合进 main 不是意外，是必然：
+#   在一片红里多三条红，系统里没有任何东西会变化。
+#
+# 判据见 scripts/ci/baseline-gate.sh。
 name: CI
 
 on:
@@ -20,9 +53,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      # 🔴 不写 version —— pnpm 版本的唯一真相源是 package.json 的 packageManager。
+      #   两处都写会直接 Error: Multiple versions of pnpm specified（见文件头）。
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -31,8 +64,22 @@ jobs:
       - name: tsc --noEmit (server)
         run: npx tsc --noEmit -p packages/server/tsconfig.json
 
+  # 🔴 基线只许单向收缩。不加这条，一个月后 known-failures.txt 会有 200 行，
+  #    闸变成"红了就把它加进白名单"，形同虚设。
+  baseline-shrink-only:
+    name: 基线单向收缩
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 基线不得扩大（除非 commit message 显式声明）
+        run: bash scripts/ci/baseline-shrink-only.sh
+
   test:
-    name: 单元测试
+    name: 单元测试（不许比基线更红）
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -48,13 +95,34 @@ jobs:
       NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
+      # 🔴 不写 version —— pnpm 版本的唯一真相源是 package.json 的 packageManager。
+      #   两处都写会直接 Error: Multiple versions of pnpm specified（见文件头）。
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: vitest run
-        run: npx vitest run --reporter=basic
+      # 🔴 `config/env.ts` 是 **fail-fast**：`findEnvFile()` 找不到 .env 直接 throw，
+      #   于是一批测试在 **import 期**就挂 —— 整个文件一条用例都不跑。
+      #   CI 一直只设了环境变量、没有这个**文件**，实测 36 个测试文件因此从没跑过
+      #   （总用例数 2439，服务器 2785，差 346 —— 正是红线 #12 规则 6 那个识别信号）。
+      #   dotenv 默认不覆盖已存在的 process.env，所以上面 env: 里的值仍然说了算。
+      - name: 造 .env（缺文件会让 36 个测试文件在 import 期就挂）
+        run: |
+          cat > .env <<'ENVEOF'
+          DATABASE_URL=postgres://ci:ci@127.0.0.1:5432/ci_unused
+          JWT_SECRET=ci-secret-12345678
+          REDIS_URL=redis://127.0.0.1:6379
+          NODE_ENV=test
+          ENVEOF
+      - name: 基线闸
+        run: bash scripts/ci/baseline-gate.sh
+      # 基线尚未建立时，把候选清单带出来给人看过再提交（脚本刻意不自动写基线）
+      - name: 上传基线候选（仅当基线文件还不存在）
+        if: always() && hashFiles('.github/known-failures.txt') == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: known-failures-candidate
+          path: ${{ runner.temp }}/known-failures.candidate.txt
+          if-no-files-found: ignore

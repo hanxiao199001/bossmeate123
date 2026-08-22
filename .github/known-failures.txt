@@ -1,0 +1,89 @@
+# 测试基线 —— 已知失败清单（红线 #12 规则 3 的执行载体）
+#
+# 判据见 scripts/ci/baseline-gate.sh：
+#   本次失败 - 本文件  非空 → 🔴 CI 红（新增失败 = 真回归嫌疑 = 阻塞项）
+#   本文件 - 本次失败  非空 → ✅ 提示把它们从这里删掉
+#
+# 🔴 本文件只许**单向收缩**。新失败的正确处置是①修代码 或 ②更新那条断言，
+#    **不是**把它加进来。确需扩大 → commit message 写 BASELINE-EXPAND: <理由>
+#    （scripts/ci/baseline-shrink-only.sh 会拦，这类 commit 因此单独可查）。
+#
+# 这 72 条按 2026-07-08 那次全量 triage 的结论是「过时漂移」（读活文件、功能仍在，
+# 只是断言钉住了旧文案/旧门控/旧路径），真回归 = 0。清理只可两种动作：
+#   ①更新断言到现状  ②删读已删文件的死断言
+# 周报每周报一次这个数（只报数不催），让它不至于永远躺着。
+#
+# total_cases=2865
+# 生成于 CI（红线 #12 规则 6：基线必须在跑它的同一个环境里量）
+packages/server/src/__tests__/discipline-code-generated-column-drift.test.ts::discipline_code 生成列漂移守卫 快照来源 migration 仍是最后一条重建 discipline_code 生成列的迁移
+packages/server/src/__tests__/journals-match-discipline-code.test.ts::路由已切到生成列 + generic 放行 helper 打的是生成列 discipline_code, 不是原始列
+packages/server/src/__tests__/journals-match-discipline-code.test.ts::路由已切到生成列 + generic 放行 includeGeneric:false 时只要对口刊(筛选器/同档对比用)
+packages/server/src/__tests__/journals-match-discipline-code.test.ts::路由已切到生成列 + generic 放行 journalDisciplineIs: 精确分桶, 与 meta/disciplines 的 GROUP BY discipline_code 同口径
+packages/server/src/__tests__/journals-match-discipline-code.test.ts::路由已切到生成列 + generic 放行 与 daily-cron 选刊器同口径: code OR generic(综合刊任何槽位通吃)
+packages/server/src/__tests__/ops-daily-briefing.test.ts::collectTenantBriefing — mock db 聚合口径 按 select 调用顺序取数: 生成数/任务/草稿箱每号/发布数/公众号/租户配置
+packages/server/src/__tests__/p0-sidebar-layout.test.ts::5-21 P0: Sidebar 全局 layout 重构 5-23 PR #156: CostComparisonPage 已砍内联 nav
+packages/server/src/__tests__/pr-domestic-branch-composite-if.test.ts::generateJournalAIContent 接线(源码结构守卫) isDomesticJournal / domesticGuidance 均来自纯函数返回值(单一口径)
+packages/server/src/__tests__/pr-domestic-branch-composite-if.test.ts::generateJournalAIContent 接线(源码结构守卫) 与 title-generator 口径统一: 都读 journal_kind(isDomesticKind) 且都叠加 '无真实 IF'
+packages/server/src/__tests__/pr-domestic-branch-composite-if.test.ts::generateJournalAIContent 接线(源码结构守卫) 影响因子 knownFields 改判 hasIF; 复合IF 有值时进 ##已知期刊数据## 并带口径警示
+packages/server/src/__tests__/pr-journal-rotation-cooldown-fixes.test.ts::#4 roundup 选刊: 去录用率排序偏置 + discipline_code 口径 orderBy 不再有 acceptance_rate DESC(48 本霸榜偏置), 改随机轮转
+packages/server/src/__tests__/pr-journal-rotation-cooldown-fixes.test.ts::#4 roundup 选刊: 去录用率排序偏置 + discipline_code 口径 学科过滤打 discipline_code(migration 026 口径), generic 综合刊可补位, 保留 ILIKE 兼容中文名
+packages/server/src/__tests__/pr1-journal-trust.test.ts::PR 1: placeholder dev 术语清理 submessage 全部为用户友好文案
+packages/server/src/__tests__/pr107-enricher-trust.test.ts::PR #107: 30 天 cron 注册 scheduler 含 'journal-trust-reverify' job type + cron pattern + handler
+packages/server/src/__tests__/pr133-recommendation-feed.test.ts::PR #133 feed-service 静态校验 export fetchRecommendations + 含 system tenant + LEFT JOIN journals + skip 过滤
+packages/server/src/__tests__/pr141-dvh-frontend-button.test.ts::PR #141: 数字人前端按钮 wire ContentDetailPage 含数字人视频按钮 + select，调 generate-dvh-video
+packages/server/src/__tests__/pr141-dvh-frontend-button.test.ts::PR #141: 数字人前端按钮 wire RecommendationFeedPage wire onGenerateDvh → POST /generate-dvh-video + toast
+packages/server/src/__tests__/pr161-workbench-v2.test.ts::PR #161: frontend Workbench v2 多选 + 手动生成 BulkDistributeProgressPanel 用 EventSource 订阅 SSE 端点
+packages/server/src/__tests__/pr161-workbench-v2.test.ts::PR #161: frontend Workbench v2 多选 + 手动生成 ContentWorkbenchPage 接 dual mode (单选 ContentPreviewPane / 多选 BatchPreviewSummary)
+packages/server/src/__tests__/pr161-workbench-v2.test.ts::PR #161: frontend Workbench v2 多选 + 手动生成 WorkbenchTopBar 含 2 个生成 button + 已选 N 篇 badge
+packages/server/src/__tests__/pr162-content-detail-hotfix.test.ts::5-23 hotfix: ContentDetailPage canPublish + 返回 Bug 1: canPublish 含 'generated' (state-machine 新状态)
+packages/server/src/__tests__/pr162-content-quality.test.ts::PR #162 Phase 2: article-skill prompt 双重硬约束 user prompt: sparse known fields + 显式 ##未公开字段## 列表 (字段缺不填'未知')
+packages/server/src/__tests__/pr162-content-quality.test.ts::PR #162 Phase 4-lite: validator gate wiring feed-service: /recommendations SQL filter hasWarnings (IS DISTINCT FROM 'true')
+packages/server/src/__tests__/pr167-prompt-blacklist.test.ts::PR #167: prompt 黑名单 4 字段 user prompt 含 ##禁止字段## 段 + 4 字段全列出
+packages/server/src/__tests__/pr167-prompt-blacklist.test.ts::PR #167: prompt 黑名单 4 字段 模糊词 仍允许 — 兜底语在 prompt 里明确
+packages/server/src/__tests__/pr179-fix-infer-discipline.test.ts::PR #179: backfill-discipline script 存在 含 lookupOpenAlexByIssn + inferDiscipline + UPDATE
+packages/server/src/__tests__/pr182-website-no-google-fallback.test.ts::PR #182: website NULL → 整行 skip (砍 Google fallback) shunshi-style-template.ts: 保留真 website 渲染 (有 http(s) 才 push 行)
+packages/server/src/__tests__/pr184-content-quality-v2.test.ts::PR #184 问题1: SCI 收录状态注入 article-skill: knownFields 注入收录情况
+packages/server/src/__tests__/pr184-content-quality-v2.test.ts::PR #184 问题1: SCI 收录状态注入 article-skill: 无收录证据时禁称 SCI/SSCI/核心/顶刊
+packages/server/src/__tests__/pr184-content-quality-v2.test.ts::PR #184 问题3: 封面占位兜底 shunshi-template: renderHeroBlock 无 cover 用 PLACEHOLDER_BG 占位卡
+packages/server/src/__tests__/pr184-content-quality-v2.test.ts::PR #184 问题4: 砍 AI 感 + 中文化 article-skill: unknownBlock 砍 '据公开资料尚无统一披露' 教唆
+packages/server/src/__tests__/pr188-letpub-circuit-proxy.test.ts::PR #188: 代理支持 ingest-letpub-pool: 读 env LETPUB_PROXY
+packages/server/src/__tests__/pr188-letpub-circuit-proxy.test.ts::PR #188: 代理支持 journal_scraper.py: --proxy CLI + session 透传
+packages/server/src/__tests__/pr188-letpub-circuit-proxy.test.ts::PR #188: 代理支持 scrapling-bridge: crawlLetpubCategory 透传 proxy
+packages/server/src/__tests__/pr191-discipline-cover.test.ts::PR #191: 学科主题题图 默认主题兜底 (未知学科)
+packages/server/src/__tests__/pr194-if-from-history.test.ts::PR #194: backfill 脚本补存量 backfill-if-from-history: latestIF + 只补空值不覆盖
+packages/server/src/__tests__/pr194-if-from-history.test.ts::PR #194: orchestrator 增量提取 impact_factor if_history tryExtract 后加 impact_factor tryExtract
+packages/server/src/__tests__/pr196-car-halt.test.ts::PR #196: CAR 止血 renderCarHistoryBlock 暂关 (return 空)
+packages/server/src/__tests__/pr202-narrative-angle.test.ts::PR #202: 叙事主线 (article angle) 主线候选数据驱动 (按真实字段 gating)
+packages/server/src/__tests__/pr203-editorial-blocks.test.ts::PR #203: 投稿时间线 有 renderTimelineBlock, 锚定审稿周期
+packages/server/src/__tests__/pr206-208-accuracy-fixes.test.ts::PR #206: 自引率止血 prompt 不再喂自引率数值, 且禁 AI 提自引率
+packages/server/src/__tests__/pr206-208-accuracy-fixes.test.ts::PR #206: 自引率止血 自引率徽章渲染早返回空 (止血)
+packages/server/src/__tests__/pr206-208-accuracy-fixes.test.ts::PR #207: SCIE/SCI 称谓 有 SCIE 时注入同义说明
+packages/server/src/__tests__/pr216-jcar-website-backfill.test.ts::PR #216: jcarindex 顺手回填官网 targets 查出 website (判 NULL)
+packages/server/src/__tests__/pr222-daily-quota.test.ts::PR #224: 设置界面 每日配额区块 + 各学科输入 + 保存
+packages/server/src/__tests__/pr225-sci-coverage-neutral.test.ts::PR #225: 软化无收录证据 prompt else 分支仍禁假称 SCI/顶刊 (防拔高)
+packages/server/src/__tests__/pr225-sci-coverage-neutral.test.ts::PR #225: 软化无收录证据 prompt else 分支强调'不代表未收录'+ 禁主动否认
+packages/server/src/__tests__/pr228-apc-dual-path.test.ts::PR #228: APC 双路径合一 APC=0 视为'免费(无 APC)', 不是未知
+packages/server/src/__tests__/pr228-apc-dual-path.test.ts::PR #228: APC 双路径合一 knownFields 兜底读 publicationCosts.apc (JSONB)
+packages/server/src/__tests__/pr229-anti-fabricate-partition.test.ts::PR #229: 防分区编造 casPartitionNew 空时也加入未公开字段 (原静默丢失)
+packages/server/src/__tests__/pr230-sssci-anti-denial.test.ts::PR #230: SSCI/AHCI/ESCI 反否定 强力禁'未被 X 收录'/'未被 SSCI 收录'等否定句
+packages/server/src/__tests__/pr230-sssci-anti-denial.test.ts::PR #230: SSCI/AHCI/ESCI 反否定 正则扩到 4 类 WOS 等级
+packages/server/src/__tests__/pr230-sssci-anti-denial.test.ts::PR #230: SSCI/AHCI/ESCI 反否定 禁'投稿前请确认单位/学校是否认可'这种暗示未收录话术
+packages/server/src/__tests__/pr232-anti-rewrite-partition.test.ts::PR #232: 防分区真值改写 knownFields 分区字段加 [必须原文搬运] 标记
+packages/server/src/__tests__/pr233-dual-index-and-lint.test.ts::PR #233: 双收录 scieNote 列全 matchAll 取所有命中 WOS 等级 (含 SCIE+SSCI 双收录)
+packages/server/src/__tests__/pr233-dual-index-and-lint.test.ts::PR #233: 双收录 scieNote 列全 scieNote 用 wosTagsJoin 列全 + 多重收录提示
+packages/server/src/__tests__/pr234-selfcite-unit-compat.test.ts::PR #234: 自引率单位兼容 listicle 风险阈值统一为 pct >= 20 (兼容双单位)
+packages/server/src/__tests__/pr235-ablesci-detail-multi.test.ts::PR #235: knownFields + 渲染层 fallback article-skill knownFields 优先 acceptanceRate, 兜底 acceptanceDifficulty
+packages/server/src/__tests__/pr237-dvh-credential-cjs-interop.test.ts::PR #237: DVH CJS interop fix PR #237 注释解释 CJS default 在 .default 上
+packages/server/src/__tests__/pr238-dvh-query-logging.test.ts::PR #238: DVH query 加日志 + 延 timeout 加 poll 中间状态日志 (status 变或每 30s)
+packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2: article-skill prompt 90 秒五段式 JSON schema 含 90 秒 + 五段式标注
+packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2: article-skill prompt 90 秒五段式 prompt 含 90 秒目标 + 250-350 字规格
+packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2: article-skill prompt 90 秒五段式 五段式结构 (开场+定位+数据+人群+CTA)
+packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2: article-skill prompt 90 秒五段式 风格指引: B 站知识区博主拆解口吻
+packages/server/src/__tests__/q10-wechat-typography.test.ts::PR Q.10: 长 URL 智能截断 + 深度分析章节排版 shunshi 模板：长 URL（> 50 字符）显示「查看官网 →」+ href 不变
+packages/server/src/__tests__/q5-chart-config-resolver.test.ts::PR Q.5: 防回归 grep shunshi-style 4 chart 前 typesSet.has 判断
+packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 below_bar：评过分但没过
+packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 passed：sixDimPassed=true
+packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 unscored：从没跑过六维
+packages/server/src/__tests__/tier1-failopen-gates.test.ts::2a 红线校验: 解析失败/异常 → 判「检查不可用」而不是「合格」 反例(零回归): 一切正常 → overallPassed=true, 不产生任何『不可用』标记
+packages/server/src/__tests__/tier1-failopen-gates.test.ts::2c safeSearch 挂掉: 三道检查不能同时空转 检索**成功但 0 条规则** → 维持原行为放行(没配规则是配置状态, 不是故障)
+packages/server/src/__tests__/tier1-failopen-gates.test.ts::2c safeSearch 挂掉: 三道检查不能同时空转 风格挂掉不再硬返 75 分冒充合格: available=false, 且该项被移出综合判定
