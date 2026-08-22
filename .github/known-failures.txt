@@ -81,9 +81,6 @@ packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2
 packages/server/src/__tests__/pr241-video-script-independent.test.ts::PR #241 v2: article-skill prompt 90 秒五段式 风格指引: B 站知识区博主拆解口吻
 packages/server/src/__tests__/q10-wechat-typography.test.ts::PR Q.10: 长 URL 智能截断 + 深度分析章节排版 shunshi 模板：长 URL（> 50 字符）显示「查看官网 →」+ href 不变
 packages/server/src/__tests__/q5-chart-config-resolver.test.ts::PR Q.5: 防回归 grep shunshi-style 4 chart 前 typesSet.has 判断
-packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 below_bar：评过分但没过
-packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 passed：sixDimPassed=true
-packages/server/src/__tests__/quality-verdict-snapshot.test.ts::resolveQualitySnapshot — 三档 unscored：从没跑过六维
 packages/server/src/__tests__/tier1-failopen-gates.test.ts::2a 红线校验: 解析失败/异常 → 判「检查不可用」而不是「合格」 反例(零回归): 一切正常 → overallPassed=true, 不产生任何『不可用』标记
 packages/server/src/__tests__/tier1-failopen-gates.test.ts::2c safeSearch 挂掉: 三道检查不能同时空转 检索**成功但 0 条规则** → 维持原行为放行(没配规则是配置状态, 不是故障)
 packages/server/src/__tests__/tier1-failopen-gates.test.ts::2c safeSearch 挂掉: 三道检查不能同时空转 风格挂掉不再硬返 75 分冒充合格: available=false, 且该项被移出综合判定
