@@ -49,22 +49,44 @@ npx vitest run --reporter=json --outputFile="$OUT" >/dev/null 2>&1
 [ -f "$OUT" ] || { echo "✗ vitest 没产出 JSON（$OUT），无法判定。"; exit 1; }
 
 # 失败用例 ID = <相对文件路径>::<完整用例名>。用 file+name 而非序号，改动顺序不会误报。
+#
+# 🔴 **套件加载失败必须单独捞**（8-22 实测踩到）：
+#   import 挂掉的文件在 JSON 里是 `status:"failed"` + `assertionResults: []` ——
+#   只遍历 assertionResults 的话它**一条失败都不产出**，闸直接放行。
+#   那正是本项目反复写红线的那类病：坏产物与好产物在下游无法区分（红线 #14）。
+#   实测：`zz-collect-boom.test.ts` 引一个不存在的模块 → 旧提取器输出 0 条。
 node -e '
 const r = require(process.argv[1]);
 const root = process.cwd() + "/";
 const fails = [];
-let total = 0;
+let total = 0, suiteErrors = 0;
 for (const f of r.testResults ?? []) {
   const file = (f.name ?? "").startsWith(root) ? f.name.slice(root.length) : f.name;
-  for (const a of f.assertionResults ?? []) {
+  const as = f.assertionResults ?? [];
+  for (const a of as) {
     total++;
     if (a.status === "failed") fails.push(file + "::" + (a.fullName ?? a.title));
   }
+  // 整个文件没跑起来：没有任何用例结果，但套件本身是 failed
+  if (f.status === "failed" && as.length === 0) {
+    suiteErrors++;
+    // 🔴 消息必须归一化后才能进基线：原始文本里带**绝对路径**
+    //   （本地 /tmp/wt_xxx、CI /home/runner/work/...），不剥掉的话同一个故障
+    //   在两个环境里是两条不同的记录，基线永远对不上 —— 判据会因环境而变，等于没有判据。
+    const msg = String(f.message ?? "").split("\n")[0]
+      .split(" imported from ")[0]          // 引入方路径，纯环境噪声
+      .split(root).join("")                 // 仓库根前缀
+      .replace(/\/[^\s\x27"]*\/(node_modules|packages|apps)\//g, "$1/")
+      .trim();
+    fails.push(file + "::‹套件加载失败› " + msg.slice(0, 120));
+  }
 }
-console.error("总用例数 " + total + " / 失败 " + fails.length);
+console.error("总用例数 " + total + " / 失败用例 " + (fails.length - suiteErrors) + " / 套件加载失败 " + suiteErrors);
+require("fs").writeFileSync(process.argv[2], String(total));
 process.stdout.write([...new Set(fails)].sort().join("\n") + (fails.length ? "\n" : ""));
-' "$OUT" > "$NOW"
+' "$OUT" "${RUNNER_TEMP:-/tmp}/total-cases.txt" > "$NOW"
 
+TOTAL_NOW=$(cat "${RUNNER_TEMP:-/tmp}/total-cases.txt" 2>/dev/null || echo "")
 echo "本次失败 $(grep -c . "$NOW" 2>/dev/null || echo 0) 条"
 
 # ── 自举：基线还没建 ───────────────────────────────────────────────
@@ -73,11 +95,26 @@ if [ ! -f "$BASELINE" ]; then
   echo "⚠️  基线文件不存在：$BASELINE"
   echo "    本次运行的失败清单已产出为 artifact。**看过之后**把它提交为基线，闸才开始工作。"
   echo "    刻意不自动写入 —— 自动生成的基线 = 没有基线。"
-  cp "$NOW" "${RUNNER_TEMP:-/tmp}/known-failures.candidate.txt"
+  {
+    echo "# total_cases=${TOTAL_NOW:-unknown}"
+    echo "# 生成于 CI（红线 #12 规则 6：基线必须在跑它的同一个环境里量）"
+    cat "$NOW"
+  } > "${RUNNER_TEMP:-/tmp}/known-failures.candidate.txt"
   exit 0
 fi
 
-sort -u "$BASELINE" > "${RUNNER_TEMP:-/tmp}/baseline.sorted"
+# `# ` 开头的是元信息行（total_cases 等），不参与失败集比对
+grep -v '^#' "$BASELINE" | grep . | sort -u > "${RUNNER_TEMP:-/tmp}/baseline.sorted"
+
+# 环境对齐检查（红线 #12 规则 6）：总用例数对不上 = 两次跑的不是同一批，对比无效。
+# 只在**变少**时告警 —— 加测试让它变多是正常的。不硬拦：删测试也是合法动作。
+TOTAL_BASE=$(grep -o '^# total_cases=[0-9]*' "$BASELINE" 2>/dev/null | head -1 | cut -d= -f2)
+if [ -n "${TOTAL_BASE:-}" ] && [ -n "${TOTAL_NOW:-}" ] && [ "$TOTAL_NOW" -lt "$TOTAL_BASE" ]; then
+  echo
+  echo "⚠️  总用例数 $TOTAL_BASE → $TOTAL_NOW（少了 $((TOTAL_BASE - TOTAL_NOW)) 条）。"
+  echo "    要么删了测试，要么有文件没跑起来 —— 后者请看上面的『套件加载失败』条目。"
+  echo "    红线 #12 规则 6：两次运行总用例数对不上 = 环境没对齐，此时任何对比都不可靠。"
+fi
 
 added=$(comm -13 "${RUNNER_TEMP:-/tmp}/baseline.sorted" "$NOW")
 fixed=$(comm -23 "${RUNNER_TEMP:-/tmp}/baseline.sorted" "$NOW")
