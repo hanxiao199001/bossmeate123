@@ -22,17 +22,25 @@ const read = (p: string) => readFileSync(join(SRC, p), "utf8");
 describe("resolveQualitySnapshot — 三档", () => {
   it("passed：sixDimPassed=true", () => {
     expect(resolveQualitySnapshot({ sixDimPassed: true, sixDimTotal: 86 }))
-      .toEqual({ verdict: "passed", sixDimTotal: 86 });
+      .toEqual({ verdict: "passed", sixDimTotal: 86, scoringVersion: null });
   });
 
   it("below_bar：评过分但没过", () => {
     expect(resolveQualitySnapshot({ sixDimPassed: false, sixDimTotal: 73 }))
-      .toEqual({ verdict: "below_bar", sixDimTotal: 73 });
+      .toEqual({ verdict: "below_bar", sixDimTotal: 73, scoringVersion: null });
   });
 
   it("unscored：从没跑过六维", () => {
-    expect(resolveQualitySnapshot({})).toEqual({ verdict: "unscored", sixDimTotal: null });
-    expect(resolveQualitySnapshot(null)).toEqual({ verdict: "unscored", sixDimTotal: null });
+    expect(resolveQualitySnapshot({})).toEqual({ verdict: "unscored", sixDimTotal: null, scoringVersion: null });
+    expect(resolveQualitySnapshot(null)).toEqual({ verdict: "unscored", sixDimTotal: null, scoringVersion: null });
+
+    /**
+     * 8-22 补：a892a64 加 `scoringVersion` 时**一条断言都没加**，
+     * 于是这个字段从上线起就没有任何测试覆盖 —— 而它正是"分数能不能归属"的载体。
+     * 存量无此字段 → null（`SCORING_VERSION_LEGACY` 由读取侧归类，不在这里猜）。
+     */
+    expect(resolveQualitySnapshot({ sixDimPassed: true, sixDimTotal: 86, sixDimScoringVersion: "v5" }))
+      .toEqual({ verdict: "passed", sixDimTotal: 86, scoringVersion: "v5" });
   });
 
   it("🔴 unscored 不许并进 below_bar —— 两者是不同的事", () => {
