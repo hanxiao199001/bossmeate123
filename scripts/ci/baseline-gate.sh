@@ -5,7 +5,12 @@
 # ═══ 为什么不是「全绿才过」═══
 #
 # 2026-08-22 查：最近 200 次 CI  failure 198 / cancelled 2 / success 0，
-# 往前翻不到任何一次绿。全量基线有 72 红，`vitest run` 恒非零退出 → CI 恒红。
+# 往前翻不到任何一次绿。
+#
+# 根因有两层，别只记住第二层：
+#   ① CI 两个 job 都死在 `pnpm/action-setup`（version 与 packageManager 双写冲突），
+#      **从没到过 tsc / vitest** —— 建 CI 那天(6-10)起就是这样。
+#   ② 就算把 ① 修好，全量基线 72 红会让 `vitest run` 照样恒非零 → CI 还是恒红。
 #
 #   恒红的 CI = 命中率 100% 的检查器 = 零信息量。
 #
