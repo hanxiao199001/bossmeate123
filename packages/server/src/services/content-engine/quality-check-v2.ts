@@ -704,15 +704,72 @@ ${scorerView}
         "P0① 六维评分 JSON 经修复后可解析(省下一次重打)");
     }
 
+    /**
+     * 🔴 8-22：**维度缺失 = 评分失败，绝不静默填 0**（老韩拍板）。
+     *
+     * ═══ 事故 ═══
+     *
+     * 同尺 5 轮标定实测：**7.6% 的评分调用产出垃圾分**，而且模式极其规整 ——
+     *
+     * ```
+     *              topicH dataAc struct format practi origin   总分
+     * 教育学报 r3        5     0      0      0      0      0     10
+     * 江苏高教 r4        8     3      7      0      0      0     38
+     * 图书情报 r1        8     0      0      0      0      0     16
+     * ```
+     *
+     * **每次都是「前 N 维有分、后面全 0」** —— 模型输出被截断，
+     * `extractJsonObject` 把残缺 JSON「修好」（补花括号），
+     * 缺失的尾部维度经 `clamp(Number(undefined) → NaN → 0)` 变成 0 分。
+     *
+     * 零维频率严格按 JSON 出场顺序单调递增（topicHook 0 次 → originalityCompliance 19 次），
+     * 这是截断的指纹，不可能是模型真的给 0。
+     *
+     * ═══ 后果 ═══
+     *
+     * 一篇中位 78 分的内容有 7.6% 概率被记成 16 分 → `sixDimPassed=false`
+     * → 进不了草稿箱 / 被 <60 闸拦。**下游完全无法区分「内容差」和「评分挂了」。**
+     * 而 7-27 那次血的教训写着：「我们的评分器挂了」≠「内容有问题」，
+     * 当时的处置是把「没评上分」从红线里移出去 —— 但那条路只对**整体**失败生效，
+     * 对这种**部分**失败完全失明，因为它伪装成了一个正常的低分。
+     *
+     * 这是红线 #14 的第七次，浓缩在一个三元表达式里：
+     * `Number.isFinite(v) ? v : 0` —— 「解析不出来」被写成了「0 分」。
+     *
+     * ═══ 修法 ═══
+     *
+     * 任一维度缺失或分数不是有限数 → **抛错**，走既有的重打/降级链路，
+     * 最终仍失败则判「没评上分」(quality_check_unavailable)。
+     * 绝不返回一个数字 —— 数字会被当成结论。
+     *
+     * ⚠️ 不要改 `clamp` 去掉 NaN 兜底就算完：那只会让 NaN 传到总分变成 NaN，
+     * 同样是静默的坏值。判据必须在**知道哪一维缺了**的这一层做。
+     */
     const dims = {} as Record<SixDimKey, SixDimDetail>;
+    const missing: string[] = [];
     for (const key of Object.keys(SIX_DIM_WEIGHTS) as SixDimKey[]) {
-      const d = parsed[key] || {};
+      const d = parsed[key];
+      const rawScore = d && typeof d === "object" ? Number((d as { score?: unknown }).score) : Number.NaN;
+      if (!Number.isFinite(rawScore)) {
+        missing.push(key);
+        continue;
+      }
       dims[key] = {
-        score: clamp(Math.round(Number(d.score)), 0, 10),
+        score: clamp(Math.round(rawScore), 0, 10),
         weakestSection: String(d.weakestSection || "全文"),
         fixHint: String(d.fixHint || ""),
         justification: String(d.justification || ""),
       };
+    }
+    if (missing.length > 0) {
+      // 记一条足够定位的日志：缺了哪几维 + 是否经过修复 + 输出长度（截断的直接证据）
+      logger.warn(
+        { tenantId, contentId, tier, missing, repairs, model: response.model,
+          outputLen: String(response.content ?? "").length,
+          finishReason: (response as { finishReason?: string }).finishReason ?? null },
+        "🔴 六维评分输出缺维(疑截断) —— 判为评分失败, 绝不按 0 分计",
+      );
+      throw new Error(`六维评分缺少维度: ${missing.join(",")}（疑输出截断）`);
     }
 
     // 7-20 反"奖励编造": 正文有无据 IF/分区 → dataAccuracy 硬压到 ≤3, 覆盖 LLM 给的分。
@@ -927,6 +984,14 @@ function degradedSixDim(reason = "评分服务降级"): SixDimResult {
  *  会成为最弱维度被优先修(fixHint 直接告诉它删掉哪几个无据数字)。 */
 const FABRICATION_CAP = 3;
 
+/**
+ * ⚠️ 8-22：`Number.isFinite(v) ? v : 0` 这一段曾是 7.6% 垃圾分的病灶 ——
+ * 维度解析不出来时 NaN 被静默写成 0 分，下游读成"这一维极差"。
+ *
+ * 现在**缺维在上游就抛错**（见六维解析处的 missing 判据），
+ * 本函数的 NaN 兜底只作最后一道防御，**不再承担任何判据职责**。
+ * 🔴 不要把"某维是否有效"的判断退回到这里 —— 它看不到是哪一维、也没法重试。
+ */
 function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(Number.isFinite(v) ? v : 0, min), max);
 }
