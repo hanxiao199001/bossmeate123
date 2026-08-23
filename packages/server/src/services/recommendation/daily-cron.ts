@@ -990,8 +990,27 @@ export async function runDailyContentByType(
   // 7-30 感知①: 排产**之前**先盘一次期刊池, 把"今天注定要降级"记在降级发生之前(见下)
   const poolPreflight = await preflightJournalPool(SYS, cq);
 
+  /**
+   * 🔴 roundup 停用开关（老韩 2026-08-23 拍板：内容质量一般，停掉）。
+   *
+   * **停用 ≠ 删除。** 代码原样留着，恢复就是把参数改回 true ——
+   * 「万一要恢复」不该是一次回滚部署（8-20 v2 切换那次立的规矩：
+   * 重大行为变更的回退路径必须在切之前就存在，且回退动作是改一个配置）。
+   *
+   * 落在这里而不是把 quota 改成 0：`tenants.config` 那条路**不产生审计行**，
+   * 而 `runtime_params` 自带 `runtime_param_audits`（谁改的、什么时候、改成什么）。
+   * 停一整条产线这种事，必须能查到是谁在什么时候停的。
+   */
+  const { getParam: getRoundupParam } = await import("../ops/runtime-params.js");
+  const roundupEnabled = await getRoundupParam<boolean>("roundup.enabled");
+
   for (const [type, cfg] of Object.entries(cq)) {
     if (!cfg.count) continue;
+    if (type === "roundup" && !roundupEnabled) {
+      // 只陈述事实（红线 #13）。**不写"因为质量差"** —— 停用理由在参数页，不在日志里。
+      logger.info({ skippedCount: cfg.count }, "roundup 体裁已停用(roundup.enabled=false), 本轮跳过");
+      continue;
+    }
     const discs = cfg.disciplines.length ? cfg.disciplines : ALL_DISC_CODES;
     for (let i = 0; i < cfg.count; i++) {
       const discipline = disciplineForSlot(discs, i);
