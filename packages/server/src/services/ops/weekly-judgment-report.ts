@@ -244,14 +244,35 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
    */
   let testBaseline: { knownFailures: number | null } = { knownFailures: null };
   try {
-    const { readFileSync } = await import("node:fs");
+    const { readFileSync, existsSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const { join, dirname } = await import("node:path");
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
-    const raw = readFileSync(join(repoRoot, ".github/known-failures.txt"), "utf8");
-    testBaseline = { knownFailures: raw.split("\n").filter((l) => l.trim().length > 0).length };
+    /**
+     * 🔴 8-23：**向上找到为止，不数层数。**
+     *
+     * 第一版写死 `"../../../.."` —— 少算了一级（落在 `packages/` 而不是仓库根），
+     * 于是永远读不到文件、永远报 null，实测周报里那一行**一次都没出现过**。
+     * 而且 src 与 dist 的深度还不一样，数层数注定要再错一次。
+     *
+     * 它失败得是对的（报 null、整句不出现、绝不写 0，红线 #14）——
+     * 但"失败形态正确"不等于"功能可用"，这两件事必须分开验（红线 #24）。
+     */
+    let dir = dirname(fileURLToPath(import.meta.url));
+    let found: string | null = null;
+    for (let i = 0; i < 8; i++) {
+      const candidate = join(dir, ".github/known-failures.txt");
+      if (existsSync(candidate)) { found = candidate; break; }
+      const parent = dirname(dir);
+      if (parent === dir) break;   // 到根了
+      dir = parent;
+    }
+    if (found) {
+      const raw = readFileSync(found, "utf8");
+      // `# ` 开头的是元信息行（total_cases 等），与基线闸同口径，不计入条数
+      testBaseline = { knownFailures: raw.split("\n").filter((l) => l.trim().length > 0 && !l.startsWith("#")).length };
+    }
   } catch {
-    /* 基线文件读不到 → 保持 null, 那一行不出现 */
+    /* 读不到 → 保持 null, 那一行不出现 */
   }
 
   const todos = pickTodos({ checkers, annotated, health, backlog });
