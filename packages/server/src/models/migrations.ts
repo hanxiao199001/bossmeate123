@@ -913,4 +913,39 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       ALTER TABLE content_publish_log ADD COLUMN IF NOT EXISTS scoring_version VARCHAR(16);
     `,
   },
+  {
+    version: "041_content_rescore_audits",
+    description:
+      "8-23: 重评审计表。**红线 #21 一次性例外的落痕载体**(老韩 8-23 批准, 289 篇)。" +
+      "为什么单独建表而不是复用: runtime_param_audits 是参数专用; decision_traces 是选刊决策形态" +
+      "(硬塞就是红线 #20 口径混用); ops_incidents 是告警表, 灌 289 条例行记账会**稀释简报信任**——" +
+      "而那正是 CC-待办 #1 在治的病, 不能一边治一边加剧。" +
+      "**exception_ref 是这张表的关键列**: 「改了什么」有归宿了, 「凭什么允许改」也要有归宿。" +
+      "否则三个月后看到 289 条状态迁移, 查不到它是被批准的还是被绕过的 ——" +
+      "绕过和被批准的例外, 一周后回看是两件事。" +
+      "纯 insert、无唯一索引, 因此不涉及红线 #19 的冲突路径。" +
+      "退回执行: DROP TABLE content_rescore_audits。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS content_rescore_audits (
+        id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        content_id     UUID NOT NULL,
+        batch          VARCHAR(32) NOT NULL,
+        old_status     VARCHAR(32),
+        new_status     VARCHAR(32),
+        old_total      NUMERIC(5,2),
+        new_total      NUMERIC(5,2),
+        old_version    VARCHAR(16),
+        new_version    VARCHAR(16),
+        ruler_offset   NUMERIC(5,2),
+        decision       VARCHAR(24) NOT NULL,
+        reasons        JSONB NOT NULL DEFAULT '[]'::jsonb,
+        cost_cents     INTEGER,
+        exception_ref  JSONB NOT NULL,
+        approved_by    VARCHAR(64) NOT NULL,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_rescore_audits_batch ON content_rescore_audits (batch, created_at);
+      CREATE INDEX IF NOT EXISTS idx_rescore_audits_content ON content_rescore_audits (content_id);
+    `,
+  },
 ];

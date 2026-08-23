@@ -1614,6 +1614,47 @@ export const checkerLedger = pgTable(
  * 的注册表决定；本表只存**值**。读取顺序：DB → env → 代码默认，
  * 三层都在，所以没被配过的参数行为零变化。
  */
+/**
+ * 重评审计（migration 041，8-23）。**红线 #21 一次性例外的落痕载体。**
+ *
+ * `exception_ref` 是这张表的关键列：「改了什么」有归宿了，「凭什么允许改」也要有归宿。
+ * 否则三个月后看到 289 条状态迁移，查不到它是被批准的还是被绕过的 ——
+ * **绕过和被批准的例外，一周后回看是两件事。**
+ *
+ * 不做通用化：以后有别的批量重评场景再说。
+ */
+export const contentRescoreAudits = pgTable(
+  "content_rescore_audits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** 不做外键：内容删了审计仍要保留，否则「这批干了什么」会凭空消失 */
+    contentId: uuid("content_id").notNull(),
+    /** 分组：truncated | control | zero6 | failed —— 三组分记 + 第四组「重评也失败」 */
+    batch: varchar("batch", { length: 32 }).notNull(),
+    oldStatus: varchar("old_status", { length: 32 }),
+    newStatus: varchar("new_status", { length: 32 }),
+    oldTotal: numeric("old_total", { precision: 5, scale: 2 }),
+    newTotal: numeric("new_total", { precision: 5, scale: 2 }),
+    oldVersion: varchar("old_version", { length: 16 }),
+    newVersion: varchar("new_version", { length: 16 }),
+    /** 对照组实测的 Δ 中位数。**恢复判据必须扣掉它** —— 不扣就是拿放宽后的尺子救老内容 */
+    rulerOffset: numeric("ruler_offset", { precision: 5, scale: 2 }),
+    /** restored | kept_archived | rescore_failed */
+    decision: varchar("decision", { length: 24 }).notNull(),
+    /** 三条恢复判据逐条的通过/不通过，**不论好坏如实记** */
+    reasons: jsonb("reasons").notNull().default([]),
+    costCents: integer("cost_cents"),
+    /** 批准人/日期/范围/预算 —— 「凭什么允许改」 */
+    exceptionRef: jsonb("exception_ref").notNull(),
+    approvedBy: varchar("approved_by", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_rescore_audits_batch").on(table.batch, table.createdAt),
+    index("idx_rescore_audits_content").on(table.contentId),
+  ],
+);
+
 export const runtimeParams = pgTable("runtime_params", {
   key: varchar("key", { length: 64 }).primaryKey(),
   value: jsonb("value").notNull(),
