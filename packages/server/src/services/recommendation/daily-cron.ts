@@ -28,6 +28,9 @@ import { verifiedJournalCondition, journalPoolCriteria } from "../journals/journ
 import { getPoolInventory, disciplineCn, type PoolInventory } from "../journals/pool-inventory.js";
 import { GENERIC_DISCIPLINE_CODE, DISCIPLINE_CODES } from "./discipline-mapping.js";
 import { traceJournalConsumptionBatch, traceJournalIntent } from "../ops/decision-trace.js";
+// 8-23 roundup「先量不拦」：只写分不设闸，见下方调用点注释
+import { sixDimQualityCheck } from "../content-engine/quality-check-v2.js";
+import { SIX_DIM_SCORING_VERSION } from "../content-engine/quality-thresholds.js";
 import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
@@ -1045,6 +1048,45 @@ export async function runDailyContentByType(
           if (!roundupOk) {
             logger.warn({ discipline, journalIds, mismatches: fab.mismatches, hardHits: comp.hardHits }, "7-25 盘点编造/合规命中, 转 needs_review");
           }
+          /**
+           * 🔴 8-23「先量不拦」(老韩拍板选 A)。**只写分，不设闸。**
+           *
+           * ## 为什么这里必须先量
+           *
+           * roundup 不走 batch-worker / quality-pipeline，所以六维一次都没跑过：
+           *
+           * ```
+           * roundup    28 篇   有六维分   0    进过分发  28  (100%)
+           * 普通文章  317 篇   有六维分 312    进过分发 116  ( 37%)
+           * ```
+           *
+           * 普通线要过 80 分才可能进分发，roundup 一分没打就 100% 进 ——
+           * 分发内容里它占 19.4%。
+           *
+           * ## 🔴 为什么不顺手把闸也接上
+           *
+           * 六维的 `dataAccuracy` / `structureDensity` 判据都锚在「单篇单刊」上，
+           * 而 roundup 一篇说 3 本刊。**如果判据不适用，评分结果不是低分，是噪音** ——
+           * 用不适用的尺子量出来的数和随机数没区别，而它长得和真实低分一模一样。
+           *
+           * 直接接闸 = 拿一把可能没有刻度的尺子卡掉 19.4% 的产出。
+           * 读法已在跑之前预注册（`scoring-rubric-experiment.ts` 文件头）：
+           * 看**方差**而不是看分数高低 —— 不适用的判据会把样本压到同一个位置。
+           *
+           * ## 硬约束
+           *
+           * 分照常落 metadata，`sixDimPassed` 照常写，但**分发侧对 roundup 的行为一个字不改**。
+           * 一旦这里顺手加了拦截，结论就被自己的干预污染了，A 也就不是 A 了。
+           *
+           * 旁路：评分挂了绝不影响 roundup 产出（它本来就没有这一步）。
+           */
+          let roundupSixDim: Awaited<ReturnType<typeof sixDimQualityCheck>> | null = null;
+          try {
+            roundupSixDim = await sixDimQualityCheck({ tenantId: SYS, title, body: html });
+          } catch (err) {
+            logger.warn({ discipline, err: err instanceof Error ? err.message : String(err) },
+              "盘点六维评分失败(旁路, 不影响产出) —— 本篇无分, 不是 0 分");
+          }
           const [row] = await db.insert(contents).values({
             tenantId: SYS, userId: SYS_USER, type: "article", title, body: html,
             // 多刊盘点是成品文章, 直接 generated 进批量发布(原误存 draft 导致进不了内容工坊批量导入)
@@ -1055,6 +1097,18 @@ export async function runDailyContentByType(
               //   落在篇上，省得篇级统计去 join 行表然后把篇数放大 N 倍。
               journalCount: journalIds.length,
               journalCountRequested: roundupCount3,
+              // 8-23「先量不拦」：分落库，闸不接。degraded 时不写分(没评上分 ≠ 评了 0 分)
+              ...(roundupSixDim && !roundupSixDim.degraded ? {
+                // 与普通线同口径：只存每维分数（不存 fixHint/justification 那些长文本）
+                sixDimScores: Object.fromEntries(
+                  Object.entries(roundupSixDim.dims).map(([k, v]) => [k, v.score]),
+                ),
+                sixDimTotal: roundupSixDim.totalScore,
+                sixDimPassed: roundupSixDim.passed,
+                sixDimScoringVersion: SIX_DIM_SCORING_VERSION,
+                // 🔴 标死它没有被闸拦过 —— 免得日后有人拿这批分当"过了闸的内容"用
+                sixDimGateApplied: false,
+              } : {}),
               // 7-25: 落 journalIds —— 发布期闸门(draft-distributor / publishToAccounts)靠它
               //   才能查到本篇涉及哪些刊; 原来只存 journalCovers, 发布侧一律当"无期刊"放行。
               journalIds,
