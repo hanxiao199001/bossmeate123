@@ -17,7 +17,12 @@ vi.mock("../config/logger.js", () => ({ logger: { info: vi.fn(), warn: vi.fn(), 
 // drizzle 的算子在本测试里只做占位, 真正的分派靠下面 db mock 记录的 table 身份
 vi.mock("drizzle-orm", () => {
   const tag = () => ({ __sql: true });
-  return { and: tag, or: tag, eq: tag, gte: tag, inArray: tag, desc: tag, sql: Object.assign(tag, { raw: tag }) };
+  // 8-23: 补 `sql.join` —— reportStarvedAccounts 改用 `IN (${sql.join(...)})` 后必须有它。
+  //   漏了会让 sql.join 变成 undefined(...) 抛 TypeError, 被 catch 转成一条
+  //   account_supply_check_failed, 于是**别的用例的 incident 计数全被打乱** ——
+  //   mock 缺一个成员, 表现却是六个不相干的用例变红(红线 #24: 每个 mock 都是一次
+  //   "这段代码不再被验证"的决定, 而它挡住的东西挂了未必长得像它自己挂了)。
+  return { and: tag, or: tag, eq: tag, gte: tag, inArray: tag, desc: tag, sql: Object.assign(tag, { raw: tag, join: tag }) };
 });
 
 const TBL = { contents: { __t: "contents" }, contentPublishLog: { __t: "publish_log" }, platformAccounts: { __t: "accounts" }, tenants: { __t: "tenants" } };
@@ -60,7 +65,7 @@ interface State {
   /** 今日各号载荷(pushPairs 成功即 +1) */
   load: Map<string, number>;
   /** 8-23: reportStarvedAccounts 那条原生 SQL 的返回行(长期零供给告警用) */
-  starvedRows?: Array<{ id: string; name: string; last_at: string | null; total30: number }>;
+  starvedRows?: Array<{ id: string; name: string; last_at: string | null; total30: number }> | Error;
 }
 let S: State;
 let poolCall = 0;
@@ -123,7 +128,10 @@ vi.mock("../models/db.js", () => ({
      * 一调就抛，被它自己的 try/catch 吞掉 —— **测试里这条告警从来没真跑过**。
      * 默认返回空行（不影响既有用例），要测时往 S.starvedRows 里塞。
      */
-    execute: async () => ({ rows: S.starvedRows ?? [] }),
+    execute: async () => {
+      if (S.starvedRows instanceof Error) throw S.starvedRows;   // 8-23: 让用例能模拟"查询自己挂了"
+      return { rows: S.starvedRows ?? [] };
+    },
   },
 }));
 
@@ -313,6 +321,27 @@ describe("⑤ 长期零供给告警不依赖「今天有没有缺口」", () => 
     expect(inc.severity).toBe("error");           // ≥7 天 → 最高级
     expect(inc.message).toContain("Paper咨询与发表");
     expect(inc.detail.starvedDays).toBe(58);
+  });
+
+  it("🔴 检查自己挂了 → 落 account_supply_check_failed，绝不静默当成「没有断供的号」(红线 #23)", async () => {
+    /**
+     * 8-23 实况：这条 SQL 用 `= ANY(${array})`，drizzle 绑不成 Postgres 数组
+     * （`op ANY/ALL (array) requires array on right side`）——**从写下来那天就是坏的**，
+     * 而失败被 catch 吞成一条 warn 日志、零 incident，24 小时没人知道。
+     *
+     * ⚠️ 本用例锁的是**失败可见性**，锁不住 SQL 本身对不对 ——
+     * 那是红线 #19 的范围（单测证明不了 Postgres 会怎么执行），只能真库跑。
+     */
+    S.poolBatches = [[art("a1"), art("a2")]];
+    computeSmartPairsMock.mockImplementation(pairFirst(2));
+    S.starvedRows = new Error("op ANY/ALL (array) requires array on right side") as never;
+
+    await distributeDraftsForTenant(TENANT);
+    await flushIncidents(1);
+    const inc = recordIncidentSpy.mock.calls.map((c) => c[0] as { kind: string; message: string });
+    const failed = inc.find((i) => i.kind === "account_supply_check_failed");
+    expect(failed, "检查挂了必须落 incident，不能只留日志").toBeTruthy();
+    expect(failed!.message).toContain("这不等于没有断供的号");
   });
 
   it("没有长期断供的号 → 不响(判据得能区分，不能恒响)", async () => {

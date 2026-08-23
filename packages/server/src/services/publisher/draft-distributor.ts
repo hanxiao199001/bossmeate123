@@ -207,7 +207,7 @@ async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Pr
       FROM platform_accounts a
       LEFT JOIN content_publish_log l
         ON l.account_id = a.id AND l.created_at > now() - interval '30 days'
-      WHERE a.id = ANY(${accountIds})
+      WHERE a.id IN (${sql.join(accountIds.map((id) => sql`${id}::uuid`), sql`, `)})
       GROUP BY a.id, a.account_name`);
     const list = ((rows as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? []);
     for (const r of list) {
@@ -226,7 +226,30 @@ async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Pr
       });
     }
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "长期零供给告警计算失败(旁路, 不阻塞分发)");
+    /**
+     * 🔴 红线 #23：**检查器自己挂了必须报出来**，不许只留一条没人看的 warn。
+     *
+     * 8-23 实况：这条 SQL 用 `= ANY(${array})`，drizzle 的 `sql` 模板绑不成 Postgres 数组
+     * （`op ANY/ALL (array) requires array on right side`）——**从 8-22 写下来那天就是坏的**。
+     * 而失败被这里的 catch 吞成一条 warn 日志、零 incident，于是从外面看：
+     *
+     * ```
+     * 「没有断供的号」  和  「这个检查崩了」   长得一模一样
+     * ```
+     *
+     * 一条**专门用来发现长期故障**的告警，自己长期故障了 24 小时没人知道。
+     * 所以 catch 里必须落一条 incident —— 旁路仍然绝不抛错（不能反过来搞挂分发），
+     * 但"这项今天等于没查"这件事必须出现在简报里。
+     */
+    const detail = err instanceof Error ? err.message : String(err);
+    logger.error({ err: detail }, "🔴 长期零供给告警计算失败 —— 这不等于没有断供的号");
+    reportDistIncident({
+      kind: "account_supply_check_failed",
+      severity: "error",
+      tenantId,
+      message: `长期零供给检查**没跑成**（${detail.slice(0, 120)}）—— 这不等于没有断供的号，今天这项等于没查。`,
+      detail: { error: detail.slice(0, 300), accountCount: accountIds.length },
+    });
   }
 }
 
