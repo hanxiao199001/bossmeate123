@@ -63,11 +63,25 @@ describe("真风险必须仍然拦住（防止修误伤时把召回一起修没�
 });
 
 describe("三档拆分：分类决定处置，处置不可逆", () => {
-  it("硬禁词与正文无关 —— 正文再干净也是违规，但归 hard_banned_title（可修复）", () => {
+  it("硬禁词 + 正文干净 → hard_banned_title（可修复）", () => {
     const r = checkTitleBodyConsistency("评职称毕业稳过！", "本刊审稿规范，无任何风险。");
     expect(r.verdict).toBe("hard_banned_title");
     expect(r.titleHits).toContain("稳过");
-    expect(r.riskSignal).toBeNull();   // 与正文无关，不该带上风险信号
+    expect(r.riskSignal).toBeNull();
+  });
+
+  it("🔴 硬禁词 + 正文真风险 → trust_incident（行7 原始事故，必须留在红线里）", () => {
+    /**
+     * 第一版把硬禁词判定短路在最前面，于是这个 case 被降级成 hard_banned_title（非红线）——
+     * 而它正是这道闸存在的理由。**基线闸当场抓住了它。**
+     *
+     * ▎ 重构判据时最容易弄丢的，恰好是它最初为之而建的那个 case ——
+     * ▎ 因为新分类是照着「现在看到的数据」划的，而那个 case 早已不在数据里
+     * ▎ （它被修好之后就不再发生了）。
+     */
+    const r = checkTitleBodyConsistency("这本稳发！", "该刊 CAR 指数高风险，建议避开。");
+    expect(r.verdict).toBe("trust_incident");
+    expect(r.riskSignal).toBeTruthy();
   });
 
   it("🔴 限量话术 + 正文无真风险 = 合法（老韩 8-23 确认保留，额度归 rotation 管）", () => {

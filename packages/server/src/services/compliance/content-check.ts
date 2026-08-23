@@ -295,18 +295,34 @@ export function checkTitleBodyConsistency(
   body: string | null | undefined,
 ): { ok: boolean; verdict: TitleBodyVerdict; titleHits: string[]; riskSignal: string | null } {
   const t = title || "";
-  // ① 硬禁词：与正文无关，任何情况都不该出现（这一档**不依赖弱信号**）
   const hardHits = [...new Set(t.match(TITLE_HARD_BANNED) || [])];
+  const rateHits = [...new Set(t.match(TITLE_RATE_LIMITED) || [])];
+  const plainBody = (body || "").replace(/<[^>]+>/g, "");
+  const risk = plainBody.match(BODY_RISK_SIGNAL);
+
+  /**
+   * 🔴 **必须先看正文，硬禁词不许短路。**
+   *
+   * 第一版把硬禁词判定放在最前面直接 return —— 于是「标题喊稳发 + 正文说 CAR 高风险」
+   * 这个**行7 原始事故**再也走不到信任事故那一档，被降级成「可修复·非红线」。
+   * 而它正是这道闸存在的理由。
+   *
+   * 基线闸当场抓住了这条（`title-body-consistency.test.ts` 的行7 用例）——
+   * 一次**真回归**，不是漂移。
+   *
+   * ▎ 重构判据时，最容易弄丢的恰好是它最初为之而建的那个 case ——
+   * ▎ 因为新分类是照着「现在看到的数据」划的，而那个 case 早已不在数据里
+   * ▎ （它被修好之后就不再发生了）。
+   */
+  if (risk && (hardHits.length > 0 || rateHits.length > 0)) {
+    return { ok: false, verdict: "trust_incident", titleHits: [...hardHits, ...rateHits], riskSignal: risk[0] };
+  }
+  // 正文无真风险时：硬禁词仍然违规（与正文无关），但属可修复档
   if (hardHits.length > 0) {
     return { ok: false, verdict: "hard_banned_title", titleHits: hardHits, riskSignal: null };
   }
-  // ② 限量词 + 正文真风险 = 信任事故
-  const plainBody = (body || "").replace(/<[^>]+>/g, "");
-  const risk = plainBody.match(BODY_RISK_SIGNAL);
-  if (!risk) return { ok: true, verdict: "ok", titleHits: [], riskSignal: null };
-  const rateHits = [...new Set(t.match(TITLE_RATE_LIMITED) || [])];
-  if (rateHits.length === 0) return { ok: true, verdict: "ok", titleHits: [], riskSignal: risk[0] };
-  return { ok: false, verdict: "trust_incident", titleHits: rateHits, riskSignal: risk[0] };
+  // 限量话术 + 正文干净 = 合法（老韩 8-23 确认保留，额度归 usage-rotation 管）
+  return { ok: true, verdict: "ok", titleHits: [], riskSignal: risk ? risk[0] : null };
 }
 
 // 7-05 脏点清理(行1 教训): 标题的"审稿周期/录用率"具体数字必须在正文复现。
