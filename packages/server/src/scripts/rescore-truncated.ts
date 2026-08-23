@@ -64,6 +64,19 @@ import { logger } from "../config/logger.js";
 
 const APPLY = process.argv.includes("--apply");
 
+/**
+ * 🔴 评分结果落盘 —— **dry-run 与 --apply 不许各评一遍**。
+ *
+ * 8-23 差点踩到: "dry-run 只跳过落库、不跳过 LLM 调用", 所以
+ * `dry-run(¥6.8) + --apply(¥6.8) = ¥13.6` 会直接撞破 ¥12.75 的硬停线 ——
+ * 而红线 #21 的例外只批了一次的钱。
+ *
+ * 解耦形态照抄 task#104 阶段2 的万方回填(红线 #11):
+ * **先跑分落盘 → 看过之后 --apply 只读盘不再调 LLM**。
+ * 崩了也能 resume, 已评过的不会重复烧钱。
+ */
+const CACHE = process.env.RESCORE_CACHE ?? "/tmp/rescore-2026-08-23.jsonl";
+
 /** 批准原文 —— 每一行审计都带它。「凭什么允许改」必须有归宿。 */
 const EXCEPTION_REF = {
   redline: "#21 不批量重跑质检",
@@ -92,12 +105,12 @@ const DIM_FLOOR = 6;
 const CONCURRENCY = 5;
 
 type Batch = "truncated" | "zero6" | "control";
-interface Sample { id: string; status: string; title: string; body: string; oldTotal: number | null; oldVersion: string | null; zeroN: number; batch: Batch }
+interface Sample { id: string; tenantId: string; status: string; title: string; body: string; oldTotal: number | null; oldVersion: string | null; zeroN: number; batch: Batch }
 interface Scored extends Sample { newTotal: number | null; newDims: Record<string, number> | null; degraded: boolean; err?: string }
 
 async function pickSamples(): Promise<Sample[]> {
   const rows = (await db.execute(sql`
-    SELECT c.id, c.status, c.title, c.body,
+    SELECT c.id, c.tenant_id, c.status, c.title, c.body,
            NULLIF(c.metadata->>'sixDimTotal','')::numeric AS old_total,
            c.metadata->>'sixDimScoringVersion' AS old_version,
            (SELECT count(*) FROM jsonb_each(c.metadata->'sixDimScores') e WHERE (e.value)::text='0')::int AS zero_n
@@ -107,7 +120,8 @@ async function pickSamples(): Promise<Sample[]> {
   `) as unknown as { rows: Array<Record<string, unknown>> }).rows;
 
   const all = rows.map((r) => ({
-    id: String(r.id), status: String(r.status), title: String(r.title ?? ""), body: String(r.body ?? ""),
+    id: String(r.id), tenantId: String(r.tenant_id), status: String(r.status),
+    title: String(r.title ?? ""), body: String(r.body ?? ""),
     oldTotal: r.old_total == null ? null : Number(r.old_total),
     oldVersion: r.old_version == null ? null : String(r.old_version),
     zeroN: Number(r.zero_n ?? 0),
@@ -121,6 +135,16 @@ async function pickSamples(): Promise<Sample[]> {
 }
 
 async function scoreAll(samples: Sample[]): Promise<{ scored: Scored[]; spentCents: number; stopped: boolean }> {
+  const { existsSync, readFileSync, appendFileSync } = await import("node:fs");
+  // 已评过的直接复用, 一次都不重复烧钱
+  const cached = new Map<string, Scored>();
+  if (existsSync(CACHE)) {
+    for (const line of readFileSync(CACHE, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try { const o = JSON.parse(line) as Scored; cached.set(o.id, o); } catch { /* 坏行跳过 */ }
+    }
+    console.log(`  复用已评结果 ${cached.size} 篇(${CACHE}) —— 这部分不再调 LLM`);
+  }
   const scored: Scored[] = [];
   let spentCents = 0;
   let stopped = false;
@@ -132,9 +156,17 @@ async function scoreAll(samples: Sample[]): Promise<{ scored: Scored[]; spentCen
       break;
     }
     const chunk = samples.slice(i, i + CONCURRENCY);
-    const out = await Promise.all(chunk.map(async (s): Promise<Scored> => {
+    const fresh = chunk.filter((s) => !cached.has(s.id));
+    scored.push(...chunk.filter((s) => cached.has(s.id)).map((s) => cached.get(s.id)!));
+    const out = await Promise.all(fresh.map(async (s): Promise<Scored> => {
       try {
-        const r = await sixDimQualityCheck({ tenantId: "00000000-0000-0000-0000-000000000000", title: s.title, body: s.body });
+        /**
+         * 🔴 用**这篇内容自己的 tenantId**。
+         * 第一版硬编码了零 uuid —— 那个租户在 tenants 表里不存在, 于是每次调用的
+         * cost_ledger 插入都撞外键 (`cost_ledger_tenant_id_fkey`), 钱花了记不上账。
+         * FK 约束替我大声失败了, 否则这批的成本会全部消失。
+         */
+        const r = await sixDimQualityCheck({ tenantId: s.tenantId, title: s.title, body: s.body });
         return {
           ...s, degraded: r.degraded, newTotal: r.totalScore,
           newDims: r.degraded ? null : Object.fromEntries(Object.entries(r.dims).map(([k, v]) => [k, v.score])),
@@ -143,8 +175,9 @@ async function scoreAll(samples: Sample[]): Promise<{ scored: Scored[]; spentCen
         return { ...s, degraded: true, newTotal: null, newDims: null, err: err instanceof Error ? err.message : String(err) };
       }
     }));
+    for (const o of out) appendFileSync(CACHE, JSON.stringify(o) + "\n");   // 逐篇落盘, 崩了可 resume
     scored.push(...out);
-    spentCents += chunk.length * CENTS_PER_CALL;
+    spentCents += fresh.length * CENTS_PER_CALL;
     process.stdout.write(`\r  已评 ${scored.length}/${samples.length}  花费 ≈¥${(spentCents / 100).toFixed(2)}`);
   }
   process.stdout.write("\n");
