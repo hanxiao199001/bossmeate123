@@ -27,7 +27,7 @@ import { generateRoundupArticle } from "../content-engine/roundup-generator.js";
 import { verifiedJournalCondition, journalPoolCriteria } from "../journals/journal-sql.js";
 import { getPoolInventory, disciplineCn, type PoolInventory } from "../journals/pool-inventory.js";
 import { GENERIC_DISCIPLINE_CODE, DISCIPLINE_CODES } from "./discipline-mapping.js";
-import { traceJournalConsumptionBatch } from "../ops/decision-trace.js";
+import { traceJournalConsumptionBatch, traceJournalIntent } from "../ops/decision-trace.js";
 import { classifyPickDegrade, describePickDegrade } from "./pick-degrade.js";
 import { initialStatusFields } from "../articles/state-machine.js";
 import {
@@ -995,7 +995,45 @@ export async function runDailyContentByType(
       usedDisc.add(discipline);
       try {
         if (type === "roundup") {
-          const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: 3, audience: "普通院校教师" });
+          /**
+           * 🔴 8-23：roundup 链路整体接观测。三笔债一起还，**不再单点补**。
+           *
+           * ## 债① intent 留痕缺一半
+           *
+           * ```
+           * daily_cron_article   intent 126 / consumption 126   ← 成对
+           * daily_cron_roundup   intent   0 / consumption  36   ← 只有一半
+           * ```
+           *
+           * 消耗侧只记**成功拿到**的刊。所以「想要 3 本、只拿到 2 本」这类
+           * **选不出刊的失败，在留痕里完全不可见** —— 而 roundup 恰好是最容易撞冷却的
+           * 那条线（一篇吃 3 本，15 天冷却，池子小的学科一轮就见底）。
+           *
+           * ## 债② 没有心跳 —— 但它不该有心跳，它该有 intent
+           *
+           * roundup **不走 `generating` 状态**（直接 insert 成 generated），
+           * 所以 watchdog 够不着它、心跳也无处可打。硬塞一个心跳字段是形式主义。
+           *
+           * 它真正缺的是**「开始了」这个进度点**：生成挂住的时候，
+           * 现在的现象是 daily-cron 静默卡住，事后没有任何东西能证明它试过。
+           * intent 留痕正好就是那个点 —— **intent 有、content 无 = 这一篇死在生成里**。
+           *
+           * ## 债③ 本数/篇数口径
+           *
+           * 一篇 roundup = 3 行 `journal_usage`。任何按行数算「篇数」的查询都会
+           * 把 roundup 放大 3 倍（这正是 8-17「日耗 17.9 实为 14」那次的源头）。
+           * 下面往 metadata 落 `journalCount`，篇级查询不必再 join。
+           */
+          const roundupCount3 = 3;
+          const correlationId = await traceJournalIntent({
+            requestedBy: "daily_cron_roundup", slotDiscipline: discipline, scope: "roundup", tenantId: SYS,
+          });
+          const { title, html, journalCovers, journalIds } = await generateRoundupArticle({ tenantId: SYS, discipline, count: roundupCount3, audience: "普通院校教师" });
+          // 拿到的比要的少 = 撞冷却/池子见底。**只陈述事实**(红线 #13)，不写"多半是因为 X"。
+          if (journalIds.length < roundupCount3) {
+            logger.warn({ discipline, want: roundupCount3, got: journalIds.length },
+              "盘点选刊不足额 —— intent 与 consumption 的差就是这个数");
+          }
           // 7-25: 盘点补编造闸。此前 roundup 是**唯一一条零校验产线** —— 既不过 checkCompliance,
           //   也没有编造检测(它不走 batch-worker / quality-pipeline, 那两处的闸门够不着),
           //   而它每天在产、又是"一次说 3 本刊的 IF/分区"的最高危形态。
@@ -1013,6 +1051,10 @@ export async function runDailyContentByType(
             ...initialStatusFields(roundupOk ? "generated" : "needs_review"),
             metadata: {
               source: "roundup", templateId: "journal-roundup", discipline, journalCovers,
+              // 🔴 债③ 口径：一篇 roundup 吃 N 本刊，`journal_usage` 是 N 行。
+              //   落在篇上，省得篇级统计去 join 行表然后把篇数放大 N 倍。
+              journalCount: journalIds.length,
+              journalCountRequested: roundupCount3,
               // 7-25: 落 journalIds —— 发布期闸门(draft-distributor / publishToAccounts)靠它
               //   才能查到本篇涉及哪些刊; 原来只存 journalCovers, 发布侧一律当"无期刊"放行。
               journalIds,
@@ -1029,6 +1071,8 @@ export async function runDailyContentByType(
             void traceJournalConsumptionBatch(journalIds, {
               requestedBy: "daily_cron_roundup", slotDiscipline: discipline, scope: "roundup",
               tenantId: SYS, contentId: row.id,
+              // 与上面那次 intent 串起来 —— 不串的话两侧永远配不上对，差额也就看不见
+              correlationId,
             });
             journalIds.forEach((jid) => uniqueJournals.add(jid));
           }
