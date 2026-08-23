@@ -211,7 +211,20 @@ export async function journalConsumptionReport(hours = 24): Promise<string> {
  */
 export async function traceJournalConsumptionBatch(
   journalIds: string[],
-  ctx: Omit<PickConsumption, "correlationId" | "journalId" | "journalDiscipline">,
+  ctx: Omit<PickConsumption, "correlationId" | "journalId" | "journalDiscipline">
+    & {
+      /**
+       * 8-23：由调用方传入，与它那次 `traceJournalIntent` 串起来。
+       *
+       * 不传就自己生成一个（旧行为）—— 但那样 intent 与 consumption **永远配不上对**，
+       * 于是「想选 3 本、实际只拿到 2 本」这类**选不出刊的失败**在留痕里完全不可见：
+       * 消耗侧只记成功拿到的那些，失败的那一本不会留下任何痕迹。
+       *
+       * 实测（8-23）：`daily_cron_article` intent 126 / consumption 126（成对），
+       * 而 `daily_cron_roundup` intent **0** / consumption 36 —— 只有一半。
+       */
+      correlationId?: string;
+    },
 ): Promise<void> {
   if (journalIds.length === 0) return;
   try {
@@ -222,7 +235,7 @@ export async function traceJournalConsumptionBatch(
       .from(journals)
       .where(inArray(journals.id, journalIds));
     const discOf = new Map(rows.map((r) => [r.id, r.disc]));
-    const correlationId = randomUUID();
+    const correlationId = ctx.correlationId ?? randomUUID();
     for (const jid of journalIds) {
       const jd = discOf.get(jid) ?? null;
       await traceJournalConsumption({
