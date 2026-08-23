@@ -486,7 +486,19 @@ export function startBatchWorker(): Worker<BatchRowJob> {
           }
           const tc = checkTitleBodyConsistency(fin?.title, fin?.body);
           const td = checkTitleDataConsistency(fin?.title, fin?.body, dbFields);
-          if (!tc.ok) { titleBodyBad = { reason: "title_body_inconsistent", detail: { titleHits: tc.titleHits, riskSignal: tc.riskSignal } }; logger.warn({ contentId: content.id, ...tc }, "标题-正文矛盾(标题保录承诺 vs 正文风险信号), 转 needs_review"); }
+          if (!tc.ok) {
+            /**
+             * 8-23 分档。**分类决定处置，而处置不可逆** ——
+             * `title_body_inconsistent` 是红线类·永不进池，`title_hard_banned` 是可修复。
+             * 原来两者被压成一种，于是「改一句话就能救」的内容被当成信任事故扔掉。
+             */
+            const reason = tc.verdict === "hard_banned_title" ? "title_hard_banned" : "title_body_inconsistent";
+            titleBodyBad = { reason, detail: { verdict: tc.verdict, titleHits: tc.titleHits, riskSignal: tc.riskSignal } };
+            logger.warn({ contentId: content.id, ...tc },
+              tc.verdict === "hard_banned_title"
+                ? "标题含硬禁词(与正文无关) —— 转 needs_review, 处置=重写标题"
+                : "标题-正文矛盾(限量话术 vs 正文真风险信号), 转 needs_review");
+          }
           else if (!td.ok) { titleBodyBad = { reason: "title_data_fabricated", detail: { mismatches: td.mismatches } }; logger.warn({ contentId: content.id, mismatches: td.mismatches }, "标题数字正文无据(疑编造审稿/录用率), 转 needs_review"); }
           else if (unverifiedSrc) { titleBodyBad = { reason: "unverified_source_journal", detail: unverifiedSrc }; logger.warn({ contentId: content.id, journalId: row.journalId, ...unverifiedSrc }, "PR B: 源刊未核实(conf<70/legacy_unknown), daily-cron 回退命中, 转 needs_review 人工复核"); }
         } catch (e) {

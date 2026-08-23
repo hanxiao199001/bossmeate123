@@ -56,6 +56,14 @@ interface PoolItem {
 //   同 body_fabrication / output_unhealthy 的道理 —— 不进名单会被反复重拦(白跑 + 日志刷屏)。
 //   ⚠️ 它与上面那条"未评上分"的区分是本闸的要害: 这里进红线的是**评过分且分低**,
 //   "评分器挂了"仍然走队尾(UNSCORED_REASONS), 绝不能因为加了这道闸又把 7-27 的零产出重演一遍。
+/**
+ * 红线类 = **不可修复的信任事故**，永不进池。
+ *
+ * 🔴 8-23：`title_hard_banned`（标题含硬禁词）**刻意不在这里** ——
+ * 它是「改一句标题就能救」的可修复问题，处置是重写标题而不是归档。
+ * 把可修复的东西放进红线类，等于每天扔掉一批只差一句话的内容
+ * （实测：原来 348 篇里 305 篇是这个形态，而它们的六维总分是全场最高的）。
+ */
 export const RED_LINE_REASONS = ["title_data_fabricated", "title_body_inconsistent", "body_fabrication", "output_unhealthy", "ai_fabricated_journal", "six_dim_below_floor"];
 
 /**
