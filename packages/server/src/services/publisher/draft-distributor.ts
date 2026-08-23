@@ -194,6 +194,33 @@ async function countDistributableStock(tenantId: string): Promise<number> {
  *
  * 严重度按断供天数升级：≥3 天 warn，≥7 天 error。
  * 25 天这种必须是最高级 —— 一个数字在告警里躺着不动，说明没人在处理它。
+ *
+ * ## 🔴 「进箱」只对公众号成立 —— 适用范围写在自己这里，不从调用方继承
+ *
+ * `content_publish_log` 的进箱动作是**公众号链路**独有的。抖音号 / 视频号
+ * 根本没有「进箱」这个动作，它们的「30 天零记录」不是断供，是**这个指标对它们不适用**。
+ *
+ * 实测（8-23，全部 22 个 active 号）：
+ *
+ * ```
+ * douyin        8 个   30 天零记录   ← 本来就不该有
+ * wechat_video  7 个   30 天零记录   ← 本来就不该有
+ * wechat        7 个   6 个正常 + Paper 断供 26 天   ← 只有这一个是真故障
+ * ```
+ *
+ * 调用方 `distributeDraftsForTenant` 的 `accounts` **已经**过滤了
+ * `platform='wechat' AND status='active'`，所以今天传进来的就只有那 7 个 ——
+ * 本函数不加过滤也不会误报。
+ *
+ * **但那是继承来的前提，不是自己的。** 哪天有人把抖音加进草稿分发，
+ * 这条告警会**静默地**开始喊 15 条假的 —— 而一条第一次喊就误报 15/16 的告警，
+ * 当场就没人再信它了。所以把前提写在这里：`AND a.platform = 'wechat'`。
+ *
+ * ▎ 一个检查的适用范围，必须由它自己声明，而不是指望调用方替它过滤。
+ * ▎ 继承来的正确性，会在调用方改变的那一刻静默失效。
+ *
+ * 这与「告警的调用条件不得依赖今天有没有别的问题」是同一族：
+ * 前者是**什么时候跑**被外部决定，这条是**对谁跑**被外部决定。
  */
 async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Promise<void> {
   const STARVE_WARN_DAYS = 3;
@@ -208,6 +235,7 @@ async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Pr
       LEFT JOIN content_publish_log l
         ON l.account_id = a.id AND l.created_at > now() - interval '30 days'
       WHERE a.id IN (${sql.join(accountIds.map((id) => sql`${id}::uuid`), sql`, `)})
+        AND a.platform = 'wechat'
       GROUP BY a.id, a.account_name`);
     const list = ((rows as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? []);
     for (const r of list) {
