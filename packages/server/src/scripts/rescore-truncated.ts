@@ -63,6 +63,27 @@ import { SIX_DIM_SCORING_VERSION, SIX_DIM_PUBLISH_TOTAL } from "../services/cont
 import { logger } from "../config/logger.js";
 
 const APPLY = process.argv.includes("--apply");
+/**
+ * `--roundup`：给 roundup 停用决定**留依据**（老韩 8-23，走 #21 例外的同一个批准，
+ * 范围内追加 28 篇 / 预算 +¥0.8）。
+ *
+ * 🔴 **结果不改变决定，只入档。** 停用已经拍了，这一跑不是复议。
+ *
+ * 但它能区分两件事，而这两件的后续完全不同：
+ *
+ * ```
+ * 分数确实低    → 内容本身有问题，停对了
+ * 分数其实不低  → 老韩看到的「质量一般」是**体裁不吸引人**，不是内容有错
+ *                 —— 以后想做类似合辑内容要避开的坑，是完全不同的一个
+ * ```
+ *
+ * ⚠️ 读法在跑之前已预注册（`scoring-rubric-experiment.ts` 文件头）：
+ * **看方差不看分数高低** —— 判据若对多刊合辑不适用，会把样本压到同一个位置，
+ * 那时低分测的是判据自己，不是内容。
+ *
+ * 本模式**只评分、只入档，不改任何状态**（恢复判据整段跳过）。
+ */
+const ROUNDUP_MODE = process.argv.includes("--roundup");
 
 /**
  * 🔴 评分结果落盘 —— **dry-run 与 --apply 不许各评一遍**。
@@ -104,11 +125,30 @@ const NOISE_BAND_UPPER = 4;
 const DIM_FLOOR = 6;
 const CONCURRENCY = 5;
 
-type Batch = "truncated" | "zero6" | "control";
+type Batch = "truncated" | "zero6" | "control" | "roundup_evidence";
 interface Sample { id: string; tenantId: string; status: string; title: string; body: string; oldTotal: number | null; oldVersion: string | null; zeroN: number; batch: Batch }
 interface Scored extends Sample { newTotal: number | null; newDims: Record<string, number> | null; degraded: boolean; err?: string }
 
 async function pickSamples(): Promise<Sample[]> {
+  if (ROUNDUP_MODE) {
+    const rr = (await db.execute(sql`
+      SELECT c.id, c.tenant_id, c.status, c.title, c.body,
+             NULLIF(c.metadata->>'sixDimTotal','')::numeric AS old_total,
+             c.metadata->>'sixDimScoringVersion' AS old_version
+      FROM contents c
+      WHERE c.metadata->>'source' = 'roundup'
+        AND jsonb_typeof(c.metadata->'sixDimScores') IS DISTINCT FROM 'object'
+      ORDER BY c.created_at DESC
+      LIMIT 28
+    `) as unknown as { rows: Array<Record<string, unknown>> }).rows;
+    return rr.map((r) => ({
+      id: String(r.id), tenantId: String(r.tenant_id), status: String(r.status),
+      title: String(r.title ?? ""), body: String(r.body ?? ""),
+      oldTotal: r.old_total == null ? null : Number(r.old_total),
+      oldVersion: r.old_version == null ? null : String(r.old_version),
+      zeroN: 0, batch: "roundup_evidence" as const,
+    }));
+  }
   const rows = (await db.execute(sql`
     SELECT c.id, c.tenant_id, c.status, c.title, c.body,
            NULLIF(c.metadata->>'sixDimTotal','')::numeric AS old_total,
@@ -219,6 +259,33 @@ async function main(): Promise<void> {
   for (const s of scored) {
     if (s.batch === "control") continue;   // 对照组只提供偏移量，不参与恢复
 
+    // roundup 留证模式：只入档，**一个状态都不改**（停用决定已经拍了，这不是复议）
+    if (s.batch === "roundup_evidence") {
+      if (APPLY) {
+        await db.insert(contentRescoreAudits).values({
+          contentId: s.id, batch: s.batch, oldStatus: s.status, newStatus: s.status,
+          oldTotal: null, newTotal: s.newTotal?.toString() ?? null,
+          oldVersion: s.oldVersion ?? "从未评过分", newVersion: s.degraded ? null : SIX_DIM_SCORING_VERSION,
+          rulerOffset: null, decision: "evidence_only",
+          reasons: [{ criterion: "停用决定留证", pass: true,
+            detail: s.degraded ? "没评上分" : `总分 ${s.newTotal}；维度 ${JSON.stringify(s.newDims)}` }],
+          costCents: Math.round(CENTS_PER_CALL),
+          exceptionRef: { ...EXCEPTION_REF, addendum: "roundup 停用留证，范围内追加 28 篇 / 预算 +¥0.8（老韩 8-23）" },
+          approvedBy: EXCEPTION_REF.approvedBy,
+        });
+        await db.update(contents).set({
+          metadata: sql`${contents.metadata} || ${JSON.stringify({
+            roundupShutdownEvidence: {
+              scoredAt: "2026-08-23", newTotal: s.newTotal, newDims: s.newDims,
+              scoringVersion: SIX_DIM_SCORING_VERSION, gateApplied: false,
+              note: "roundup 停用决定的留痕。结果不改变决定，只入档。",
+            },
+          })}::jsonb`,
+        }).where(eq(contents.id, s.id));
+      }
+      continue;
+    }
+
     const reasons: Array<{ criterion: string; pass: boolean; detail: string }> = [];
     let decision: "restored" | "kept_archived" | "rescore_failed" = "kept_archived";
 
@@ -281,6 +348,25 @@ async function main(): Promise<void> {
     const g = scored.filter((s) => s.batch === b && !s.degraded && s.newTotal != null && s.oldTotal != null);
     const dm = median(g.map((s) => s.newTotal! - s.oldTotal!));
     console.log(`  ${b} 组 Δ 中位数 ${dm?.toFixed(2) ?? "n/a"}（扣偏移后 ${dm != null && rulerOffset != null ? (dm - rulerOffset).toFixed(2) : "n/a"}）n=${g.length}`);
+  }
+  if (ROUNDUP_MODE) {
+    const g = scored.filter((s) => !s.degraded && s.newTotal != null);
+    const totals = g.map((s) => s.newTotal!);
+    const mean = totals.reduce((a, b) => a + b, 0) / (totals.length || 1);
+    const sd = Math.sqrt(totals.reduce((a, b) => a + (b - mean) ** 2, 0) / (totals.length || 1));
+    console.log(`\n═══ roundup 停用留证（结果不改变决定）═══`);
+    console.log(`评出分 ${g.length} / ${scored.length} 篇`);
+    console.log(`总分  均值 ${mean.toFixed(1)}  中位 ${median(totals)?.toFixed(1)}  标准差 ${sd.toFixed(2)}  范围 ${Math.min(...totals)}~${Math.max(...totals)}`);
+    console.log(`对照：v5 普通线 n=18 均值 72.6 / 中位 73.5`);
+    console.log(`\n🔴 读法(跑之前已预注册)：看**方差**不看分数高低。`);
+    console.log(`   标准差与普通线可比 → 尺子适用，低分是内容问题`);
+    console.log(`   标准差很小(样本被压在同一位置) → 判据对多刊合辑不适用，低分测的是判据自己`);
+    for (const k of ["dataAccuracy", "structureDensity", "topicHook", "formatting", "practicality", "originalityCompliance"]) {
+      const vs = g.map((s) => s.newDims![k]!).filter((v) => Number.isFinite(v));
+      const m = vs.reduce((a, b) => a + b, 0) / (vs.length || 1);
+      const s2 = Math.sqrt(vs.reduce((a, b) => a + (b - m) ** 2, 0) / (vs.length || 1));
+      console.log(`   ${k.padEnd(22)} 均 ${m.toFixed(2)}  标准差 ${s2.toFixed(2)}`);
+    }
   }
   if (!APPLY) console.log(`\n⚠️ dry-run：一行都没写。确认无误后加 --apply。`);
 }
