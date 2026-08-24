@@ -20,6 +20,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { contents, opsIncidents, goldenSetAnnotations } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { checkerLabel } from "./checker-labels.js";
 import { summarize, judge, ledgerSince, MIN_ADJUDICATED, type CheckerVerdict } from "./checker-ledger.js";
 import { getChecker } from "./checker-registry.js";
 import { bjDateString, truncateForWecom } from "./daily-briefing.js";
@@ -125,7 +126,7 @@ export interface WeeklyReport {
    * 但那只是**一张快照** —— 上游热度源随时可能再次饱和，或有人改权重把分布压平。
    * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
    */
-  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
+  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean; reasons: string[] };
   /**
    * ④ 测试基线失败数 —— 8-22 加。
    *
@@ -246,7 +247,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
   };
 
   // ④ 关键词分数分布(见 keywordScore 字段注释)
-  let keywordScore = { total: 0, atMaxRatio: 0, topDisciplines: "(无数据)", healthy: true };
+  let keywordScore = { total: 0, atMaxRatio: 0, topDisciplines: "(无数据)", healthy: true, reasons: [] as string[] };
   try {
     const { scoreDistributionHealth } = await import("../agents/keyword-score.js");
     const rows = (await db.execute(sql`
@@ -261,6 +262,8 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
       atMaxRatio: h.atMaxRatio,
       topDisciplines: top.map((t) => `${t.c} ${t.n}`).join(" · ") || "(无)",
       healthy: h.healthy,
+      // 🔴 8-24: 把**实际触发的那一条**带出来。见下方渲染处注释。
+      reasons: h.reasons,
     };
   } catch {
     /* 关键词表读不到不该拖垮整张周报 */
@@ -445,7 +448,7 @@ function renderText(d: {
    * 但那只是**一张快照** —— 上游热度源随时可能再次饱和，或有人改权重把分布压平。
    * 让它每周自证：满分占比是否还 < 5%，TOP100 是不是仍被单一学科占据。
    */
-  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean };
+  keywordScore: { total: number; atMaxRatio: number; topDisciplines: string; healthy: boolean; reasons: string[] };
   testBaseline: { knownFailures: number | null };
   todos: WeeklyTodo[];
   ledgerSince: string | null;
@@ -482,13 +485,15 @@ function renderText(d: {
     const vocal = d.checkers.filter((c) => c.hits > 0);
     for (const c of vocal.slice(0, 12)) {
       const tag = c.mode === "shadow" ? "[影子]" : "";
-      L.push(`  ${tag}${c.checkerId}  命中 ${c.hits} / 已裁决 ${c.adjudicated}`);
+      // 8-24: 给运营看人话, code 收在括号里备查（见 checker-labels.ts 的文件头）
+      L.push(`  ${tag}${checkerLabel(c.checkerId)}  命中 ${c.hits} / 已裁决 ${c.adjudicated}`);
       L.push(`      ${c.message}`);
     }
     if (silent.length > 0) {
+      // 零命中的也换人话 —— 一串 snake_case 会让整段被跳过
       L.push(
         `  另有 ${silent.length} 道闸本周零命中（安全闸本就该安静，不必然是坏事）：` +
-          silent.map((c) => c.checkerId.replace(/^output_health\./, "")).join("、"),
+          silent.map((c) => checkerLabel(c.checkerId)).join("、"),
       );
     }
     if (vocal.length === 0) L.push("  本周所有闸都没有命中。");
@@ -524,14 +529,45 @@ function renderText(d: {
   //   挂条件的话最该看的那句话第一周就不出现了。
   L.push("        逐周看这个数：涨 = 没人在清，持平 = 正常水位。");
   // 关键词分数分布 —— 「常数判据检测」的数据侧版本，见 keywordScore 字段注释
+  /**
+   * 🔴 8-24 修「数字通过、结论失败」的自相矛盾。
+   *
+   * 实测那份周报：
+   *
+   * ```
+   * 选题打分 2994 词 ｜ 并列满分占比 1.2%（>5% 就是打分失效） … ← 分布已塌，选题会趋同
+   *                              ↑ 1.2% < 5%，按它自己写的标准是通过的
+   * ```
+   *
+   * `healthy` 由**两条**判据决定，而文案只解释了第一条；挂的恰好是没解释的第二条
+   * （TOP100 不同分值占比 < 50%）。读者看到「通过的数字 + 失败的结论」，
+   * 唯一能得出的结论是「这系统在乱说」—— **那比不显示更糟，它会让人从此不信这份报表。**
+   *
+   * ▎ 复合判据的展示，必须指向**实际触发的那一条**，而不是最容易展示的那一条。
+   *
+   * 而 `reasons[]` 里本来就有答案，只是没被用 —— 又一次「数据在手边但没拿出来用」。
+   */
   L.push(
     `  选题打分 ${d.keywordScore.total} 词 ｜ 并列满分占比 ${(d.keywordScore.atMaxRatio * 100).toFixed(1)}%` +
-      `（>5% 就是打分失效）｜ TOP100 学科：${d.keywordScore.topDisciplines}` +
-      (d.keywordScore.healthy ? "" : "  ← 分布已塌，选题会趋同"),
+      `（>5% 算打分失效）｜ TOP100 学科：${d.keywordScore.topDisciplines}`,
   );
+  if (!d.keywordScore.healthy) {
+    const why = d.keywordScore.reasons.length > 0
+      ? d.keywordScore.reasons.join("；")
+      : "（判据未给出原因 —— 这本身是个 bug，请报技术）";
+    L.push(`        ⚠️ 分布已塌，选题会趋同。触发的是：${why}`);
+  }
   // 测试基线失败数 —— 只报数不催，见 testBaseline 字段注释
   if (d.testBaseline.knownFailures !== null) {
-    L.push(`  测试基线失败 ${d.testBaseline.knownFailures} 条（逐周看：降 = 有人在清，持平 = 没人清）`);
+    /**
+     * 🔴 8-24：**一个不需要行动的指标，必须明说「不需要行动」。**
+     *
+     * 否则它就是焦虑源：运营看到一个数，不知道该不该管，也没人告诉他不用管。
+     * 沉默的指标会被读成「这个我是不是该管」。
+     *
+     * ▎ 每一行报表内容都要能回答「我该做什么」—— 包括答案是「什么都不用做」。
+     */
+    L.push(`  测试基线失败 ${d.testBaseline.knownFailures} 条（仅供参考，无需处理；逐周看：降 = 有人在清，持平 = 没人清）`);
   }
   L.push("");
 

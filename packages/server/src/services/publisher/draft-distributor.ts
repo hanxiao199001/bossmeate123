@@ -256,8 +256,21 @@ async function reportStarvedAccounts(tenantId: string, accountIds: string[]): Pr
         tenantId,
         // 🔴 只陈述事实（红线 #13）：断供天数 + 最后一次 + 近 30 天总量。
         //   不写"可能是配对问题/凭证失效" —— 那是排查者的工作，写死会带偏方向。
+        /**
+         * 🔴 8-24 补落点。**导航不是归因，两件事要分清：**
+         *
+         * ```
+         * 归因(禁止)  「多半是凭证失效」          ← 猜的，红线 #13
+         * 导航(应该)  「到账号矩阵查看该号状态」   ← 事实，告诉他去哪
+         * ```
+         *
+         * 8-24 首次真跑的实测文案只有事实、没有落点 ——
+         * 运营知道出事了，但不知道下一步点哪里。
+         * 一条报表内容要能回答「我该做什么」，光有「发生了什么」不够。
+         */
         message: `公众号「${String(r.name ?? "?")}」连续 ${days === 999 ? "30+" : days} 天零进箱` +
-          `（最后一次 ${lastAt ? lastAt.toISOString().slice(0, 10) : "近 30 天内无记录"}，近 30 天共 ${Number(r.total30 ?? 0)} 篇）`,
+          `（最后一次 ${lastAt ? lastAt.toISOString().slice(0, 10) : "近 30 天内无记录"}，近 30 天共 ${Number(r.total30 ?? 0)} 篇）` +
+          ` → 到「账号矩阵」查看该号的配置与配对状态`,
         detail: { accountId: String(r.id), accountName: r.name ?? null, starvedDays: days, total30d: Number(r.total30 ?? 0) },
       });
     }
