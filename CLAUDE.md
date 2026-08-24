@@ -584,7 +584,33 @@ node_modules 用**绝对路径 symlink 指向主仓**：目录内部的相对 sy
   c. ssh curl http://localhost:3000/api/v1/health → 200
 ```
 
-deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
+deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。
+
+**🔴 verify 清单必须多问一句（8-24 加）：本次改动会让哪些*现有*指标变化？预期升还是降？**
+
+> **改动上线后的验收，第一步应该是列出「哪些现有指标会因此变化」，而不是设计新指标。**
+> 现有指标是现成的、有历史基线的、免费的。
+
+**8-22 的实例**：`e007c8f`（缺维即抛错）上线当天，`quality_check_degraded`
+从日常 2-8 条**跳到 46 条**，`unavailable` 从 0 跳到 5。
+
+```
+e007c8f 之前   截断 → 静默给 0 分       → 不产生 incident
+e007c8f 之后   截断 → 抛错 → 重打链路   → degraded/unavailable 大量产生
+maxTokens 修复后（8-23）                → 三项全部归零
+```
+
+当时我们**靠推理**得出「修了可见性、没修根因，代价从静默坏分变成重打费」——
+而 **46 这个数当天就摆在库里**，看一眼曲线就知道，不用推理。
+
+> **顺序反了：我们先推理出结论，再去找证据验证。**
+> 正确的顺序是先看现有指标怎么动了，再解释为什么。
+
+所以每次改动的 verify，除了 mtime/字面/health 三项，再加一行：
+**列出预期会动的现有指标 + 预期方向**，上线后当天对一次。
+对不上（方向反了、或该动的没动）本身就是信号。
+
+部署目标 = 阿里云新机 `ubuntu@119.91.52.13`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
 
 **⚠️ deploy 前服务器工作区必须干净（否则 git 操作 abort，整条部署失败）**：
 - deploy:smart 走 `git fetch + merge/reset`，服务器工作区有**已跟踪文件的本地改动**时 git 会 abort（报 `Aborting`/`ELIFECYCLE`），部署起不来。`.env.bak-*` 等 untracked 不影响，只有 `M`（modified tracked）会卡。
