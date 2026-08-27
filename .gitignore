@@ -96,3 +96,8 @@ deploy-*.py
 # 7-22 SVG 图表快照 = svg-charts.test.ts 每次跑 writeFileSync 生成的可视化样品(非断言基线)
 # 跟踪它 → 任何环境跑一次测试就产生 diff → 卡 deploy 的 git 操作(已 abort 两次)。改为不跟踪, 文件仍生成可看。
 packages/server/src/__tests__/fixtures/snapshots/*.svg
+
+# === 治理建议（2026-08-28）===
+# 内部办公文档(docx/pptx/xlsx)建议不入库, 改用网盘/内部知识库分发;
+# 历史遗留文件已移至 docs/internal/, 新增的一律忽略:
+docs/internal/
