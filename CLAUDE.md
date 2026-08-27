@@ -465,7 +465,7 @@ tsc      ✅ 通过
 
 ```bash
 # 服务器上跑（Mac 跑不了 vitest，见 memory: vitest 本地跑不了→上服务器跑）
-MAIN=/home/projects/bossmate; WT=/tmp/wt_<commit>
+MAIN=<DEPLOY_PATH>; WT=/tmp/wt_<commit>
 git -C "$MAIN" worktree add -q --detach "$WT" <commit>
 ln -s "$MAIN/node_modules"                 "$WT/node_modules"
 ln -s "$MAIN/.env"                         "$WT/.env"           # ← 别忘
@@ -487,7 +487,7 @@ node_modules 用**绝对路径 symlink 指向主仓**：目录内部的相对 sy
 | 1 | base=main | PR 严格 base=main，禁分支套娃（PR #96/#98 教训） |
 | 2 | drift 4 规则 | 桌面写代码 / 服务器跑 / 不可逆操作前 verify / PR 自助 merge |
 | 3 | AI 模型硬约束 | 锁 DeepSeek + Qwen-Plus，禁 Claude/GPT；T2 路由 + T3 死代码已清 |
-| 4 | 云厂商硬约束（已迁阿里云） | 服务器阿里云 ECS **119.91.52.13**（key `~/.ssh/bossmate_deploy`，ssh config alias `bossmate-boss`）；存储阿里云 **OSS**（私有桶 + 签名 URL，见 chart/音频段）；LLM 阿里云**百炼**（DeepSeek + Qwen-Plus，红线 #3）；数字人阿里云 **DVH**；语音阿里云 **NLS**；短信阿里云。**腾讯云 COS/CMS/ECS 已全部弃用，122.152.234.155 是旧机（勿再引用）。迁移细节以 `迁移手册-新服务器.md` 为准。** |
+| 4 | 云厂商硬约束（已迁阿里云） | 服务器阿里云 ECS **<SERVER_IP>**（key `~/.ssh/bossmate_deploy`，ssh config alias `bossmate-boss`）；存储阿里云 **OSS**（私有桶 + 签名 URL，见 chart/音频段）；LLM 阿里云**百炼**（DeepSeek + Qwen-Plus，红线 #3）；数字人阿里云 **DVH**；语音阿里云 **NLS**；短信阿里云。**腾讯云 COS/CMS/ECS 已全部弃用，<OLD_SERVER_IP> 是旧机（勿再引用）。迁移细节以 `迁移手册-新服务器.md` 为准。** |
 | 5 | merge 后立刻 deploy + verify | pnpm deploy:smart + 至少 3 项 verify (mtime / 字面 / health) |
 | 6 | 不扩 scope | spec 外不动；新需求开新 PR |
 | 7 | 依赖锁文件同 commit | 改 `package.json` 依赖必须**同一 commit** 更新 `pnpm-lock.yaml`（服务器 frozen-lockfile，漏更新 = 部署直接失败）。见下方教训 |
@@ -579,19 +579,19 @@ node_modules 用**绝对路径 symlink 指向主仓**：目录内部的相对 sy
 
 ```
 本地 main 同步 → pnpm deploy:smart → 3 项 verify:
-  a. ssh ls -la /home/projects/bossmate/apps/web/dist/assets/*.js → mtime 最新
+  a. ssh ls -la <DEPLOY_PATH>/apps/web/dist/assets/*.js → mtime 最新
   b. ssh grep "新功能字面" dist/assets/*.js → 命中
   c. ssh curl http://localhost:3000/api/v1/health → 200
 ```
 
-deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@119.91.52.13`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
+deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR #49 false-green bug）。部署目标 = 阿里云新机 `ubuntu@<SERVER_IP>`（可 `export BOSSMATE_DEPLOY_SERVER` 覆盖）。
 
 **⚠️ deploy 前服务器工作区必须干净（否则 git 操作 abort，整条部署失败）**：
 - deploy:smart 走 `git fetch + merge/reset`，服务器工作区有**已跟踪文件的本地改动**时 git 会 abort（报 `Aborting`/`ELIFECYCLE`），部署起不来。`.env.bak-*` 等 untracked 不影响，只有 `M`（modified tracked）会卡。
 - **两个已知脏源，别再踩**：① **绝不 `scp` 单文件到服务器**改代码——会弄脏工作区，一律走 git commit+deploy（2026-07-21 教训，scp daily-cron.ts 卡了 deploy）。② SVG 图表快照曾每跑一次 vitest 就被 `svg-charts.test.ts` 的 writeFileSync 重写、产生 diff 卡 deploy（abort 两次）——已于 2026-07-22 `git rm --cached` + gitignore 根治（`snapshots/*.svg` 不再跟踪），若再见类似"测试输出产物被跟踪导致每跑必脏"，同样处理：确认它是**测试输出而非输入 fixture**（无人 readFileSync 它）后 untrack + gitignore，别用"deploy 前 checkout 还原"治标。
-- 万一 deploy 被 abort：`ssh ... 'cd /home/projects/bossmate && git status --short'` 找到 `M` 文件，确认是快照/被 scp 弄脏的代码后 `git checkout -- <file>` 还原，再重跑 deploy:smart。
+- 万一 deploy 被 abort：`ssh ... 'cd <DEPLOY_PATH> && git status --short'` 找到 `M` 文件，确认是快照/被 scp 弄脏的代码后 `git checkout -- <file>` 还原，再重跑 deploy:smart。
 
-**唯一部署入口 = `pnpm deploy:smart`。其余任何部署脚本一律不得手跑（包括 AI）。** 历史遗留的 `deploy.sh` / `deploy-v4*.sh` / `deploy-*.py` 等脚本硬编码指向已弃用服务器（106.53.163.120 等），手跑 = 部署到死机。已于 2026-07-03 清理三个 .sh 孤儿；2026-07-06 排雷三个 .py 死脚本（deploy-crawlers/deploy-topic/deploy-v2，base64 打包旧源码直写生产的应急通道，从未入 git，已移入 .review-stash/demined-deploy-py-20260706/ 封存）；若日后从 git 历史翻出旧脚本，**只可读不可跑**。
+**唯一部署入口 = `pnpm deploy:smart`。其余任何部署脚本一律不得手跑（包括 AI）。** 历史遗留的 `deploy.sh` / `deploy-v4*.sh` / `deploy-*.py` 等脚本硬编码指向已弃用服务器（<OLD_SERVER_IP> 等），手跑 = 部署到死机。已于 2026-07-03 清理三个 .sh 孤儿；2026-07-06 排雷三个 .py 死脚本（deploy-crawlers/deploy-topic/deploy-v2，base64 打包旧源码直写生产的应急通道，从未入 git，已移入 .review-stash/demined-deploy-py-20260706/ 封存）；若日后从 git 历史翻出旧脚本，**只可读不可跑**。
 
 **依赖锁文件铁律（红线 #7）**：改 `package.json` 依赖（加/删/升）必须**同一 commit** 更新 `pnpm-lock.yaml`。服务器 `pnpm install` 走 frozen-lockfile，manifest 与锁文件 specifier 不一致 → 安装报错 → 部署整条失败（build 都到不了）。
 > 教训：07d2a74 加 `ali-oss` 到 `packages/server/package.json` 却漏更新锁文件，静默潜伏到下次部署（185222d 图文重构）才炸出来，报 "specifiers in the lockfile don't match specs in package.json"。补锁单独 commit 3dd3f2e 才通。
@@ -602,9 +602,9 @@ deploy:smart 路径：直连 fetch 3 次 retry → bundle 绕路兜底（修 PR 
 ## JWT 自签验证模式（curl 测受保护 endpoint）
 
 ```bash
-ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate && TOKEN=$(node -e "
+ssh ubuntu@<SERVER_IP> 'cd <DEPLOY_PATH> && TOKEN=$(node -e "
 const fs = require(\"fs\");
-const env = fs.readFileSync(\"/home/projects/bossmate/.env\", \"utf8\");
+const env = fs.readFileSync(\"<DEPLOY_PATH>/.env\", \"utf8\");
 const secret = env.match(/^JWT_SECRET=(.+)$/m)[1].trim();
 const crypto = require(\"crypto\");
 const h = Buffer.from(JSON.stringify({alg:\"HS256\",typ:\"JWT\"})).toString(\"base64url\");
