@@ -15,7 +15,7 @@
 
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { getLlmEndpoint } from "./llm-endpoints.js";
+import { getBillingAccount, getLlmEndpoint } from "./llm-endpoints.js";
 
 export type FallbackStrategy = "serial" | "race";
 
@@ -321,12 +321,50 @@ export interface DegenerateFallbackIssue {
   provider: string;
   model: string;
   /** 声明了补偿槽但补偿槽自己也不合格时的说明 */
-  problem: "undeclared" | "compensator_degenerate" | "compensator_same_vendor";
+  problem:
+    | "undeclared"
+    | "compensator_degenerate"
+    | "compensator_same_vendor"
+    /**
+     * 9-01 新增: primary 与 fallback 是不同厂商不同模型, 但**扣同一个账户的钱**。
+     * 这一类原来完全查不出来 —— 详见 findDegenerateFallbacks 的注释。
+     */
+    | "same_billing_account";
+  /** 命中 same_billing_account 时: 两条路径共用的那个账户 */
+  billingAccount?: string;
 }
 
 /**
- * 纯函数: 找出所有"假兜底"(primary 与 fallback 完全相同)且未被正当补偿的路由。
- * 与 selectModel 的去重条件逐字对应 —— 那里认为"相同"的, 这里就该判退化。
+ * 纯函数: 找出所有"假兜底"的路由。
+ *
+ * ## 两条判据, 第二条是 9-01 补的
+ *
+ * ① **同模型** —— primary 与 fallback 完全相同。与 selectModel 的去重条件逐字对应。
+ * ② **同账户** —— 不同厂商、不同模型, 但**钱扣在同一个账户上**。
+ *
+ * ## 🔴 为什么必须补第二条: 这个检查器自己被同一个假象骗了
+ *
+ * 8-31 事故: 主 deepseek-v4-pro / 备 qwen-plus, 账户欠费时**两个在 14 秒内一起挂**,
+ * 370 篇内容失败。而本函数当天**一条都没报** —— 因为它比的是 `providerName`
+ * ("deepseek" ≠ "qwen" → 判为"跨厂商, 安全")。
+ *
+ * 但 `DEEPSEEK_VIA=bailian` 从 7-26 起就打开了: 名字里的 "deepseek" 只是**路由名**,
+ * baseURL 和 key 都是阿里云百炼的。两条路径的服务商/账户/密钥/网络出口/进程/机器
+ * **六项全同**, 唯一不同的是模型名。
+ *
+ * > 一个用来检测假冗余的检查器, 自己把"不同的模型"当成了"不同的失败点" ——
+ * > 而这正是那次事故的全部内容。
+ *
+ * 9-01 老韩确认 OSS 与百炼也是同一个阿里云账号, 说明**账户维度确实要单独建模**:
+ * 厂商名和"谁付钱"是两个实体, 冗余判定必须看后者。
+ *
+ * ## 关于会不会刷屏
+ *
+ * 单账户配置下 ② 会命中全部 7 条路由 —— **这是实话, 不是误报**。
+ * 处置在 spec《单点故障与假冗余盘点》B-1: 要么给 DEEPSEEK_API_KEY 单独充值把
+ * fallback 拉回官方账户(拆开), 要么删掉"有冗余"的说法。在二选一落地之前,
+ * 这个告警**就应该一直响**。
+ * 落库走 recordIncidentThrottled 同一个 key, 不会把别的告警淹掉。
  */
 export function findDegenerateFallbacks(): DegenerateFallbackIssue[] {
   const route = buildTaskRoute();
@@ -334,19 +372,47 @@ export function findDegenerateFallbacks(): DegenerateFallbackIssue[] {
   const same = (a: ModelChoice, b: ModelChoice) =>
     a.providerName === b.providerName && a.modelName === b.modelName;
 
+  const acct = (c: ModelChoice) => getBillingAccount(c.providerName);
+  /** 两条路径是否共享失败点; 返回命中的是哪一条判据, null = 不共享 */
+  const sharedFailurePoint = (
+    a: ModelChoice, b: ModelChoice,
+  ): "degenerate" | "same_billing_account" | null => {
+    if (same(a, b)) return "degenerate";                 // ① 同模型
+    if (acct(a) === acct(b)) return "same_billing_account"; // ② 模型不同但同账户
+    return null;
+  };
+
   for (const [tt, r] of Object.entries(route) as Array<[TaskType, { primary: ModelChoice; fallback: ModelChoice }]>) {
-    if (!same(r.primary, r.fallback)) continue;
+    const shared = sharedFailurePoint(r.primary, r.fallback);
+    if (!shared) continue;
 
-    const allow = DEGENERATE_FALLBACK_ALLOWED[tt];
     const base = { taskType: tt, provider: r.primary.providerName, model: r.primary.modelName };
-    if (!allow) { issues.push({ ...base, problem: "undeclared" }); continue; }
+    const problem = shared === "degenerate" ? "undeclared" as const : "same_billing_account" as const;
 
-    // 补偿槽自己不能也是假兜底, 而且必须换厂商(同厂商同一批故障会一起挂)
+    // 声明了补偿槽的, 走补偿槽校验 —— 两条判据共用这一段, 否则
+    // "同账户"会抢在 DEGENERATE_FALLBACK_ALLOWED 之前命中, 把已声明的合规槽误报成问题。
+    const allow = DEGENERATE_FALLBACK_ALLOWED[tt];
+    if (!allow) {
+      issues.push(shared === "degenerate" ? { ...base, problem } : { ...base, problem, billingAccount: acct(r.primary) });
+      continue;
+    }
+
+    // 补偿槽自己不能也共享失败点, 而且必须**换账户**。
+    //   9-01: 原来这里比的是 providerName —— 单账户下恒判"跨厂商 = 安全",
+    //   正是上面说的那个假象。同一个账户欠费时, 换哪个厂商名都一起挂。
+    //
+    // 顺序有意为之: **先判"补偿槽与被补偿槽同账户"**, 再判"补偿槽自己退化"。
+    //   单账户配置下两个条件会同时成立, 而前者才是可执行的那句话
+    //   ——「这个补偿槽根本补不了, 因为它和被补偿的槽扣同一个账户」。
+    //   反过来先报 compensator_degenerate 会把人引向"去改补偿槽的模型",
+    //   而改模型解决不了账户问题。
     const comp = route[allow.compensatedBy];
-    if (!comp || same(comp.primary, comp.fallback)) {
+    if (!comp) {
       issues.push({ ...base, problem: "compensator_degenerate" });
-    } else if (comp.primary.providerName === r.primary.providerName) {
-      issues.push({ ...base, problem: "compensator_same_vendor" });
+    } else if (acct(comp.primary) === acct(r.primary)) {
+      issues.push({ ...base, problem: "compensator_same_vendor", billingAccount: acct(r.primary) });
+    } else if (sharedFailurePoint(comp.primary, comp.fallback)) {
+      issues.push({ ...base, problem: "compensator_degenerate" });
     }
   }
   return issues;
@@ -370,7 +436,10 @@ export function assertNoDegenerateFallback(): void {
   const issues = findDegenerateFallbacks();
   if (issues.length === 0) return;
   const detail = issues
-    .map((i) => `  · ${i.taskType}: primary 与 fallback 都是 ${i.provider}/${i.model} (${i.problem})`)
+    .map((i) => i.problem === "same_billing_account"
+      // 这一类不是"同一个模型", 说成那样会让人以为改个模型名就好了
+      ? `  · ${i.taskType}: primary 与 fallback 是不同模型, 但**扣同一个账户**(${i.billingAccount}) —— 该账户欠费/停用时两条路径一起挂`
+      : `  · ${i.taskType}: primary 与 fallback 都是 ${i.provider}/${i.model} (${i.problem})`)
     .join("\n");
   logger.error(
     { issues },
