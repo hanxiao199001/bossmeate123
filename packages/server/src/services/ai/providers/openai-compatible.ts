@@ -101,12 +101,16 @@ export class OpenAICompatibleProvider implements AIProvider {
     void (async () => {
       try {
         const { isQuotaLikeError, recordIncident } = await import("../../ops/incidents.js");
+        const { describeQuotaAction } = await import("../llm-endpoints.js");
         // 8-03: 字段优先(百炼的 Arrearage 就靠这条被认出来), 文本只是兜底
         if (!isQuotaLikeError(status, body, fields)) return;
+        // 8-26: 主语是**扣费账户**不是路由名 —— 详见 llm-endpoints.describeQuotaAction 的注释。
+        const billing = describeQuotaAction(this.name);
         await recordIncident({
           kind: "llm_quota",
-          message: `${this.name} 返回额度不足/欠费 (HTTP ${status}${fields?.errorType ? `, type=${fields.errorType}` : ""}): ${body.slice(0, 200)}`,
+          message: `${billing.label}账户额度不足/欠费 (HTTP ${status}${fields?.errorType ? `, type=${fields.errorType}` : ""}) — ${billing.action}。命中链路: ${this.name}/${this.defaultModel}。原文: ${body.slice(0, 200)}`,
           detail: {
+            billingAccount: billing.account,
             provider: this.name, status,
             errorType: fields?.errorType ?? null,
             errorCode: fields?.errorCode ?? null,
