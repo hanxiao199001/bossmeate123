@@ -127,6 +127,12 @@ export const KIND_LABEL: Record<string, string> = {
   service_recovered: "外部服务已恢复(积压内容已自动重新入队)",
   deferred_retry_exhausted: "自动重跑次数用尽(已转人工, 不再自动重试)",
   service_probe_failed: "外部服务仍未恢复(恢复探测失败)",
+  // 8-26 备份体系。生产此前**零自动备份**, 详见 services/ops/backup.ts 文件头。
+  backup_failed: "每日备份失败(今天没有可用备份, 而 03:30 的保留期清理照常会删数据)",
+  backup_drill_failed: "恢复演练失败(备份文件在, 但没能证明它能恢复 —— 不算有备份)",
+  backup_stale: "备份过期未更新(任务可能压根没在跑 —— 没跑不会产生任何失败告警)",
+  backup_ledger_write_failed: "备份台账写入失败(备份新鲜度检查会因此误报)",
+  backup_drill_cleanup_failed: "演练库没删掉(每周积累一个全量库会吃满磁盘)",
 };
 
 export interface RecordIncidentInput {

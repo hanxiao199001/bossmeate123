@@ -10,19 +10,41 @@
 
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { createWriteStream, existsSync, mkdirSync, unlinkSync } from "fs";
-import { join, dirname } from "path";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "fs";
+import { join, dirname, relative } from "path";
 
 /** 存储接口 */
 export interface IStorage {
-  /** 上传文件，返回公开 URL */
-  upload(buffer: Buffer, remotePath: string, contentType?: string): Promise<string>;
+  /**
+   * 上传文件，返回公开 URL。
+   *
+   * 🔴 8-26 新增 opts.private: 桶本身是**公共读**(抖音/公众号要能直接拉媒体 URL),
+   *   而备份是全库 dump —— 放进同一个桶不加对象级 ACL, 等于把整个客户数据库
+   *   挂在一个可枚举的公网地址上。private 走 `x-oss-object-acl: private` 覆盖桶 ACL。
+   */
+  upload(buffer: Buffer, remotePath: string, contentType?: string, opts?: { private?: boolean }): Promise<string>;
   /** 删除文件 */
   delete(remotePath: string): Promise<void>;
   /** 生成带签名的临时 URL */
   getSignedUrl(remotePath: string, ttlSeconds?: number): Promise<string>;
   /** 解析 remotePath 为本地磁盘绝对路径（仅 LocalStorage 可用，OSS 返回 null） */
   resolveLocalPath?(remotePath: string): string;
+  /**
+   * 列出某前缀下的对象。8-26 备份保留期清理需要它 —— 不能只按本地记录删,
+   * 本地记录丢了(重装/换机)之后 OSS 上的旧备份就永远没人清。
+   */
+  list(prefix: string, maxKeys?: number): Promise<StorageObject[]>;
+  /** 下载对象到内存。8-26 每周恢复演练需要把备份拉回来真恢复一遍 */
+  download(remotePath: string): Promise<Buffer>;
+  /** 查对象元信息; 不存在返回 null。上传后回查用 —— 只有回查过才算传上去了 */
+  head(remotePath: string): Promise<{ size: number } | null>;
+}
+
+/** list() 的一行 */
+export interface StorageObject {
+  path: string;
+  size: number;
+  lastModified: Date;
 }
 
 /** 生成标准文件路径 */
@@ -72,12 +94,14 @@ class OssStorage implements IStorage {
     }
   }
 
-  async upload(buffer: Buffer, remotePath: string, contentType?: string): Promise<string> {
+  async upload(buffer: Buffer, remotePath: string, contentType?: string, opts?: { private?: boolean }): Promise<string> {
     const client = await this.getClient();
     const options: any = {};
-    if (contentType) {
-      options.headers = { "Content-Type": contentType };
-    }
+    const headers: Record<string, string> = {};
+    if (contentType) headers["Content-Type"] = contentType;
+    // 对象级 ACL 覆盖桶级 —— 桶是公共读, 备份必须私有。见 IStorage.upload 的注释。
+    if (opts?.private) headers["x-oss-object-acl"] = "private";
+    if (Object.keys(headers).length) options.headers = headers;
 
     const result = await client.put(remotePath, buffer, options);
     logger.info({ remotePath, size: buffer.length }, "OSS: 文件已上传");
@@ -94,6 +118,44 @@ class OssStorage implements IStorage {
     const client = await this.getClient();
     return client.signatureUrl(remotePath, { expires: ttlSeconds }) as string;
   }
+
+  /**
+   * 8-26: 列出前缀下的对象(自动翻页, ali-oss 单页上限 1000)。
+   * maxKeys 是**总量**上限, 不是单页 —— 备份前缀下条目不多, 但别让分页 bug 变成"只清了第一页"。
+   */
+  async list(prefix: string, maxKeys = 1000): Promise<StorageObject[]> {
+    const client = await this.getClient();
+    const out: StorageObject[] = [];
+    let marker: string | undefined;
+    do {
+      const page = await client.list({ prefix, "max-keys": Math.min(1000, maxKeys - out.length), marker }, {});
+      for (const o of (page.objects ?? []) as Array<{ name: string; size: number; lastModified: string }>) {
+        out.push({ path: o.name, size: Number(o.size), lastModified: new Date(o.lastModified) });
+      }
+      marker = page.isTruncated ? (page.nextMarker as string) : undefined;
+    } while (marker && out.length < maxKeys);
+    return out;
+  }
+
+  async download(remotePath: string): Promise<Buffer> {
+    const client = await this.getClient();
+    const res = await client.get(remotePath);
+    return res.content as Buffer;
+  }
+
+  async head(remotePath: string): Promise<{ size: number } | null> {
+    const client = await this.getClient();
+    try {
+      const res = await client.head(remotePath);
+      // ali-oss 把 Content-Length 放在 res.res.headers 里
+      const len = Number(res?.res?.headers?.["content-length"] ?? NaN);
+      return Number.isFinite(len) ? { size: len } : null;
+    } catch (err) {
+      // 404 = 对象不存在(调用方据此判定"没传上去"); 其余错误照旧抛, 别把网络故障洗成"文件不存在"
+      if ((err as { status?: number })?.status === 404) return null;
+      throw err;
+    }
+  }
 }
 
 // ============ 本地磁盘实现（开发环境） ============
@@ -108,7 +170,8 @@ class LocalStorage implements IStorage {
     }
   }
 
-  async upload(buffer: Buffer, remotePath: string): Promise<string> {
+  async upload(buffer: Buffer, remotePath: string, _contentType?: string, _opts?: { private?: boolean }): Promise<string> {
+    // 本地实现没有 ACL 概念; 参数保留只为签名一致(备份路径在生产恒走 OSS, 见 backup.ts 的守卫)
     const fullPath = join(this.baseDir, remotePath);
     const dir = dirname(fullPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -143,6 +206,32 @@ class LocalStorage implements IStorage {
   /** remotePath → 磁盘绝对路径（视频合成 FFmpeg 需要） */
   resolveLocalPath(remotePath: string): string {
     return join(this.baseDir, remotePath);
+  }
+
+  async list(prefix: string, maxKeys = 1000): Promise<StorageObject[]> {
+    const root = join(this.baseDir, prefix);
+    if (!existsSync(root)) return [];
+    const out: StorageObject[] = [];
+    const walk = (dir: string) => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (out.length >= maxKeys) return;
+        const full = join(dir, ent.name);
+        if (ent.isDirectory()) { walk(full); continue; }
+        const st = statSync(full);
+        out.push({ path: relative(this.baseDir, full), size: st.size, lastModified: st.mtime });
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  async download(remotePath: string): Promise<Buffer> {
+    return readFileSync(join(this.baseDir, remotePath));
+  }
+
+  async head(remotePath: string): Promise<{ size: number } | null> {
+    const full = join(this.baseDir, remotePath);
+    return existsSync(full) ? { size: statSync(full).size } : null;
   }
 }
 

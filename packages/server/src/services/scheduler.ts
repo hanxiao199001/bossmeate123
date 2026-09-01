@@ -54,7 +54,9 @@ export type SchedulerJobType =
   | "wechat-stats-collect"     // 7-06 ①: 每日拉"昨日"公众号阅读数据回流 (getarticlesummary T+1)
   | "ops-daily-briefing"       // 7-25: 每日运营简报(异常汇总→企微推送, 推失败降级落库+今日驾驶舱)
   | "ops-weekly-judgment"      // 8-14 Phase 2: 判断层周报(检查器台账 + 去留建议 → 企微推运营)
-  | "service-health-probe";    // 8-03: 每 30 分钟探外部依赖是否恢复 → 自动重跑积压内容(欠费/服务挂)
+  | "service-health-probe"     // 8-03: 每 30 分钟探外部依赖是否恢复 → 自动重跑积压内容(欠费/服务挂)
+  | "daily-backup"             // 8-26: 每日 02:00 BJ 全库 pg_dump + Redis RDB → 上传 OSS(跨云) + 30 天保留期清理
+  | "backup-restore-drill";    // 8-26: 每周一 04:00 BJ 恢复演练(拉最新备份灌进临时库验证) —— 没验证过能恢复的备份不算备份
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -416,6 +418,24 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       logger.info(cleanupResult, "PR #178 content-retention-cleanup cron 完成");
       return cleanupResult;
     }
+
+    case "daily-backup": {
+      // 8-26: 每日 02:00 BJ 全库备份 → OSS。刻意排在 03:30 保留期清理**之前**。
+      //   失败会落 incident(backup_failed) 并抛出 —— 抛出是故意的, 让 BullMQ 也记一次 failed。
+      //   吞掉异常就变成"任务显示成功但没有备份", 正是这次改造要防的形态。
+      const { runDailyBackup } = await import("./ops/backup.js");
+      const backupResult = await runDailyBackup();
+      logger.info(backupResult, "8-26 daily-backup cron 完成");
+      return backupResult;
+    }
+
+    case "backup-restore-drill": {
+      // 8-26: 每周一 04:00 BJ 恢复演练。备份文件存在 ≠ 能恢复。
+      const { runBackupRestoreDrill } = await import("./ops/backup.js");
+      const drillResult = await runBackupRestoreDrill();
+      logger.info(drillResult, "8-26 backup-restore-drill cron 完成");
+      return drillResult;
+    }
     case "journal-trust-reverify": {
       // PR #107 + 6-19: 每日去 LetPub 重核验, "最久没核验优先"(lastVerifiedAt ASC NULLS FIRST), ~3个月滚全库一遍。
       // 两个 env 开关(新一年 JCR 发布时加速全量核对一遍, 之后恢复默认):
@@ -675,7 +695,13 @@ async function registerCronJobs() {
     }
   );
 
-  // 6-11: 每日 05:00 登录态保活巡检(避开 03:30 备份/清理与 07:00 爬虫)
+  // 6-11: 每日 05:00 登录态保活巡检(避开 02:00 备份 / 03:30 保留期清理 与 07:00 爬虫)
+  //
+  // ⚠️ 8-26 更正: 这句原本写的是"避开 03:30 备份/清理"——**03:30 只有清理, 没有备份**。
+  //   03:30 跑的是 content-retention-cleanup(删 60 天前的内容), 是个纯删除任务。
+  //   这句注释让人以为存在备份机制, 8-26 盘点时才发现生产**零自动备份**已经跑了几个月。
+  //   注释描述了一个不存在的系统, 比没有注释更危险 —— 它让人不去查。
+  //   真正的备份是同日新加的 daily-backup(02:00, 刻意排在 03:30 删数据之前)。
   await crawlerQueue.upsertJobScheduler(
     "login-keepalive-schedule",
     { pattern: "0 5 * * *", tz: "Asia/Shanghai" },
@@ -922,6 +948,38 @@ async function registerCronJobs() {
   );
 
   // PR #178：每日 03:30 BJ 60 天保留清理
+  /**
+   * 8-26 每日 02:00 BJ 全库备份 → OSS(跨云)。
+   *
+   * 🔴 时点是刻意的: 必须早于 03:30 的 content-retention-cleanup。
+   *   反过来的话备的是"已经删掉 60 天前内容"的库 —— 那正是最需要能回滚的那一刀。
+   *
+   * 与同在 02:00 的 stale-review-cleanup 同队列串行, 不冲突(BullMQ 按 concurrency 排队);
+   * 两者都很轻, 真正吃时间的是 pg_dump(240MB 库, 实测量级几十秒)。
+   */
+  if (env.BACKUP_ENABLED) {
+    await crawlerQueue.upsertJobScheduler(
+      "daily-backup-schedule",
+      { pattern: `${env.BACKUP_CRON_MINUTE} ${env.BACKUP_CRON_HOUR} * * *`, tz: "Asia/Shanghai" },
+      { name: "daily-backup", data: { type: "daily-backup" as SchedulerJobType } }
+    );
+    // 每周恢复演练 —— 没验证过能恢复的备份不算备份
+    if (env.BACKUP_DRILL_ENABLED) {
+      await crawlerQueue.upsertJobScheduler(
+        "backup-restore-drill-schedule",
+        { pattern: env.BACKUP_DRILL_CRON, tz: "Asia/Shanghai" },
+        { name: "backup-restore-drill", data: { type: "backup-restore-drill" as SchedulerJobType } }
+      );
+    } else {
+      // 关掉时必须显式移除既有调度 —— BullMQ 的 job scheduler 存在 Redis 里,
+      // 不再 upsert 不会让旧调度消失(与 wechat-stats-collect 8-20 同一个坑)。
+      await crawlerQueue.removeJobScheduler("backup-restore-drill-schedule").catch(() => { /* 本就没有 */ });
+    }
+  } else {
+    await crawlerQueue.removeJobScheduler("daily-backup-schedule").catch(() => { /* 本就没有 */ });
+    await crawlerQueue.removeJobScheduler("backup-restore-drill-schedule").catch(() => { /* 本就没有 */ });
+  }
+
   await crawlerQueue.upsertJobScheduler(
     "content-retention-cleanup-schedule",
     { pattern: "30 3 * * *", tz: "Asia/Shanghai" },
