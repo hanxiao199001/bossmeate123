@@ -315,6 +315,14 @@ export interface PlatformSignals {
   health: FullHealth;
   supplier: SupplierBalanceResult;
   incidents: IncidentCount[];
+  /** 8-26 备份新鲜度。undefined = 没采到(老调用方/测试), 与"没问题"是两回事, 判据里按空列表处理 */
+  backupFreshness?: BackupFreshnessIssue[];
+}
+
+/** 与 ops/backup.ts 的 FreshnessIssue 同形状 —— 这里复述一遍是为了让本文件的纯函数不 import IO 模块 */
+export interface BackupFreshnessIssue {
+  level: "alert" | "warn";
+  text: string;
 }
 
 /**
@@ -537,8 +545,29 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
     if (inc.kind === "journal_pool_forecast") continue;
 
     const label = KIND_LABEL[inc.kind] ?? inc.kind;
-    const level: BriefItemLevel = inc.kind === "ledger_write_failed" || inc.kind === "zero_output" ? "alert" : "warn";
+    // 8-26: 备份类进 alert —— 备份坏了和"记账失败/零产出"同级。
+    //   它们的共同点是**当天看不出损失**, 要等到真正需要的那天才知道完了。
+    const ALERT_KINDS = new Set([
+      "ledger_write_failed", "zero_output",
+      "backup_failed", "backup_drill_failed", "backup_stale", "backup_ledger_write_failed",
+    ]);
+    const level: BriefItemLevel = ALERT_KINDS.has(inc.kind) ? "alert" : "warn";
     items.push({ level, text: `${label} 近 24h 发生 ${inc.count} 次 —— 最后一条: ${inc.lastMessage.slice(0, 80)}` });
+  }
+
+  /**
+   * 8-26 备份新鲜度 —— 这一段回答的是上面那个 incident 循环**答不了**的问题。
+   *
+   * 上面遍历的是"发生过的异常"。而备份最危险的失效形态是**压根没跑**:
+   * 调度没注册 / 进程没起 / 开关被关掉 —— 一次都不执行, 于是一条失败 incident 都没有,
+   * 简报干干净净, 而你没有备份。只有拿"最近一次成功"的时间戳比对当前时间才看得见。
+   * (同一个道理 CLAUDE.md 红线 #14 写过五遍: 可观测体系只能看见以失败形态存在的失败。)
+   *
+   * 判据在这里(纯函数), 取数在 collectPlatformBriefing —— 与本文件其余信号同一套分工。
+   */
+  for (const iss of s.backupFreshness ?? []) {
+    items.push({ level: iss.level, text: `备份: ${iss.text}` });
+    if (iss.level === "alert") todos.push(`核查备份: ${iss.text}`);
   }
 
   return { items, todos };
@@ -926,7 +955,19 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
     //   collectPoolBriefing 自带 try/catch(绝不抛错), 所以这里不再包 .catch。
     collectPoolBriefing(SYSTEM_RECOMMENDATION_TENANT_ID),
   ]);
-  const { items, todos } = judgePlatform({ health, supplier, incidents });
+  // 8-26: 备份新鲜度取数。检查自身抛错也要变成一条 alert —— 静默 catch 等于告诉运营"备份正常"。
+  let backupFreshness: BackupFreshnessIssue[];
+  try {
+    const { checkBackupFreshness } = await import("./backup.js");
+    backupFreshness = await checkBackupFreshness(now);
+  } catch (err) {
+    backupFreshness = [{
+      level: "alert",
+      text: `新鲜度检查没跑成(≠ 备份正常) —— ${err instanceof Error ? err.message : String(err)}`,
+    }];
+  }
+
+  const { items, todos } = judgePlatform({ health, supplier, incidents, backupFreshness });
   // 8-02: 连续异常升级由租户级搬到这里。🚨 是最响的一条, 排最前。
   const streakItems = await collectZeroStreakPlatform(now);
   // 8-02 生成结果闭环。**直接产出条目, 不落库** —— collect* 全链路必须保持只读:
