@@ -10,6 +10,8 @@ build/
 # Environment
 .env
 .env.local
+# 部署目标(每台机器自己一份, 与 .env 同一套规矩) —— 见 scripts/deploy-with-fallback.sh
+.deploy.local
 .env.production
 # task #1 root cause fix（2026-05-01）：.env 备份/影子文件证据
 .env.backup*

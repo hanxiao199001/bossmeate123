@@ -47,8 +47,17 @@ pnpm lint                   # oxlint
 pnpm build                  # 全量构建
 ```
 
-部署使用 `pnpm deploy:smart`(`scripts/deploy-with-fallback.sh`),服务器地址通过
-环境变量 `BOSSMATE_DEPLOY_SERVER` 指定。
+部署使用 `pnpm deploy:smart`(`scripts/deploy-with-fallback.sh`)。
+
+**🔴 首次部署前必须建 `.deploy.local`**(仓库根,已 gitignore,与 `.env` 同一套规矩):
+
+```
+BOSSMATE_DEPLOY_SERVER=ubuntu@<部署机地址>
+```
+
+取值优先级:环境变量 `BOSSMATE_DEPLOY_SERVER` → `.deploy.local` → 都没有则报错退出。
+源码里**没有**硬编码的服务器地址(本仓库公开),所以不建这个文件部署跑不起来 ——
+这是刻意的:默认值会把生产地址随源码一起公开。
 
 ## License
 
