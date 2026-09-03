@@ -11,7 +11,7 @@ import { createHash as nodeCreateHash } from "node:crypto";
  *
  * 可选环境变量:
  *   NODE_VER   要打包的 Node 版本 (默认 v22.14.0)
- *   SERVER_URL 写进 cfg 的服务器地址 (默认 http://119.91.52.13)
+ *   SERVER_URL 写进 cfg 的服务器地址 (必填,无默认值)
  */
 import { execSync, execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, writeFileSync, rmSync, readFileSync, createWriteStream, existsSync } from "node:fs";
@@ -72,7 +72,12 @@ function bundleChromium(platform) {
   console.log(`   \u2713 ${platform} Chromium(\u7f13\u5b58) \u2192 ${rel}`);
   return rel;
 }
-const SERVER_URL = process.env.SERVER_URL || "http://119.91.52.13";
+const SERVER_URL = process.env.SERVER_URL;
+if (!SERVER_URL) {
+  console.error("✗ 必须设置 SERVER_URL,例如 SERVER_URL=http://<服务器地址> pnpm build:portable");
+  console.error("  不设默认值是刻意的:默认值会把生产地址打进发给客户的便携包。");
+  process.exit(1);
+}
 
 async function download(url, dest) {
   const res = await fetch(url);
@@ -166,7 +171,7 @@ const bat = [
   'if exist "%USERPROFILE%\\\\.bossmate-agent\\\\config.json" goto run_section',
   "",
   ":pair_loop",
-  '  if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://119.91.52.13 : "',
+  '  if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://<服务器地址> : "',
   '  if "!PAIR_CODE!"=="" set /p "PAIR_CODE=Pairing code 6 digits from the web : "',
   "  echo Pairing...",
   '  "%NODE%" dist\\cli.js pair "!SERVER_URL!" "!PAIR_CODE!" "!DEVICE_NAME!"',

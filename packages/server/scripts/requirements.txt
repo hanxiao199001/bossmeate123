@@ -1,6 +1,6 @@
 # ⚠️ 2026-07-25 勿按本文件在生产装 scrapling —— 装上会产生假数据，比不装更糟。
 #
-# 实测(阿里云 119.91.52.13)：生产机本来就**没装** scrapling，journal_scraper.py 一直返回
+# 实测(生产机)：生产机本来就**没装** scrapling，journal_scraper.py 一直返回
 # {"error":"Scrapling 未安装"}，所有 LetPub 富化路径静默空转(无数据但无害)。这次按本文件装上
 # scrapling 0.4.11 + [fetchers] extra 后，脚本能跑了，但**解析全错**：任何刊都返回
 #   impactFactor = 2026.0（抓到的是年份）、name = '按研究方向查看：'（抓到的是导航文案）

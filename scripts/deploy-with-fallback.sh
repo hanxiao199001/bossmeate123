@@ -21,8 +21,24 @@
 #   b. 直连重试 3→2 次、退避 3s，失败立即走 bundle（desktop→server SSH 那条一直稳）
 set -euo pipefail
 
-# PR-H: 部署目标可配置 — 迁移到老板新机时只需 export BOSSMATE_DEPLOY_SERVER=ubuntu@xxx
-SERVER="${BOSSMATE_DEPLOY_SERVER:-ubuntu@119.91.52.13}"
+# PR-H: 部署目标可配置 — 迁移到老板新机时只需改 .deploy.local(或 export BOSSMATE_DEPLOY_SERVER)
+#
+# 9-04: 部署目标不再有硬编码默认值(源码脱敏, 见 #248)。取值优先级:
+#   ① 环境变量 BOSSMATE_DEPLOY_SERVER
+#   ② 仓库根的 .deploy.local(gitignored, 一行 BOSSMATE_DEPLOY_SERVER=ubuntu@x.x.x.x)
+#   ③ 都没有 → 报错退出, 并告诉人去建那个文件
+#
+# 🔴 为什么是文件而不是 shell 配置(老韩定):
+#   shell 配置绑在**一个用户的一个终端**上 —— 换会话、换机器、换接手人就断,
+#   而且断的时候表现是"部署突然跑不了", 没人知道要去改 ~/.zshrc。
+#   gitignored 文件和 .env 是同一套规矩, 团队已经会了; 它跟着仓库走, 不跟着人走。
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -z "${BOSSMATE_DEPLOY_SERVER:-}" ] && [ -f "$REPO_ROOT/.deploy.local" ]; then
+  # 只认这一个键, 且不 source 整个文件 —— source 会执行文件里的任意内容,
+  # 而这是个"配置文件"不是"脚本", 不该有执行语义。
+  BOSSMATE_DEPLOY_SERVER="$(grep -E '^BOSSMATE_DEPLOY_SERVER=' "$REPO_ROOT/.deploy.local" | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')"
+fi
+SERVER="${BOSSMATE_DEPLOY_SERVER:?未配置部署目标。请在仓库根建 .deploy.local, 内容一行: BOSSMATE_DEPLOY_SERVER=ubuntu@<部署机地址>  (该文件已 gitignore, 与 .env 同一套规矩); 或 export 同名环境变量}"
 REMOTE_PATH="${BOSSMATE_REMOTE_PATH:-/home/projects/bossmate}"
 BRANCH="main"
 START=$(date +%s)

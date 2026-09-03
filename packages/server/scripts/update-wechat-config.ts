@@ -8,7 +8,7 @@
  * 修法：user 公众号后台重置 app_secret → 通过本脚本（env vars）重新加密 + UPDATE。
  *
  * 用法：
- *   ssh ubuntu@119.91.52.13
+ *   ssh "$BOSSMATE_DEPLOY_SERVER"
  *   cd /home/projects/bossmate
  *   WECHAT_APP_SECRET="<真新 secret>" \
  *     WECHAT_APP_ID="wxfae94e195cf225fb" \

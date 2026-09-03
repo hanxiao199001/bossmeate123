@@ -12,6 +12,7 @@ import {
 } from "../utils/platforms";
 import PageHeader from "../components/ui/PageHeader";
 import VoiceCloneRecorder from "../components/settings/VoiceCloneRecorder";
+import { WECHAT_WHITELIST_IP } from "../utils/deployConfig";
 
 // ===== 类型定义 =====
 interface Account {
@@ -645,7 +646,7 @@ const handleScopeChange = async (accountId: string, scope: string) => {
                     <p className="font-medium">📋 凭证获取与配置（一次配好，永不过期）：</p>
                     <p>1. 用公众号管理员微信扫码登录 <a href="https://mp.weixin.qq.com" target="_blank" rel="noreferrer" className="underline font-medium">mp.weixin.qq.com</a></p>
                     <p>2. 左侧菜单 <b>设置与开发 → 基本配置</b>：页面上方即 <b>AppID</b>；<b>AppSecret</b> 点"重置"生成（仅显示一次，立即复制；重置不影响已有功能）</p>
-                    <p>3. 同页 <b>IP白名单</b> 点"查看"→ 添加服务器 IP：<code className="px-1 py-0.5 bg-blue-100 rounded font-mono font-bold select-all">119.91.52.13</code>（不加白名单接口会报 40164 错误）</p>
+                    <p>3. 同页 <b>IP白名单</b> 点"查看"→ 添加服务器 IP：<code className="px-1 py-0.5 bg-blue-100 rounded font-mono font-bold select-all">{WECHAT_WHITELIST_IP}</code>（不加白名单接口会报 40164 错误）</p>
                     <p>4. 回到本页填入两项凭证，保存后自动验证</p>
                   </div>
                 )}
