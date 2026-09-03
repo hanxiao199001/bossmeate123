@@ -140,6 +140,8 @@ export const KIND_LABEL: Record<string, string> = {
   content_deferred: "内容已暂停待重跑(外部服务不可用, 原稿已保存, 服务恢复后自动重跑)",
   service_recovered: "外部服务已恢复(积压内容已自动重新入队)",
   deferred_retry_exhausted: "自动重跑次数用尽(已转人工, 不再自动重试)",
+  // 9-04 件 1(b): 超 72 小时的积压不再花钱补 —— 补它会挤掉今天的新内容
+  deferred_expired: "暂停待重跑已超 72 小时, 不再自动补(每天有新选题, 旧稿不值得再花钱)",
   service_probe_failed: "外部服务仍未恢复(恢复探测失败)",
   // 8-26 备份体系。生产此前**零自动备份**, 详见 services/ops/backup.ts 文件头。
   backup_failed: "每日备份失败(今天没有可用备份, 而 03:30 的保留期清理照常会删数据)",

@@ -19,6 +19,7 @@ import { desc, sql, inArray, eq, and, gte } from "drizzle-orm";
 import { db } from "../../models/db.js";
 import { keywords as keywordsTable, contents, tenants, journals, journalUsage } from "../../models/schema.js";
 import { logger } from "../../config/logger.js";
+import { countTodayArticleRequeues } from "../ops/deferred.js";
 import { startOfBjDay } from "../metrics/matrix-health.js";
 import { env } from "../../config/env.js";
 import { recommendJournals } from "./journal-recommender.js";
@@ -987,6 +988,35 @@ export async function runDailyContentByType(
   const startedAt = new Date().toISOString();
   const SYS = target?.tenantId ?? SYSTEM_RECOMMENDATION_TENANT_ID;
   const SYS_USER = target?.userId ?? SYSTEM_RECOMMENDATION_USER_ID;
+  /**
+   * 🔴 9-04 件 1(a): 重跑**占**当天配额, 不叠加。
+   *
+   * 病历(8-31 → 9-03): 欠费 → 370 篇挂 deferred → 充值 → 积压全部涌入队列,
+   * **和当天 18 篇新内容叠加** → 一天烧 ¥162/¥166(正常 ¥15-25) → 又欠费 → 积压更大。
+   *
+   * 关键在"叠加"两个字: 重跑本身没错, 错在它不占配额。
+   * 今天要生产的总量是 N 篇, 其中若已有 k 篇是在补昨天的, 那今天就只该新排 N-k 篇。
+   *
+   * 扣到 0 是允许的 —— 那天的产能全用来补积压了, 这是正确结果, 不是故障。
+   * 但会 log, 因为"今天一篇新的都没排"必须有痕迹。
+   */
+  const retriedToday = await countTodayArticleRequeues();
+  if (retriedToday > 0) {
+    const before = Object.fromEntries(Object.entries(cq).map(([k, v]) => [k, v.count]));
+    let left = retriedToday;
+    // 按 count 从大到小扣, 免得把小类型直接扣成 0 而大类型纹丝不动
+    for (const key of Object.keys(cq).sort((a, b) => cq[b].count - cq[a].count)) {
+      if (left <= 0) break;
+      const cut = Math.min(cq[key].count, left);
+      cq[key] = { ...cq[key], count: cq[key].count - cut };
+      left -= cut;
+    }
+    logger.info(
+      { retriedToday, before, after: Object.fromEntries(Object.entries(cq).map(([k, v]) => [k, v.count])), unabsorbed: left },
+      "件 1(a): 今日重跑占用配额, 新内容排产已相应减少",
+    );
+  }
+
   const tplWeights = await buildTemplateWeights(SYS); // PR-Q2 模板加权
   const batchIds: string[] = [];
   const failures: Array<{ keyword: string; error: string }> = [];

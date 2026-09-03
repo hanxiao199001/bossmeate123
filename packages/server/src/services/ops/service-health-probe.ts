@@ -21,10 +21,13 @@ import { logger } from "../../config/logger.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { recordIncident, recordIncidentThrottled } from "./incidents.js";
 import { classifyFailure, FAILURE_KIND_LABEL, type FailureKind } from "./failure-kind.js";
+import { env } from "../../config/env.js";
 import {
+  DEFERRED_EXPIRE_HOURS,
   DEFERRED_MAX_RETRY,
   countDeferredBacklog,
   listExhaustedCandidates,
+  listExpiredDeferred,
   listRetriableDeferred,
   patchDeferred,
   clearDeferred,
@@ -218,6 +221,8 @@ async function probeWithBackoff(target: ProbeTarget, now = Date.now()): Promise<
 // ============ 自动重跑 ============
 
 export interface RetryOutcome {
+  /** 9-04 件 1(b): 本轮因超 72 小时被作废的条数 */
+  expired: number;
   requeued: number;
   skipped: number;
   exhausted: number;
@@ -231,13 +236,70 @@ export interface RetryOutcome {
 const MAX_DVH_RETRY_PER_RUN = 3;
 
 /**
+ * 🔴 9-04 件 1(c): 每轮最多派几篇**文章**重跑。
+ *
+ * 视频早就有 MAX_DVH_RETRY_PER_RUN=3(一条几块钱, 谁都知道要限), 文章一直没有等价物 ——
+ * 于是 8-31 的 370 篇积压在 9-02 充值后**一次性全涌进队列**, 3.5 小时烧掉 ¥26.88 / 1235 次调用
+ * (按真价约 ¥105), 而正常一整天才 ¥15-25。
+ *
+ * 取日配额的 1/8: 探测每 30 分钟一轮, 一天最多 48 轮, 理论上限 6×N ——
+ * 真正的天花板是日预算闸(件 1 前置已改成真 ¥50), 这里只负责**不让它在一轮里冲垮当天**。
+ */
+export const MAX_ARTICLE_RETRY_PER_RUN_DIVISOR = 8;
+export function maxArticleRetryPerRun(dailyQuota: number): number {
+  return Math.max(1, Math.floor(dailyQuota / MAX_ARTICLE_RETRY_PER_RUN_DIVISOR));
+}
+
+/**
  * 把积压的 deferred 内容重新跑起来。
  *
  * @param avail 各依赖当前是否可用。DVH **不单独探测**, 由 llm && tts 推断
  *   (同一个阿里云账户, TTS 通了账户就通; 而 DVH 探测一次就是几块钱)。
  */
-export async function retryDeferredContents(avail: { llm: boolean; tts: boolean }): Promise<RetryOutcome> {
-  const out: RetryOutcome = { requeued: 0, skipped: 0, exhausted: 0, byKind: {} };
+export async function retryDeferredContents(
+  avail: { llm: boolean; tts: boolean },
+  now: Date = new Date(),
+): Promise<RetryOutcome> {
+  const out: RetryOutcome = { requeued: 0, skipped: 0, exhausted: 0, expired: 0, byKind: {} };
+
+  // ⓪ 9-04 件 1(b): 先把超 72 小时的作废 —— 放在最前面, 免得它们在本轮被当成可重跑的派出去。
+  //    不删行、不改 status, 只在 metadata.deferred 上标 expired。
+  //
+  //    🔴 **按批聚合成一条 incident, 不是一条一个**。
+  //    首次上线时 8-31 那批积压会一口气作废 ~370 条 —— 落 370 条 incident 就是
+  //    《沉默检查器盘点》说的反面: 一个"喊的"检查器。简报里 370 行会把当天所有
+  //    别的告警全冲没, 而运营需要知道的只有一件事: 作废了多少、最老的多久了。
+  //    (与 daily-briefing 里 journal_pool_forecast 那类"每条都报"的处理同一个教训。)
+  const expiredRows = await listExpiredDeferred(now);
+  if (expiredRows.length > 0) {
+    for (const row of expiredRows) {
+      await patchDeferred(row.id, { expired: true, expiredAt: now.toISOString() });
+      out.expired += 1;
+    }
+    const failedAts = expiredRows.map((r) => r.mark.failedAt).filter(Boolean).sort();
+    const byKind: Record<string, number> = {};
+    for (const r of expiredRows) {
+      const k = (r.mark.input as { kind?: string } | undefined)?.kind ?? "unknown";
+      byKind[k] = (byKind[k] ?? 0) + 1;
+    }
+    const days = Math.floor(DEFERRED_EXPIRE_HOURS / 24);
+    void recordIncident({
+      kind: "deferred_expired",
+      severity: "warn",
+      message:
+        `${expiredRows.length} 条内容暂停待重跑已超 ${DEFERRED_EXPIRE_HOURS} 小时, 本轮统一作废, 不再自动补` +
+        `(最老 ${failedAts[0]?.slice(0, 10) ?? "?"}, 最新 ${failedAts[failedAts.length - 1]?.slice(0, 10) ?? "?"})` +
+        ` —— 每天都有新选题, ${days} 天前没生成出来的稿子不值得再花钱补(补它会挤掉今天的新内容)。原稿仍在库里, 未删除。`,
+      detail: {
+        count: expiredRows.length,
+        oldestFailedAt: failedAts[0] ?? null,
+        newestFailedAt: failedAts[failedAts.length - 1] ?? null,
+        byKind,
+        // 只留前 20 个 id 供抽查 —— 全量 370 个塞进 detail 没人看, 也把 jsonb 撑大
+        sampleContentIds: expiredRows.slice(0, 20).map((r) => r.id),
+      },
+    });
+  }
 
   // ① 先把"重试次数用尽"的转人工 —— 别让一条永远坏的内容每 30 分钟烧一次钱
   for (const row of await listExhaustedCandidates(50)) {
@@ -260,6 +322,9 @@ export async function retryDeferredContents(avail: { llm: boolean; tts: boolean 
 
   const rows = await listRetriableDeferred(["quota_exceeded", "service_down"], 100);
   let dvhBudget = MAX_DVH_RETRY_PER_RUN;
+  // 9-04 件 1(c): 文章也要限速。见 maxArticleRetryPerRun 的注释。
+  let articleBudget = maxArticleRetryPerRun(env.DAILY_GEN_HARD_CAP);
+  const articleBudgetTotal = articleBudget;
 
   for (const row of rows) {
     const inputKind = (row.mark.input as { kind?: string } | undefined)?.kind;
@@ -267,11 +332,13 @@ export async function retryDeferredContents(avail: { llm: boolean; tts: boolean 
     const needsTts = inputKind === "dvh_text";
     if (!avail.llm || (needsTts && !avail.tts)) { out.skipped += 1; continue; }
     if (needsTts && dvhBudget <= 0) { out.skipped += 1; continue; }
+    // 件 1(c): 文章类限速。跳过的留在积压里, 下一轮(30 分钟后)再派 —— 不是丢弃。
+    if (!needsTts && articleBudget <= 0) { out.skipped += 1; continue; }
 
     try {
       const done = await dispatchRetry(row);
       if (!done) { out.skipped += 1; continue; }
-      if (needsTts) dvhBudget -= 1;
+      if (needsTts) dvhBudget -= 1; else articleBudget -= 1;
       out.requeued += 1;
       out.byKind[inputKind ?? "unknown"] = (out.byKind[inputKind ?? "unknown"] ?? 0) + 1;
     } catch (err) {
@@ -281,6 +348,12 @@ export async function retryDeferredContents(avail: { llm: boolean; tts: boolean 
         "deferred.retry_dispatch_failed — 本条留在积压里, 下轮再试",
       );
     }
+  }
+  if (articleBudget <= 0 && articleBudgetTotal > 0) {
+    logger.info(
+      { articleBudgetTotal, requeued: out.requeued, skipped: out.skipped },
+      "件 1(c): 本轮文章重跑配额已用满, 其余留待下一轮(30 分钟后)",
+    );
   }
   return out;
 }
