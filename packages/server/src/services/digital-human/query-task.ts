@@ -133,3 +133,49 @@ export async function queryDvhTaskUntilDone(taskUuid: string): Promise<DvhQueryR
   logger.warn({ taskUuid, pollCount, lastStatus, timeoutMs: POLL_TIMEOUT_MS }, "dvh.query.timeout");
   throw new Error(`DVH query timeout ${POLL_TIMEOUT_MS}ms taskUuid=${taskUuid} lastStatus=${lastStatus} polls=${pollCount}`);
 }
+
+/**
+ * 单次查询, 不轮询不阻塞 (9-04 件 2)。
+ *
+ * `queryDvhTaskUntilDone` 会**在请求内阻塞最多 10 分钟** —— 那正是 30 天 ¥169.31
+ * 孤儿账的成因: 付了钱的异步任务被绑在一个 HTTP 请求的生命周期上。
+ * 新的表驱动轮询器每 5 分钟扫一次, 每条只查一次就走, 由 dvh_tasks 表记住进度。
+ *
+ * 刻意**不抛** DvhTaskFailedError: 失败与否由调用方按 classifyDvhStatus 判,
+ * 这里只负责如实把阿里云说的话带回来(含不认识的 status)。
+ */
+export interface DvhQueryOnce {
+  rawStatus: string;
+  videoUrl?: string;
+  subtitlesUrl?: string;
+  durationMs?: number;
+  failCode?: string;
+  failReason?: string;
+}
+
+export async function queryDvhTaskOnce(taskUuid: string): Promise<DvhQueryOnce> {
+  const dvhTenantId = process.env.DVH_TENANT_ID;
+  const appId = process.env.DVH_APP_ID;
+  if (!dvhTenantId || !appId) throw new Error("DVH query: DVH_TENANT_ID/DVH_APP_ID 缺失");
+  const client = createDvhClient();
+  const runtime = new $Util.RuntimeOptions({});
+  const req = new $avatar20220130.GetVideoTaskInfoRequest({
+    tenantId: parseInt(dvhTenantId, 10),
+    app: new $avatar20220130.GetVideoTaskInfoRequestApp({ appId }),
+    taskUuid,
+  });
+  const resp = await client.getVideoTaskInfoWithOptions(req, runtime);
+  if (resp.body?.success === false) {
+    throw new Error(`DVH query failed: ${resp.body.code} ${resp.body.message}`);
+  }
+  const d = resp.body?.data ?? {};
+  const r = (d as { taskResult?: Record<string, unknown> }).taskResult ?? {};
+  return {
+    rawStatus: String((d as { status?: unknown }).status ?? ""),
+    ...(r.videoUrl ? { videoUrl: String(r.videoUrl) } : {}),
+    ...(r.subtitlesUrl ? { subtitlesUrl: String(r.subtitlesUrl) } : {}),
+    ...(r.videoDuration != null ? { durationMs: Number(r.videoDuration) } : {}),
+    ...(r.failCode != null ? { failCode: String(r.failCode) } : {}),
+    ...(r.failReason != null ? { failReason: String(r.failReason) } : {}),
+  };
+}

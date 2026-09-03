@@ -25,6 +25,7 @@ import { postprocessVideoWithSubtitle } from "./video-postprocess.js";
 import type { TemplateId } from "./template-mapping.js";
 import type { DvhEffectiveParams } from "./submit-task.js";
 import { checkBudget, estimateDvhCents, recordCost, DVH_CENTS_PER_SECOND } from "../billing/cost-ledger.js";
+import { recordDvhSubmit, settleDvhTask } from "./dvh-tasks.js";
 import { recordIncident, recordIncidentThrottled } from "../ops/incidents.js";
 
 /**
@@ -156,6 +157,47 @@ export interface ProduceVideoOptions {
   backgroundUrl?: string;
 }
 
+/**
+ * 9-04 件 2(c): submit 成功后**立刻**落库 + 按预估记账, 然后请求可以随时结束。
+ *
+ * 记账放在这里而不是拿到成片时: 钱在 submit 那一刻就已经花了,
+ * 阿里云不管我们知不知道结果。"不计入"是把真实支出藏起来。
+ *
+ * ## 🔴 落库失败为什么**不抛**
+ *
+ * 初版写的是"落库失败必须抛 —— 没进表的 taskUuid 就是下一个孤儿"。那个判断是错的:
+ * 走到这里时任务**已经提交并扣费了**, 抛出并不能把钱要回来, 只是**连视频也一起丢掉** ——
+ * 钱花了、没记录、还没成片, 比只是"没记录"严格更糟。
+ *
+ * 所以改成: 落库失败 → 落 incident 大声报 + 继续往下走(inline 那条路仍可能拿到成片)。
+ * 那条 incident 就是这条任务在系统里唯一的痕迹, 因此**不节流**。
+ *
+ * (这个错误是 CI 抓出来的: 14 条既有 DVH 测试因为 produce 被提前打断而红。)
+ */
+async function onSubmitted(
+  taskUuid: string, tenantId: string, text: string, title: string, templateId: string,
+): Promise<void> {
+  const estimatedCents = estimateDvhCents(text);
+  try {
+    await recordDvhSubmit({ taskUuid, tenantId, estimatedCents, title, templateId });
+  } catch (err) {
+    logger.error({ taskUuid, err: err instanceof Error ? err.message : err }, "dvh.task.submit_record_failed");
+    void recordIncident({
+      kind: "dvh_task_untracked", severity: "error", tenantId,
+      message:
+        `数字人任务已提交并扣费, 但**没能记进 dvh_tasks**(task ${taskUuid}) —— ` +
+        `轮询器不会跟进它, 24 小时后也不会有孤儿告警。这条 incident 是它在系统里唯一的痕迹, 需人工核对。`,
+      detail: { taskUuid, title: title.slice(0, 80), templateId, estimatedCents, err: String(err).slice(0, 300) },
+    });
+  }
+  void recordCost({
+    tenantId, kind: "dvh",
+    amountCents: estimatedCents,
+    quantity: Math.round(text.length / 5),
+    note: `DVH提交(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
+  });
+}
+
 export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedVideo> {
   const { text, title, templateId, tenantId, clonedVoiceId, backgroundUrl } = opts;
   if (!isRealMode()) {
@@ -257,6 +299,7 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       });
       taskUuid = submit.taskUuid;
       effective = submit.effective;
+      await onSubmitted(taskUuid, tenantId, text, title, templateId);
       const query = await queryDvhTaskUntilDone(taskUuid);
       rawVideoUrl = query.videoUrl;   // ★ 付费产物到手
       durationMs = query.durationMs;
@@ -281,18 +324,49 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
       });
       taskUuid = submit.taskUuid;
       effective = submit.effective;
+      await onSubmitted(taskUuid, tenantId, text, title, templateId);
       const query = await queryDvhTaskUntilDone(taskUuid);
       rawVideoUrl = query.videoUrl;   // ★ 付费产物到手 — 此后不可丢
       durationMs = query.durationMs;
       subtitlesUrl = query.subtitlesUrl ?? "";
     }
-    // PR-W1 成本台账: 拿到付费产物即记账 (0.165元/秒)。fire-and-forget, 不影响主流程。
-    void recordCost({
-      tenantId, kind: "dvh",
-      amountCents: Math.round((durationMs / 1000) * DVH_CENTS_PER_SECOND),
-      quantity: Math.round(durationMs / 1000),
-      note: `DVH合成 ${title.slice(0, 50)} (task ${taskUuid})`,
-    });
+    /**
+     * 9-04 件 2(b) 记账时机改了: **submit 成功即按预估记一笔**(见 onSubmitted),
+     * 这里只补**实际与预估的差额**。
+     *
+     * 原来是"拿到付费产物才记账" —— 于是任务失败/取不回时那笔钱要么不记、
+     * 要么在 catch 里另记一笔预估, 两条路各写各的。改成 submit 即记之后:
+     *   · 钱在 submit 那一刻就已经花了, 阿里云不管我们知不知道结果
+     *   · 「每笔扣费对应一个终态」变成查 dvh_tasks 一个字段, 不用跨表对账
+     *
+     * ⚠️ 这里**不能**再记全额, 否则同一条视频会被记两笔。
+     */
+    const actualCents = Math.round((durationMs / 1000) * DVH_CENTS_PER_SECOND);
+    /**
+     * 🔴 落定失败**不抛** —— 与 onSubmitted 同一个理由(见那里的注释):
+     * 成片已经在手上了, 因为记不上账就把它丢掉是本末倒置。
+     * 落不上就当"没落定", 交给轮询器去落 —— 它查一次阿里云也能拿到同样的终态。
+     */
+    let settledHere = false;
+    try {
+      settledHere = await settleDvhTask({
+        taskUuid, status: "success", videoUrl: rawVideoUrl, durationMs, actualCents,
+        detail: { settledBy: "inline" },
+      });
+    } catch (e) {
+      logger.error({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.task.settle_failed_inline — 交给轮询器落定");
+    }
+    if (settledHere) {
+      const delta = actualCents - estimateDvhCents(text);
+      if (delta !== 0) {
+        void recordCost({
+          tenantId, kind: "dvh",
+          amountCents: delta,
+          quantity: Math.round(durationMs / 1000),
+          note: `DVH实际时长校正 ${title.slice(0, 40)} (task ${taskUuid}) 预估${estimateDvhCents(text)}→实际${actualCents}`,
+        });
+      }
+    }
     // PR #252: ffmpeg burn-in 自定义字幕. postprocess 内部已 fallback 原 videoUrl, 正常不抛.
     const pp = await postprocessVideoWithSubtitle({
       videoUrl: rawVideoUrl,
@@ -338,11 +412,24 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
         { taskUuid: failed.taskUuid, failCode: failed.failCode, failReason: failed.failReason, status: failed.rawStatus, tenantId },
         "dvh.task.failed_by_provider — 阿里云判任务失败, 无成片产出",
       );
-      void recordCost({
-        tenantId, kind: "dvh",
-        amountCents: estimateDvhCents(text),
-        note: `DVH失败任务(预估, 已扣费无产出) ${title.slice(0, 40)} (task ${failed.taskUuid} ${failed.failCode})`,
-      });
+      /**
+       * 9-04 件 2(b): **不再在这里记账** —— submit 时已按预估记过一笔。
+       * 原来失败路径另记一笔预估, 与 submit 那笔叠加 = 同一条视频记两次。
+       * 这里只负责把终态原子落定; 落不上(别人先落定了)就连告警也跳过(单一写者)。
+       */
+      // 落定失败不抛(同上): 落不上就当没落定, 轮询器会拿到同样的终态。
+      //   但**告警照发** —— 失败这件事本身与记不记得上账无关。
+      let settled = true;
+      try {
+        settled = await settleDvhTask({
+          taskUuid: failed.taskUuid, status: "failed",
+          lastStatus: failed.rawStatus, failCode: failed.failCode, failReason: failed.failReason,
+          detail: { settledBy: "inline" },
+        });
+      } catch (e) {
+        logger.error({ taskUuid: failed.taskUuid, err: e instanceof Error ? e.message : e }, "dvh.task.settle_failed_inline");
+      }
+      if (!settled) throw err;
       void recordIncident({
         kind: "dvh_task_failed", severity: "error", tenantId,
         message: `数字人任务被阿里云判失败(已扣费, 无成片): ${failed.failCode} ${failed.failReason}`.slice(0, 300),
@@ -356,20 +443,27 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
     }
     // ★ submit 成功 (已扣费) 但 query **取不回**(网络/超时): 任务可能仍在跑, taskUuid 有捞回价值.
     if (taskUuid) {
-      logger.error({ err: msg, taskUuid }, "dvh.bridge.paid_task_orphaned_query_failed");
-      // 7-31 上简报: 这是**钱花了没拿到货**, 四种兜底里最贵的一种, 且 orphanTaskUuid 拿在手上
-      //   还能去阿里云捞回成片 —— 只写在日志里等于放弃这笔钱。不节流: 一条 = 一笔损失, 条数就是要看的量。
-      void recordIncident({
-        kind: "dvh_paid_task_orphaned", severity: "error", tenantId,
-        message: `数字人任务已提交并扣费, 但取不回成片(task ${taskUuid}) — 可凭该 taskUuid 去阿里云捞回`,
-        detail: { taskUuid, templateId, title: title.slice(0, 80), estimatedCents: estimateDvhCents(text), err: msg.slice(0, 300) },
-      });
-      // PR-W1: submit 已扣费但拿不到实际时长 — 按预估记账, note 标孤儿供核对
-      void recordCost({
-        tenantId, kind: "dvh",
-        amountCents: estimateDvhCents(text),
-        note: `DVH孤儿任务(预估) ${title.slice(0, 50)} (task ${taskUuid})`,
-      });
+      /**
+       * 🔴 9-04 件 2: 这里**不再落 dvh_paid_task_orphaned**。
+       *
+       * 原文案是「取不回成片 — 可凭该 taskUuid 去阿里云捞回」, 9-03 实测把它证伪了:
+       * 10 条"孤儿"里只有 1 条真有成片可捞, 8 条阿里云早已明确判失败, 1 条结果已过期。
+       * **捞无可捞 —— 那句话把损失说成了待办。**
+       *
+       * 而且"请求内查不到"≠"任务失败": 那 10 条里 9 条阿里云都有终态,
+       * 只是我们的 10 分钟轮询先放弃了。真正的孤儿判定移到轮询器,
+       * 依据是「24 小时内拿不到任何终态」(dvh-poller.listOverdueDvhTasks)。
+       */
+      logger.info({ err: msg, taskUuid }, "dvh.inline_query_gave_up — 交给轮询器继续跟(24h 上限)");
+      /**
+       * 9-04 件 2: **不再在这里记账, 也不再在这里判孤儿。**
+       *
+       * submit 时已按预估记过账; 而"是不是孤儿"现在由轮询器在 24 小时后判定
+       * (dvh-poller.listOverdueDvhTasks) —— 请求内查不到成片**不等于**任务失败,
+       * 9-03 实测 10 条"孤儿"里 9 条阿里云早有终态, 1 条甚至成功了。
+       *
+       * 这一行留着的只是日志: 本次请求没拿到成片, 任务交给轮询器继续跟。
+       */
       // 🔴 8-12: 不再退占位样片。8-12 实测线上因此躺着 4 条"状态 draft、看不出异常"的假成品
       //   (标题是真实期刊内容, 片子是固定占位样片, 还带着与该刊无关的 IF/分区大字卡)。
       //   改为抛错 → 调用方落 status=failed + metadata.deferred, 服务恢复后由重跑接管。
