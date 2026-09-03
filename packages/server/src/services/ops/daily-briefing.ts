@@ -332,6 +332,8 @@ export interface PlatformSignals {
   incidents: IncidentCount[];
   /** 8-26 备份新鲜度。undefined = 没采到(老调用方/测试), 与"没问题"是两回事, 判据里按空列表处理 */
   backupFreshness?: BackupFreshnessIssue[];
+  /** 9-04 件 2: 数字人轮询器停摆的一句话; 空/undefined = 活着 */
+  dvhPollerIssue?: string;
 }
 
 /** 与 ops/backup.ts 的 FreshnessIssue 同形状 —— 这里复述一遍是为了让本文件的纯函数不 import IO 模块 */
@@ -580,6 +582,13 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
    *
    * 判据在这里(纯函数), 取数在 collectPlatformBriefing —— 与本文件其余信号同一套分工。
    */
+  // 9-04 件 2(补充 c): 数字人轮询器心跳。判据同上一段 —— 轮询器挂了的表现是
+  //   所有任务慢慢老化到 24h 变孤儿, 和"阿里云慢"在指标上分不开, 只有心跳能区分。
+  if (s.dvhPollerIssue) {
+    items.push({ level: "alert", text: `数字人: ${s.dvhPollerIssue}` });
+    todos.push(`核查数字人轮询器: ${s.dvhPollerIssue}`);
+  }
+
   for (const iss of s.backupFreshness ?? []) {
     items.push({ level: iss.level, text: `备份: ${iss.text}` });
     if (iss.level === "alert") todos.push(`核查备份: ${iss.text}`);
@@ -983,7 +992,17 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
     }];
   }
 
-  const { items, todos } = judgePlatform({ health, supplier, incidents, backupFreshness });
+  // 9-04 件 2: 轮询器心跳。检查自身抛错也要变成 alert —— 静默等于说"轮询器正常"。
+  let dvhPollerIssue: string | undefined;
+  try {
+    const { checkDvhPollerAlive } = await import("../digital-human/dvh-heartbeat.js");
+    const hb = await checkDvhPollerAlive(now);
+    if (!hb.alive) dvhPollerIssue = hb.text;
+  } catch (err) {
+    dvhPollerIssue = `心跳检查没跑成(≠ 轮询器正常) —— ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  const { items, todos } = judgePlatform({ health, supplier, incidents, backupFreshness, dvhPollerIssue });
   // 8-02: 连续异常升级由租户级搬到这里。🚨 是最响的一条, 排最前。
   const streakItems = await collectZeroStreakPlatform(now);
   // 8-02 生成结果闭环。**直接产出条目, 不落库** —— collect* 全链路必须保持只读:

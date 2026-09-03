@@ -142,6 +142,10 @@ export const KIND_LABEL: Record<string, string> = {
   deferred_retry_exhausted: "自动重跑次数用尽(已转人工, 不再自动重试)",
   // 9-04 件 1(b): 超 72 小时的积压不再花钱补 —— 补它会挤掉今天的新内容
   deferred_expired: "暂停待重跑已超 72 小时, 不再自动补(每天有新选题, 旧稿不值得再花钱)",
+  // 9-04 件 2: 数字人任务状态机。三个 kind 拆开后:
+  //   failed 是常态记录(阿里云明确判失败), orphaned 才是异常(24h 拿不到任何终态)。
+  dvh_result_expired: "数字人任务结果已过期(阿里云侧保留期约 6~15 天, 24h 内出现属异常)",
+  dvh_poller_stalled: "数字人轮询器停摆(超 15 分钟无心跳 —— 表现和「阿里云慢」一样, 要 24h 后才看得见)",
   service_probe_failed: "外部服务仍未恢复(恢复探测失败)",
   // 8-26 备份体系。生产此前**零自动备份**, 详见 services/ops/backup.ts 文件头。
   backup_failed: "每日备份失败(今天没有可用备份, 而 03:30 的保留期清理照常会删数据)",

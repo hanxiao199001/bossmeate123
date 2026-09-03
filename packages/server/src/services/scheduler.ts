@@ -56,7 +56,8 @@ export type SchedulerJobType =
   | "ops-weekly-judgment"      // 8-14 Phase 2: 判断层周报(检查器台账 + 去留建议 → 企微推运营)
   | "service-health-probe"     // 8-03: 每 30 分钟探外部依赖是否恢复 → 自动重跑积压内容(欠费/服务挂)
   | "daily-backup"             // 8-26: 每日 02:00 BJ 全库 pg_dump + Redis RDB → 上传 OSS(跨云) + 30 天保留期清理
-  | "backup-restore-drill";    // 8-26: 每周一 04:00 BJ 恢复演练(拉最新备份灌进临时库验证) —— 没验证过能恢复的备份不算备份
+  | "backup-restore-drill"     // 8-26: 每周一 04:00 BJ 恢复演练
+  | "dvh-poll";                // 9-04 件 2: 每 5 分钟扫 dvh_tasks 未落定任务
 
 export interface SchedulerJobData {
   type: SchedulerJobType;
@@ -427,6 +428,16 @@ async function processJob(job: { name: string; data: SchedulerJobData }) {
       const backupResult = await runDailyBackup();
       logger.info(backupResult, "8-26 daily-backup cron 完成");
       return backupResult;
+    }
+
+    case "dvh-poll": {
+      // 9-04 件 2: 表驱动轮询, 与请求生命周期解耦。整体不抛 —— 单条出错不该让其余的停下来。
+      const { runDvhPollOnce } = await import("./digital-human/dvh-poller.js");
+      const { noteDvhPollHeartbeat } = await import("./digital-human/dvh-heartbeat.js");
+      const pollResult = await runDvhPollOnce();
+      await noteDvhPollHeartbeat();   // 心跳: 见 dvh-heartbeat.ts 文件头(七问 Q3)
+      logger.info(pollResult, "9-04 dvh-poll cron 完成");
+      return pollResult;
     }
 
     case "backup-restore-drill": {
@@ -979,6 +990,19 @@ async function registerCronJobs() {
     await crawlerQueue.removeJobScheduler("daily-backup-schedule").catch(() => { /* 本就没有 */ });
     await crawlerQueue.removeJobScheduler("backup-restore-drill-schedule").catch(() => { /* 本就没有 */ });
   }
+
+  /**
+   * 9-04 件 2: 每 5 分钟扫一次未落定的数字人任务。
+   *
+   * 为什么是独立的 cron 而不是塞进 service-health-probe(每 30 分钟):
+   * 那条是"外部依赖恢复没有"的探测, 跑不跑取决于有没有积压;
+   * 而付费任务的落定**不能**依赖于"当前有没有别的东西挂了"。
+   */
+  await crawlerQueue.upsertJobScheduler(
+    "dvh-poll-schedule",
+    { pattern: "*/5 * * * *", tz: "Asia/Shanghai" },
+    { name: "dvh-poll", data: { type: "dvh-poll" as SchedulerJobType } }
+  );
 
   await crawlerQueue.upsertJobScheduler(
     "content-retention-cleanup-schedule",

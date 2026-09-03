@@ -976,4 +976,48 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_ops_backups_time ON ops_backups (created_at DESC);
     `,
   },
+  {
+    version: "043_dvh_tasks",
+    description:
+      "9-04 件 2: 数字人任务状态表 —— 把「付了钱的异步任务」从「一个 HTTP 请求的生命周期」里解耦。" +
+      "病历: 30 天内 ¥169.31(占 DVH 支出 42.4%)记为「孤儿任务」, 告警文案写着「可凭 taskUuid 去阿里云捞回」。" +
+      "9-03 逐个查了那 10 个 taskUuid, 真相是: 8 条阿里云早已明确判失败(7×10010002 图片分辨率 + " +
+      "1×10050005 任务处理超时)、1 条其实成功了(有成片, 实测可下)、1 条结果已过期。" +
+      "**10 条里 9 条阿里云都有终态, 我们只是没等到** —— 10 分钟轮询超时总是先到, " +
+      "于是 8-13 特意加的 DvhTaskFailedError 分支至今 0 次执行, 全部归成了 orphaned。" +
+      "submitted_at 是 24h 上限的计时基准; status 只在 'submitted' 时允许被改成终态(单一写者), " +
+      "过渡期内老的请求内轮询与新的定时任务不会双写。" +
+      "last_status 存阿里云返回的**原始** status 字符串 —— 不认识的值(如 6)要能被看见, " +
+      "而不是被 `>=4` 一律吞成「失败」。" +
+      "退回执行: DROP TABLE dvh_tasks。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS dvh_tasks (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        task_uuid       VARCHAR(64) NOT NULL UNIQUE,
+        tenant_id       UUID NOT NULL,
+        content_id      UUID,
+        status          VARCHAR(20) NOT NULL DEFAULT 'submitted',
+        submitted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        settled_at      TIMESTAMPTZ,
+        last_polled_at  TIMESTAMPTZ,
+        poll_count      INTEGER NOT NULL DEFAULT 0,
+        last_status     VARCHAR(32),
+        fail_code       VARCHAR(32),
+        fail_reason     VARCHAR(300),
+        video_url       TEXT,
+        duration_ms     INTEGER,
+        estimated_cents INTEGER,
+        actual_cents    INTEGER,
+        title           VARCHAR(200),
+        template_id     VARCHAR(64),
+        detail          JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      -- 轮询任务每 5 分钟扫一次"未落定且未超 24h"的行, 这条索引是它的唯一查询路径
+      CREATE INDEX IF NOT EXISTS idx_dvh_tasks_pending ON dvh_tasks (status, submitted_at) WHERE status = 'submitted';
+      CREATE INDEX IF NOT EXISTS idx_dvh_tasks_time ON dvh_tasks (submitted_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_dvh_tasks_content ON dvh_tasks (content_id);
+    `,
+  },
 ];
