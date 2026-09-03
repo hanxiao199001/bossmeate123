@@ -124,7 +124,24 @@ export function startBatchWorker(): Worker<BatchRowJob> {
             const delay = delayToBjMidnight(1);
             await batchQueue.add(
               "batch-row",
-              { batchId, rowId, tenantId, userId, deferCount: deferCount + 1 },
+              {
+                batchId, rowId, tenantId, userId, deferCount: deferCount + 1,
+                /**
+                 * 🔴 9-04 件 1(d): 顺延时必须把 isRetry/deferredRetryCount 带回去。
+                 *
+                 * 原来这里只带 { batchId, rowId, tenantId, userId, deferCount } ——
+                 * 一条从 deferred 重跑来的行, 撞顶顺延一次之后就退化成"普通行",
+                 * deferredRetryCount 归 0。而 service-health-probe.dispatchRetry 的注释
+                 * 明写着「重跑失败时把计数带回去, 否则每次都从 0 开始 = 上限形同虚设」——
+                 * 顺延这条路正好把它抹掉了。
+                 *
+                 * 同时 isRetry 丢了会让件 1(e) 的归因失真: 顺延过的重跑行会被记成新内容,
+                 * 「重跑占了多少钱」这个判据本身就不准了。
+                 */
+                isRetry: job.data.isRetry,
+                deferredRetryCount: job.data.deferredRetryCount,
+                autoRetryCount: job.data.autoRetryCount,
+              },
               { delay, jobId: `batch-${batchId}-${rowId}-defer-${deferCount + 1}` },
             );
             // 保持 pending —— 它没失败, 只是还没轮到它
@@ -288,7 +305,13 @@ export function startBatchWorker(): Worker<BatchRowJob> {
         const GEN_HARD_TIMEOUT_MS = 180_000;
         const result = await Promise.race([
           // 7-06 成本归属: ALS 把批次租户带给 RoutedProvider→chat() 记账(见 billing/llm-cost)
-          runWithLlmCallAttribution({ tenantId, userId, conversationId: `batch-${batchId}` }, () =>
+          // 9-04 件 1(e): 再带上 contentId 与 isRetry ——
+          //   contents 行在本函数上方(第 176 行)就插好了, 生成之前 id 已经可用;
+          //   isRetry 来自 deferred 重跑入队时塞的 job.data(见 service-health-probe.dispatchRetry)。
+          //   有了这两个字段,「今天花的钱里重跑占多少」就是一条 SQL, 不用再拿时间窗反推。
+          runWithLlmCallAttribution(
+            { tenantId, userId, conversationId: `batch-${batchId}`, contentId: content.id, isRetry: job.data.isRetry === true },
+            () =>
             (article as { handle: (input: string, history: unknown[], ctx: unknown) => Promise<{ reply: string; artifact?: { body: string; title?: string } }> })
               .handle(row.topic, [], skillContext)),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("生成超时(180秒) — 可能补期刊数据或模型响应卡住, 请重试")), GEN_HARD_TIMEOUT_MS)),

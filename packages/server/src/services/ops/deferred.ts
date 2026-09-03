@@ -39,6 +39,24 @@ export type DeferredReason = Exclude<FailureKind, "content_error">;
  */
 export const DEFERRED_MAX_RETRY = 5;
 
+/**
+ * 🔴 9-04 件 1(b): deferred 超过这个时长就作废, 不再重跑。
+ *
+ * 病历(8-31 → 9-03): 欠费 → 370 篇失败挂 deferred → 充值 → 积压全部涌入队列,
+ * 和当天新内容叠加 → 一天烧掉 ¥162/¥166(正常日 ¥15-25) → 又欠费 → 积压更大。
+ * **每充一次钱, 钱先被旧积压吃掉, 新内容顺延到次日; 次日又是积压优先。**
+ *
+ * 为什么是 72 小时: 每天都有新选题产出, 4 天前那篇没生成出来的稿子,
+ * 不值得再花钱补 —— 它的时效性已经过了, 而补它要挤掉今天的新内容。
+ *
+ * ⚠️ 这不是"重做存量"(红线 #21 禁止的那件事), 是**放弃从未存在过的东西**:
+ * 那些 content 行 body 是 NULL, 从来没有产出过内容, 不存在"已发出去要不要改"的问题。
+ *
+ * 🔴 不许静默删: 到期只标记 + 落 incident(deferred_expired), 行还在库里。
+ * 静默删会让"积压去哪了"变成无法回答的问题 —— 而那正是件 1 要量的东西。
+ */
+export const DEFERRED_EXPIRE_HOURS = 72;
+
 /** 文章生成(batch-worker 链路)重跑要的全部输入 */
 export interface DeferredInputArticle {
   kind: "article_generation";
@@ -89,6 +107,9 @@ export interface DeferredMark {
   /** 原始错误摘要(排障用, 不给运营看) */
   lastError?: string;
   lastRetryAt?: string;
+  /** 9-04 件 1(b): 超 72 小时已作废, 不再自动重跑。行仍在库里, 只是不再花钱补 */
+  expired?: boolean;
+  expiredAt?: string;
   /**
    * 已重新入队/已重跑过一轮的时点。**一次 defer 只重跑一次**:
    * article / dvh 两条链路重跑会产出**新的 contents 行**, 老行若不封口, 下一轮探测会再跑一次,
@@ -172,13 +193,25 @@ export function readDeferred(metadata: unknown): DeferredMark | null {
     ...(typeof m.lastRetryAt === "string" ? { lastRetryAt: m.lastRetryAt } : {}),
     ...(typeof m.requeuedAt === "string" ? { requeuedAt: m.requeuedAt } : {}),
     ...(m.exhausted === true ? { exhausted: true } : {}),
+    ...(m.expired === true ? { expired: true } : {}),
+    ...(typeof m.expiredAt === "string" ? { expiredAt: m.expiredAt } : {}),
   };
 }
 
+/** 这条 deferred 是否已超过 72 小时(件 1 b)。failedAt 不可解析时**按未过期处理** —— 宁可多跑一次也不误废 */
+export function isDeferredExpired(mark: DeferredMark | null, now: Date = new Date()): boolean {
+  if (!mark?.failedAt) return false;
+  const at = new Date(mark.failedAt);
+  if (Number.isNaN(at.getTime())) return false;
+  return now.getTime() - at.getTime() > DEFERRED_EXPIRE_HOURS * 3600_000;
+}
+
 /** 这条 deferred 现在还能不能自动重跑 */
-export function canAutoRetry(mark: DeferredMark | null): boolean {
+export function canAutoRetry(mark: DeferredMark | null, now: Date = new Date()): boolean {
   if (!mark) return false;
   if (mark.exhausted) return false;
+  if (mark.expired) return false;                  // 9-04 件 1(b): 已作废
+  if (isDeferredExpired(mark, now)) return false;  // 超 72h — 即使还没被标记也不再跑
   if (mark.requeuedAt) return false;               // 已经重跑过一轮, 结果由新行承接
   if (!mark.input || typeof mark.input !== "object") return false; // 没有 input = 跑不了
   return mark.retryCount < DEFERRED_MAX_RETRY;
@@ -321,6 +354,10 @@ export interface DeferredRow {
 const RETRIABLE_DEFERRED = sql`
   ${contents.metadata} -> 'deferred' IS NOT NULL
   AND COALESCE(${contents.metadata} -> 'deferred' ->> 'exhausted', 'false') <> 'true'
+  -- 9-04 件 1(b): 已作废的不再捞。SQL 层也挡一道 —— 只靠 JS 里的 canAutoRetry 的话,
+  -- 每轮都要把它们查出来再筛掉, 积压越大越浪费; 而且 listExhaustedCandidates 那条路
+  -- 不走 canAutoRetry, 会把作废的又当"重试用尽"处理一遍。
+  AND COALESCE(${contents.metadata} -> 'deferred' ->> 'expired', 'false') <> 'true'
   AND ${contents.metadata} -> 'deferred' ->> 'requeuedAt' IS NULL
 `;
 
@@ -364,6 +401,67 @@ export async function listRetriableDeferred(
 }
 
 /** 重跑次数已用尽、等着转人工的那些 */
+/**
+ * 9-04 件 1(b): 找出超过 72 小时、仍待重跑的 deferred。
+ *
+ * 与 listRetriableDeferred 用同一个 RETRIABLE_DEFERRED 前置条件(未 exhausted / 未 expired /
+ * 未 requeued), 差别只在**时间**: 那边要没过期的, 这边要过期的。两边互补, 不重不漏。
+ */
+/**
+ * 9-04 件 1(a): 今天已经派出去多少条**文章**重跑。
+ *
+ * 判据用 `requeuedAt` 而不是新行的创建时间: 一次 defer 只重跑一次, 重跑时会在**老行**上
+ * 盖 requeuedAt 并产出一条新行。所以「今天 requeuedAt 落在今天的老行数」= 今天派出的重跑篇数,
+ * 与新行是否生成成功无关 —— 配额扣的是**派工**, 不是产出(失败的那次钱也花了)。
+ *
+ * 只数 article_generation: dvh 走 MAX_DVH_RETRY_PER_RUN 自己的预算, 不占文章配额。
+ */
+export async function countTodayArticleRequeues(now: Date = new Date()): Promise<number> {
+  // 北京时间当天 00:00 起
+  const bj = new Date(now.getTime() + 8 * 3600_000);
+  const startBj = new Date(Date.UTC(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate()));
+  const startIso = new Date(startBj.getTime() - 8 * 3600_000).toISOString();
+  try {
+    const rows = await db.execute(sql`
+      SELECT count(*)::int AS n FROM contents
+      WHERE metadata -> 'deferred' ->> 'requeuedAt' >= ${startIso}
+        AND metadata -> 'deferred' -> 'input' ->> 'kind' = 'article_generation'
+    `);
+    return Number((rows as unknown as { rows: Array<{ n: number }> }).rows?.[0]?.n ?? 0);
+  } catch (err) {
+    // 🔴 查不动时返回 0 = 不扣配额 = 退回旧行为(叠加)。这是**故意的**:
+    //    宁可多生成一天, 也不要因为一次查询失败就把当天配额砍成 0 篇。
+    //    但必须喊出来, 否则"配额没被扣"这件事没有任何痕迹。
+    logger.warn({ err: err instanceof Error ? err.message : err }, "deferred.count_today_requeues_failed — 本次不扣配额(退回叠加行为)");
+    return 0;
+  }
+}
+
+export async function listExpiredDeferred(now: Date = new Date(), limit = 200): Promise<DeferredRow[]> {
+  try {
+    const rows = await db
+      .select({
+        id: contents.id, tenantId: contents.tenantId, userId: contents.userId,
+        title: contents.title, status: contents.status, metadata: contents.metadata,
+      })
+      .from(contents)
+      .where(RETRIABLE_DEFERRED)
+      .limit(Math.max(1, Math.min(500, limit)));
+    const out: DeferredRow[] = [];
+    for (const r of rows) {
+      const mark = readDeferred(r.metadata);
+      if (!mark || !isDeferredExpired(mark, now)) continue;
+      out.push({ id: r.id, tenantId: r.tenantId, userId: r.userId, title: r.title, status: r.status, mark });
+    }
+    return out;
+  } catch (err) {
+    // 🔴 查不动时返回空数组是安全的(这一轮不作废任何东西), 但必须喊出来 ——
+    //    静默失败会表现为"积压一直不减", 和"没有积压"在指标上分不开。
+    logger.warn({ err: err instanceof Error ? err.message : err }, "deferred.list_expired_failed — 本轮不作废");
+    return [];
+  }
+}
+
 export async function listExhaustedCandidates(limit = 50): Promise<DeferredRow[]> {
   try {
     const rows = await db

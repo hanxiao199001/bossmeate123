@@ -114,6 +114,20 @@ export interface LlmCallAttribution {
   tenantId: string;
   userId?: string;
   conversationId?: string;
+  /**
+   * 9-04 件 1(e): 这次调用产出的内容 id，写进 cost_ledger.content_id。
+   *
+   * 此前该列**恒为 NULL** —— recordLlmUsage 压根不接这个参数，
+   * 于是"这笔钱花在哪篇上"无从回答，件 1 的判据只能靠时间窗推算。
+   */
+  contentId?: string;
+  /**
+   * 🔴 这次调用是不是 deferred 重跑产生的。
+   *
+   * 件 1 的停止条件就是它：有了这个标记，「今天 ¥X 里重跑占 ¥Y」是一条 SQL；
+   * 没有它，只能拿 requeuedAt 时间窗反推，而时间窗会把当天正常生成也算进去。
+   */
+  isRetry?: boolean;
 }
 
 const llmCallContext = new AsyncLocalStorage<LlmCallAttribution>();
@@ -143,11 +157,15 @@ export async function recordLlmUsage(p: {
   outputTokens: number;
   /** 命中输入缓存的 token 数(含在 inputTokens 内)。provider 没给就是 0 */
   cachedTokens?: number;
+  /** 9-04 件 1(e): 显式传入优先; 没传则从 ALS 的 attribution 里取 */
+  contentId?: string;
+  isRetry?: boolean;
 }): Promise<void> {
   try {
     if (p.model === "none") return; // "无可用模型"占位回复, 没花钱
     if ((p.inputTokens ?? 0) <= 0 && (p.outputTokens ?? 0) <= 0) return; // 无 usage 的失败/降级回复
-    const tenantId = UUID_RE.test(p.tenantId) ? p.tenantId : getLlmCallAttribution()?.tenantId;
+    const attr = getLlmCallAttribution();
+    const tenantId = UUID_RE.test(p.tenantId) ? p.tenantId : attr?.tenantId;
     if (!tenantId || !UUID_RE.test(tenantId)) {
       logger.debug({ model: p.model, taskType: p.taskType }, "llm_cost.skip — 无真实租户可归属(脚本/系统调用)");
       return;
@@ -161,12 +179,19 @@ export async function recordLlmUsage(p: {
     //   也可能走阿里云百炼(DEEPSEEK_VIA=bailian) —— provider 名都叫 deepseek, 只看它会把账记串。
     //   注意 note 首个 token 仍是 "provider/model", 成本日报的 split_part 解析不受影响。
     const billing = getBillingAccount(p.provider);
+    // 9-04 件 1(e): 归因。显式入参优先, 否则读 ALS —— skills 链路的 8 个
+    //   provider.chat 调用点不传参, 全靠 worker 外层包的那一层 attribution。
+    //   contentId 非 uuid 一律丢弃: cost_ledger.content_id 有外键, 编一个会让整条记账失败。
+    const rawContentId = p.contentId ?? attr?.contentId;
+    const contentId = rawContentId && UUID_RE.test(rawContentId) ? rawContentId : null;
+    const isRetry = p.isRetry ?? attr?.isRetry ?? false;
     await recordCost({
       tenantId,
       kind: "llm",
+      contentId,
       amountCents: cents, // recordCost 内 Math.round 到整数分
       quantity: p.inputTokens + p.outputTokens,
-      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens}${cached > 0 ? ` cached=${cached}` : ""} billing=${billing}${priced ? "" : " unpriced"}`,
+      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens}${cached > 0 ? ` cached=${cached}` : ""}${isRetry ? " retry=1" : ""} billing=${billing}${priced ? "" : " unpriced"}`,
     });
     // 7-27 无人值守: 把刚花的钱累到日上限闸的进程内增量上, 让 60s 缓存窗口内也能及时触顶。
     //   闸门本身(checkLlmDailyCap)在生成链路调用; 这里只喂数, 不做任何拦截(记账出口不该有副作用)。
