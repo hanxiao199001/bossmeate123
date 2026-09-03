@@ -125,6 +125,14 @@ export const KIND_LABEL: Record<string, string> = {
   //   先把 label 补上, 免得它哪天第一次触发时又是一行英文。
   dvh_task_failed: "数字人任务失败(已扣费)",
   dvh_bg_resolution_rejected: "背景图分辨率不合规(已拦截)",
+  // 9-03 反向守卫(kind-label-completeness.test.ts)第一次跑就抓出的 4 个漏网。
+  //   其中 keyword_score_flat 已实发 17 次(8-17 起, 9-02 还在响), 简报里一直念英文;
+  //   quota_floor_exceeds_pool 发过 4 次后于 8-20 归零 —— 那不是问题解决了,
+  //   是它死于配额 v2 上线那天(见 CLAUDE.md「影子模式转正式生效」那条红线)。
+  watchdog_kill: "生成超时被判死(看门狗; 尚无法区分「跑得慢」与「真卡死」)",
+  ai_fabricated_journal: "草稿分发拦下影子刊内容(关联期刊是 AI 编造的, 已转人工)",
+  quota_floor_exceeds_pool: "配额保底数超过可选池(该学科没有那么多刊可排)",
+  keyword_score_flat: "关键词分数分布不健康(梯度不足, 选题会趋同)",
   // 8-02 自检补: 这个 kind 由 model-router 的启动期自检落库(已出现 5 次), 但一直没有 label,
   //   简报里就直接把英文 kind 念出来, 运营看不懂。
   degenerate_fallback_route: "AI 兜底路由退化(主模型与备用模型是同一个, 主模型一挂即全线停)",
