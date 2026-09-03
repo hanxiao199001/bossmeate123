@@ -119,6 +119,12 @@ export const KIND_LABEL: Record<string, string> = {
   dvh_submit_failed: "数字人视频提交失败(未扣费, 但界面显示成功、落库的是占位样片)",
   dvh_tts_failed: "数字人配音合成失败(已主动中止, 未扣费; 提交了也必是哑巴视频)",
   dvh_mock_mode: "数字人处于演示模式(DVH_REAL_MODE 未开, 出的全是固定占位样片)",
+  // 9-03 补: 这两个 kind 的落库点 8 月就在了(produce-video.ts:206/347), 但一直没 label ——
+  //   简报里会直接把英文 kind 念出来。dvh_bg_resolution_rejected 已实发 3 次;
+  //   dvh_task_failed 至今 0 次(全部 10 次损失都走了 dvh_paid_task_orphaned 的超时分支),
+  //   先把 label 补上, 免得它哪天第一次触发时又是一行英文。
+  dvh_task_failed: "数字人任务失败(已扣费)",
+  dvh_bg_resolution_rejected: "背景图分辨率不合规(已拦截)",
   // 8-02 自检补: 这个 kind 由 model-router 的启动期自检落库(已出现 5 次), 但一直没有 label,
   //   简报里就直接把英文 kind 念出来, 运营看不懂。
   degenerate_fallback_route: "AI 兜底路由退化(主模型与备用模型是同一个, 主模型一挂即全线停)",
