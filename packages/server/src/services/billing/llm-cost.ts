@@ -21,18 +21,34 @@ import { logger } from "../../config/logger.js";
 import { getBillingAccount } from "../ai/llm-endpoints.js";
 import { recordCost } from "./cost-ledger.js";
 
-/** 单价: 分 / 1M token */
-export interface ModelPrice { in: number; out: number }
+/**
+ * 单价: 分 / 1M token。
+ *
+ * `cache` = 命中输入缓存的那部分 token 单价(百炼账单里是独立计费项)。
+ * 不填则命中缓存的 token 按 `in` 计价 —— **刻意不给静默折扣**:
+ * 少算钱和多算钱一样是记错账, 而少算的那种不会有人来投诉。
+ */
+export interface ModelPrice { in: number; out: number; cache?: number }
 
 /** 2026-07 手抄默认价(分/1M token): deepseek-chat ¥2/¥8, deepseek-reasoner ¥4/¥16, qwen-plus ¥0.8/¥2 */
 const DEFAULT_PRICES: Record<string, ModelPrice> = {
   "deepseek-chat": { in: 200, out: 800 },
   "deepseek-reasoner": { in: 400, out: 1600 },
   "qwen-plus": { in: 80, out: 200 },
-  // 7-26 校正(取代 7-25 的暂定值): 按 DeepSeek 官方价目表 v4-pro $0.435/$0.87、
-  //   v4-flash $0.14/$0.28 每 1M token, 按 ~7.14 汇率折人民币 ≈ ¥3.1/¥6.2 与 ¥1/¥2。
-  //   阿里云百炼上的同名模型**与官网同价**(百炼公告), 所以走哪个账户单价一样, 这张表通用。
-  "deepseek-v4-pro": { in: 310, out: 620 },
+  /**
+   * 🔴 9-03 按**真实账单**校正: ¥12/¥24 每 1M token(原记 ¥3.1/¥6.2)。
+   *
+   * 7-26 那版是"按 DeepSeek 官网 $0.435/$0.87 折汇率"推算的, 注释还写着
+   * 「百炼与官网同价, 这张表通用」—— **推算错了, 而且错了 3.9 倍**。
+   *
+   * 后果不是"报表数字难看", 是**预算闸整整失灵了 5 周**:
+   *   LLM_DAILY_COST_CAP_YUAN=50 实际拦在 ¥195 才触发,
+   *   而 9-03 那次重跑风暴 3.5 小时烧掉的真实金额约 ¥105 —— 闸从头到尾没响。
+   *
+   * 教训与红线 #16 同族: **单价是外部事实, 不许用汇率乘法"算"出来。**
+   * 以账单为准, 对不上就改这张表(或用 LLM_PRICE_OVERRIDES 热覆盖)。
+   */
+  "deepseek-v4-pro": { in: 1200, out: 2400, cache: 100 },
   "deepseek-v4-flash": { in: 100, out: 200 },
   // qwen-max 之前不在表里 —— 一旦有人把主力切成它, 成本会记 0 分(预算闸失明), 先补上。
   "qwen-max": { in: 240, out: 960 },
@@ -49,8 +65,11 @@ function getPriceTable(): Record<string, ModelPrice> {
       for (const [model, p] of Object.entries(raw)) {
         const inCents = Number(p?.in);
         const outCents = Number(p?.out);
-        if (Number.isFinite(inCents) && inCents >= 0 && Number.isFinite(outCents) && outCents >= 0) {
-          table[model] = { in: inCents, out: outCents };
+        const cacheRaw = (p as { cache?: unknown })?.cache;
+        const cacheCents = cacheRaw === undefined ? undefined : Number(cacheRaw);
+        const cacheOk = cacheCents === undefined || (Number.isFinite(cacheCents) && cacheCents >= 0);
+        if (Number.isFinite(inCents) && inCents >= 0 && Number.isFinite(outCents) && outCents >= 0 && cacheOk) {
+          table[model] = { in: inCents, out: outCents, ...(cacheCents === undefined ? {} : { cache: cacheCents }) };
         } else {
           logger.warn({ model }, "llm_cost.price_override_invalid — 该条忽略");
         }
@@ -64,11 +83,27 @@ function getPriceTable(): Record<string, ModelPrice> {
 }
 
 /** 算一笔调用的成本(分, 浮点)。模型不在价目表 → priced=false + 0 分(用量仍会被记录)。 */
-export function computeLlmCostCents(model: string, inputTokens: number, outputTokens: number): { cents: number; priced: boolean } {
+export function computeLlmCostCents(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cachedTokens = 0,
+): { cents: number; priced: boolean } {
   const price = getPriceTable()[model];
   if (!price) return { cents: 0, priced: false };
+  /**
+   * 🔴 `inputTokens`(= API 的 prompt_tokens)**已经包含**命中缓存的部分,
+   * 所以未命中量要减出来, 否则缓存那段会被算两遍。
+   * 缓存价缺失时按 `in` 计 —— 见 ModelPrice.cache 的注释(不给静默折扣)。
+   */
+  const cached = Math.max(0, Math.min(cachedTokens, inputTokens));
+  const uncached = inputTokens - cached;
+  const cachePrice = price.cache ?? price.in;
   return {
-    cents: (inputTokens / 1_000_000) * price.in + (outputTokens / 1_000_000) * price.out,
+    cents:
+      (uncached / 1_000_000) * price.in +
+      (cached / 1_000_000) * cachePrice +
+      (outputTokens / 1_000_000) * price.out,
     priced: true,
   };
 }
@@ -106,6 +141,8 @@ export async function recordLlmUsage(p: {
   provider: string;
   inputTokens: number;
   outputTokens: number;
+  /** 命中输入缓存的 token 数(含在 inputTokens 内)。provider 没给就是 0 */
+  cachedTokens?: number;
 }): Promise<void> {
   try {
     if (p.model === "none") return; // "无可用模型"占位回复, 没花钱
@@ -115,7 +152,8 @@ export async function recordLlmUsage(p: {
       logger.debug({ model: p.model, taskType: p.taskType }, "llm_cost.skip — 无真实租户可归属(脚本/系统调用)");
       return;
     }
-    const { cents, priced } = computeLlmCostCents(p.model, p.inputTokens, p.outputTokens);
+    const cached = p.cachedTokens ?? 0;
+    const { cents, priced } = computeLlmCostCents(p.model, p.inputTokens, p.outputTokens, cached);
     if (!priced) {
       logger.warn({ model: p.model }, "llm_cost.unpriced — 模型不在价目表, 金额记 0(用 LLM_PRICE_OVERRIDES 补价)");
     }
@@ -128,7 +166,7 @@ export async function recordLlmUsage(p: {
       kind: "llm",
       amountCents: cents, // recordCost 内 Math.round 到整数分
       quantity: p.inputTokens + p.outputTokens,
-      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens} billing=${billing}${priced ? "" : " unpriced"}`,
+      note: `${p.provider}/${p.model} task=${p.taskType} in=${p.inputTokens} out=${p.outputTokens}${cached > 0 ? ` cached=${cached}` : ""} billing=${billing}${priced ? "" : " unpriced"}`,
     });
     // 7-27 无人值守: 把刚花的钱累到日上限闸的进程内增量上, 让 60s 缓存窗口内也能及时触顶。
     //   闸门本身(checkLlmDailyCap)在生成链路调用; 这里只喂数, 不做任何拦截(记账出口不该有副作用)。
