@@ -20,7 +20,9 @@ const errorSpy = vi.fn();
 vi.mock("../config/logger.js", () => ({
   logger: { info: infoSpy, warn: warnSpy, error: errorSpy, debug: vi.fn() },
 }));
-vi.mock("../models/db.js", () => ({ db: {} }));
+// 9-04 件 2: dvh_tasks 走模块级 db.execute(原始 SQL), 与本文件传入的 fakeDb 是两条路。
+//   替身缺 execute 时 recordDvhSubmit 会抛 → 触发 dvh_task_untracked, 淹掉本文件真正要测的东西。
+vi.mock("../models/db.js", () => ({ db: { execute: async () => ({ rows: [], rowCount: 1 }) } }));
 
 const isRealModeMock = vi.fn();
 vi.mock("../services/digital-human/client.js", () => ({
@@ -107,7 +109,17 @@ describe("PR #261: 付费视频落库失败防丢", () => {
     expect(errStr).toContain("paid-1.mp4"); // rawVideoUrl 可恢复
   });
 
-  it("B) submit 成功(已扣费)但 query 超时 → 记 orphanTaskUuid 到 metadata + ERROR, postprocess 不触发", async () => {
+  /**
+   * 🔴 9-04 件 2 改了这条的语义, 断言随之更新(不是加进基线)。
+   *
+   * 【原断言】query 超时 → 落 ERROR `dvh.bridge.paid_task_orphaned_query_failed`, 当场判孤儿。
+   * 【为什么改】9-03 逐个查了那 10 条"孤儿"的 taskUuid: 9 条阿里云早有终态,
+   *   1 条甚至**成功了**且成片可下 —— "请求内查不到"≠"任务失败", 只是我们的
+   *   10 分钟轮询先放弃了。孤儿判定移到轮询器(24h 内拿不到任何终态)。
+   * 【现语义】请求内放弃 → INFO `dvh.inline_query_gave_up`, 任务交给轮询器。
+   *   metadata.orphanTaskUuid 保留不变 —— 它是排查线索, 与"是不是孤儿"无关。
+   */
+  it("B) submit 成功(已扣费)但 query 超时 → 交给轮询器 + metadata 留 taskUuid, postprocess 不触发", async () => {
     isRealModeMock.mockReturnValue(true);
     submitDvhTaskMock.mockResolvedValue({ taskUuid: "task-orphan-9", submitMs: 10 });
     queryDvhTaskMock.mockRejectedValue(new Error("DVH query timeout 600000ms"));
@@ -116,7 +128,8 @@ describe("PR #261: 付费视频落库失败防丢", () => {
     });
     await triggerDvhFromArticle({ ...baseOpts, db: fakeDb });
     expect(postprocessMock).not.toHaveBeenCalled();
-    expect(JSON.stringify(errorSpy.mock.calls)).toContain("dvh.bridge.paid_task_orphaned_query_failed");
+    // 不再当场判孤儿, 但必须留下"交给轮询器"的痕迹
+    expect(JSON.stringify(infoSpy.mock.calls)).toContain("dvh.inline_query_gave_up");
     expect(fakeDb._captured.values.metadata.orphanTaskUuid).toBe("task-orphan-9");
   });
 });

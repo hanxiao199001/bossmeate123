@@ -78,6 +78,10 @@ const inserted: Array<Record<string, any>> = [];
 let insertShouldFail = false;
 vi.mock("../models/db.js", () => ({
   db: {
+    // 9-04 件 2: dvh_tasks 走 db.execute(原始 SQL)。测试替身缺这一项时,
+    //   recordDvhSubmit 会抛 → 触发 dvh_task_untracked 告警, 把"正常路径零 incident"
+    //   这条不变量弄红。补齐替身, 而不是放宽断言。
+    execute: async () => ({ rows: [], rowCount: 1 }),
     // checkCompliance 会读 SYSTEM 租户扩展词 → 返回空配置
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ config: {} }] }) }) }),
     insert: () => ({

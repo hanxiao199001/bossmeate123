@@ -160,18 +160,36 @@ export interface ProduceVideoOptions {
 /**
  * 9-04 件 2(c): submit 成功后**立刻**落库 + 按预估记账, 然后请求可以随时结束。
  *
- * 落库失败必须抛 —— 一个没进表的 taskUuid 就是下一个孤儿, 而且是查不到的那种:
- * 钱花了、任务在阿里云跑着、我们这边毫无记录。宁可让本次 produce 失败(能重试),
- * 也不要产生一条无人认领的付费任务。
- *
  * 记账放在这里而不是拿到成片时: 钱在 submit 那一刻就已经花了,
  * 阿里云不管我们知不知道结果。"不计入"是把真实支出藏起来。
+ *
+ * ## 🔴 落库失败为什么**不抛**
+ *
+ * 初版写的是"落库失败必须抛 —— 没进表的 taskUuid 就是下一个孤儿"。那个判断是错的:
+ * 走到这里时任务**已经提交并扣费了**, 抛出并不能把钱要回来, 只是**连视频也一起丢掉** ——
+ * 钱花了、没记录、还没成片, 比只是"没记录"严格更糟。
+ *
+ * 所以改成: 落库失败 → 落 incident 大声报 + 继续往下走(inline 那条路仍可能拿到成片)。
+ * 那条 incident 就是这条任务在系统里唯一的痕迹, 因此**不节流**。
+ *
+ * (这个错误是 CI 抓出来的: 14 条既有 DVH 测试因为 produce 被提前打断而红。)
  */
 async function onSubmitted(
   taskUuid: string, tenantId: string, text: string, title: string, templateId: string,
 ): Promise<void> {
   const estimatedCents = estimateDvhCents(text);
-  await recordDvhSubmit({ taskUuid, tenantId, estimatedCents, title, templateId });
+  try {
+    await recordDvhSubmit({ taskUuid, tenantId, estimatedCents, title, templateId });
+  } catch (err) {
+    logger.error({ taskUuid, err: err instanceof Error ? err.message : err }, "dvh.task.submit_record_failed");
+    void recordIncident({
+      kind: "dvh_task_untracked", severity: "error", tenantId,
+      message:
+        `数字人任务已提交并扣费, 但**没能记进 dvh_tasks**(task ${taskUuid}) —— ` +
+        `轮询器不会跟进它, 24 小时后也不会有孤儿告警。这条 incident 是它在系统里唯一的痕迹, 需人工核对。`,
+      detail: { taskUuid, title: title.slice(0, 80), templateId, estimatedCents, err: String(err).slice(0, 300) },
+    });
+  }
   void recordCost({
     tenantId, kind: "dvh",
     amountCents: estimatedCents,
@@ -324,10 +342,20 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
      * ⚠️ 这里**不能**再记全额, 否则同一条视频会被记两笔。
      */
     const actualCents = Math.round((durationMs / 1000) * DVH_CENTS_PER_SECOND);
-    const settledHere = await settleDvhTask({
-      taskUuid, status: "success", videoUrl: rawVideoUrl, durationMs, actualCents,
-      detail: { settledBy: "inline" },
-    });
+    /**
+     * 🔴 落定失败**不抛** —— 与 onSubmitted 同一个理由(见那里的注释):
+     * 成片已经在手上了, 因为记不上账就把它丢掉是本末倒置。
+     * 落不上就当"没落定", 交给轮询器去落 —— 它查一次阿里云也能拿到同样的终态。
+     */
+    let settledHere = false;
+    try {
+      settledHere = await settleDvhTask({
+        taskUuid, status: "success", videoUrl: rawVideoUrl, durationMs, actualCents,
+        detail: { settledBy: "inline" },
+      });
+    } catch (e) {
+      logger.error({ taskUuid, err: e instanceof Error ? e.message : e }, "dvh.task.settle_failed_inline — 交给轮询器落定");
+    }
     if (settledHere) {
       const delta = actualCents - estimateDvhCents(text);
       if (delta !== 0) {
@@ -389,11 +417,18 @@ export async function produceVideo(opts: ProduceVideoOptions): Promise<ProducedV
        * 原来失败路径另记一笔预估, 与 submit 那笔叠加 = 同一条视频记两次。
        * 这里只负责把终态原子落定; 落不上(别人先落定了)就连告警也跳过(单一写者)。
        */
-      const settled = await settleDvhTask({
-        taskUuid: failed.taskUuid, status: "failed",
-        lastStatus: failed.rawStatus, failCode: failed.failCode, failReason: failed.failReason,
-        detail: { settledBy: "inline" },
-      });
+      // 落定失败不抛(同上): 落不上就当没落定, 轮询器会拿到同样的终态。
+      //   但**告警照发** —— 失败这件事本身与记不记得上账无关。
+      let settled = true;
+      try {
+        settled = await settleDvhTask({
+          taskUuid: failed.taskUuid, status: "failed",
+          lastStatus: failed.rawStatus, failCode: failed.failCode, failReason: failed.failReason,
+          detail: { settledBy: "inline" },
+        });
+      } catch (e) {
+        logger.error({ taskUuid: failed.taskUuid, err: e instanceof Error ? e.message : e }, "dvh.task.settle_failed_inline");
+      }
       if (!settled) throw err;
       void recordIncident({
         kind: "dvh_task_failed", severity: "error", tenantId,

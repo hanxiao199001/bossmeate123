@@ -106,6 +106,10 @@ const inserted: any[] = [];
 let sysConfig: any = { config: {} };
 vi.mock("../models/db.js", () => ({
   db: {
+    // 9-04 件 2: dvh_tasks 走 db.execute(原始 SQL)。测试替身缺这一项时,
+    //   recordDvhSubmit 会抛 → 触发 dvh_task_untracked 告警, 把"正常路径零 incident"
+    //   这条不变量弄红。补齐替身, 而不是放宽断言。
+    execute: async () => ({ rows: [], rowCount: 1 }),
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [sysConfig] }) }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
     insert: () => ({ values: (v: any) => ({ returning: async () => { inserted.push(v); return [{ id: "vid-1" }]; } }) }),
@@ -420,11 +424,19 @@ describe("TTS 失败 → 直接失败, 绝不带着静音去提交", () => {
 
 describe("success 只在真拿到成片时报 + 失败落 incident", () => {
   /**
-   * 孤儿任务 = 已提交(**已扣费**)但取不回成片 —— 四种失败里最贵的一种。
-   * 8-12 起同样不退占位样片；但 incident 与 taskUuid 这两条不变量必须保住：
-   * 那条已付费的成片还能凭 taskUuid 去阿里云捞回，丢了 taskUuid 就等于把钱扔了。
+   * 🔴 9-04 件 2 改了这条的语义, 断言随之更新(不是加进基线)。
+   *
+   * 【原断言】请求内查不到成片 → 当场落 dvh_paid_task_orphaned, 文案「可凭 taskUuid 去阿里云捞回」。
+   * 【为什么改】9-03 逐个查了那 10 条"孤儿"的 taskUuid, 把原文案**证伪**了:
+   *     7 条 status=4 / 10010002   1 条 status=4 / 10050005
+   *     1 条 status=3 其实成功了     1 条 status=6 结果已过期
+   *   10 条里只有 1 条真有成片可捞, 8 条阿里云早已明确判失败 —— **捞无可捞**,
+   *   那句话把损失说成了待办。而且"请求内查不到"≠"任务失败":
+   *   9 条阿里云都有终态, 只是我们的 10 分钟轮询先放弃了。
+   * 【现语义】请求内放弃 → 不再当场判孤儿, 只记日志, 任务交给轮询器跟到 24 小时。
+   *   真正的孤儿判定在 dvh-poller.listOverdueDvhTasks(24h 内拿不到任何终态)。
    */
-  it("已扣费却取不回成片(孤儿任务): 不产占位样片, 但 incident 必须带 taskUuid 供捞回", async () => {
+  it("已扣费却取不回成片: 不产占位样片, 不当场判孤儿(交给轮询器跟 24h)", async () => {
     queryMock.mockRejectedValue(new Error("query timeout"));
     const app = await buildApp();
     await app.inject({ method: "POST", url: "/dvh-from-text", payload: { text: CLEAN, templateId: MALE_KEY } });
@@ -433,11 +445,12 @@ describe("success 只在真拿到成片时报 + 失败落 incident", () => {
     expect(meta.placeholder).toBeUndefined();
     expect(meta.fallbackReason).toBeUndefined();
     expect(meta.narrationText).toBe(CLEAN);
-    // ★ 钱花了没拿到货 —— 必须上简报, 且带上 taskUuid(还能去阿里云捞回成片)
+    // ★ 不再在请求内落孤儿告警 —— 那是轮询器 24 小时后的职责
     const inc = incidentSpy.mock.calls.map((c) => c[0] as any).find((a) => a.kind === "dvh_paid_task_orphaned");
-    expect(inc).toBeTruthy();
-    expect(inc.detail.taskUuid).toBe("t-1");
-    // ★ 不许叫 success
+    expect(inc).toBeUndefined();
+    // ★ 但必须留下"交给轮询器"的痕迹, 不能悄无声息
+    expect(logSpy.info.mock.calls.some((c) => String(c[1]).startsWith("dvh.inline_query_gave_up"))).toBe(true);
+    // ★ 仍然不许叫 success
     expect(logSpy.info.mock.calls.some((c) => String(c[1]) === "dvh.text.success")).toBe(false);
   });
 
