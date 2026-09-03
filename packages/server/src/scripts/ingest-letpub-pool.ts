@@ -3,7 +3,7 @@
  *
  * 用法 (prod):
  *   # 1. 先 ingest (列表爬, 请求少, 快):
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && node dist/scripts/ingest-letpub-pool.js'
  *
  *   # 2. 再 enrich (交叉验证升 confidence, 慢 + 限速):

@@ -2,7 +2,7 @@
  * PR #181 — backfill journals.website (用 Crossref API, 免费无限额).
  *
  * 用法:
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/backfill-website.js'
  */

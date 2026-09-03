@@ -2,7 +2,7 @@
  * PR #178 — 月度期刊池刷新 + 异常值检测.
  *
  * 用法 (prod 手动):
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/refresh-journals-pool.js'
  *

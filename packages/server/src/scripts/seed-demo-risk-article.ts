@@ -5,7 +5,7 @@
  * 需要一篇含营销诱导词 (扫码免费领 / 加微信 / 100% 保证) 的 article 才能触发 modal。
  *
  * 用法 (prod):
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/seed-demo-risk-article.js'
  *

@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # PR-H: 部署目标可配置 — 迁移到老板新机时只需 export BOSSMATE_DEPLOY_SERVER=ubuntu@xxx
-SERVER="${BOSSMATE_DEPLOY_SERVER:-ubuntu@119.91.52.13}"
+SERVER="${BOSSMATE_DEPLOY_SERVER:?需先 export BOSSMATE_DEPLOY_SERVER=ubuntu@<部署机地址>}"
 REMOTE_PATH="${BOSSMATE_REMOTE_PATH:-/home/projects/bossmate}"
 BRANCH="main"
 START=$(date +%s)

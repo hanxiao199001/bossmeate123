@@ -2,7 +2,7 @@
  * PR #178 — 60 天内容保留 + 自动清理.
  *
  * 用法 (prod 手动 dry-run):
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/cleanup-old-contents.js --dry-run'
  *

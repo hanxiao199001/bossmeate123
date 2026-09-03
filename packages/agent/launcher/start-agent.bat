@@ -89,7 +89,7 @@ if exist "%USERPROFILE%\.bossmate-agent\config.json" goto run_section
 :pair_loop
 rem ===== pair (no config, or after revoke cleared config) =====
 
-if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://119.91.52.13 : "
+if "!SERVER_URL!"=="" set /p "SERVER_URL=Server URL e.g. http://<服务器地址> : "
 
 if "!PAIR_CODE!"=="" set /p "PAIR_CODE=Pairing code 6 digits from the web : "
 

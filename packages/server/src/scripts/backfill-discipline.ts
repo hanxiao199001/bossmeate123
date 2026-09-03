@@ -2,7 +2,7 @@
  * PR #180 — 回填 journals.discipline (从 DB jcr_full + journal name 推断, 0 API 调用).
  *
  * 用法:
- *   ssh ubuntu@119.91.52.13 'cd /home/projects/bossmate/packages/server && \
+ *   ssh "$BOSSMATE_DEPLOY_SERVER" 'cd /home/projects/bossmate/packages/server && \
  *     set -a && source ../../.env && set +a && \
  *     node dist/scripts/backfill-discipline.js'
  *
