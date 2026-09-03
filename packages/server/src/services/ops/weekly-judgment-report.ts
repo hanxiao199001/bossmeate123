@@ -34,6 +34,7 @@ export type OperatorAction =
   /** 需要开发介入 */
   | "提工单给开发";
 
+import { PRICE_CORRECTION_NOTE } from "./daily-briefing.js";
 import {
   listStaleUnmergedBranches,
   renderUnmergedBranches,
@@ -604,6 +605,8 @@ function renderText(d: {
       : `  本周人工标注 ${d.annotated} 条（一致率趋势待 Golden Set 累积后给出）。`,
   );
   L.push("");
+  // 9-03 单价校正 —— 判据与说明见 daily-briefing.ts 的 PRICE_CORRECTION_NOTE
+  L.push(PRICE_CORRECTION_NOTE);
   L.push(FOOTER);
   return L.join("\n");
 }

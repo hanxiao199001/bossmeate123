@@ -184,10 +184,15 @@ export class OpenAICompatibleProvider implements AIProvider {
       usage: {
         prompt_tokens: number;
         completion_tokens: number;
+        // 9-03: 百炼/OpenAI 兼容口径的缓存命中量。两种字段名都见过, 都认。
+        prompt_tokens_details?: { cached_tokens?: number };
+        prompt_cache_hit_tokens?: number;
       };
     };
 
     const content = data.choices[0]?.message?.content || "";
+    const cachedInputTokens =
+      Number(data.usage?.prompt_tokens_details?.cached_tokens ?? data.usage?.prompt_cache_hit_tokens ?? 0) || 0;
 
     logger.info(
       {
@@ -195,6 +200,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         model: data.model,
         inputTokens: data.usage.prompt_tokens,
         outputTokens: data.usage.completion_tokens,
+        cachedInputTokens,
       },
       "调用成功"
     );
@@ -204,6 +210,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: data.model,
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
+      cachedInputTokens,
       finishReason:
         data.choices[0]?.finish_reason === "stop" ? "stop" : "max_tokens",
     };

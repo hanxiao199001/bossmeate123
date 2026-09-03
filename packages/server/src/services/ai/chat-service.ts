@@ -186,6 +186,12 @@ export interface ChatResponse {
   inputTokens: number;
   outputTokens: number;
   /**
+   * 9-03: 命中输入缓存的 token 数，**已含在 inputTokens 内**。
+   * 缓存单价是未命中的 1/12（¥1 vs ¥12 每 1M），不区分会把成本高估。
+   * provider 未返回时为 undefined —— 记账侧按 0 处理（全部按未命中计价，不给静默折扣）。
+   */
+  cachedInputTokens?: number;
+  /**
    * 7-28 ②b: 这次调用**是否真的拿到了模型输出**。
    *   false = content 是系统兜底文案(主备全挂/无可用模型), 不是模型说的话。
    * 不想改控制流的调用点可以只读它做判断, 不必再各自抄一份兜底文案字符串
@@ -216,6 +222,9 @@ interface OpenAICompatResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    // 9-03: 缓存命中量。百炼与 DeepSeek 两种字段名都见过, 都认。
+    prompt_tokens_details?: { cached_tokens?: number };
+    prompt_cache_hit_tokens?: number;
   };
 }
 
@@ -277,7 +286,7 @@ async function callOpenAICompatible(
   maxTokens: number,
   timeoutMs: number = env.AI_REQUEST_TIMEOUT_MS,
   temperature: number = 0.7
-): Promise<{ content: string; inputTokens: number; outputTokens: number; finishReason: "stop" | "max_tokens" | "error" }> {
+): Promise<{ content: string; inputTokens: number; outputTokens: number; cachedInputTokens?: number; finishReason: "stop" | "max_tokens" | "error" }> {
   return withRetry(async () => {
     const { controller, cleanup } = createTimeoutController({
       timeoutMs,
@@ -327,6 +336,9 @@ async function callOpenAICompatible(
       const content = data.choices?.[0]?.message?.content || "";
       const inputTokens = data.usage?.prompt_tokens || 0;
       const outputTokens = data.usage?.completion_tokens || 0;
+      // 9-03: 缓存命中的 token 单价是未命中的 1/12(¥1 vs ¥12 每 1M), 不区分就会把成本高估。
+      const cachedInputTokens =
+        Number(data.usage?.prompt_tokens_details?.cached_tokens ?? data.usage?.prompt_cache_hit_tokens ?? 0) || 0;
       /**
        * 🔴 8-13 补取 finish_reason。此前整条 skills 链路根本没有这个信号 ——
        * `routed-provider` 硬编码 "stop", 于是日志里的 finishReason 恒为 "stop",
@@ -338,7 +350,7 @@ async function callOpenAICompatible(
       const finishReason: "stop" | "max_tokens" | "error" =
         rawFinish === "length" ? "max_tokens" : rawFinish === "stop" ? "stop" : rawFinish ? "error" : "stop";
 
-      return { content, inputTokens, outputTokens, finishReason };
+      return { content, inputTokens, outputTokens, cachedInputTokens, finishReason };
     } finally {
       cleanup();
     }
@@ -356,7 +368,7 @@ async function executeAICall(
   _systemPrompt: string | undefined,
   timeoutMs: number,
   overrides?: { temperature?: number; maxTokens?: number }
-): Promise<{ content: string; inputTokens: number; outputTokens: number; finishReason: "stop" | "max_tokens" | "error" }> {
+): Promise<{ content: string; inputTokens: number; outputTokens: number; cachedInputTokens?: number; finishReason: "stop" | "max_tokens" | "error" }> {
   return await callOpenAICompatible(
     provider.baseUrl,
     provider.apiKey,
@@ -436,6 +448,7 @@ export async function chat(request: ChatRequest): Promise<ChatResponse> {
     provider: response.provider,
     inputTokens: response.inputTokens,
     outputTokens: response.outputTokens,
+    cachedTokens: response.cachedInputTokens,
   });
 
   return response;
@@ -504,6 +517,7 @@ async function chatWithSerialMode(
       provider: provider.name,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      cachedInputTokens: result.cachedInputTokens,
       finishReason: result.finishReason,
       ok: true,
     };
@@ -532,6 +546,7 @@ async function chatWithSerialMode(
           provider: fallback.name,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
+          cachedInputTokens: result.cachedInputTokens,
           finishReason: result.finishReason,
           ok: true,
         };
@@ -655,6 +670,7 @@ async function chatWithRaceMode(
         provider: winner.provider.name,
         inputTokens: winner.result.inputTokens,
         outputTokens: winner.result.outputTokens,
+        cachedInputTokens: winner.result.cachedInputTokens,
         finishReason: winner.result.finishReason,
         ok: true,
       };
@@ -691,6 +707,7 @@ async function chatWithRaceMode(
           provider: loser.provider.name,
           inputTokens: loser.result.inputTokens,
           outputTokens: loser.result.outputTokens,
+          cachedInputTokens: loser.result.cachedInputTokens,
           ok: true,
         };
       } else {

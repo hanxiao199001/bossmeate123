@@ -113,6 +113,21 @@ export function worstLevel(items: Array<{ level: BriefItemLevel }>): BriefLevel 
   return worst;
 }
 
+/**
+ * 🔴 9-03 单价校正：历史成本数字**不回填**，只加一句口径说明。
+ *
+ * `deepseek-v4-pro` 的单价此前记的是 ¥3.1/¥6.2（7-26 按官网美元价折汇率**推算**的），
+ * 真实账单是 ¥12/¥24 —— **低估 3.9 倍**。
+ *
+ * 为什么不回填：回填要重算近 1.8 万条 ledger，而那些数字已经进过 30+ 份简报和周报，
+ * 改了之后历史报表与当时推送的内容对不上，反而更难追。
+ * 宁可留一句"9-03 前的数低估 3.9×"让读的人自己换算 ——
+ * **一个明确标注的错数，比一个悄悄改对的数更可用**（同一批人可能还留着旧截图）。
+ */
+export const PRICE_CORRECTION_NOTE =
+  "⚠️ 成本口径: 9-03 前的历史成本按旧单价记账, **低估约 3.9 倍**"
+  + "(deepseek-v4-pro 记 ¥3.1/¥6.2, 实际 ¥12/¥24 每 1M token)。跨 9-03 比较需换算。";
+
 function yuan(cents: number): string {
   return (cents / 100).toFixed(2);
 }
@@ -644,6 +659,7 @@ export function renderBriefingText(
     L.push(`阿里云账户余额: ${platform.supplier.aliyunAvailableYuan.toFixed(2)} 元`);
   }
   L.push("");
+  L.push(PRICE_CORRECTION_NOTE);
   L.push("详情打开「今日驾驶舱」。本简报每天自动发送一次(正常也发, 没收到=简报本身出问题了)。");
 
   return L.join("\n");
