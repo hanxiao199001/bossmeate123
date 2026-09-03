@@ -80,14 +80,19 @@ function reportAiCallFailure(err: unknown, ctx: { provider: string; model: strin
        * 8-16 单日 154 次 400 Arrearage，`ops_incidents` **零条**，简报一个字没提。
        */
       if (isQuotaLikeError(0, msg)) {
+        // 8-26: 原来这里把「阿里云百炼」**硬编码**在文案里。当时恰好是对的(DEEPSEEK_VIA=bailian),
+        //   但它是碰巧对, 不是算出来对 —— 一旦切回 official 就会稳定地把人指向错的账户。
+        //   现在由 describeQuotaAction 从 DEEPSEEK_VIA 推出扣费账户, 两种配置下都说得对。
+        const { describeQuotaAction } = await import("./llm-endpoints.js");
+        const billing = describeQuotaAction(ctx.provider);
         await recordIncidentThrottled({
           kind: "llm_quota",
           severity: "error",
           // 红线 #13：只写事实 + 可执行动作，不猜"大概是谁忘了充"
-          message: `LLM 账户额度不可用: ${ctx.provider}/${ctx.model} — 调用被拒。需去阿里云百炼充值后自动恢复。原文: ${msg.slice(0, 160)}`,
+          message: `${billing.label}账户额度不可用 — 调用被拒，${billing.action}。命中链路: ${ctx.provider}/${ctx.model}。原文: ${msg.slice(0, 160)}`,
           tenantId: ctx.tenantId ?? null,
-          detail: { provider: ctx.provider, model: ctx.model, taskType: ctx.taskType, raw: msg.slice(0, 400) },
-        }, { key: `llm_quota:${ctx.provider}:${ctx.model}` });
+          detail: { billingAccount: billing.account, provider: ctx.provider, model: ctx.model, taskType: ctx.taskType, raw: msg.slice(0, 400) },
+        }, { key: `llm_quota:${billing.account}:${ctx.provider}:${ctx.model}` });
         return;
       }
 

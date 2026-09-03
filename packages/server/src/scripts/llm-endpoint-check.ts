@@ -12,8 +12,10 @@
  *   DEEPSEEK_VIA=bailian   # 配合 QWEN_API_KEY = 百炼控制台 API-KEY
  */
 import {
+  billingAccountLabel,
   checkLlmEndpointConfig,
   getLlmEndpoint,
+  type BillingAccount,
   type LlmEndpoint,
   type LlmProviderName,
 } from "../services/ai/llm-endpoints.js";
@@ -57,7 +59,7 @@ async function probe(ep: LlmEndpoint): Promise<string> {
  * 成本：max_tokens=1 的一次调用，可忽略；换来的是"能不能真的干活"这个答案。
  * 不计费探活回答的是"地址和 key 对不对"，这两个问题不是一回事。
  */
-async function probeBilled(ep: { baseUrl: string; apiKey: string }, model: string): Promise<string> {
+async function probeBilled(ep: { baseUrl: string; apiKey: string; billingAccount: BillingAccount }, model: string): Promise<string> {
   try {
     const res = await fetch(`${ep.baseUrl}/chat/completions`, {
       method: "POST",
@@ -68,7 +70,8 @@ async function probeBilled(ep: { baseUrl: string; apiKey: string }, model: strin
     if (res.ok) return "✅ 计费调用通(账户可用)";
     const body = await res.text();
     if (/arrearage|overdue|欠费|in good standing/i.test(body)) {
-      return `🔴 **账户欠费** —— 去阿里云百炼充值, 充完自动恢复。原文: ${body.slice(0, 140)}`;
+      // 8-26: 账户名不许硬编码 —— 探的是哪条线路就说哪条线路的扣费账户(见 describeQuotaAction 注释)
+      return `🔴 **${billingAccountLabel(ep.billingAccount)}账户欠费** —— 去该账户充值, 充完自动恢复。原文: ${body.slice(0, 140)}`;
     }
     return `❌ ${res.status}: ${body.slice(0, 160)}`;
   } catch (e) {
