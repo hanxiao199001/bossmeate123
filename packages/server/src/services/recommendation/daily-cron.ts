@@ -905,7 +905,18 @@ async function preflightJournalPool(
     return null;
   }
   try {
-    // 今天真要排的 (定位 × 学科) 名额数 —— 与下面主循环 `discs[i % discs.length]` 同一个分配算法
+    /**
+     * 今天真要排的 (定位 × 学科) 名额数 —— 必须与主循环**同一个**分配函数。
+     *
+     * 8-24: 原来这里写的是 `discs[i % discs.length]`，注释还写着「与下面主循环同一个
+     * 分配算法」—— 而主循环 8-17 已改成 `disciplineForSlot()`（按日轮转），**那句注释
+     * 从那天起就是假的**。实测两个时期都没产生可观测差异（v2 返回展开多重集，
+     * `count === discs.length` 时 `i % len` 恰好完整遍历一遍；v2 之前那个列表全是
+     * education，两种算法同解），所以这不是事故修复，是**消除潜在分歧**：
+     * 手配路径（`count=4` / `discs=13`）下两者会给出不同的学科集合。
+     *
+     * 🔴 规矩：预判与执行必须调**同一个函数**，不许各写一份"应该一样"的实现。
+     */
     const planned: Array<{ scope: "domestic" | "international"; discipline: string; slots: number }> = [];
     for (const [type, cfg] of Object.entries(cq)) {
       if (type !== "domestic" && type !== "international") continue;
@@ -914,7 +925,7 @@ async function preflightJournalPool(
       const discs = cfg.disciplines.length ? cfg.disciplines : ALL_DISC_CODES;
       const per = new Map<string, number>();
       for (let i = 0; i < count; i++) {
-        const d = discs[i % discs.length];
+        const d = disciplineForSlot(discs, i);
         per.set(d, (per.get(d) ?? 0) + 1);
       }
       for (const [discipline, slots] of per) planned.push({ scope: type, discipline, slots });

@@ -188,6 +188,76 @@ async function countDistributableStock(tenantId: string): Promise<number> {
 }
 
 /**
+ * 🔴 8-24：`draft_shortfall` 从**水位型**改成**趋势型**。
+ *
+ * ## 为什么必须改判据，而不是再改一次文案
+ *
+ * 实测：近 30 天里它**告警 27 天、跨度 27 天 —— 一天没停过**。
+ *
+ * ▎ 一个每天都成立的告警，就是常数判据 ——
+ * ▎ 而我们自己的规则写着：命中率 ≈100% = 零判别力。
+ *
+ * 8-22 我们重写过它的文案（点名到号 + 先查存货），让它说得**更准**了。
+ * 但**准和有用是两回事**：它现在准确地、每天一次地，告诉我们一件永远为真的事。
+ *
+ * **改文案没用，27 天后它还在天天喊。** 根因是结构性的：
+ * 保底 14 篇/天 vs 实际进箱 9.7 篇/天，两个数不匹配它就会永远响。
+ *
+ * ▎ 当一个指标长期处于告警状态时，该报的是**变化**，不是**水位**。
+ * ▎   水位型「今天未达保底」   → 每天都成立 → 零信息
+ * ▎   趋势型「连续 3 天恶化」  → 只在变坏时响 → 有信息
+ *
+ * ## 三个触发条件
+ *
+ * ```
+ * ① 缺口比上次扩大            恶化
+ * ② 某个号从达标变成不达标      新增
+ * ③ 连续 QUIET_DAYS 天无变化 → 每周汇总报一次   —— 降频，不静默
+ * ```
+ *
+ * 🔴 **③ 是关键**：长期未解决的问题**不能完全消失**，否则会被彻底遗忘。
+ * 从每日降级为每周，**保留存在感但不再消耗每天的注意力**。
+ */
+export const SHORTFALL_QUIET_DAYS = 7;
+
+export interface ShortfallSnapshot { count: number; ids: string[] }
+
+/** 取上一条 draft_shortfall 的快照，用于对比。查不到就返回 null（首次运行/表刚建）。 */
+async function lastShortfallSnapshot(tenantId: string): Promise<{ snap: ShortfallSnapshot; ageDays: number } | null> {
+  try {
+    const rows = (await db.execute(sql`
+      SELECT detail, created_at FROM ops_incidents
+      WHERE kind = 'draft_shortfall' AND tenant_id = ${tenantId}::uuid
+      ORDER BY created_at DESC LIMIT 1
+    `) as unknown as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+    const r = rows[0];
+    if (!r) return null;
+    const after = ((r.detail as { shortfallsAfter?: Array<{ accountId?: string }> } | null)?.shortfallsAfter) ?? [];
+    const ageDays = Math.floor((Date.now() - new Date(String(r.created_at)).getTime()) / 86400_000);
+    return { snap: { count: after.length, ids: after.map((x) => String(x.accountId ?? "")).sort() }, ageDays };
+  } catch (err) {
+    // 🔴 查不到上次状态 ≠ 没有缺口。查询挂了就退回"报"，宁可多报一次也不静默
+    //   （红线 #23：检查器自己挂了不许当作"没问题"）。
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "shortfall 趋势对比读不到上次快照, 本次按报处理");
+    return null;
+  }
+}
+
+/** 判定这次要不要报，以及为什么。 */
+export function shouldReportShortfall(
+  now: ShortfallSnapshot,
+  prev: { snap: ShortfallSnapshot; ageDays: number } | null,
+): { report: boolean; trend: "worse" | "new_account" | "weekly_digest" | "first" | "unchanged" } {
+  if (!prev) return { report: true, trend: "first" };
+  if (now.count > prev.snap.count) return { report: true, trend: "worse" };
+  const prevSet = new Set(prev.snap.ids);
+  if (now.ids.some((id) => !prevSet.has(id))) return { report: true, trend: "new_account" };
+  // 无变化：每 QUIET_DAYS 天汇总一次，保留存在感
+  if (prev.ageDays >= SHORTFALL_QUIET_DAYS) return { report: true, trend: "weekly_digest" };
+  return { report: false, trend: "unchanged" };
+}
+
+/**
  * 「某号长期零供给」独立告警。8-22 加（老韩拍板拆分）。
  *
  * 为什么必须与 `draft_shortfall` 分开：
@@ -783,15 +853,31 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
       const starved = shortAfter.filter((s) => s.assigned === 0);
       // ② 先查存货：可发池里**过了闸、没推过**的还有多少
       const availableStock = await countDistributableStock(tenantId);
+      // 8-24 趋势判据：水位不报，只报变化（见 shouldReportShortfall 的注释）
+      const nowSnap: ShortfallSnapshot = {
+        count: shortAfter.length,
+        ids: shortAfter.map((x) => String(x.accountId ?? "")).sort(),
+      };
+      const prevSnap = await lastShortfallSnapshot(tenantId);
+      const trendVerdict = shouldReportShortfall(nowSnap, prevSnap);
+      if (!trendVerdict.report) {
+        logger.info({ tenantId, count: nowSnap.count, prevAgeDays: prevSnap?.ageDays },
+          "draft_shortfall 与上次无变化且未到汇总周期, 本次不报(趋势型判据)");
+      } else {
+      const trendPrefix =
+        trendVerdict.trend === "worse" ? "【缺口扩大】" :
+        trendVerdict.trend === "new_account" ? "【新增未达标号】" :
+        trendVerdict.trend === "weekly_digest" ? `【${SHORTFALL_QUIET_DAYS}天汇总·状态未变】` : "";
       reportDistIncident({
         kind: "draft_shortfall",
-        severity: starved.length > 0 ? "error" : "warn",
+        // 汇总型降一级：状态没变就不该是 error（那会让人以为出了新事）
+        severity: trendVerdict.trend === "weekly_digest" ? "warn" : (starved.length > 0 ? "error" : "warn"),
         tenantId,
         // 🔴 8-22 点名到号。**这是 25 天失明的直接病灶**：
         //   号名与 assigned:0 一直写在 detail 里、每天都在，
         //   但人读的这行 message 从来没提过名字，只说"N/7 个号未达保底"。
         //   数据不缺，缺的是把它放到人会读的那一行 —— 写进 detail 不等于报出来。
-        message: `${shortAfter.length}/${accounts.length} 个公众号未达每日保底(${target}篇)：` +
+        message: trendPrefix + `${shortAfter.length}/${accounts.length} 个公众号未达每日保底(${target}篇)：` +
           shortAfter.map((x) => `${x.accountName ?? x.accountId}(${x.assigned}/${target})`).join("、") +
           (starved.length > 0 ? `; 其中 ${starved.length} 个号今日 0 篇` : "") +
           `${report.remedy?.attempted ? `; 已自动补救(放宽到 ${report.remedy.windowDays} 天窗口)补进 ${report.remedy.pushed ?? 0} 篇` : ""}` +
@@ -802,8 +888,11 @@ export async function distributeDraftsForTenant(tenantId: string): Promise<Draft
           poolSize: report.poolSize, unmatched: unmatchedCount,
           shortfallsBefore: shortBefore, shortfallsAfter: shortAfter,
           remedy: report.remedy ?? null,
+          trend: trendVerdict.trend,
+          prevCount: prevSnap?.snap.count ?? null,
         },
       });
+      }
     } else {
       logger.info({ tenantId, remedy: report.remedy }, "7-28 ①c 缺口已被补救轮填平, 不告警");
     }
