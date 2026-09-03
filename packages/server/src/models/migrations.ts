@@ -948,4 +948,32 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_rescore_audits_content ON content_rescore_audits (content_id);
     `,
   },
+  {
+    version: "042_ops_backups",
+    description:
+      "8-26 备份台账。此前生产**零自动备份**: ~/db-backups 只有 7-19/7-20 两个手打的 pre-migration " +
+      "dump(盘点当天已 37 天前), 与数据库同在 /dev/vda2 一块盘上, 而每日 03:30 的保留期清理照常删 60 天前内容。" +
+      "为什么要一张表而不是只落 incident: incident 记的是**失败**, 这张表要回答的是" +
+      "「最近一次成功是什么时候」—— 这两个问题在『任务压根没跑』时答案完全不同。" +
+      "一个从不执行的备份任务不会产生任何失败 incident, 只有拿成功时间戳去比对当前时间才看得见它。" +
+      "(同一个道理 CLAUDE.md 红线 #14 已经写过: 可观测体系只能看见以失败形态存在的失败。)" +
+      "verified_bytes 存的是**上传后回查到的对象大小**, 不是本地文件大小 —— 只有回查过才算传上去了。" +
+      "退回执行: DROP TABLE ops_backups。",
+    sql: `
+      CREATE TABLE IF NOT EXISTS ops_backups (
+        id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        kind           VARCHAR(24) NOT NULL,
+        status         VARCHAR(16) NOT NULL,
+        remote_path    TEXT,
+        local_bytes    BIGINT,
+        verified_bytes BIGINT,
+        sha256         VARCHAR(64),
+        duration_ms    INTEGER,
+        detail         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ops_backups_kind_time ON ops_backups (kind, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ops_backups_time ON ops_backups (created_at DESC);
+    `,
+  },
 ];

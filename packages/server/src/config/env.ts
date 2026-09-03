@@ -226,6 +226,26 @@ const envSchema = z.object({
   OSS_ACCESS_KEY: z.string().optional(),
   OSS_SECRET_KEY: z.string().optional(),
 
+  // ============ 备份 (8-26) ============
+  // 背景: 8-26 盘点发现生产**零自动备份** —— ~/db-backups 里只有 7-19/7-20 两个手打的
+  //   pre-migration dump(37 天前), 且与数据库在同一块盘上; 而每日 03:30 有个删 60 天前内容的
+  //   清理任务在跑。删错不可逆, 没有任何东西兜着。
+  BACKUP_ENABLED: z.string().default("true").transform((v) => v === "true"),
+  /** 每日备份时刻(BJ)。默认 02:00 —— 必须早于 03:30 的保留期清理, 否则备的是删完的库 */
+  BACKUP_CRON_HOUR: z.coerce.number().int().min(0).max(23).default(2),
+  BACKUP_CRON_MINUTE: z.coerce.number().int().min(0).max(59).default(0),
+  /** 保留天数 —— 超过这个天数的备份自动清理 */
+  BACKUP_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  /** OSS 上的存放前缀 */
+  BACKUP_OSS_PREFIX: z.string().default("_backups"),
+  /** 每周恢复演练(默认周一 04:00 BJ)。没验证过能恢复的备份不算备份 */
+  BACKUP_DRILL_ENABLED: z.string().default("true").transform((v) => v === "true"),
+  BACKUP_DRILL_CRON: z.string().default("0 4 * * 1"),
+  /** 备份"过期未跑"的告警阈值(小时)。日备 + 6h 宽限 = 30h */
+  BACKUP_STALE_HOURS: z.coerce.number().int().min(2).max(720).default(30),
+  /** 演练"过期未跑"的告警阈值(天)。周演练 + 1d 宽限 */
+  BACKUP_DRILL_STALE_DAYS: z.coerce.number().int().min(1).max(90).default(8),
+
   // TTS 配音
   //   siliconflow = SiliconFlow 托管 CosyVoice2; dashscope = 阿里云百炼 qwen-tts(复用 QWEN_API_KEY, 同一账号好核算成本)。6-22 接入。
   TTS_PROVIDER: z.enum(["aliyun", "azure", "siliconflow", "dashscope"]).default("aliyun"),

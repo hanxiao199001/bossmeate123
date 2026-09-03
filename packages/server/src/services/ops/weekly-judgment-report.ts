@@ -34,6 +34,14 @@ export type OperatorAction =
   /** 需要开发介入 */
   | "提工单给开发";
 
+import { PRICE_CORRECTION_NOTE } from "./daily-briefing.js";
+import {
+  listStaleUnmergedBranches,
+  renderUnmergedBranches,
+  STALE_BRANCH_DAYS,
+  type UnmergedBranchesResult,
+} from "./unmerged-branches.js";
+
 export interface WeeklyTodo {
   /** 一句话说清是什么问题 */
   what: string;
@@ -118,6 +126,15 @@ export interface WeeklyReport {
    * 持续上涨 = 人是瓶颈；稳定 = 正常水位。让它每周自己报，不用人去查。
    */
   backlog: { total: number; stale7d: number; addedThisWeek: number };
+  /**
+   * ⑤ 未部署改动 —— 9-01 加(老韩)。
+   *
+   * 8-26→9-01 一周内「写了没上线」复现三次, 其中一次(主备模型共享百炼账户)
+   * 代价是 370 篇内容。而这件事此前**没有任何出口**: 分支躺在远端, 不产生失败信号,
+   * 没有任何报表会提起它 —— 一个没上线的修复不会报错, 它只是不存在。
+   * 判据与取数见 ops/unmerged-branches.ts(含"取数失败不许当成没问题"那条)。
+   */
+  unmergedBranches: UnmergedBranchesResult;
   /**
    * ④ 关键词分数分布 —— 8-18 加。
    *
@@ -308,8 +325,12 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     /* 读不到 → 保持 null, 那一行不出现 */
   }
 
+  // 9-01: 未部署改动。取数失败会以 error 形态返回, 由 renderUnmergedBranches 原样报出来 ——
+  //   静默当成"没有未部署改动"正是这一节要治的病。
+  const unmergedBranches = await listStaleUnmergedBranches(now);
+
   const todos = pickTodos({ checkers, annotated, health, backlog });
-  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, testBaseline, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, testBaseline, unmergedBranches, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -327,6 +348,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     backlog,
     keywordScore,
     testBaseline,
+    unmergedBranches,
     todos,
     text,
   };
@@ -440,6 +462,7 @@ function renderText(d: {
     distributedUnqualified: number;
   };
   backlog: { total: number; stale7d: number; addedThisWeek: number };
+  unmergedBranches: UnmergedBranchesResult;
   /**
    * ④ 关键词分数分布 —— 8-18 加。
    *
@@ -571,6 +594,10 @@ function renderText(d: {
   }
   L.push("");
 
+  L.push(`■ 未部署改动（超过 ${STALE_BRANCH_DAYS} 天未合入 main）`);
+  L.push(...renderUnmergedBranches(d.unmergedBranches));
+  L.push("");
+
   L.push("■ 系统分 vs 人工");
   L.push(
     d.annotated === 0
@@ -578,6 +605,8 @@ function renderText(d: {
       : `  本周人工标注 ${d.annotated} 条（一致率趋势待 Golden Set 累积后给出）。`,
   );
   L.push("");
+  // 9-03 单价校正 —— 判据与说明见 daily-briefing.ts 的 PRICE_CORRECTION_NOTE
+  L.push(PRICE_CORRECTION_NOTE);
   L.push(FOOTER);
   return L.join("\n");
 }

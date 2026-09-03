@@ -246,6 +246,40 @@ export function getBillingAccount(provider: string): BillingAccount {
   return "deepseek";
 }
 
+/** 账户的人话名字 —— 告警里要让人知道去哪个控制台充钱 */
+const BILLING_ACCOUNT_LABEL: Record<BillingAccount, string> = {
+  bailian: "阿里云百炼",
+  deepseek: "DeepSeek 官方",
+};
+
+/**
+ * 欠费告警专用: 「该去哪充值」的一句话。
+ *
+ * 🔴 8-26: 这是 8-17「欠费三层失明」的**第四层** —— 认出来了、记了 incident、简报也提了,
+ *   但那句话把人指向了**错误的账户**。
+ *
+ *   实况: `DEEPSEEK_VIA=bailian` 早就打开了, deepseek-v4-pro 跑在百炼上、扣的是阿里云的钱;
+ *   而告警文案取的是 `this.name`(路由名)。于是 8-25 阿里云账户欠费同时打死 LLM/TTS/DVH 三条线,
+ *   告警却在喊「deepseek 返回额度不足/欠费」—— 排查的人跑去看 DeepSeek 官方账户,
+ *   而那个账户从 7-26 起就没在用了。错误正文里明明带着 help.aliyun.com 的链接。
+ *
+ *   `BillingAccount` 这个类型 7-26 就建好了, 只是没人把它接到告警上。
+ *   **建了模型不等于用了模型**: 「路由名」和「扣谁的钱」是两个实体, 欠费告警必须说后者。
+ *
+ *   provider/model 仍然保留 —— 排查要靠它定位链路 —— 但它只能出现在「哪条链路」的位置,
+ *   不许出现在「去哪充值」的位置。
+ */
+export function describeQuotaAction(provider: string): { account: BillingAccount; label: string; action: string } {
+  const account = getBillingAccount(provider);
+  const label = BILLING_ACCOUNT_LABEL[account];
+  return { account, label, action: `需去${label}账户充值后自动恢复` };
+}
+
+/** 已知扣费账户时的人话名字(自检脚本等已经拿到 LlmEndpoint 的场合直接用这个) */
+export function billingAccountLabel(account: BillingAccount): string {
+  return BILLING_ACCOUNT_LABEL[account];
+}
+
 /** 一行人话描述当前 LLM 接入点, 给启动日志/自检脚本用(不打印 key) */
 export function describeLlmEndpoints(): string {
   const { deepseek, qwen } = resolveLlmEndpoints(currentConfig());

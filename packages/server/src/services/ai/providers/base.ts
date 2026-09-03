@@ -21,6 +21,12 @@ export interface ChatCompletionResponse {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * 命中输入缓存的 token 数，**已包含在 inputTokens 内**（与 OpenAI/百炼口径一致）。
+   * 9-03 加：账单里缓存是独立计费项（¥1/1M vs ¥12/1M），不区分就会把成本高估。
+   * provider 没返回这个字段时为 undefined —— 记账侧按 0 处理，即全部按未命中计价。
+   */
+  cachedInputTokens?: number;
   finishReason: "stop" | "max_tokens" | "error";
 }
 
