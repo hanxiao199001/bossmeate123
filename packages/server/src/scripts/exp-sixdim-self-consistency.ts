@@ -38,6 +38,7 @@ import { resolve } from "path";
 import { sql } from "drizzle-orm";
 import { db } from "../models/db.js";
 import { logger } from "../config/logger.js";
+import { env } from "../config/env.js";
 import { sixDimQualityCheck, SIX_DIM_WEIGHTS, type SixDimKey } from "../services/content-engine/quality-check-v2.js";
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../config/system-recommendation.js";
 import { runWithLlmCallAttribution } from "../services/billing/llm-cost.js";
@@ -159,7 +160,13 @@ async function main() {
 
   const summary = {
     measuredAt: new Date().toISOString(),
-    model: "deepseek-v4-pro",
+    /**
+     * 🔴 从 env 读, 不硬编码(model-name-single-source 守卫抓的就是这个)。
+     * 这个字段是实验结论的一部分 —— 写死的话, 哪天主模型切了,
+     * 这份 JSON 会**声称**自己测的是 v4-pro, 而实际测的是别的。
+     * 一份说谎的实验记录比没有记录更糟: 后来的人会拿它当基准。
+     */
+    model: env.DEEPSEEK_MODEL_REASONER,
     note: "同模型同 prompt 重评; run1 = 库里已有的 v5 分, run2 = 本次重评",
     n: valid.length, nRequested: SAMPLE_SIZE, nSkipped: pairs.length - valid.length,
     totalR: pearson(xs, ys),
