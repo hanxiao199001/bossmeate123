@@ -29,6 +29,7 @@ import {
 import { SYSTEM_RECOMMENDATION_TENANT_ID } from "../../config/system-recommendation.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
+import { collectCostBreakdown, renderCostBreakdown, type CostBreakdown } from "./cost-breakdown.js";
 import { getSpend, type BudgetConfig } from "../billing/cost-ledger.js";
 import { getKfStats } from "../work-wechat/kf-stats.js";
 import { computePublishHealth, normalizePublishMode, startOfBjDay, type PublishHealth } from "../metrics/matrix-health.js";
@@ -334,6 +335,8 @@ export interface PlatformSignals {
   backupFreshness?: BackupFreshnessIssue[];
   /** 9-04 件 2: 数字人轮询器停摆的一句话; 空/undefined = 活着 */
   dvhPollerIssue?: string;
+  /** 9-04: 当日成本拆分(总额/重跑占/视频占/是否撞顶)。undefined = 老调用方/测试, 不渲染 */
+  costBreakdown?: CostBreakdown;
 }
 
 /** 与 ops/backup.ts 的 FreshnessIssue 同形状 —— 这里复述一遍是为了让本文件的纯函数不 import IO 模块 */
@@ -582,6 +585,14 @@ export function judgePlatform(s: PlatformSignals): { items: BriefItem[]; todos: 
    *
    * 判据在这里(纯函数), 取数在 collectPlatformBriefing —— 与本文件其余信号同一套分工。
    */
+  // 9-04: 成本拆分四个数。放在告警之后、系统概况之前 —— 它不是告警, 是每天都要看的数。
+  if (s.costBreakdown) {
+    items.push({ level: "info", text: "— 今日成本 —" });
+    for (const line of renderCostBreakdown(s.costBreakdown)) {
+      items.push({ level: s.costBreakdown.error || s.costBreakdown.cappedAt ? "warn" : "info", text: line.trim() });
+    }
+  }
+
   // 9-04 件 2(补充 c): 数字人轮询器心跳。判据同上一段 —— 轮询器挂了的表现是
   //   所有任务慢慢老化到 24h 变孤儿, 和"阿里云慢"在指标上分不开, 只有心跳能区分。
   if (s.dvhPollerIssue) {
@@ -1002,7 +1013,10 @@ export async function collectPlatformBriefing(now: Date = new Date()): Promise<P
     dvhPollerIssue = `心跳检查没跑成(≠ 轮询器正常) —— ${err instanceof Error ? err.message : String(err)}`;
   }
 
-  const { items, todos } = judgePlatform({ health, supplier, incidents, backupFreshness, dvhPollerIssue });
+  // 9-04: 成本拆分。取数失败以 error 形态带下去, 由渲染层原样报 —— 不静默成 0。
+  const costBreakdown = await collectCostBreakdown(now);
+
+  const { items, todos } = judgePlatform({ health, supplier, incidents, backupFreshness, dvhPollerIssue, costBreakdown });
   // 8-02: 连续异常升级由租户级搬到这里。🚨 是最响的一条, 排最前。
   const streakItems = await collectZeroStreakPlatform(now);
   // 8-02 生成结果闭环。**直接产出条目, 不落库** —— collect* 全链路必须保持只读:
