@@ -47,6 +47,25 @@ export interface StorageObject {
   lastModified: Date;
 }
 
+/**
+ * 🔴 超过这个大小走分片上传 (9-04)。
+ *
+ * ali-oss 单次 `put` 默认 60 秒响应超时。20MB 是个保守阈值:
+ * 9-04 实测 43.5MB 的备份**刚好**跑得过去(整个备份任务 77 秒), 69MB 的视频直接超时。
+ * 取 20MB 而不是 40MB, 是因为真正的变量是**网速**不是文件大小 ——
+ * 阈值该留在"再慢一倍也不会撞线"的位置。
+ */
+export const MULTIPART_THRESHOLD_BYTES = 20 * 1024 * 1024;
+/** 分片大小。阿里云要求 ≥100KB; 8MB 是官方示例的常用值 */
+export const MULTIPART_PART_SIZE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 最近一次上传耗时(秒)。备份任务读它落进 ops_backups.upload_seconds ——
+ * 让"贴着 60 秒线"这件事能被**提前看见**, 而不是等 backup_failed 才知道。
+ */
+let lastUploadSeconds = 0;
+export function getLastUploadSeconds(): number { return lastUploadSeconds; }
+
 /** 生成标准文件路径 */
 export function buildStoragePath(
   tenantId: string,
@@ -96,16 +115,45 @@ class OssStorage implements IStorage {
 
   async upload(buffer: Buffer, remotePath: string, contentType?: string, opts?: { private?: boolean }): Promise<string> {
     const client = await this.getClient();
-    const options: any = {};
     const headers: Record<string, string> = {};
     if (contentType) headers["Content-Type"] = contentType;
     // 对象级 ACL 覆盖桶级 —— 桶是公共读, 备份必须私有。见 IStorage.upload 的注释。
     if (opts?.private) headers["x-oss-object-acl"] = "private";
-    if (Object.keys(headers).length) options.headers = headers;
+    const options: any = Object.keys(headers).length ? { headers } : {};
 
-    const result = await client.put(remotePath, buffer, options);
-    logger.info({ remotePath, size: buffer.length }, "OSS: 文件已上传");
-    return result.url as string;
+    const startedAt = Date.now();
+    /**
+     * 🔴 9-04: 超过 MULTIPART_THRESHOLD_BYTES 走分片。
+     *
+     * 病历: ali-oss 的单次 put 有 **60 秒响应超时**(默认)。9-04 存档那条 69MB 的
+     * 数字人成片时直接 `ResponseTimeoutError`, 而当时**每日备份的 43.5MB 刚好跑得过去** ——
+     * 贴着这条线。库再长一点、或网络慢一点, 备份就会稳定失败。
+     *
+     * 失败形态是 backup_failed(会正确告警), 但那时**已经没有备份了** ——
+     * 告警对了不等于损失没发生。所以在撞线之前就把它拆掉, 而不是等它响。
+     */
+    const useMultipart = buffer.length > MULTIPART_THRESHOLD_BYTES;
+    let url: string;
+    if (useMultipart) {
+      const r = await client.multipartUpload(remotePath, buffer, {
+        partSize: MULTIPART_PART_SIZE_BYTES,
+        ...options,
+      });
+      // multipartUpload 的返回形状与 put 不同: url 在 res.requestUrls[0](带 uploadId 查询串),
+      //   不能直接当公开地址用。自己按 endpoint+bucket 拼一个干净的。
+      url = (r as { res?: { requestUrls?: string[] } })?.res?.requestUrls?.[0]?.split("?")[0]
+        ?? `https://${env.OSS_BUCKET}.${env.OSS_ENDPOINT}/${remotePath}`;
+    } else {
+      const result = await client.put(remotePath, buffer, options);
+      url = result.url as string;
+    }
+    const uploadSeconds = (Date.now() - startedAt) / 1000;
+    logger.info(
+      { remotePath, size: buffer.length, uploadSeconds, multipart: useMultipart },
+      "OSS: 文件已上传",
+    );
+    lastUploadSeconds = uploadSeconds;
+    return url;
   }
 
   async delete(remotePath: string): Promise<void> {

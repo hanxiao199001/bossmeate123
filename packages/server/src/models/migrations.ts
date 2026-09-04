@@ -1020,4 +1020,18 @@ SELECT _bm_set_fk('users','tenant_id','tenants','CASCADE');
       CREATE INDEX IF NOT EXISTS idx_dvh_tasks_content ON dvh_tasks (content_id);
     `,
   },
+  {
+    version: "044_ops_backups_upload_seconds",
+    description:
+      "9-04: ops_backups 加 upload_seconds —— 让「上传时间贴着 ali-oss 60 秒超时线」这件事能被**提前看见**。" +
+      "病历: 9-04 存档 69MB 数字人成片时 ali-oss 单次 put 直接 ResponseTimeoutError(默认 60s), " +
+      "而当日备份的 43.5MB **刚好**跑得过去(整个备份任务 77 秒) —— 贴着线。" +
+      "库再长一点或网络慢一点, 备份就会稳定失败; 失败形态是 backup_failed(会正确告警), " +
+      "但那时**已经没有备份了** —— 告警对了不等于损失没发生。" +
+      "同批把 >20MB 的上传改走分片, 这一列则负责让人在撞线之前就看到趋势(周报报近 7 天最长)。" +
+      "退回执行: ALTER TABLE ops_backups DROP COLUMN upload_seconds。",
+    sql: `
+      ALTER TABLE ops_backups ADD COLUMN IF NOT EXISTS upload_seconds NUMERIC(8,2);
+    `,
+  },
 ];
