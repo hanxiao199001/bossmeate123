@@ -494,9 +494,15 @@ async function inspectRestored(drillUrl: string): Promise<{
 /**
  * 9-04: 近 7 天最长上传耗时 —— 周报用。
  *
- * 🔴 这一项不是告警, 是**趋势**。ali-oss 单次 put 的 60 秒超时是一条硬线,
- * 而 9-04 实测备份的 43.5MB 已经贴着它跑。超过 20MB 现在走分片(不再受那条线约束),
- * 但这个数仍要报 —— 它同时反映网络与库增长, 是"什么时候该动手"的唯一先行指标。
+ * 🔴 这一项不是告警, 是**趋势**。
+ *
+ * ⚠️ 9-04 更正: 这段原本写着"超过 20MB 走分片, 不再受 60 秒那条线约束" —— **是错的**。
+ * ali-oss 的 60 秒是**每次 HTTP 响应**的超时, 分片只是把一个大请求拆成多个,
+ * 每一片仍受同一条限制。真正解掉它的是客户端的 `timeout: 600000`(见 OssStorage 类注释)。
+ * 当日实测: postgres 备份 45MB 上传 **67.3 秒** —— 旧的 60 秒配置下这次必失败。
+ *
+ * 所以这个数仍要报, 而且比原来更重要: 它同时反映网络与库增长,
+ * 是"什么时候该动手"的唯一先行指标。判据见下方 renderUploadTrend 的文案。
  *
  * 报法上刻意**只报数不催** —— 与 8-24 那条「一个不需要行动的指标必须明说不需要行动」同源:
  * 逐周看趋势, 涨了才需要人管。
@@ -525,7 +531,7 @@ export function renderUploadTrend(t: UploadTrend, days = 7): string {
   if (t.error) return `  ⚠️ 上传耗时**没查成**(≠ 一切正常): ${t.error}`;
   if (t.samples === 0) return `  近 ${days} 天没有成功的备份上传记录 —— 这本身值得看一眼(备份是否在跑?)`;
   const s = (t.maxSeconds ?? 0).toFixed(1);
-  return `  近 ${days} 天备份上传最长 ${s} 秒（${t.samples} 次；仅供参考，无需处理。>20MB 已走分片，不再受 ali-oss 60 秒单次超时约束；逐周看：涨 = 库在长或网络在变慢）`;
+  return `  近 ${days} 天备份上传最长 ${s} 秒（${t.samples} 次；仅供参考，无需处理。逐周看：涨 = 库在长或网络在变慢；持续 >300 秒 = 带宽问题，不是超时问题）`;
 }
 
 export interface FreshnessIssue { level: "alert" | "warn"; text: string }
