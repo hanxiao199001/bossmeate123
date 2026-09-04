@@ -54,6 +54,23 @@ describe("周报的上传耗时那一行", () => {
     expect(renderUploadTrend(t())).toMatch(/无需处理/);
   });
 
+  it("🔴 不许再声称「走分片就不受 60 秒约束」—— 那句话是错的", () => {
+    /**
+     * 9-04 实测推翻: ali-oss 的 60 秒是**每次 HTTP 响应**的超时,
+     * 分片只是把一个大请求拆成多个, 每一片仍受同一条限制
+     * (报 `Failed to upload some parts ... part_num: 2`)。
+     * 真正解掉它的是客户端 timeout: 600000。
+     * 当日 postgres 备份上传 67.3 秒 —— 旧配置下这次必失败。
+     */
+    const out = renderUploadTrend(t());
+    expect(out).not.toMatch(/不再受/);
+    expect(out).not.toMatch(/60 秒/);
+  });
+
+  it("给出「什么时候不是超时问题」的判据, 而不是让人一直调 timeout", () => {
+    expect(renderUploadTrend(t())).toMatch(/300 秒.*带宽/);
+  });
+
   it("给出逐周怎么读, 而不是丢一个裸数字", () => {
     expect(renderUploadTrend(t())).toMatch(/涨/);
   });
