@@ -77,7 +77,7 @@ import { logger } from "../../config/logger.js";
 import { db } from "../../models/db.js";
 import { sql } from "drizzle-orm";
 import { recordIncident } from "./incidents.js";
-import { getStorage } from "../storage/index.js";
+import { getStorage, getLastUploadSeconds } from "../storage/index.js";
 
 /** 产物过小即视为损坏 —— 240MB 的库压出来不可能只有几 KB */
 const MIN_PG_DUMP_BYTES = 64 * 1024;
@@ -92,6 +92,8 @@ export interface BackupArtifact {
   localBytes: number;
   verifiedBytes: number;
   sha256: string;
+  /** 9-04: 这一次上传花了多久。贴近 ali-oss 的 60 秒单次超时线时要能提前看见 */
+  uploadSeconds: number;
 }
 
 export interface BackupResult {
@@ -163,13 +165,15 @@ function beijingDateStr(now: Date): string {
 async function recordBackupRow(row: {
   kind: string; status: "success" | "failed";
   remotePath?: string | null; localBytes?: number | null; verifiedBytes?: number | null;
-  sha256?: string | null; durationMs?: number | null; detail?: Record<string, unknown>;
+  sha256?: string | null; durationMs?: number | null; uploadSeconds?: number | null;
+  detail?: Record<string, unknown>;
 }): Promise<void> {
   try {
     await db.execute(sql`
-      INSERT INTO ops_backups (kind, status, remote_path, local_bytes, verified_bytes, sha256, duration_ms, detail)
+      INSERT INTO ops_backups (kind, status, remote_path, local_bytes, verified_bytes, sha256, duration_ms, upload_seconds, detail)
       VALUES (${row.kind}, ${row.status}, ${row.remotePath ?? null}, ${row.localBytes ?? null},
               ${row.verifiedBytes ?? null}, ${row.sha256 ?? null}, ${row.durationMs ?? null},
+              ${row.uploadSeconds ?? null},
               ${JSON.stringify(row.detail ?? {})}::jsonb)
     `);
   } catch (err) {
@@ -239,7 +243,7 @@ export async function runDailyBackup(now: Date = new Date()): Promise<BackupResu
       await recordBackupRow({
         kind: a.kind, status: "success", remotePath: a.remotePath,
         localBytes: a.localBytes, verifiedBytes: a.verifiedBytes, sha256: a.sha256,
-        durationMs, detail: { date },
+        durationMs, uploadSeconds: a.uploadSeconds, detail: { date },
       });
     }
     logger.info({ date, artifacts: artifacts.length, prunedCount, durationMs }, "✅ 每日备份完成");
@@ -283,8 +287,9 @@ async function sealAndUpload(
   if (head.size !== localBytes) {
     throw new Error(`${kind}: 上传后大小对不上 —— 本地 ${localBytes} vs OSS ${head.size} (${remotePath})`);
   }
-  logger.info({ kind, remotePath, bytes: localBytes }, "备份已上传并回查通过");
-  return { kind, remotePath, localBytes, verifiedBytes: head.size, sha256: sha };
+  const uploadSeconds = getLastUploadSeconds();
+  logger.info({ kind, remotePath, bytes: localBytes, uploadSeconds }, "备份已上传并回查通过");
+  return { kind, remotePath, localBytes, verifiedBytes: head.size, sha256: sha, uploadSeconds };
 }
 
 /**
@@ -485,6 +490,43 @@ async function inspectRestored(drillUrl: string): Promise<{
 }
 
 // ============ 新鲜度看门狗(答"压根没跑"这个问题) ============
+
+/**
+ * 9-04: 近 7 天最长上传耗时 —— 周报用。
+ *
+ * 🔴 这一项不是告警, 是**趋势**。ali-oss 单次 put 的 60 秒超时是一条硬线,
+ * 而 9-04 实测备份的 43.5MB 已经贴着它跑。超过 20MB 现在走分片(不再受那条线约束),
+ * 但这个数仍要报 —— 它同时反映网络与库增长, 是"什么时候该动手"的唯一先行指标。
+ *
+ * 报法上刻意**只报数不催** —— 与 8-24 那条「一个不需要行动的指标必须明说不需要行动」同源:
+ * 逐周看趋势, 涨了才需要人管。
+ */
+export interface UploadTrend { maxSeconds: number | null; samples: number; error: string | null }
+
+export async function collectUploadTrend(days = 7): Promise<UploadTrend> {
+  try {
+    const res = await db.execute(sql`
+      SELECT MAX(upload_seconds)::float8 AS max_s, COUNT(upload_seconds)::int AS n
+      FROM ops_backups
+      WHERE status = 'success' AND upload_seconds IS NOT NULL
+        AND created_at > NOW() - (${days} || ' days')::interval
+    `);
+    const r = (res as unknown as { rows?: Array<{ max_s: number | null; n: number }> }).rows?.[0];
+    return { maxSeconds: r?.max_s ?? null, samples: Number(r?.n ?? 0), error: null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, "upload_trend.collect_failed");
+    return { maxSeconds: null, samples: 0, error: msg.slice(0, 160) };
+  }
+}
+
+/** 渲染成周报一行。判据与渲染分开 */
+export function renderUploadTrend(t: UploadTrend, days = 7): string {
+  if (t.error) return `  ⚠️ 上传耗时**没查成**(≠ 一切正常): ${t.error}`;
+  if (t.samples === 0) return `  近 ${days} 天没有成功的备份上传记录 —— 这本身值得看一眼(备份是否在跑?)`;
+  const s = (t.maxSeconds ?? 0).toFixed(1);
+  return `  近 ${days} 天备份上传最长 ${s} 秒（${t.samples} 次；仅供参考，无需处理。>20MB 已走分片，不再受 ali-oss 60 秒单次超时约束；逐周看：涨 = 库在长或网络在变慢）`;
+}
 
 export interface FreshnessIssue { level: "alert" | "warn"; text: string }
 

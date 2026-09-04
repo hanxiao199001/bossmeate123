@@ -135,6 +135,8 @@ export interface WeeklyReport {
    * 判据与取数见 ops/unmerged-branches.ts(含"取数失败不许当成没问题"那条)。
    */
   unmergedBranches: UnmergedBranchesResult;
+  /** 9-04: 近 7 天备份上传最长耗时, 已渲染成一行 */
+  uploadTrendLine: string;
   /**
    * ④ 关键词分数分布 —— 8-18 加。
    *
@@ -328,9 +330,12 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
   // 9-01: 未部署改动。取数失败会以 error 形态返回, 由 renderUnmergedBranches 原样报出来 ——
   //   静默当成"没有未部署改动"正是这一节要治的病。
   const unmergedBranches = await listStaleUnmergedBranches(now);
+  // 9-04: 备份上传耗时。取数失败以文案形态带下去, 不静默。
+  const { collectUploadTrend, renderUploadTrend } = await import("./backup.js");
+  const uploadTrendLine = renderUploadTrend(await collectUploadTrend());
 
   const todos = pickTodos({ checkers, annotated, health, backlog });
-  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, testBaseline, unmergedBranches, todos, ledgerSince: since0 });
+  const text = renderText({ weekOf, checkers, annotated, health, qualification, backlog, keywordScore, testBaseline, unmergedBranches, uploadTrendLine, todos, ledgerSince: since0 });
 
   return {
     weekOf,
@@ -349,6 +354,7 @@ export async function buildWeeklyReport(now: Date = new Date()): Promise<WeeklyR
     keywordScore,
     testBaseline,
     unmergedBranches,
+    uploadTrendLine,
     todos,
     text,
   };
@@ -463,6 +469,8 @@ function renderText(d: {
   };
   backlog: { total: number; stale7d: number; addedThisWeek: number };
   unmergedBranches: UnmergedBranchesResult;
+  /** 9-04: 近 7 天备份上传最长耗时, 已渲染成一行 */
+  uploadTrendLine: string;
   /**
    * ④ 关键词分数分布 —— 8-18 加。
    *
@@ -592,6 +600,11 @@ function renderText(d: {
      */
     L.push(`  测试基线失败 ${d.testBaseline.knownFailures} 条（仅供参考，无需处理；逐周看：降 = 有人在清，持平 = 没人清）`);
   }
+  L.push("");
+
+  // 9-04: 备份上传耗时趋势 —— 只报数不催, 见 backup.ts 的 renderUploadTrend 注释
+  L.push("■ 备份上传耗时");
+  L.push(d.uploadTrendLine);
   L.push("");
 
   L.push(`■ 未部署改动（超过 ${STALE_BRANCH_DAYS} 天未合入 main）`);
