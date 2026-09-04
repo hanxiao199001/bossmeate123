@@ -106,6 +106,26 @@ class OssStorage implements IStorage {
         //   实测(生产桶 bossmate-media): 开 secure 后 put().url 与 signatureUrl() 都转 https,
         //   且签名 URL 真下载得到(GET 200), 不是只换了前缀。
         secure: true,
+        /**
+         * 🔴 9-04: ali-oss 默认**每次 HTTP 响应** 60 秒超时, 这才是真正的那条线。
+         *
+         * 病历: 9-01 备份成功(43.5MB / 77 秒), 9-03 起连续失败 ResponseTimeoutError,
+         * 生产**连续两天没有备份**。
+         *
+         * 9-04 先加了 ">20MB 走分片"——**没解决**: 分片只是把一个大请求拆成多个,
+         * 每一片仍受同一个 60 秒约束, 实测报 `Failed to upload some parts ... part_num: 2`。
+         *
+         * ▎ 判断失误的由来: 9-04 存档那条 69MB 视频时用的是
+         * ▎ `new OSS({..., timeout: 600000 })` —— 是**这个参数**让它成功的,
+         * ▎ 而当时只把 multipart 搬了过来, 把 timeout 漏了,
+         * ▎ 然后把"分片能解决"当成了已验证的结论。
+         *
+         * 600000 = 10 分钟。按 9-01 实测 565KB/s 算, 够传约 340MB;
+         * 按今天的坏情况(<133KB/s)也够 78MB。速度本身另有观察项 ——
+         * upload_seconds 已落台账, 连看 3 天; 若持续 >300 秒那是**带宽问题不是超时问题**
+         * (轻量应用服务器有上行带宽限制), 到时另议, 不要再靠调大这个数来治。
+         */
+        timeout: 600_000,
       });
       return this.client;
     } catch (err) {
